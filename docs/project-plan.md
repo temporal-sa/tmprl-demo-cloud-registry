@@ -17,6 +17,7 @@ Keep it current as phases move from design to implementation.
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
+| 9. Per-Project Temporal UI | Deferred | Explore after core deploy path works; likely self-hosted Temporal UI pointed at Temporal Cloud with read-only namespace credentials. |
 
 ## Decisions
 
@@ -463,3 +464,37 @@ Open registry questions:
 - Should registry page data be generated as static JSON committed under
   `clusters/sa-demo/generated`, generated into the registry image at build time,
   or loaded dynamically from this repo?
+
+## Phase 9: Per-Project Temporal UI
+
+Goal: optionally provide each demo with a Temporal UI view scoped to that
+project's Temporal Cloud namespace.
+
+Status: deferred until core validation, generation, infra, Flux, build, and
+worker-controller flows are working.
+
+Design direction:
+
+- Generate a self-hosted `temporalio/ui` deployment per project only when
+  explicitly enabled by platform config.
+- Point the UI at the project's Temporal Cloud endpoint and default namespace.
+- Protect the route with shared Temporal employee auth.
+- Use a separate read-only Namespace-scoped Temporal service account/API key for
+  the UI. Do not reuse the worker/API key.
+- Disable UI write actions with Temporal UI configuration as an additional
+  guardrail.
+- Store the UI key under the project secret prefix, for example
+  `tmprl-cloud-demo/<metadata.name>/temporal-ui`.
+
+POC questions:
+
+- Confirm the supported way for self-hosted Temporal UI to authenticate to
+  Temporal Cloud with API keys. If direct API key config is not supported, test
+  whether an in-cluster proxy can inject the required `Authorization` header and
+  whether `TEMPORAL_FORWARD_HEADERS` is sufficient.
+- Confirm Temporal Cloud read-only namespace permissions cover the UI workflows
+  list/detail/history/query use cases without allowing mutation.
+- Decide whether the route should be a project path such as `/temporal` or a
+  separate derived host.
+- Confirm payload codec behavior if a demo uses a codec server.
+- Define key rotation behavior separately from worker credentials.
