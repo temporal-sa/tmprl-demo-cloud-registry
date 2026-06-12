@@ -1,0 +1,10 @@
+# macos
+.DS_Store
+
+# local tooling
+.venv/
+node_modules/
+
+# generated build output
+dist/
+build/

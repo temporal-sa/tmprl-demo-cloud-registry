@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-sa/cluster-gitops-config/schemas/project.schema.json",
+  "title": "ProjectDeployment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "platform.temporal.io/v1alpha1"
+    },
+    "kind": {
+      "const": "ProjectDeployment"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "environment",
+        "source",
+        "image",
+        "runtime",
+        "ingress",
+        "temporal"
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["testing", "production"]
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "branch", "context", "dockerfile"],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dockerfile": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repositoryName", "tagStrategy"],
+          "properties": {
+            "repositoryName": {
+              "$ref": "#/$defs/ecrRepositoryName"
+            },
+            "tagStrategy": {
+              "type": "string",
+              "enum": ["git-sha"]
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["services"],
+          "properties": {
+            "services": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "containerPort", "servicePort"],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/dnsLabel"
+                  },
+                  "containerPort": {
+                    "$ref": "#/$defs/port"
+                  },
+                  "servicePort": {
+                    "$ref": "#/$defs/port"
+                  },
+                  "worker": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subdomain", "target"],
+          "properties": {
+            "subdomain": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+              "not": {
+                "pattern": "(^|\\.)tmprl-demo\\.cloud$"
+              }
+            },
+            "target": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["service", "port"],
+              "properties": {
+                "service": {
+                  "$ref": "#/$defs/dnsLabel"
+                },
+                "port": {
+                  "$ref": "#/$defs/port"
+                }
+              }
+            }
+          }
+        },
+        "temporal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["createNamespace", "namespaceId", "endpoint", "namespace", "apiKey"],
+          "properties": {
+            "createNamespace": {
+              "type": "boolean"
+            },
+            "namespaceId": {
+              "$ref": "#/$defs/temporalNamespaceId"
+            },
+            "endpoint": {
+              "$ref": "#/$defs/temporalEndpointBinding"
+            },
+            "namespace": {
+              "$ref": "#/$defs/envBinding"
+            },
+            "apiKey": {
+              "$ref": "#/$defs/envBinding"
+            }
+          }
+        },
+        "workerController": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "workers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "service", "taskQueue"],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/dnsLabel"
+                  },
+                  "service": {
+                    "$ref": "#/$defs/dnsLabel"
+                  },
+                  "taskQueue": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/envName"
+              },
+              "value": {
+                "type": "string"
+              },
+              "valueFrom": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "ingressUrl": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              {
+                "required": ["value"]
+              },
+              {
+                "required": ["valueFrom"]
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "dnsLabel": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "minLength": 1,
+      "maxLength": 63
+    },
+    "ecrRepositoryName": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+    },
+    "envBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["env"],
+      "properties": {
+        "env": {
+          "$ref": "#/$defs/envName"
+        }
+      }
+    },
+    "temporalEndpointBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["env"],
+      "properties": {
+        "env": {
+          "$ref": "#/$defs/envName"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valueFrom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["temporalNamespaceEndpoint"],
+          "properties": {
+            "temporalNamespaceEndpoint": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["value"]
+        },
+        {
+          "required": ["valueFrom"]
+        }
+      ]
+    },
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "temporalNamespaceId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$"
+    }
+  }
+}
