@@ -38,6 +38,8 @@ BASE_DOMAIN = "tmprl-demo.cloud"
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
 IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
 IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
+TEMPORAL_API_KEY_TTL_DAYS = 365
+TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -135,6 +137,9 @@ def load_projects(paths: list[str]) -> list[Project]:
 def render_all(projects: list[Project]) -> dict[Path, str]:
     files: dict[Path, str] = {
         Path("build-plan.json"): render_json(build_plan_payload(projects)),
+        Path("external-resources-plan.json"): render_json(
+            external_resources_plan_payload(projects)
+        ),
         Path("kustomization.yaml"): render_kustomization(
             [project.name for project in projects]
         ),
@@ -784,6 +789,77 @@ def build_plan_payload(projects: list[Project]) -> dict[str, Any]:
             "template": IMAGE_TAG_TEMPLATE,
         },
         "projects": [project_build_plan(project) for project in projects],
+    }
+
+
+def external_resources_plan_payload(projects: list[Project]) -> dict[str, Any]:
+    return {
+        "apiVersion": "tmprl-demo.cloud/v1alpha1",
+        "kind": "ExternalResourcesPlan",
+        "projects": [project_external_resources(project) for project in projects],
+    }
+
+
+def project_external_resources(project: Project) -> dict[str, Any]:
+    secret_prefix = project_secret_prefix(project)
+    ecr_repositories = [
+        {
+            "name": image_repository_name(project, build_name),
+            "build": build_name,
+            "components": components_for_build(project, build_name),
+        }
+        for build_name in sorted(builds(project_document(project)))
+    ]
+
+    return {
+        "name": project.name,
+        "kubernetesNamespace": project.namespace,
+        "secretPrefix": secret_prefix,
+        "ecrRepositories": ecr_repositories,
+        "temporalCloud": temporal_cloud_resources(project),
+        "secretsManager": secrets_manager_resources(project),
+        "iam": {
+            "externalSecretsReadPath": f"{secret_prefix}/*",
+            "buildPushRepositories": [
+                repository["name"] for repository in ecr_repositories
+            ],
+        },
+    }
+
+
+def temporal_cloud_resources(project: Project) -> dict[str, Any]:
+    return {
+        "namespace": {
+            "name": project.name,
+            "deletionPolicy": "retain-until-explicitly-approved",
+        },
+        "apiKey": {
+            "scope": "namespace",
+            "namespace": project.name,
+            "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
+            "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
+            "secretRemotePath": temporal_secret_remote_path(project),
+            "components": sorted(temporal_components(project)),
+        },
+    }
+
+
+def secrets_manager_resources(project: Project) -> dict[str, Any]:
+    return {
+        "temporalCredentials": {
+            "managedBy": "platform",
+            "remotePath": temporal_secret_remote_path(project),
+            "properties": ["address", "namespace", "apiKey", "tls"],
+        },
+        "userManaged": [
+            {
+                "name": secret_name,
+                "managedBy": "project-owner",
+                "remotePath": user_secret_remote_path(project, secret_name),
+                "components": sorted(components_for_user_secret(project, secret_name)),
+            }
+            for secret_name in user_secret_names(project)
+        ],
     }
 
 
