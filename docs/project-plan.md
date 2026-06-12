@@ -542,6 +542,7 @@ Registry web responsibilities:
 
 Registry worker direction:
 
+- implement registry/operator workflows in Python;
 - generalize the temporary environment management currently being explored in
   `temporal-agent-harness-example`;
 - provide lifecycle workflows for published demos rather than one-off

@@ -35,8 +35,12 @@ components:
 
   worker:
     build: worker
+    command: ["python", "-m", "demo_registry_operator.worker"]
     worker:
       taskQueue: demo-registry-management
+    env:
+      - name: DEMO_REGISTRY_TASK_QUEUE
+        value: demo-registry-management
 
 ingress:
   subdomain: registry

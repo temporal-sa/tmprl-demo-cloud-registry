@@ -72,6 +72,13 @@ spec:
       - name: worker
         image: registry.invalid/tmprl-cloud-demo/demo-registry/worker:git-sha
         imagePullPolicy: IfNotPresent
+        command:
+        - python
+        - -m
+        - demo_registry_operator.worker
         envFrom:
         - secretRef:
             name: temporal-credentials
+        env:
+        - name: DEMO_REGISTRY_TASK_QUEUE
+          value: demo-registry-management
