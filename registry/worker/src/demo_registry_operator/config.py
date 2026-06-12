@@ -15,6 +15,9 @@ class WorkerConfig:
     temporal_api_key: str | None
     temporal_tls: bool
     activity_workers: int
+    watch_enabled: bool
+    watch_interval_seconds: int
+    reconcile_mode: str
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -28,6 +31,16 @@ class WorkerConfig:
             temporal_api_key=os.getenv("TEMPORAL_API_KEY"),
             temporal_tls=env_bool("TEMPORAL_TLS", default=False),
             activity_workers=env_int("DEMO_REGISTRY_ACTIVITY_WORKERS", default=20),
+            watch_enabled=env_bool("DEMO_REGISTRY_WATCH_ENABLED", default=False),
+            watch_interval_seconds=env_int(
+                "DEMO_REGISTRY_WATCH_INTERVAL_SECONDS",
+                default=15,
+            ),
+            reconcile_mode=env_choice(
+                "DEMO_REGISTRY_RECONCILE_MODE",
+                default="plan",
+                choices={"plan", "apply"},
+            ),
         )
 
 
@@ -47,3 +60,11 @@ def env_int(name: str, *, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed > 0 else default
+
+
+def env_choice(name: str, *, default: str, choices: set[str]) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    parsed = value.strip().lower()
+    return parsed if parsed in choices else default

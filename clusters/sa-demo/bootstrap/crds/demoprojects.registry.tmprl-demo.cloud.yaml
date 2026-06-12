@@ -1,0 +1,266 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: demoprojects.registry.tmprl-demo.cloud
+  labels:
+    app.kubernetes.io/name: demo-registry-operator
+    app.kubernetes.io/managed-by: flux
+spec:
+  group: registry.tmprl-demo.cloud
+  scope: Cluster
+  names:
+    plural: demoprojects
+    singular: demoproject
+    kind: DemoProject
+    listKind: DemoProjectList
+    shortNames:
+      - demo
+      - demos
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Namespace
+          type: string
+          jsonPath: .spec.derived.kubernetesNamespace
+        - name: Host
+          type: string
+          jsonPath: .spec.derived.host
+        - name: Active
+          type: string
+          jsonPath: .status.activeImageVersion
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - source
+                - registry
+                - builds
+                - components
+                - ingress
+                - derived
+              properties:
+                source:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                registry:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                builds:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    required:
+                      - context
+                      - dockerfile
+                    properties:
+                      context:
+                        type: string
+                        minLength: 1
+                      dockerfile:
+                        type: string
+                        minLength: 1
+                components:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                ingress:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                smokeCheck:
+                  type: object
+                  required:
+                    - path
+                    - expectedStatus
+                  properties:
+                    path:
+                      type: string
+                      pattern: "^/.*$"
+                    expectedStatus:
+                      type: integer
+                      minimum: 100
+                      maximum: 599
+                    timeoutSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 60
+                derived:
+                  type: object
+                  required:
+                    - host
+                    - kubernetesNamespace
+                    - temporalNamespace
+                    - secretPrefix
+                    - imageRepositoryPrefix
+                  properties:
+                    host:
+                      type: string
+                      minLength: 1
+                    kubernetesNamespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                    temporalNamespace:
+                      type: string
+                      minLength: 1
+                    secretPrefix:
+                      type: string
+                      pattern: "^tmprl-cloud-demo/[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                    imageRepositoryPrefix:
+                      type: string
+                      minLength: 1
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Planned
+                    - Reconciling
+                    - BaseReconciled
+                    - WaitingForImages
+                    - CandidateApplied
+                    - SmokeCheckPending
+                    - SmokeCheckFailed
+                    - Promoted
+                    - Ready
+                    - Error
+                    - Stopped
+                message:
+                  type: string
+                lastError:
+                  type: object
+                  properties:
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                activeImageVersion:
+                  type: string
+                activeImages:
+                  type: object
+                  additionalProperties:
+                    type: string
+                candidateRolloutStatus:
+                  type: object
+                  properties:
+                    phase:
+                      type: string
+                    sourceCommitSha:
+                      type: string
+                    imageVersion:
+                      type: string
+                    url:
+                      type: string
+                    images:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    startedAt:
+                      type: string
+                      format: date-time
+                    completedAt:
+                      type: string
+                      format: date-time
+                    message:
+                      type: string
+                smokeCheckStatus:
+                  type: object
+                  properties:
+                    phase:
+                      type: string
+                    path:
+                      type: string
+                    expectedStatus:
+                      type: integer
+                    actualStatus:
+                      type: integer
+                    checkedAt:
+                      type: string
+                      format: date-time
+                    message:
+                      type: string
+                externalResources:
+                  type: object
+                  properties:
+                    ecr:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    secretsManager:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    temporalCloud:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                appliedResources:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      apiVersion:
+                        type: string
+                      kind:
+                        type: string
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+                      action:
+                        type: string
+                reconcileMode:
+                  type: string
+                  enum:
+                    - plan
+                    - apply
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      observedGeneration:
+                        type: integer
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

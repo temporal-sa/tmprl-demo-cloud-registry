@@ -82,3 +82,6 @@ spec:
     temporalNamespace: dejavu-tacos
     secretPrefix: tmprl-cloud-demo/dejavu-tacos
     imageRepositoryPrefix: tmprl-cloud-demo
+  smokeCheck:
+    path: /api/health
+    expectedStatus: 200

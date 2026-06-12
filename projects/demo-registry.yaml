@@ -47,3 +47,7 @@ ingress:
   routes:
     - component: web
       port: http
+
+smokeCheck:
+  path: /health
+  expectedStatus: 200

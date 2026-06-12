@@ -71,3 +71,7 @@ ingress:
       port: http
     - component: frontend
       port: http
+
+smokeCheck:
+  path: /api/health
+  expectedStatus: 200

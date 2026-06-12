@@ -138,11 +138,17 @@ def load_projects(paths: list[str]) -> list[Project]:
 def render_all(projects: list[Project]) -> dict[Path, str]:
     files: dict[Path, str] = {
         Path("build-plan.json"): render_json(build_plan_payload(projects)),
+        Path("demoprojects.yaml"): render_yaml_documents(
+            [
+                demo_project_resource(project, review_artifact=False)
+                for project in projects
+            ],
+        ),
         Path("external-resources-plan.json"): render_json(
             external_resources_plan_payload(projects)
         ),
         Path("kustomization.yaml"): render_kustomization(
-            [project.name for project in projects]
+            ["demoprojects.yaml"]
         ),
         Path("registry.json"): render_json(registry_payload(projects)),
     }
@@ -183,7 +189,7 @@ def render_project(project: Project) -> dict[Path, str]:
         )
 
     rendered[Path("demoproject-template.yaml")] = render_yaml_documents(
-        [demo_project_resource(project)]
+        [demo_project_resource(project, review_artifact=True)]
     )
 
     ingress_resource_list = ingress_resources(project)
@@ -220,32 +226,40 @@ def render_project(project: Project) -> dict[Path, str]:
     return rendered
 
 
-def demo_project_resource(project: Project) -> dict[str, Any]:
+def demo_project_resource(project: Project, *, review_artifact: bool) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "source": project.data["source"],
+        "registry": project.data["registry"],
+        "builds": project.data["builds"],
+        "components": project.data["components"],
+        "ingress": project.data["ingress"],
+        "derived": {
+            "host": project.host,
+            "kubernetesNamespace": project.namespace,
+            "temporalNamespace": project.name,
+            "secretPrefix": project_secret_prefix(project),
+            "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
+        },
+    }
+    smoke_check = project.data.get("smokeCheck")
+    if isinstance(smoke_check, dict):
+        spec["smokeCheck"] = smoke_check
+
+    annotations = {
+        "platform.temporal.io/source": relative_path(project.path),
+    }
+    if review_artifact:
+        annotations["platform.temporal.io/review-artifact"] = "true"
+
     return {
         "apiVersion": DEMO_PROJECT_API_VERSION,
         "kind": "DemoProject",
         "metadata": {
             "name": project.name,
             "labels": common_labels(project),
-            "annotations": {
-                "platform.temporal.io/source": relative_path(project.path),
-                "platform.temporal.io/review-artifact": "true",
-            },
+            "annotations": annotations,
         },
-        "spec": {
-            "source": project.data["source"],
-            "registry": project.data["registry"],
-            "builds": project.data["builds"],
-            "components": project.data["components"],
-            "ingress": project.data["ingress"],
-            "derived": {
-                "host": project.host,
-                "kubernetesNamespace": project.namespace,
-                "temporalNamespace": project.name,
-                "secretPrefix": project_secret_prefix(project),
-                "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
-            },
-        },
+        "spec": spec,
     }
 
 

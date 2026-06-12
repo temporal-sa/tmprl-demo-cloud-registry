@@ -63,6 +63,9 @@
     },
     "ingress": {
       "$ref": "#/$defs/ingress"
+    },
+    "smokeCheck": {
+      "$ref": "#/$defs/smokeCheck"
     }
   },
   "$defs": {
@@ -362,6 +365,28 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 160
+        }
+      }
+    },
+    "smokeCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "expectedStatus"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/.*$"
+        },
+        "expectedStatus": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 10
         }
       }
     },

@@ -10,6 +10,7 @@ with workflow.unsafe.imports_passed_through():
     from demo_registry_operator.activities.reconcile import (
         plan_rollout,
         promote_candidate,
+        record_project_status,
         reconcile_project,
         run_smoke_check,
     )
@@ -50,12 +51,76 @@ class DemoProjectWorkflow:
                 "project": project_name,
                 "phase": "Reconciling",
             }
-            self._status = await workflow.execute_activity(
+            reconcile_status = await workflow.execute_activity(
                 reconcile_project,
                 demo_project,
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
+            self._status = reconcile_status
+
+            if reconcile_status.get("phase") == "SmokeCheckPending":
+                smoke_plan = {
+                    "project": project_name,
+                    "demoProject": demo_project,
+                    "host": reconcile_status.get("desired", {}).get("host"),
+                    "candidate": reconcile_status.get("candidateRolloutStatus", {}),
+                    "smokeCheck": demo_project.get("spec", {}).get("smokeCheck"),
+                }
+                smoke_result = await workflow.execute_activity(
+                    run_smoke_check,
+                    smoke_plan,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+                if not smoke_result.get("ok"):
+                    self._status = {
+                        **reconcile_status,
+                        "phase": "SmokeCheckFailed",
+                        "message": "Candidate smoke check failed; active route was not promoted.",
+                        "smokeCheckStatus": {
+                            "phase": "Failed",
+                            "path": smoke_result.get("smokeCheck", {}).get("path"),
+                            "expectedStatus": smoke_result.get("expectedStatus"),
+                            "actualStatus": smoke_result.get("actualStatus"),
+                            "checkedAt": smoke_result.get("checkedAt"),
+                            "message": smoke_result.get("message"),
+                        },
+                    }
+                else:
+                    promotion = await workflow.execute_activity(
+                        promote_candidate,
+                        smoke_plan,
+                        start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                    self._status = {
+                        **reconcile_status,
+                        "phase": promotion.get("phase", "Promoted"),
+                        "message": promotion.get("message"),
+                        "appliedResources": [
+                            *reconcile_status.get("appliedResources", []),
+                            *promotion.get("appliedResources", []),
+                        ],
+                        "smokeCheckStatus": {
+                            "phase": "Passed",
+                            "path": smoke_result.get("smokeCheck", {}).get("path"),
+                            "expectedStatus": smoke_result.get("expectedStatus"),
+                            "actualStatus": smoke_result.get("actualStatus"),
+                            "checkedAt": smoke_result.get("checkedAt"),
+                            "message": smoke_result.get("message"),
+                        },
+                    }
+
+                await workflow.execute_activity(
+                    record_project_status,
+                    {
+                        "demoProject": demo_project,
+                        "status": self._status,
+                    },
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
 
         self._status = {
             "project": project_name,

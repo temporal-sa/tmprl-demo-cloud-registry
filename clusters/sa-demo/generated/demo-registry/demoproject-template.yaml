@@ -62,3 +62,6 @@ spec:
     temporalNamespace: demo-registry
     secretPrefix: tmprl-cloud-demo/demo-registry
     imageRepositoryPrefix: tmprl-cloud-demo
+  smokeCheck:
+    path: /health
+    expectedStatus: 200

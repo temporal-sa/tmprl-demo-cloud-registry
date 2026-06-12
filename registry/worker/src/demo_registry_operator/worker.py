@@ -11,10 +11,12 @@ from temporalio.worker import Worker
 from demo_registry_operator.activities.reconcile import (
     plan_rollout,
     promote_candidate,
+    record_project_status,
     reconcile_project,
     run_smoke_check,
 )
 from demo_registry_operator.config import WorkerConfig
+from demo_registry_operator.watch import run_demo_project_watch
 from demo_registry_operator.workflows.demo_project import (
     DemoProjectWorkflow,
     DemoRolloutWorkflow,
@@ -29,9 +31,11 @@ async def main() -> None:
     config = WorkerConfig.from_env()
     client = await connect(config)
     logger.info(
-        "Starting registry worker namespace=%s task_queue=%s",
+        "Starting registry worker namespace=%s task_queue=%s watch_enabled=%s reconcile_mode=%s",
         config.temporal_namespace,
         config.task_queue,
+        config.watch_enabled,
+        config.reconcile_mode,
     )
 
     with concurrent.futures.ThreadPoolExecutor(
@@ -49,10 +53,23 @@ async def main() -> None:
                 plan_rollout,
                 run_smoke_check,
                 promote_candidate,
+                record_project_status,
             ],
             activity_executor=activity_executor,
         )
-        await worker.run()
+        worker_task = asyncio.create_task(worker.run())
+        tasks = [worker_task]
+        if config.watch_enabled:
+            tasks.append(asyncio.create_task(run_demo_project_watch(client, config)))
+
+        done, pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()
 
 
 async def connect(config: WorkerConfig) -> Client:
