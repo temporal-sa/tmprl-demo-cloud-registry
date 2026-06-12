@@ -19,6 +19,7 @@ Keep it current as phases move from design to implementation.
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 | 10. Registry Operator | Design | Explore treating the registry worker as a Temporal-backed operator that reconciles `DemoProject` CRs through entity workflows. |
+| 11. SA Onboarding Skill | Design | Companion wizard skill that assesses demo repos, estimates migration lift, creates needed code/config changes, and writes project configs. |
 
 ## Decisions
 
@@ -607,3 +608,36 @@ POC questions:
   so, how codec endpoints are routed.
 - Define resource quotas and concurrency limits so temporary environments
   cannot exhaust the demo cluster.
+
+## Phase 11: SA Onboarding Skill
+
+Goal: provide a companion Codex skill that helps SAs migrate demo repositories
+onto the demo registry platform.
+
+The skill should behave like a guided wizard:
+
+- assess the target demo repo before editing;
+- check the registry for an existing matching or similar demo;
+- identify app components, Temporal workers, Dockerfiles, deployment manifests,
+  environment variables, health endpoints, custom secrets, and local-only
+  assumptions;
+- estimate migration lift and explain the required changes;
+- discuss the plan with the SA before making code changes;
+- create or update Dockerfiles when needed;
+- update apps/workers to read Temporal connection settings and secrets from
+  environment variables;
+- generate the project config file for this registry;
+- generate AWS Secrets Manager instructions for custom secrets under
+  `tmprl-cloud-demo/<project-name>/<secret-name>`;
+- run project validation and generation checks after producing the config.
+
+The first version should prefer the platform-managed deployment path. If a demo
+repo already contains Flux/Kustomize/Kubernetes overlays, the skill should
+assess them and explain migration options, but it should not make arbitrary BYO
+manifest support the default path.
+
+Suggested implementation location:
+
+```text
+skills/tmprl-demo-cloud-onboarding/SKILL.md
+```
