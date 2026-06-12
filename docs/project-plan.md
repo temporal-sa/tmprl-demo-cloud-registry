@@ -17,7 +17,7 @@ Keep it current as phases move from design to implementation.
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
-| 9. Per-Project Temporal UI | Deferred | Explore after core deploy path works; likely self-hosted Temporal UI pointed at Temporal Cloud with read-only namespace credentials. |
+| 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 
 ## Decisions
 
@@ -465,36 +465,51 @@ Open registry questions:
   `clusters/sa-demo/generated`, generated into the registry image at build time,
   or loaded dynamically from this repo?
 
-## Phase 9: Per-Project Temporal UI
+## Phase 9: Ephemeral Demo Environments
 
-Goal: optionally provide each demo with a Temporal UI view scoped to that
-project's Temporal Cloud namespace.
+Goal: let the registry create temporary demo environments with their own local
+Temporal dev server and UI when a user needs an inspectable Temporal environment.
 
 Status: deferred until core validation, generation, infra, Flux, build, and
 worker-controller flows are working.
 
+Decision:
+
+- Do not add a per-project self-hosted Temporal UI pointed at Temporal Cloud as
+  the default plan. That path requires solving UI-to-Cloud auth, API key
+  scoping, read-only behavior, and codec behavior. Instead, keep Cloud
+  namespaces focused on the real deployed demo, and use temporary environments
+  when an interactive Temporal UI is needed.
+
 Design direction:
 
-- Generate a self-hosted `temporalio/ui` deployment per project only when
-  explicitly enabled by platform config.
-- Point the UI at the project's Temporal Cloud endpoint and default namespace.
-- Protect the route with shared Temporal employee auth.
-- Use a separate read-only Namespace-scoped Temporal service account/API key for
-  the UI. Do not reuse the worker/API key.
-- Disable UI write actions with Temporal UI configuration as an additional
-  guardrail.
-- Store the UI key under the project secret prefix, for example
-  `tmprl-cloud-demo/<metadata.name>/temporal-ui`.
+- The registry worker owns lifecycle for temporary demo environments.
+- A temporary environment gets a generated Kubernetes namespace with a bounded
+  TTL and an owner/request id.
+- The registry deploys a local Temporal dev server pod in that namespace, using
+  a containerized Temporal CLI/server-dev mode rather than Temporal Cloud.
+- The registry deploys the demo app components into the same temporary
+  namespace, configured to talk to the local Temporal dev server instead of the
+  project's Temporal Cloud namespace.
+- The registry exposes the temporary app and Temporal UI through protected
+  routes.
+- Temporary environments are disposable and are not the source of truth for the
+  published demo's Cloud namespace or durable production-like state.
+- Cleanup must delete the temporary namespace and all child resources after the
+  TTL or explicit user action.
 
 POC questions:
 
-- Confirm the supported way for self-hosted Temporal UI to authenticate to
-  Temporal Cloud with API keys. If direct API key config is not supported, test
-  whether an in-cluster proxy can inject the required `Authorization` header and
-  whether `TEMPORAL_FORWARD_HEADERS` is sufficient.
-- Confirm Temporal Cloud read-only namespace permissions cover the UI workflows
-  list/detail/history/query use cases without allowing mutation.
-- Decide whether the route should be a project path such as `/temporal` or a
-  separate derived host.
-- Confirm payload codec behavior if a demo uses a codec server.
-- Define key rotation behavior separately from worker credentials.
+- Confirm the exact container image and entrypoint for running the Temporal CLI
+  dev server in Kubernetes.
+- Decide whether temporary namespaces should reuse the generated deployment
+  templates with substituted image tags or use a separate registry-worker
+  rendering path.
+- Define the temporary namespace naming convention and TTL labels.
+- Define how the registry worker rewrites Temporal connection env vars for
+  local dev-server mode.
+- Decide route shape for temporary app and Temporal UI access.
+- Decide whether temporary environments should support payload codecs and, if
+  so, how codec endpoints are routed.
+- Define resource quotas and concurrency limits so temporary environments
+  cannot exhaust the demo cluster.
