@@ -10,16 +10,16 @@ Keep it current as phases move from design to implementation.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
-| 2. Generator | In progress | Initial deterministic generator writes cluster manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders. |
-| 3. Platform Infra | Not started | Needs provider verification for Temporal Cloud resources and scoped API key support. |
-| 4. Flux Bootstrap | Not started | Must reconcile generated Kubernetes state from inside the cluster. |
+| 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
+| 3. Platform Infra | Design | Bootstrap/manual setup is documented in `BOOTSTRAP.md`; Temporal Cloud provider automation remains blocked on destructive lifecycle review. |
+| 4. Flux Bootstrap | In progress | `clusters/sa-demo/bootstrap/` installs CRD, operator RBAC/Deployment, platform ExternalSecrets, and generated `DemoProject` CRs. |
 | 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
-| 10. Registry Operator | Design | Explore treating the registry worker as a Temporal-backed operator that reconciles `DemoProject` CRs through entity workflows. |
-| 11. SA Onboarding Skill | Design | Companion wizard skill that assesses demo repos, estimates migration lift, creates needed code/config changes, and writes project configs. |
+| 10. Registry Operator | In progress | Python worker has a `DemoProject` watch loop, entity workflows, status updates, plan/apply reconcile modes, namespace/RBAC/metadata reconcile, image override deployment path, and smoke-check-gated promotion status. |
+| 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
 
 ## Decisions
 
@@ -78,6 +78,12 @@ Keep it current as phases move from design to implementation.
   represented by `projects/demo-registry.yaml`, reconciled as a `DemoProject`,
   and rolled out through the same build, smoke-test, auth, and status machinery
   as other demos.
+- `DemoProject` CRs are now the applied project contract after bootstrap. Older
+  generated Kubernetes files remain review artifacts until the operator fully
+  owns reconciliation for those resource kinds.
+- First deployment testing targets `dejavu-tacos`; image builds are still a
+  manual substitute represented by the
+  `registry.tmprl-demo.cloud/image-overrides` annotation.
 
 ## Architecture Pivot: Registry Operator
 

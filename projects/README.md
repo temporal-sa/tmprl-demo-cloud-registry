@@ -29,6 +29,9 @@ Rules:
   receive traffic for each path.
 - `ingress.temporalAuthRequired` defaults to `true` when omitted. Set it to
   `false` only for reviewed public demos.
+- `smokeCheck` defines the owner-approved HTTP path and expected status used to
+  promote a candidate route after deployment. Keep it narrow and stable, for
+  example `path: /health` with `expectedStatus: 200`.
 - Worker components automatically receive Temporal connection env vars and a
   namespace-scoped API key. Set `temporalAccess: true` only on non-worker
   components, such as an API server, that need to start or query workflows.

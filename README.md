@@ -44,6 +44,9 @@ and [schemas/project.schema.json](schemas/project.schema.json).
 See [docs/project-plan.md](docs/project-plan.md) for the phased implementation
 plan, current decisions, and open steering questions.
 
+See [BOOTSTRAP.md](BOOTSTRAP.md) for the manual setup checklist and first
+`dejavu-tacos` deployment test path.
+
 ## Validation
 
 Project config validation runs in GitHub Actions on pull requests and pushes.
@@ -70,10 +73,10 @@ committed for review. Regenerate it after changing project configs:
 python3 scripts/generate_projects.py
 ```
 
-The generator writes Kubernetes namespace/RBAC skeletons, Services, Traefik
-routes, ExternalSecret placeholders, worker-controller placeholders, project
-metadata, registry landing page data, Deployment templates, and a deterministic
-build plan, external resources plan, and `DemoProject` templates.
+The generator writes the applied `DemoProject` CR set, Kubernetes
+namespace/RBAC skeletons, Services, Traefik routes, ExternalSecret placeholders,
+worker-controller placeholders, project metadata, registry landing page data,
+Deployment templates, and deterministic build and external resources plans.
 
 Generated Deployment templates use `registry.invalid` placeholders and are not
 referenced from generated `kustomization.yaml` files until the platform build
@@ -88,9 +91,12 @@ The generated `external-resources-plan.json` lists the ECR repositories,
 Temporal Cloud namespace/API key intent, AWS Secrets Manager paths, and scoped
 IAM access that future platform infra automation should provision.
 
-Generated `demoproject-template.yaml` files are review artifacts for the
-registry-operator direction. They are not referenced from generated
-`kustomization.yaml` files until the CRD and operator bootstrap path exists.
+Generated `demoprojects.yaml` is referenced from the generated
+`kustomization.yaml` and is the desired state consumed by the registry
+operator after bootstrap. Per-project `demoproject-template.yaml` files remain
+review artifacts. The older generated Kubernetes manifests are not referenced
+from the applied top-level kustomization; the operator reconciles those
+resources from `DemoProject` status and spec.
 
 ## Generated Assets
 

@@ -7,15 +7,24 @@ onboarding.
 
 1. A project owner opens a PR adding `projects/<name>.yaml`.
 2. CI validates the config against `schemas/project.schema.json`.
-3. Platform automation renders managed assets.
-4. Terraform or provider-specific automation creates external resources:
-   ECR, Temporal Cloud namespace/API key, and AWS Secrets Manager values.
-5. Flux reconciles Kubernetes resources from inside the cluster.
+3. Platform automation renders reviewed `DemoProject` custom resources and
+   deterministic review artifacts.
+4. Flux bootstraps the registry/operator control plane from
+   `clusters/sa-demo/bootstrap/`.
+5. Flux applies generated `DemoProject` resources.
+6. The registry worker watches `DemoProject` resources and signals one durable
+   Temporal entity workflow per project.
+7. The entity workflow reconciles Kubernetes resources and records status. ECR,
+   Temporal Cloud namespace/API key, and AWS Secrets Manager lifecycle are
+   manual or provider-backed steps until destructive automation is reviewed.
 
 ## Boundaries
 
-Flux owns Kubernetes desired state. It should not need direct access to Temporal
-Cloud admin credentials.
+Flux owns bootstrap desired state and reviewed `DemoProject` resources. The
+registry operator owns project runtime resources created from those
+`DemoProject` specs.
+
+Flux should not need direct access to Temporal Cloud admin credentials.
 
 External control-plane assets are managed by a platform provisioner. Sensitive
 generated values, especially Temporal API keys, are stored in AWS Secrets
