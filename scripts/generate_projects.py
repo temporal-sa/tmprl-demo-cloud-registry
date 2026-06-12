@@ -36,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = ROOT / "clusters" / "sa-demo" / "generated"
 BASE_DOMAIN = "tmprl-demo.cloud"
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
+IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
+IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -132,6 +134,7 @@ def load_projects(paths: list[str]) -> list[Project]:
 
 def render_all(projects: list[Project]) -> dict[Path, str]:
     files: dict[Path, str] = {
+        Path("build-plan.json"): render_json(build_plan_payload(projects)),
         Path("kustomization.yaml"): render_kustomization(
             [project.name for project in projects]
         ),
@@ -480,7 +483,19 @@ def worker_versioning_env(project: Project, worker: dict[str, Any]) -> list[dict
 
 
 def placeholder_image(project: Project, build_name: str) -> str:
-    return f"registry.invalid/tmprl-cloud-demo/{project.name}/{build_name}:git-sha"
+    return f"registry.invalid/{image_repository_name(project, build_name)}:git-sha"
+
+
+def image_repository_name(project: Project, build_name: str) -> str:
+    return f"{IMAGE_REPOSITORY_PREFIX}/{project.name}/{build_name}"
+
+
+def image_uri_template(project: Project, build_name: str) -> str:
+    repository = image_repository_name(project, build_name)
+    return (
+        "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/"
+        f"{repository}:{IMAGE_TAG_TEMPLATE}"
+    )
 
 
 def ingress_resources(project: Project) -> list[dict[str, Any]]:
@@ -757,6 +772,59 @@ def registry_payload(projects: list[Project]) -> dict[str, Any]:
         "baseDomain": BASE_DOMAIN,
         "projects": [registry_entry(project) for project in projects],
     }
+
+
+def build_plan_payload(projects: list[Project]) -> dict[str, Any]:
+    return {
+        "apiVersion": "tmprl-demo.cloud/v1alpha1",
+        "kind": "BuildPlan",
+        "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
+        "tagPolicy": {
+            "source": "sourceCommitSha",
+            "template": IMAGE_TAG_TEMPLATE,
+        },
+        "projects": [project_build_plan(project) for project in projects],
+    }
+
+
+def project_build_plan(project: Project) -> dict[str, Any]:
+    return {
+        "name": project.name,
+        "source": project.data["source"],
+        "builds": [
+            build_plan_entry(project, build_name, build)
+            for build_name, build in sorted(builds(project_document(project)).items())
+        ],
+    }
+
+
+def build_plan_entry(
+    project: Project,
+    build_name: str,
+    build: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "name": build_name,
+        "context": build["context"],
+        "dockerfile": build["dockerfile"],
+        "image": {
+            "repositoryName": image_repository_name(project, build_name),
+            "tagTemplate": IMAGE_TAG_TEMPLATE,
+            "uriTemplate": image_uri_template(project, build_name),
+            "placeholder": placeholder_image(project, build_name),
+        },
+        "components": components_for_build(project, build_name),
+    }
+
+
+def components_for_build(project: Project, build_name: str) -> list[str]:
+    return [
+        component_name
+        for component_name, component in sorted(
+            components(project_document(project)).items()
+        )
+        if component.get("build") == build_name
+    ]
 
 
 def registry_entry(project: Project) -> dict[str, Any]:

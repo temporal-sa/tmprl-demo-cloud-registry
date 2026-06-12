@@ -10,7 +10,7 @@ Keep it current as phases move from design to implementation.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
-| 2. Generator | In progress | Initial deterministic generator writes cluster manifests, unapplied Deployment templates, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders. |
+| 2. Generator | In progress | Initial deterministic generator writes cluster manifests, unapplied Deployment templates, build plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders. |
 | 3. Platform Infra | Not started | Needs provider verification for Temporal Cloud resources and scoped API key support. |
 | 4. Flux Bootstrap | Not started | Must reconcile generated Kubernetes state from inside the cluster. |
 | 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
@@ -256,6 +256,8 @@ Initial generated resources:
 - ExternalSecret placeholder wiring
 - ConfigMap and Secret names for injected environment
 - unapplied Deployment templates for each component with placeholder image refs
+- generated `build-plan.json` with source repo, context, Dockerfile, derived
+  image repository/tag templates, and build consumers
 - registry landing page data from project configs
 - Worker Controller placeholder/template resources when enabled
 - Optional auth middleware references when shared auth is required

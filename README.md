@@ -72,11 +72,17 @@ python3 scripts/generate_projects.py
 
 The generator writes Kubernetes namespace/RBAC skeletons, Services, Traefik
 routes, ExternalSecret placeholders, worker-controller placeholders, project
-metadata, registry landing page data, and Deployment templates.
+metadata, registry landing page data, Deployment templates, and a deterministic
+build plan.
 
 Generated Deployment templates use `registry.invalid` placeholders and are not
 referenced from generated `kustomization.yaml` files until the platform build
 pipeline can replace them with immutable ECR image tags.
+
+The generated `build-plan.json` lists source repos, build contexts,
+Dockerfiles, derived ECR repository names, tag templates, and the components
+that consume each build. It is review data for now; it does not trigger image
+builds.
 
 ## Generated Assets
 
