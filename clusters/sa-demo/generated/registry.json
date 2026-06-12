@@ -4,11 +4,11 @@
     {
       "appUrl": "https://dejavu-tacos.tmprl-demo.cloud",
       "assets": {},
-      "authRequired": true,
+      "authRequired": false,
       "host": "dejavu-tacos.tmprl-demo.cloud",
       "links": {},
       "name": "dejavu-tacos",
-      "sourceRepo": "https://github.com/temporal-sa/taco-app-temporal-demo",
+      "sourceRepo": "https://github.com/temporal-sa/demo-dejavu-tacos",
       "summary": "Interactive taco shop demo showing Temporal workflows replacing fragile checkout orchestration with durable execution, retries, and recoverable failures.",
       "tags": [
         "Durable Execution",

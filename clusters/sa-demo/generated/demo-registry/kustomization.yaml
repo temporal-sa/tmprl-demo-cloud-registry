@@ -6,6 +6,7 @@ resources:
 - rbac.yaml
 - platform-metadata.yaml
 - services.yaml
+- certificate.yaml
 - auth-middleware.yaml
 - ingressroute.yaml
 - external-secret.yaml

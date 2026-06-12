@@ -51,7 +51,7 @@
       "name": "dejavu-tacos",
       "source": {
         "branch": "main",
-        "repo": "https://github.com/temporal-sa/taco-app-temporal-demo"
+        "repo": "https://github.com/temporal-sa/demo-dejavu-tacos"
       }
     },
     {

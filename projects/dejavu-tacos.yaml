@@ -19,8 +19,15 @@ registry:
     - .NET
 
 source:
-  repo: https://github.com/temporal-sa/taco-app-temporal-demo
+  repo: https://github.com/temporal-sa/demo-dejavu-tacos
   branch: main
+
+rollout:
+  sourceCommitSha: 319c1c183ea30fd2d14212d06513f39da308a524
+  imageOverrides:
+    backend: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-app:20260612-121343
+    frontend: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-frontend:20260612-121343
+    worker-python: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-app:20260612-121343
 
 builds:
   frontend:
@@ -57,6 +64,12 @@ components:
 
   worker-python:
     build: worker-python
+    command:
+      - uv
+      - run
+      - --package
+      - dejavu-workflows
+      - worker
     worker:
       taskQueue: dejavu-tacos
     env:
@@ -65,6 +78,7 @@ components:
 
 ingress:
   subdomain: dejavu-tacos
+  temporalAuthRequired: false
   routes:
     - pathPrefix: /api
       component: backend

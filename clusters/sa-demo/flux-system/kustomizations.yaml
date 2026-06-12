@@ -1,0 +1,81 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-install
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/addons/external-secrets/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-stores
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-install
+  interval: 5m
+  path: ./clusters/sa-demo/addons/external-secrets/stores
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-crds
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/bootstrap/crds
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-operator
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-stores
+    - name: registry-crds
+  interval: 5m
+  path: ./clusters/sa-demo/bootstrap/registry-operator
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-projects
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: registry-operator
+  interval: 5m
+  path: ./clusters/sa-demo/generated
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true

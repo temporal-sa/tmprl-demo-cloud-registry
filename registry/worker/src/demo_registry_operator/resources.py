@@ -8,6 +8,8 @@ from typing import Any
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
 IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
+TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -137,6 +139,8 @@ def runtime_resources(
 
 def promotion_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     resources = []
+    if ingress_routes(demo_project):
+        resources.append(certificate_resource(demo_project))
     if auth_required(demo_project):
         resources.append(auth_middleware(demo_project))
     resources.extend(ingress_resources(demo_project))
@@ -437,7 +441,7 @@ def ingress_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
 
     routes = [ingress_route(demo_project, route_spec) for route_spec in route_specs]
     base = {
-        "apiVersion": "traefik.io/v1alpha1",
+        "apiVersion": TRAEFIK_API_VERSION,
         "kind": "IngressRoute",
         "metadata": {
             "name": project_name(demo_project),
@@ -472,6 +476,31 @@ def ingress_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     }
     http["spec"].pop("tls", None)
     return [base, http]
+
+
+def certificate_resource(demo_project: dict[str, Any]) -> dict[str, Any]:
+    name = project_name(demo_project)
+    return {
+        "apiVersion": "cert-manager.io/v1",
+        "kind": "Certificate",
+        "metadata": {
+            "name": f"{name}-tls",
+            "namespace": project_namespace(demo_project),
+            "labels": common_labels(demo_project),
+        },
+        "spec": {
+            "dnsNames": [project_host(demo_project)],
+            "issuerRef": {
+                "group": "cert-manager.io",
+                "kind": "ClusterIssuer",
+                "name": "letsencrypt",
+            },
+            "privateKey": {
+                "rotationPolicy": "Always",
+            },
+            "secretName": f"{name}-tls",
+        },
+    }
 
 
 def ingress_route(
@@ -510,20 +539,19 @@ def ingress_route(
 
 def auth_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
     return {
-        "apiVersion": "traefik.io/v1alpha1",
+        "apiVersion": TRAEFIK_API_VERSION,
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_MIDDLEWARE_NAME,
             "namespace": project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
-                "platform.temporal.io/description": "Shared Temporal employee auth forward-auth middleware.",
+                "platform.temporal.io/description": "Temporal employee catalog auth forward-auth middleware.",
             },
         },
         "spec": {
             "forwardAuth": {
-                "address": "https://auth.tmprl-demo.cloud/traefik/verify",
-                "trustForwardHeader": True,
+                "address": CATALOG_AUTH_VERIFY_URL,
                 "authResponseHeaders": [
                     "X-Temporal-Auth-JWT",
                     "X-Temporal-Auth-Subject",
@@ -549,8 +577,8 @@ def external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
         "spec": {
             "refreshInterval": "1h",
             "secretStoreRef": {
-                "name": "project-secrets",
-                "kind": "SecretStore",
+                "name": "platform-secrets",
+                "kind": "ClusterSecretStore",
             },
             "target": {
                 "name": "temporal-credentials",
@@ -611,8 +639,8 @@ def user_external_secrets(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
                 "spec": {
                     "refreshInterval": "1h",
                     "secretStoreRef": {
-                        "name": "project-secrets",
-                        "kind": "SecretStore",
+                        "name": "platform-secrets",
+                        "kind": "ClusterSecretStore",
                     },
                     "target": {
                         "name": user_secret_kubernetes_name(secret_name),

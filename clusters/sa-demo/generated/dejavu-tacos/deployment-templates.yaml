@@ -114,6 +114,12 @@ spec:
       - name: worker-python
         image: registry.invalid/tmprl-cloud-demo/dejavu-tacos/worker-python:git-sha
         imagePullPolicy: IfNotPresent
+        command:
+        - uv
+        - run
+        - --package
+        - dejavu-workflows
+        - worker
         envFrom:
         - secretRef:
             name: temporal-credentials

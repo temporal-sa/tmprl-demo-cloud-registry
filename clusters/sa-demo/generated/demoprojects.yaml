@@ -9,9 +9,11 @@ metadata:
     platform.temporal.io/project: dejavu-tacos
   annotations:
     platform.temporal.io/source: projects/dejavu-tacos.yaml
+    registry.tmprl-demo.cloud/image-overrides: '{"backend":"429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-app:20260612-121343","frontend":"429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-frontend:20260612-121343","worker-python":"429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-dejavu-tacos-app:20260612-121343"}'
+    registry.tmprl-demo.cloud/source-commit-sha: 319c1c183ea30fd2d14212d06513f39da308a524
 spec:
   source:
-    repo: https://github.com/temporal-sa/taco-app-temporal-demo
+    repo: https://github.com/temporal-sa/demo-dejavu-tacos
     branch: main
   registry:
     title: Deja Vu Tacos
@@ -62,6 +64,12 @@ spec:
         value: python
     worker-python:
       build: worker-python
+      command:
+      - uv
+      - run
+      - --package
+      - dejavu-workflows
+      - worker
       worker:
         taskQueue: dejavu-tacos
       env:
@@ -69,6 +77,7 @@ spec:
         value: http://backend:8000
   ingress:
     subdomain: dejavu-tacos
+    temporalAuthRequired: false
     routes:
     - pathPrefix: /api
       component: backend

@@ -64,6 +64,9 @@
     "ingress": {
       "$ref": "#/$defs/ingress"
     },
+    "rollout": {
+      "$ref": "#/$defs/rollout"
+    },
     "smokeCheck": {
       "$ref": "#/$defs/smokeCheck"
     }
@@ -365,6 +368,26 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 160
+        }
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageOverrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sourceCommitSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{7,40}$"
         }
       }
     },

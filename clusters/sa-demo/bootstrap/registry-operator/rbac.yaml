@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: demo-registry-operator
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/tmprl-demo-registry-operator
+    platform.temporal.io/aws-role: not-required-yet
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -75,10 +75,18 @@ rules:
       - create
       - patch
   - apiGroups:
-      - traefik.io
+      - traefik.containo.us
     resources:
       - ingressroutes
       - middlewares
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - certificates
     verbs:
       - get
       - create

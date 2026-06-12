@@ -36,6 +36,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = ROOT / "clusters" / "sa-demo" / "generated"
 BASE_DOMAIN = "tmprl-demo.cloud"
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
+TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
+IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
+SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
 IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
@@ -194,6 +198,10 @@ def render_project(project: Project) -> dict[Path, str]:
 
     ingress_resource_list = ingress_resources(project)
     if ingress_resource_list:
+        resources.append("certificate.yaml")
+        rendered[Path("certificate.yaml")] = render_yaml_documents(
+            [certificate_resource(project)]
+        )
         if auth_required(project):
             resources.append("auth-middleware.yaml")
             rendered[Path("auth-middleware.yaml")] = render_yaml_documents(
@@ -248,6 +256,18 @@ def demo_project_resource(project: Project, *, review_artifact: bool) -> dict[st
     annotations = {
         "platform.temporal.io/source": relative_path(project.path),
     }
+    rollout = project.data.get("rollout")
+    if isinstance(rollout, dict):
+        image_overrides = rollout.get("imageOverrides")
+        if isinstance(image_overrides, dict) and image_overrides:
+            annotations[IMAGE_OVERRIDES_ANNOTATION] = json.dumps(
+                image_overrides,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        source_commit_sha = rollout.get("sourceCommitSha")
+        if isinstance(source_commit_sha, str) and source_commit_sha:
+            annotations[SOURCE_COMMIT_ANNOTATION] = source_commit_sha
     if review_artifact:
         annotations["platform.temporal.io/review-artifact"] = "true"
 
@@ -559,7 +579,7 @@ def ingress_resources(project: Project) -> list[dict[str, Any]]:
 
     routes = [ingress_route(project, route_spec) for route_spec in route_specs]
     base = {
-        "apiVersion": "traefik.io/v1alpha1",
+        "apiVersion": TRAEFIK_API_VERSION,
         "kind": "IngressRoute",
         "metadata": {
             "name": project.name,
@@ -596,6 +616,30 @@ def ingress_resources(project: Project) -> list[dict[str, Any]]:
     return [base, http]
 
 
+def certificate_resource(project: Project) -> dict[str, Any]:
+    return {
+        "apiVersion": "cert-manager.io/v1",
+        "kind": "Certificate",
+        "metadata": {
+            "name": f"{project.name}-tls",
+            "namespace": project.namespace,
+            "labels": common_labels(project),
+        },
+        "spec": {
+            "dnsNames": [project.host],
+            "issuerRef": {
+                "group": "cert-manager.io",
+                "kind": "ClusterIssuer",
+                "name": "letsencrypt",
+            },
+            "privateKey": {
+                "rotationPolicy": "Always",
+            },
+            "secretName": f"{project.name}-tls",
+        },
+    }
+
+
 def ingress_route(project: Project, route_spec: dict[str, Any]) -> dict[str, Any]:
     match = f"Host(`{project.host}`)"
     path_prefix = route_spec.get("pathPrefix")
@@ -629,7 +673,7 @@ def ingress_route(project: Project, route_spec: dict[str, Any]) -> dict[str, Any
 
 def auth_middleware(project: Project) -> dict[str, Any]:
     return {
-        "apiVersion": "traefik.io/v1alpha1",
+        "apiVersion": TRAEFIK_API_VERSION,
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_MIDDLEWARE_NAME,
@@ -637,13 +681,12 @@ def auth_middleware(project: Project) -> dict[str, Any]:
             "labels": common_labels(project),
             "annotations": {
                 "platform.temporal.io/placeholder": "true",
-                "platform.temporal.io/description": "Shared auth service endpoint will be finalized in the auth phase.",
+                "platform.temporal.io/description": "Temporal employee catalog auth forward-auth middleware.",
             },
         },
         "spec": {
             "forwardAuth": {
-                "address": "https://auth.tmprl-demo.cloud/traefik/verify",
-                "trustForwardHeader": True,
+                "address": CATALOG_AUTH_VERIFY_URL,
                 "authResponseHeaders": [
                     "X-Temporal-Auth-JWT",
                     "X-Temporal-Auth-Subject",
@@ -670,8 +713,8 @@ def external_secret(project: Project) -> dict[str, Any]:
         "spec": {
             "refreshInterval": "1h",
             "secretStoreRef": {
-                "name": "project-secrets",
-                "kind": "SecretStore",
+                "name": "platform-secrets",
+                "kind": "ClusterSecretStore",
             },
             "target": {
                 "name": "temporal-credentials",
@@ -732,8 +775,8 @@ def user_external_secrets(project: Project) -> list[dict[str, Any]]:
                 "spec": {
                     "refreshInterval": "1h",
                     "secretStoreRef": {
-                        "name": "project-secrets",
-                        "kind": "SecretStore",
+                        "name": "platform-secrets",
+                        "kind": "ClusterSecretStore",
                     },
                     "target": {
                         "name": user_secret_kubernetes_name(secret_name),
