@@ -73,8 +73,10 @@ Keep it current as phases move from design to implementation.
 - Project ingress auth is secure by default. If the auth field is omitted, the
   platform requires shared Temporal employee auth. Public demos must explicitly
   opt out with `temporalAuthRequired: false`.
-- The registry landing page is managed as a project in this repo so it uses the
-  same build, deploy, auth, and Temporal credential path as other demos.
+- The registry is itself a demo. After initial bootstrap, it should be
+  represented by `projects/demo-registry.yaml`, reconciled as a `DemoProject`,
+  and rolled out through the same build, smoke-test, auth, and status machinery
+  as other demos.
 
 ## Architecture Pivot: Registry Operator
 
@@ -86,6 +88,8 @@ Proposed shape:
 
 - Flux bootstraps the registry/operator deployment, CRDs, RBAC, and the
   reviewed `DemoProject` custom resources.
+- The registry/operator bootstrap is the only special case. Once it is running,
+  the registry's own `DemoProject` entity workflow manages the registry demo.
 - Each project config is rendered into a `DemoProject` CR, or eventually
   authored directly as that CR shape if the owner-facing API stabilizes there.
 - The registry worker watches `DemoProject` resources and starts one durable
@@ -111,6 +115,11 @@ Bootstrap cost:
 
 - The registry/operator has to be installed manually or through a small
   bootstrap path before it can manage other demos.
+- The bootstrap path should install only the minimum viable registry/operator
+  control plane: CRDs, RBAC, service account/IAM, initial image, and enough
+  configuration to reconcile the `demo-registry` `DemoProject`.
+- After bootstrap, registry upgrades should go through the same candidate
+  rollout, smoke-test, and promotion workflow as other demos.
 - The operator service account/IAM role becomes high-value and must be scoped,
   audited, and separated from project runtime credentials.
 - CRD versioning and workflow versioning become part of the platform contract.
@@ -504,8 +513,8 @@ Important security notes:
 
 ## Phase 8: Registry App
 
-Goal: build the registry landing page from project configs and host it through
-the same platform path as other demos.
+Goal: build the registry landing page and operator worker as the first
+self-managed demo.
 
 Initial project config:
 
@@ -513,6 +522,13 @@ Initial project config:
 - source repo: this repo
 - ingress subdomain: `registry`
 - components: `web` and `worker`
+
+Bootstrap rule:
+
+- The initial registry/operator install is manual or handled by a minimal
+  bootstrap path because the operator cannot create itself from nothing.
+- Once running, the registry is reconciled from its own `DemoProject` and uses
+  the same smoke-test-gated rollout path as other demos.
 
 Registry web responsibilities:
 
