@@ -1,7 +1,11 @@
-# Cluster GitOps Config
+# Demo Cloud Registry
 
 Shared onboarding configuration for projects deployed into Temporal demo
 clusters through Flux.
+
+The demo registry landing page is also tracked as a project in this repo. Its
+future worker will own shared demo environment management workflows for
+published demos.
 
 Project owners add a reviewed file under `projects/`. The platform owns the
 generators, Flux installation, cluster add-ons, and external resource
@@ -20,17 +24,40 @@ provisioning needed to turn that project intent into managed infrastructure.
 
 Each project config must specify:
 
-- a unique Kubernetes namespace;
 - a source repository in the `temporal-sa` GitHub organization;
-- container build context and Dockerfile;
-- runtime pods/services;
-- one explicit ingress target service and port;
+- one or more container build contexts and Dockerfiles;
+- runtime components that reference those builds;
+- component ports when the platform should generate stable service DNS;
+- ingress routes that explicitly target a component and named port;
+- registry display metadata for the landing page;
 - a subdomain only. The platform always appends `tmprl-demo.cloud`;
-- Temporal namespace intent and the environment variable names the platform
-  should inject.
+- which non-worker components need Temporal credentials.
 
-See [projects/temporal-agent-harness.yaml](projects/temporal-agent-harness.yaml)
+Kubernetes namespaces, Temporal Cloud namespaces, Temporal API keys, ECR
+repositories, image tags, and standard Temporal env vars are derived by the
+platform.
+
+See [projects/dejavu-tacos.yaml](projects/dejavu-tacos.yaml)
 and [schemas/project.schema.json](schemas/project.schema.json).
+
+See [docs/project-plan.md](docs/project-plan.md) for the phased implementation
+plan, current decisions, and open steering questions.
+
+## Validation
+
+Project config validation runs in GitHub Actions on pull requests and pushes.
+To run the same validation locally:
+
+```sh
+python3 -m pip install -r requirements-dev.txt
+python3 scripts/validate_projects.py
+```
+
+The validator checks each `projects/*.yaml` file against the project schema and
+also enforces cross-file and cross-field rules, including unique project names,
+derived namespaces, ingress subdomains, valid build/component references, valid
+ingress routes, stable service DNS, registry display metadata, `temporal-sa`
+source repositories, and subdomain-only host configuration.
 
 ## Generated Assets
 
@@ -44,6 +71,7 @@ The platform provisioner is expected to generate or maintain:
 - AWS Secrets Manager entries for generated sensitive values;
 - External Secrets resources for Kubernetes secret sync;
 - Traefik `IngressRoute` for the requested subdomain;
+- registry landing page entries and derived links;
 - Temporal worker controller resources when workers are declared.
 
 Deletion of destructive external resources, especially Temporal namespaces,

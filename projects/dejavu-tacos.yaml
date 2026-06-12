@@ -1,0 +1,76 @@
+metadata:
+  name: dejavu-tacos
+
+registry:
+  title: Deja Vu Tacos
+  summary: Interactive taco shop demo showing Temporal workflows replacing fragile checkout orchestration with durable execution, retries, and recoverable failures.
+  tags:
+    - Durable Execution
+    - Retries
+    - Sagas
+    - Compensation
+    - Signals
+    - Queries
+  temporalSdks:
+    - Python
+    - Go
+    - TypeScript
+    - Java
+    - .NET
+
+source:
+  repo: https://github.com/temporal-sa/taco-app-temporal-demo
+  branch: main
+
+builds:
+  frontend:
+    context: .
+    dockerfile: docker/frontend.Dockerfile
+  backend:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  worker-python:
+    context: .
+    dockerfile: docker/worker-python.Dockerfile
+
+components:
+  frontend:
+    build: frontend
+    ports:
+      - name: http
+        containerPort: 5173
+        servicePort: 80
+
+  backend:
+    build: backend
+    serviceName: backend
+    temporalAccess: true
+    ports:
+      - name: http
+        containerPort: 8000
+        servicePort: 8000
+    env:
+      - name: DEJAVU_RELOAD
+        value: "0"
+      - name: DEJAVU_WORKER_LANGUAGE
+        value: python
+
+  worker-python:
+    build: worker-python
+    worker:
+      taskQueue: dejavu-tacos
+    env:
+      - name: DEJAVU_BACKEND_URL
+        valueFrom:
+          serviceUrl:
+            component: backend
+            port: http
+
+ingress:
+  subdomain: dejavu-tacos
+  routes:
+    - pathPrefix: /api
+      component: backend
+      port: http
+    - component: frontend
+      port: http

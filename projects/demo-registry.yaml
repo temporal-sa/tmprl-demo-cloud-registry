@@ -1,0 +1,45 @@
+metadata:
+  name: demo-registry
+
+registry:
+  title: Demo Cloud Registry
+  summary: Landing page for Temporal demo projects, generated from reviewed project configs and backed by platform workflows for demo environment management.
+  tags:
+    - Registry
+    - Platform
+    - Demo Management
+    - Temporal Cloud
+  temporalSdks:
+    - Python
+
+source:
+  repo: https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry
+  branch: main
+
+builds:
+  web:
+    context: .
+    dockerfile: registry/web/Dockerfile
+  worker:
+    context: .
+    dockerfile: registry/worker/Dockerfile
+
+components:
+  web:
+    build: web
+    temporalAccess: true
+    ports:
+      - name: http
+        containerPort: 8080
+        servicePort: 80
+
+  worker:
+    build: worker
+    worker:
+      taskQueue: demo-registry-management
+
+ingress:
+  subdomain: registry
+  routes:
+    - component: web
+      port: http
