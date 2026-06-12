@@ -38,6 +38,7 @@ BASE_DOMAIN = "tmprl-demo.cloud"
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
 IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
 IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
+DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
 STANDARD_TEMPORAL_ENV = {
@@ -181,6 +182,10 @@ def render_project(project: Project) -> dict[Path, str]:
             deployment_resource_list
         )
 
+    rendered[Path("demoproject-template.yaml")] = render_yaml_documents(
+        [demo_project_resource(project)]
+    )
+
     ingress_resource_list = ingress_resources(project)
     if ingress_resource_list:
         if auth_required(project):
@@ -213,6 +218,35 @@ def render_project(project: Project) -> dict[Path, str]:
 
     rendered[Path("kustomization.yaml")] = render_kustomization(resources)
     return rendered
+
+
+def demo_project_resource(project: Project) -> dict[str, Any]:
+    return {
+        "apiVersion": DEMO_PROJECT_API_VERSION,
+        "kind": "DemoProject",
+        "metadata": {
+            "name": project.name,
+            "labels": common_labels(project),
+            "annotations": {
+                "platform.temporal.io/source": relative_path(project.path),
+                "platform.temporal.io/review-artifact": "true",
+            },
+        },
+        "spec": {
+            "source": project.data["source"],
+            "registry": project.data["registry"],
+            "builds": project.data["builds"],
+            "components": project.data["components"],
+            "ingress": project.data["ingress"],
+            "derived": {
+                "host": project.host,
+                "kubernetesNamespace": project.namespace,
+                "temporalNamespace": project.name,
+                "secretPrefix": project_secret_prefix(project),
+                "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
+            },
+        },
+    }
 
 
 def namespace_resource(project: Project) -> dict[str, Any]:

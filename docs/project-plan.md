@@ -313,8 +313,8 @@ Initial generated resources:
   image repository/tag templates, and build consumers
 - generated `external-resources-plan.json` with ECR, Temporal Cloud,
   AWS Secrets Manager, and scoped IAM intent
-- future generated `DemoProject` CRs as the desired-state handoff to the
-  registry operator
+- generated but unapplied `DemoProject` CR templates as the desired-state
+  handoff to the registry operator
 - registry landing page data from project configs
 - Worker Controller placeholder/template resources when enabled
 - Optional auth middleware references when shared auth is required

@@ -73,7 +73,7 @@ python3 scripts/generate_projects.py
 The generator writes Kubernetes namespace/RBAC skeletons, Services, Traefik
 routes, ExternalSecret placeholders, worker-controller placeholders, project
 metadata, registry landing page data, Deployment templates, and a deterministic
-build plan and external resources plan.
+build plan, external resources plan, and `DemoProject` templates.
 
 Generated Deployment templates use `registry.invalid` placeholders and are not
 referenced from generated `kustomization.yaml` files until the platform build
@@ -87,6 +87,10 @@ builds.
 The generated `external-resources-plan.json` lists the ECR repositories,
 Temporal Cloud namespace/API key intent, AWS Secrets Manager paths, and scoped
 IAM access that future platform infra automation should provision.
+
+Generated `demoproject-template.yaml` files are review artifacts for the
+registry-operator direction. They are not referenced from generated
+`kustomization.yaml` files until the CRD and operator bootstrap path exists.
 
 ## Generated Assets
 
