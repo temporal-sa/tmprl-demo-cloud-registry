@@ -18,6 +18,7 @@ Keep it current as phases move from design to implementation.
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
+| 10. Registry Operator | Design | Explore treating the registry worker as a Temporal-backed operator that reconciles `DemoProject` CRs through entity workflows. |
 
 ## Decisions
 
@@ -74,6 +75,57 @@ Keep it current as phases move from design to implementation.
   opt out with `temporalAuthRequired: false`.
 - The registry landing page is managed as a project in this repo so it uses the
   same build, deploy, auth, and Temporal credential path as other demos.
+
+## Architecture Pivot: Registry Operator
+
+We are exploring a pivot from "GitOps generates every final resource" to
+"GitOps declares desired demo resources, and a Temporal-backed registry operator
+reconciles them."
+
+Proposed shape:
+
+- Flux bootstraps the registry/operator deployment, CRDs, RBAC, and the
+  reviewed `DemoProject` custom resources.
+- Each project config is rendered into a `DemoProject` CR, or eventually
+  authored directly as that CR shape if the owner-facing API stabilizes there.
+- The registry worker watches `DemoProject` resources and starts one durable
+  entity workflow per project, keyed by project name.
+- The entity workflow owns reconciliation for namespace/RBAC, ECR repositories,
+  image build orchestration, Temporal Cloud namespace/API key lifecycle, AWS
+  Secrets Manager paths, ExternalSecret wiring, Traefik routing, app
+  deployments, Worker Controller resources, and registry metadata/status.
+- The workflow writes status back to the `DemoProject` resource and/or registry
+  data so users can see whether the demo is healthy, rolling out, blocked, or
+  waiting for approval.
+
+Why this is attractive:
+
+- Temporal is a better fit than static YAML for lifecycle tasks such as API key
+  rotation, external-resource deletion guards, build retries, smoke tests,
+  approval gates, and ephemeral demo environment cleanup.
+- Git and Flux still provide reviewed desired state and cluster bootstrap.
+- The operator can use narrow credentials and explicit workflows instead of
+  giving project owners direct Kubernetes, AWS, or Temporal admin access.
+
+Bootstrap cost:
+
+- The registry/operator has to be installed manually or through a small
+  bootstrap path before it can manage other demos.
+- The operator service account/IAM role becomes high-value and must be scoped,
+  audited, and separated from project runtime credentials.
+- CRD versioning and workflow versioning become part of the platform contract.
+
+Pragmatic migration path:
+
+- Keep the current owner-facing project YAML and validator for now.
+- Generate a `DemoProject` CR per project as the next contract artifact.
+- Keep existing generated manifests/plans as review/reference output while
+  moving source-of-truth reconciliation into the operator.
+- Teach the operator to reconcile one narrow thing first, such as project
+  namespace and status.
+- Expand reconciliation in controlled slices: ECR, secrets, Temporal namespace
+  and API keys, build orchestration, app rollout, Worker Controller resources,
+  and ephemeral environments.
 
 ## Phase 1: Validation
 
@@ -261,6 +313,8 @@ Initial generated resources:
   image repository/tag templates, and build consumers
 - generated `external-resources-plan.json` with ECR, Temporal Cloud,
   AWS Secrets Manager, and scoped IAM intent
+- future generated `DemoProject` CRs as the desired-state handoff to the
+  registry operator
 - registry landing page data from project configs
 - Worker Controller placeholder/template resources when enabled
 - Optional auth middleware references when shared auth is required
@@ -343,9 +397,27 @@ Requirements:
 - Build credentials must be limited to that project's image repository.
 - Build workers must not have Temporal admin privileges or broad AWS access.
 
+Operator rollout direction:
+
+- A source push starts or signals the project entity workflow.
+- The workflow builds new immutable images and deploys candidate pods without
+  immediately moving public traffic.
+- The project config should allow a simple owner-defined smoke or health check
+  for the published demo path.
+- The workflow waits for Kubernetes readiness and then runs the smoke check
+  against the candidate version.
+- Traefik routing moves to the candidate only after the smoke check succeeds.
+- On failure, the workflow keeps the previous healthy route active, records
+  failure status, and avoids promoting the broken version.
+- Rollout status should be visible in the registry and on the `DemoProject`
+  custom resource.
+
 Open choice:
 
 - CodeBuild vs GitHub Actions vs in-AWS/cluster build worker.
+- Whether candidate rollout uses separate Kubernetes Deployments, weighted
+  Traefik services, distinct preview routes, or another promotion mechanism.
+- The exact owner-facing smoke check shape.
 
 ## Phase 6: Temporal Worker Controller
 
