@@ -61,10 +61,7 @@ components:
       taskQueue: dejavu-tacos
     env:
       - name: DEJAVU_BACKEND_URL
-        valueFrom:
-          serviceUrl:
-            component: backend
-            port: http
+        value: http://backend:8000
 
 ingress:
   subdomain: dejavu-tacos

@@ -43,9 +43,6 @@ components:
         containerPort: 8000
         servicePort: 80
     env:
-      - name: SIMPLE_CHAT_PUBLIC_URL
-        valueFrom:
-          ingressUrl: true
       - name: SIMPLE_CHAT_TASK_QUEUE
         value: simple-chat-agent-testing
       - name: SIMPLE_CHAT_WORKFLOW_PREFIX
@@ -71,14 +68,8 @@ components:
         containerPort: 8001
         servicePort: 80
     env:
-      - name: SIMPLE_CHAT_PUBLIC_URL
-        valueFrom:
-          ingressUrl: true
       - name: SIMPLE_CHAT_STREAM_SINK_URL
-        valueFrom:
-          serviceUrl:
-            component: api
-            port: http
+        value: http://api:80
       - name: SIMPLE_CHAT_TASK_QUEUE
         value: simple-chat-agent-testing
       - name: SIMPLE_CHAT_WORKFLOW_PREFIX

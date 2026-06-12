@@ -167,6 +167,12 @@ def render_project(project: Project) -> dict[Path, str]:
         resources.append("services.yaml")
         rendered[Path("services.yaml")] = render_yaml_documents(service_resources)
 
+    deployment_resource_list = deployments(project)
+    if deployment_resource_list:
+        rendered[Path("deployment-templates.yaml")] = render_yaml_documents(
+            deployment_resource_list
+        )
+
     ingress_resource_list = ingress_resources(project)
     if ingress_resource_list:
         if auth_required(project):
@@ -311,6 +317,170 @@ def services(project: Project) -> list[dict[str, Any]]:
         )
 
     return resources
+
+
+def deployments(project: Project) -> list[dict[str, Any]]:
+    resources = []
+
+    for component_name, component in sorted(
+        components(project_document(project)).items()
+    ):
+        resources.append(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": component_name,
+                    "namespace": project.namespace,
+                    "labels": component_labels(project, component_name),
+                    "annotations": {
+                        "platform.temporal.io/placeholder": "true",
+                        "platform.temporal.io/build": component["build"],
+                    },
+                },
+                "spec": {
+                    "replicas": component.get("replicas", 1),
+                    "selector": {
+                        "matchLabels": selector_labels(project, component_name),
+                    },
+                    "template": {
+                        "metadata": {
+                            "labels": component_labels(project, component_name),
+                        },
+                        "spec": {
+                            "serviceAccountName": service_account_for_component(
+                                component_name
+                            ),
+                            "automountServiceAccountToken": False,
+                            "containers": [
+                                container(project, component_name, component),
+                            ],
+                        },
+                    },
+                },
+            }
+        )
+
+    return resources
+
+
+def container(
+    project: Project,
+    component_name: str,
+    component: dict[str, Any],
+) -> dict[str, Any]:
+    rendered: dict[str, Any] = {
+        "name": component_name,
+        "image": placeholder_image(project, component["build"]),
+        "imagePullPolicy": "IfNotPresent",
+    }
+
+    if component.get("command"):
+        rendered["command"] = component["command"]
+    if component.get("args"):
+        rendered["args"] = component["args"]
+
+    ports = component_ports(component)
+    if ports:
+        rendered["ports"] = [
+            {
+                "name": port["name"],
+                "containerPort": port["containerPort"],
+            }
+            for port in ports
+        ]
+
+    env_from = env_from_refs(project, component)
+    if env_from:
+        rendered["envFrom"] = env_from
+
+    env = env_vars(project, component)
+    if env:
+        rendered["env"] = env
+
+    return rendered
+
+
+def env_from_refs(project: Project, component: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = []
+    if component_needs_temporal(component):
+        refs.append({"secretRef": {"name": "temporal-credentials"}})
+
+    references = component.get("secrets")
+    if isinstance(references, list):
+        for secret_name in sorted({item for item in references if isinstance(item, str)}):
+            refs.append(
+                {
+                    "secretRef": {
+                        "name": user_secret_kubernetes_name(secret_name),
+                    }
+                }
+            )
+
+    return refs
+
+
+def component_needs_temporal(component: dict[str, Any]) -> bool:
+    return (
+        isinstance(component.get("worker"), dict)
+        or component.get("temporalAccess") is True
+    )
+
+
+def env_vars(project: Project, component: dict[str, Any]) -> list[dict[str, str]]:
+    rendered = [
+        render_env_var(item)
+        for item in component.get("env", [])
+        if isinstance(item, dict)
+    ]
+
+    worker = component.get("worker")
+    if isinstance(worker, dict):
+        rendered.extend(worker_versioning_env(project, worker))
+
+    return rendered
+
+
+def render_env_var(item: dict[str, Any]) -> dict[str, str]:
+    return {"name": item["name"], "value": str(item["value"])}
+
+
+def worker_versioning_env(project: Project, worker: dict[str, Any]) -> list[dict[str, str]]:
+    versioning = worker.get("versioning")
+    if not isinstance(versioning, dict):
+        return []
+
+    env = versioning.get("env")
+    if not isinstance(env, dict):
+        return []
+
+    rendered = []
+    if isinstance(env.get("enabled"), str):
+        rendered.append(
+            {
+                "name": env["enabled"],
+                "value": str(versioning.get("enabled", False)).lower(),
+            }
+        )
+    if isinstance(env.get("buildId"), str):
+        rendered.append(
+            {
+                "name": env["buildId"],
+                "value": "PLACEHOLDER_BUILD_ID",
+            }
+        )
+    if isinstance(env.get("deploymentName"), str):
+        rendered.append(
+            {
+                "name": env["deploymentName"],
+                "value": worker["taskQueue"],
+            }
+        )
+    return rendered
+
+
+def placeholder_image(project: Project, build_name: str) -> str:
+    return f"registry.invalid/tmprl-cloud-demo/{project.name}/{build_name}:git-sha"
 
 
 def ingress_resources(project: Project) -> list[dict[str, Any]]:

@@ -70,9 +70,13 @@ committed for review. Regenerate it after changing project configs:
 python3 scripts/generate_projects.py
 ```
 
-The generator writes Kubernetes namespace/RBAC skeletons, Services,
-Traefik routes, ExternalSecret placeholders, worker-controller placeholders,
-project metadata, and registry landing page data.
+The generator writes Kubernetes namespace/RBAC skeletons, Services, Traefik
+routes, ExternalSecret placeholders, worker-controller placeholders, project
+metadata, registry landing page data, and Deployment templates.
+
+Generated Deployment templates use `registry.invalid` placeholders and are not
+referenced from generated `kustomization.yaml` files until the platform build
+pipeline can replace them with immutable ECR image tags.
 
 ## Generated Assets
 

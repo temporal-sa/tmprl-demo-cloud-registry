@@ -158,47 +158,15 @@
     "envVar": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": ["name", "value"],
       "properties": {
         "name": {
           "$ref": "#/$defs/envName"
         },
         "value": {
           "type": "string"
-        },
-        "valueFrom": {
-          "$ref": "#/$defs/envValueFrom"
         }
-      },
-      "oneOf": [
-        {
-          "required": ["value"]
-        },
-        {
-          "required": ["valueFrom"]
-        }
-      ]
-    },
-    "envValueFrom": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "ingressUrl": {
-          "type": "boolean",
-          "const": true
-        },
-        "serviceUrl": {
-          "$ref": "#/$defs/serviceUrlRef"
-        }
-      },
-      "oneOf": [
-        {
-          "required": ["ingressUrl"]
-        },
-        {
-          "required": ["serviceUrl"]
-        }
-      ]
+      }
     },
     "envName": {
       "type": "string",
@@ -400,24 +368,6 @@
     "httpsUrl": {
       "type": "string",
       "pattern": "^https://[^\\s]+$"
-    },
-    "serviceUrlRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["component"],
-      "properties": {
-        "component": {
-          "$ref": "#/$defs/dnsLabel"
-        },
-        "port": {
-          "$ref": "#/$defs/dnsLabel"
-        },
-        "scheme": {
-          "type": "string",
-          "enum": ["http", "https"],
-          "default": "http"
-        }
-      }
     },
     "stringArray": {
       "type": "array",

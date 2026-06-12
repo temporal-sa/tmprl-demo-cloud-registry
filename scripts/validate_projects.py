@@ -116,7 +116,6 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_component_ports(document))
         errors.extend(validate_service_names(document))
         errors.extend(validate_ingress_routes(document))
-        errors.extend(validate_service_url_refs(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_registry(document))
 
@@ -325,34 +324,6 @@ def validate_ingress_routes(document: ProjectDocument) -> list[ProjectError]:
                 f"ingress.routes[{index}]",
             )
         )
-
-    return errors
-
-
-def validate_service_url_refs(document: ProjectDocument) -> list[ProjectError]:
-    errors: list[ProjectError] = []
-
-    for component_name, component in components(document).items():
-        env = component.get("env")
-        if not isinstance(env, list):
-            continue
-
-        for index, item in enumerate(env):
-            service_url = get_nested_value(item, ("valueFrom", "serviceUrl"))
-            if not isinstance(service_url, dict):
-                continue
-
-            referenced_component = service_url.get("component")
-            port_name = service_url.get("port")
-            errors.extend(
-                validate_component_port_ref(
-                    document,
-                    referenced_component,
-                    port_name,
-                    f"components.{component_name}.env[{index}].valueFrom.serviceUrl",
-                    allow_default_port=True,
-                )
-            )
 
     return errors
 
@@ -604,15 +575,6 @@ def derive_namespace(project_name: str) -> str:
 
 def get_nested(data: dict[str, Any], path: tuple[str, ...]) -> Any:
     current: Any = data
-    for key in path:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def get_nested_value(data: Any, path: tuple[str, ...]) -> Any:
-    current = data
     for key in path:
         if not isinstance(current, dict):
             return None

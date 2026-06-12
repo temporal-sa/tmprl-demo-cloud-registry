@@ -88,8 +88,8 @@ deployment intent:
 - Compose service names used for local DNS usually become component names or
   `serviceName` values;
 - local-only environment values, such as `host.docker.internal`, are replaced
-  with generated service URLs. Temporal connection values come from platform
-  injection.
+  with literal Kubernetes service DNS URLs like `http://backend:8000`.
+  Temporal connection values come from platform injection.
 
 Run validation before opening a PR:
 
