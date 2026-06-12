@@ -1,0 +1,946 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+from jsonschema import Draft202012Validator
+from temporalio.exceptions import ApplicationError
+
+from demo_registry_operator.activities import canary
+from demo_registry_operator.activities.canary import plan_registry_operator_canary
+from demo_registry_operator.activities import reconcile
+from demo_registry_operator.resources import (
+    FINALIZATION_POLICY_ANNOTATION,
+    IMAGE_OVERRIDES_ANNOTATION,
+    REGISTRY_CATALOG_ANNOTATION,
+    SOURCE_COMMIT_ANNOTATION,
+    base_resources,
+    candidate_service_status,
+    deployment_resources,
+    runtime_secret_resources,
+    runtime_workload_resources,
+    source_git_repository,
+    worker_deployment_status,
+    worker_deployment_rollout_wait_seconds,
+)
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def project(*, worker: object, smoke_check: dict | None = None) -> dict:
+    spec = {
+        "source": {
+            "repo": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        },
+        "builds": {
+            "api": {"context": ".", "dockerfile": "docker/api.Dockerfile"},
+            "worker": {"context": ".", "dockerfile": "docker/worker.Dockerfile"},
+        },
+        "components": {
+            "api": {
+                "build": "api",
+                "ports": [{"containerPort": 8000, "servicePort": 80}],
+                "temporalAccess": True,
+            },
+            "worker": {
+                "build": "worker",
+                "worker": worker,
+                "env": [{"name": "APP_MODE", "value": "demo"}],
+            },
+        },
+        "ingress": {"subdomain": "banking-app"},
+    }
+    if smoke_check:
+        spec["smokeCheck"] = smoke_check
+    return {
+        "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+        "kind": "DemoProject",
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {
+                SOURCE_COMMIT_ANNOTATION: (
+                    "e12b0ed9d4505be2f6b0bc9d2664b1eb64a8d69c"
+                )
+            },
+        },
+        "spec": spec,
+    }
+
+
+def images() -> dict[str, str]:
+    return {
+        "api": "example.com/api:git-e12b0ed9d450",
+        "worker": "example.com/worker:git-e12b0ed9d450",
+    }
+
+
+def external_resources() -> dict:
+    return {
+        "temporalCloud": {
+            "namespace": {
+                "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+                "grpcAddress": (
+                    "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233"
+                ),
+            }
+        }
+    }
+
+
+def versioned_worker() -> dict:
+    return {
+        "versioning": {
+            "enabled": True,
+            "taskQueue": "money-transfer",
+            "rollout": {
+                "strategy": "Progressive",
+                "steps": [
+                    {"rampPercentage": 10, "pauseDuration": "5m"},
+                    {"rampPercentage": 50, "pauseDuration": "10m"},
+                ],
+                "gate": {
+                    "workflowType": "WorkerCanary",
+                    "input": {"project": "banking-money-transfer"},
+                },
+            },
+            "sunset": {
+                "scaledownDelay": "2h",
+                "deleteDelay": "48h",
+            },
+        }
+    }
+
+
+def test_plain_worker_still_renders_deployment():
+    demo_project = project(worker=True)
+
+    deployments = deployment_resources(demo_project, images())
+
+    assert {item["metadata"]["name"] for item in deployments} == {
+        "api-git-e12b0ed9d450",
+        "worker-git-e12b0ed9d450",
+    }
+
+
+def test_temporal_proxy_worker_renders_sidecar_and_local_app_env(monkeypatch):
+    monkeypatch.setenv(
+        "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE",
+        "example.com/temporal-cloud-proxy:git-e12b0ed9d450",
+    )
+    demo_project = project(worker=True)
+    worker = demo_project["spec"]["components"]["worker"]
+    worker["temporalProxy"] = {
+        "enabled": True,
+        "addressEnv": ["TEMPORAL_HOST", "TEMPORAL_GRPC_ENDPOINT"],
+    }
+    worker["env"].append({"name": "TEMPORAL_HOST", "value": "localhost:7233"})
+
+    secrets = runtime_secret_resources(demo_project)
+    deployments = deployment_resources(demo_project, images())
+    worker_deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("worker-")
+    )
+    containers = worker_deployment["spec"]["template"]["spec"]["containers"]
+
+    assert {item["metadata"]["name"] for item in secrets} == {"temporal-credentials"}
+    assert [item["name"] for item in containers] == [
+        "worker",
+        "temporal-cloud-proxy",
+    ]
+
+    app = containers[0]
+    assert "envFrom" not in app
+    assert {"name": "APP_MODE", "value": "demo"} in app["env"]
+    assert {"name": "TEMPORAL_HOST", "value": "127.0.0.1:7233"} in app["env"]
+    assert {
+        "name": "TEMPORAL_GRPC_ENDPOINT",
+        "value": "127.0.0.1:7233",
+    } in app["env"]
+    assert {"name": "TEMPORAL_NAMESPACE", "value": "default"} in app["env"]
+    assert {"name": "TEMPORAL_TLS", "value": "false"} in app["env"]
+
+    proxy = containers[1]
+    assert proxy["image"] == "example.com/temporal-cloud-proxy:git-e12b0ed9d450"
+    assert proxy["envFrom"] == [{"secretRef": {"name": "temporal-credentials"}}]
+    assert {
+        "name": "TEMPORAL_PROXY_LISTEN_ADDRESS",
+        "value": "127.0.0.1:7233",
+    } in proxy["env"]
+
+
+def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment():
+    demo_project = project(worker=versioned_worker())
+
+    deployments = deployment_resources(demo_project, images())
+    resources = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+
+    assert {item["metadata"]["name"] for item in deployments} == {
+        "api-git-e12b0ed9d450"
+    }
+
+    connection = next(item for item in resources if item["kind"] == "Connection")
+    assert connection["apiVersion"] == "temporal.io/v1alpha1"
+    assert connection["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer"
+    )
+    assert connection["spec"] == {
+        "hostPort": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        "apiKeySecretRef": {
+            "name": "temporal-worker-runtime",
+            "key": "TEMPORAL_API_KEY",
+        },
+    }
+
+    worker_deployment = next(
+        item for item in resources if item["kind"] == "WorkerDeployment"
+    )
+    assert worker_deployment["metadata"]["name"] == "money-transfer"
+    assert worker_deployment["spec"]["workerOptions"] == {
+        "connectionRef": {"name": "temporal"},
+        "temporalNamespace": "tmprl-dem-cld-banking-money-transfer.acct1",
+    }
+    assert worker_deployment["spec"]["rollout"] == {
+        "strategy": "Progressive",
+        "steps": [
+            {"rampPercentage": 10, "pauseDuration": "5m"},
+            {"rampPercentage": 50, "pauseDuration": "10m"},
+        ],
+        "gate": {
+            "workflowType": "WorkerCanary",
+            "input": {"project": "banking-money-transfer"},
+        },
+    }
+    assert worker_deployment["spec"]["sunset"] == {
+        "scaledownDelay": "2h",
+        "deleteDelay": "48h",
+    }
+    assert (
+        worker_deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+        == "example.com/worker:git-e12b0ed9d450"
+    )
+    container = worker_deployment["spec"]["template"]["spec"]["containers"][0]
+    assert container["envFrom"] == [
+        {"secretRef": {"name": "temporal-worker-runtime"}}
+    ]
+    rendered = json.dumps(worker_deployment)
+    assert "PLACEHOLDER_BUILD_ID" not in rendered
+    assert "TEMPORAL_WORKER_BUILD_ID" not in rendered
+    assert "TEMPORAL_ADDRESS" not in rendered
+    assert "TEMPORAL_NAMESPACE" not in rendered
+
+
+def test_service_account_token_automount_is_component_opt_in():
+    demo_project = project(worker=versioned_worker())
+    demo_project["spec"]["components"]["worker"][
+        "automountServiceAccountToken"
+    ] = True
+
+    base = base_resources(demo_project)
+    service_accounts = {
+        item["metadata"]["name"]: item
+        for item in base
+        if item["kind"] == "ServiceAccount"
+    }
+    assert service_accounts["api"]["automountServiceAccountToken"] is False
+    assert service_accounts["worker"]["automountServiceAccountToken"] is True
+
+    resources = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+    api_deployment = next(
+        item
+        for item in resources
+        if item["kind"] == "Deployment" and item["metadata"]["name"].startswith("api-")
+    )
+    worker_deployment = next(
+        item for item in resources if item["kind"] == "WorkerDeployment"
+    )
+
+    assert (
+        api_deployment["spec"]["template"]["spec"]["automountServiceAccountToken"]
+        is False
+    )
+    assert (
+        worker_deployment["spec"]["template"]["spec"]["automountServiceAccountToken"]
+        is True
+    )
+
+
+def test_versioned_worker_runtime_secret_contains_only_auth_env():
+    demo_project = project(worker=versioned_worker())
+
+    secrets = runtime_secret_resources(demo_project)
+
+    external_secret_names = {
+        item["metadata"]["name"]
+        for item in secrets
+        if item["kind"] == "ExternalSecret"
+    }
+    assert external_secret_names == {
+        "temporal-credentials",
+        "temporal-worker-runtime",
+    }
+    worker_runtime = next(
+        item
+        for item in secrets
+        if item["kind"] == "ExternalSecret"
+        and item["metadata"]["name"] == "temporal-worker-runtime"
+    )
+    assert [item["secretKey"] for item in worker_runtime["spec"]["data"]] == [
+        "TEMPORAL_API_KEY",
+        "TEMPORAL_TLS",
+    ]
+
+
+def test_versioned_worker_with_ports_uses_stable_service_name_and_rollout_selector():
+    demo_project = project(worker=versioned_worker())
+    demo_project["spec"]["components"]["worker"]["ports"] = [
+        {"containerPort": 9000, "servicePort": 9000}
+    ]
+
+    resources = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+
+    service = next(
+        item
+        for item in resources
+        if item["kind"] == "Service" and item["metadata"]["name"] == "worker"
+    )
+    assert service["spec"]["selector"] == {
+        "app.kubernetes.io/name": "banking-money-transfer",
+        "app.kubernetes.io/component": "worker",
+        "platform.temporal.io/rollout-version": "git-e12b0ed9d450",
+    }
+    assert candidate_service_status(demo_project, images())["worker"] == "worker"
+
+
+def test_worker_deployment_status_maps_versioned_components():
+    assert worker_deployment_status(project(worker=versioned_worker()), images()) == {
+        "worker": "money-transfer"
+    }
+
+
+def test_worker_deployment_wait_seconds_includes_gate_and_progressive_durations():
+    worker = versioned_worker()
+    gate_input = worker["versioning"]["rollout"]["gate"]["input"]
+    gate_input["timeoutSeconds"] = 1800
+    gate_input["cleanupTimeoutSeconds"] = 900
+
+    assert (
+        worker_deployment_rollout_wait_seconds(
+            project(worker=worker),
+            base_timeout_seconds=300,
+        )
+        == 3900
+    )
+
+
+def test_failed_gate_workflow_marks_worker_deployment_rollout_failed(monkeypatch):
+    def fake_status(namespace: str, name: str) -> dict:
+        return {
+            "name": name,
+            "namespace": namespace,
+            "conditions": [{"type": "Ready", "status": "False", "reason": "Waiting"}],
+            "targetVersion": {
+                "buildID": "git-e12b0ed9d450",
+                "status": "Inactive",
+                "testWorkflows": [
+                    {
+                        "workflowID": "gate",
+                        "runID": "run",
+                        "status": "Failed",
+                        "taskQueue": "money-transfer",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(reconcile, "read_worker_deployment_status", fake_status)
+
+    status = reconcile.worker_deployment_sync_status(
+        [
+            {
+                "apiVersion": "temporal.io/v1alpha1",
+                "kind": "WorkerDeployment",
+                "namespace": "tmprl-dem-cld-banking-money-transfer",
+                "name": "money-transfer",
+                "action": "patched",
+            }
+        ],
+        dry_run=False,
+    )
+
+    assert status["phase"] == "Failed"
+    assert status["ok"] is False
+    assert status["resources"][0]["targetVersion"]["testWorkflows"][0]["status"] == (
+        "Failed"
+    )
+
+
+def test_schema_accepts_controller_versioning_and_rejects_gate_input_conflict():
+    schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    valid = project(worker=versioned_worker())
+    valid["spec"]["components"]["worker"]["automountServiceAccountToken"] = True
+    valid["spec"]["components"]["worker"]["temporalProxy"] = {
+        "enabled": True,
+        "addressEnv": ["TEMPORAL_HOST"],
+    }
+
+    assert list(validator.iter_errors(valid)) == []
+
+    invalid = project(worker=versioned_worker())
+    invalid["spec"]["components"]["worker"]["worker"]["versioning"]["rollout"][
+        "gate"
+    ]["inputFrom"] = {"configMapKeyRef": {"name": "gate-input", "key": "payload.json"}}
+
+    errors = list(validator.iter_errors(invalid))
+
+    assert errors
+
+
+def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate():
+    schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    demo_project = yaml.safe_load((ROOT / "projects/registry.yaml").read_text())
+
+    assert list(validator.iter_errors(demo_project)) == []
+    assert demo_project["metadata"]["name"] == "registry-operator"
+    assert demo_project["metadata"]["annotations"] == {
+        REGISTRY_CATALOG_ANNOTATION: "true",
+        FINALIZATION_POLICY_ANNOTATION: "retain",
+    }
+    assert demo_project["spec"]["source"]["gitRepository"]["url"] == (
+        "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git"
+    )
+    assert demo_project["spec"]["source"]["gitRepository"]["authSecret"] == (
+        "source-auth"
+    )
+    assert demo_project["spec"]["source"]["gitRepository"]["ignore"].splitlines() == [
+        "/*",
+        "!/registry/",
+        "/registry/*",
+        "!/registry/web/",
+        "!/registry/web/**",
+        "!/registry/worker/",
+        "!/registry/worker/**",
+        "!/registry/temporal-cloud-proxy/",
+        "!/registry/temporal-cloud-proxy/**",
+    ]
+    assert source_git_repository(
+        demo_project,
+        namespace="tmprl-dem-cld-registry-operator",
+        interval="1m",
+    )["spec"] == {
+        "interval": "1m",
+        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git",
+        "ref": {"branch": "main"},
+        "secretRef": {"name": "registry-operator-source-auth"},
+        "ignore": "\n".join(
+            [
+                "/*",
+                "!/registry/",
+                "/registry/*",
+                "!/registry/web/",
+                "!/registry/web/**",
+                "!/registry/worker/",
+                "!/registry/worker/**",
+                "!/registry/temporal-cloud-proxy/",
+                "!/registry/temporal-cloud-proxy/**",
+            ]
+        ),
+    }
+    assert demo_project["spec"]["source"]["gitRepository"] == {
+        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git",
+        "authSecret": "source-auth",
+        "ignore": (
+            "/*\n"
+            "!/registry/\n"
+            "/registry/*\n"
+            "!/registry/web/\n"
+            "!/registry/web/**\n"
+            "!/registry/worker/\n"
+            "!/registry/worker/**\n"
+            "!/registry/temporal-cloud-proxy/\n"
+            "!/registry/temporal-cloud-proxy/**\n"
+        ),
+    }
+    assert "registry.tmprl-demo.cloud/image-overrides" not in demo_project["metadata"][
+        "annotations"
+    ]
+    assert SOURCE_COMMIT_ANNOTATION not in demo_project["metadata"]["annotations"]
+
+    image_overrides = {
+        "temporal-cloud-proxy": (
+            "example.com/registry/temporal-cloud-proxy:git-e12b0ed9d450"
+        ),
+        "web": "example.com/registry/web:git-e12b0ed9d450",
+        "worker": "example.com/registry/worker:git-e12b0ed9d450",
+    }
+    registry_external_resources = {
+        "temporalCloud": {
+            "namespace": {
+                "name": "tmprl-dem-cld-registry-operator.a2dd6",
+                "grpcAddress": (
+                    "tmprl-dem-cld-registry-operator.a2dd6.tmprl.cloud:7233"
+                ),
+            }
+        }
+    }
+
+    base = base_resources(demo_project)
+    registry_service_account = next(
+        item
+        for item in base
+        if item["kind"] == "ServiceAccount"
+        and item["metadata"]["name"] == "registry-operator"
+    )
+    assert registry_service_account["automountServiceAccountToken"] is True
+
+    secrets = runtime_secret_resources(demo_project)
+    assert {item["metadata"]["name"] for item in secrets} == {
+        "shared-auth",
+        "temporal-worker-runtime",
+        "user-secret-temporal-cloud-bootstrap",
+    }
+
+    resources = runtime_workload_resources(
+        demo_project,
+        image_overrides,
+        include_routes=False,
+        external_resources=registry_external_resources,
+    )
+    worker_deployment = next(
+        item for item in resources if item["kind"] == "WorkerDeployment"
+    )
+    assert worker_deployment["metadata"]["name"] == "registry-operator"
+    assert worker_deployment["metadata"]["namespace"] == (
+        "tmprl-dem-cld-registry-operator"
+    )
+    assert worker_deployment["spec"]["workerOptions"] == {
+        "connectionRef": {"name": "temporal"},
+        "temporalNamespace": "tmprl-dem-cld-registry-operator.a2dd6",
+    }
+
+    pod_spec = worker_deployment["spec"]["template"]["spec"]
+    assert pod_spec["serviceAccountName"] == "registry-operator"
+    assert pod_spec["automountServiceAccountToken"] is True
+    container = pod_spec["containers"][0]
+    assert container["image"] == "example.com/registry/worker:git-e12b0ed9d450"
+    assert container["envFrom"] == [
+        {"secretRef": {"name": "temporal-worker-runtime"}},
+        {"secretRef": {"name": "user-secret-temporal-cloud-bootstrap"}},
+    ]
+    assert {
+        "name": "DEMO_REGISTRY_OPERATOR_IMAGE",
+        "value": "example.com/registry/worker:git-e12b0ed9d450",
+    } in container["env"]
+    assert {
+        "name": "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE",
+        "value": "example.com/registry/temporal-cloud-proxy:git-e12b0ed9d450",
+    } in container["env"]
+    assert {"name": "DEMO_REGISTRY_TASK_QUEUE", "value": "registry-management"} in (
+        container["env"]
+    )
+    assert {
+        "name": "DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH",
+        "value": "tmprl-dem-cld/registry-operator/temporal-cloud-bootstrap",
+    } in container["env"]
+    assert {
+        "name": "DEMO_REGISTRY_WATCH_ENABLED",
+        "value": "auto",
+    } in container["env"]
+    assert worker_deployment["spec"]["sunset"] == {
+        "scaledownDelay": "1m",
+        "deleteDelay": "5m",
+    }
+
+    gate_input = worker_deployment["spec"]["rollout"]["gate"]["input"]
+    assert gate_input["projectNamePrefix"] == "operator-canary"
+    assert "expectedOperatorImage" not in gate_input
+    assert "expectedOperatorSourceSha" not in gate_input
+
+    web_deployment = next(
+        item
+        for item in resources
+        if item["kind"] == "Deployment"
+        and item["metadata"]["name"].startswith("web-")
+    )
+    web_pod_spec = web_deployment["spec"]["template"]["spec"]
+    assert web_pod_spec["volumes"] == [
+        {
+            "name": "catalog-status",
+            "configMap": {"name": "registry-catalog-status", "optional": True},
+        },
+        {
+            "name": "catalog",
+            "configMap": {"name": "registry-catalog", "optional": True},
+        },
+    ]
+    assert {"secretRef": {"name": "shared-auth"}} in web_pod_spec["containers"][0][
+        "envFrom"
+    ]
+
+
+def test_operator_canary_plan_uses_unique_name_and_expected_annotations(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-test-1234")
+    expected_images = {"api": "example.com/api:git-e12b0ed9d450"}
+
+    plan = plan_registry_operator_canary(
+        {
+            "workflowID": "worker-controller-gate",
+            "runID": "run-1",
+            "projectNamePrefix": "operator-canary",
+            "expectedOperatorImage": "example.com/operator:git-test",
+            "expectedOperatorSourceSha": "e12b0ed9d450",
+            "expectedSourceCommitSha": "e12b0ed9d4505be2f6b0bc9d2664b1eb64a8d69c",
+            "expectedImages": expected_images,
+            "demoProjectTemplate": project(worker=True),
+        }
+    )
+
+    demo_project = plan["demoProject"]
+    annotations = demo_project["metadata"]["annotations"]
+    labels = demo_project["metadata"]["labels"]
+    assert demo_project["metadata"]["name"].startswith("operator-canary-")
+    assert labels == {
+        "registry.tmprl-demo.cloud/canary": "true",
+        "registry.tmprl-demo.cloud/canary-kind": "operator-rollout",
+    }
+    assert annotations[SOURCE_COMMIT_ANNOTATION] == (
+        "e12b0ed9d4505be2f6b0bc9d2664b1eb64a8d69c"
+    )
+    assert json.loads(annotations[IMAGE_OVERRIDES_ANNOTATION]) == expected_images
+    assert demo_project["spec"]["ingress"]["subdomain"] == demo_project["metadata"]["name"]
+    assert plan["expectedOperatorSourceSha"] == "e12b0ed9d450"
+    assert plan["actualOperatorSourceSha"] == "e12b0ed9d450"
+    assert plan["targetDeploymentName"] == "registry-operator"
+    assert plan["targetBuildID"] == "git-test-1234"
+    assert plan["namespace"].startswith("tmprl-dem-cld-operator-canary-")
+
+
+def test_operator_canary_plan_rejects_unexpected_source_sha(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "actual")
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-test-1234")
+
+    with pytest.raises(ApplicationError):
+        plan_registry_operator_canary(
+            {
+                "workflowID": "worker-controller-gate",
+                "runID": "run-1",
+                "expectedOperatorImage": "example.com/operator:git-test",
+                "expectedOperatorSourceSha": "expected",
+                "demoProjectTemplate": project(worker=True),
+            }
+        )
+
+
+def test_operator_canary_plan_requires_target_version(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
+    monkeypatch.delenv("TEMPORAL_DEPLOYMENT_NAME", raising=False)
+    monkeypatch.delenv("TEMPORAL_WORKER_BUILD_ID", raising=False)
+
+    with pytest.raises(ApplicationError):
+        plan_registry_operator_canary(
+            {
+                "workflowID": "worker-controller-gate",
+                "runID": "run-1",
+                "expectedOperatorImage": "example.com/operator:git-test",
+                "expectedOperatorSourceSha": "e12b0ed9d450",
+                "demoProjectTemplate": project(worker=True),
+            }
+        )
+
+
+def test_apply_operator_canary_project_signals_target_workflow(monkeypatch):
+    signals = []
+    demo_project = project(worker=True)
+    plan = {
+        "project": "operator-canary-abc123",
+        "namespace": "tmprl-dem-cld-operator-canary-abc123",
+        "demoProject": demo_project,
+        "dryRun": False,
+        "targetDeploymentName": "registry-operator",
+        "targetBuildID": "git-test-1234",
+    }
+
+    monkeypatch.setattr(canary, "apply_demo_project", lambda resource, dry_run: "created")
+    monkeypatch.setattr(
+        canary,
+        "signal_registry_operator_canary_reconcile",
+        lambda request, resource: signals.append((request, resource))
+        or {"phase": "Signaled"},
+    )
+
+    result = canary.apply_registry_operator_canary_project(plan)
+
+    assert result["action"] == "created"
+    assert result["workflow"] == {"phase": "Signaled"}
+    assert signals == [(plan, demo_project)]
+
+
+def test_worker_deployment_config_uses_controller_env(monkeypatch):
+    from demo_registry_operator.worker import worker_deployment_config_from_env
+
+    monkeypatch.delenv("TEMPORAL_DEPLOYMENT_NAME", raising=False)
+    monkeypatch.delenv("TEMPORAL_WORKER_BUILD_ID", raising=False)
+    assert worker_deployment_config_from_env() is None
+
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-abc123")
+    config = worker_deployment_config_from_env()
+
+    assert config is not None
+    assert config.use_worker_versioning is True
+    assert config.version.deployment_name == "registry-operator"
+    assert config.version.build_id == "git-abc123"
+
+
+def test_registry_operator_rbac_can_manage_canary_and_prune_resources():
+    manifests = list(
+        yaml.safe_load_all(
+            (
+                ROOT / "clusters/sa-demo/bootstrap/registry-operator/rbac.yaml"
+            ).read_text()
+        )
+    )
+    cluster_role = next(
+        item
+        for item in manifests
+        if item
+        and item["kind"] == "ClusterRole"
+        and item["metadata"]["name"] == "registry-operator"
+    )
+    demo_project_rule = next(
+        rule
+        for rule in cluster_role["rules"]
+        if rule["apiGroups"] == ["registry.tmprl-demo.cloud"]
+        and rule["resources"] == ["demoprojects"]
+    )
+
+    assert set(demo_project_rule["verbs"]) >= {
+        "create",
+        "delete",
+        "get",
+        "list",
+        "patch",
+        "update",
+        "watch",
+    }
+
+    apps_deployment_rule = next(
+        rule
+        for rule in cluster_role["rules"]
+        if rule["apiGroups"] == ["apps"]
+        and rule["resources"] == ["deployments"]
+    )
+    assert set(apps_deployment_rule["verbs"]) >= {
+        "create",
+        "delete",
+        "get",
+        "list",
+        "patch",
+    }
+
+    service_rule = next(
+        rule
+        for rule in cluster_role["rules"]
+        if rule["apiGroups"] == [""]
+        and "services" in rule["resources"]
+    )
+    assert set(service_rule["verbs"]) >= {
+        "create",
+        "delete",
+        "get",
+        "list",
+        "patch",
+    }
+
+
+def cleanup_plan() -> dict:
+    return {
+        "project": "operator-canary-abc123",
+        "namespace": "tmprl-dem-cld-operator-canary-abc123",
+        "gitRepository": "operator-canary-abc123-source",
+        "sourceWatchNamespace": "tmprl-dem-cld-registry-operator",
+        "catalogStatusNamespace": "tmprl-dem-cld-registry-operator",
+        "catalogStatusMirrorNamespace": "tmprl-dem-cld-registry-operator",
+        "catalogStatusConfigMap": "registry-catalog-status",
+        "cleanupTimeoutSeconds": 0,
+        "pollSeconds": 0,
+    }
+
+
+def test_canary_delete_requests_demo_project_deletion(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        canary,
+        "delete_demo_project",
+        lambda name: calls.append(name) or "deleting",
+    )
+
+    result = canary.delete_registry_operator_canary_project(cleanup_plan())
+
+    assert result["phase"] == "DeleteRequested"
+    assert result["ok"] is True
+    assert result["deleteAction"] == "deleting"
+    assert calls == ["operator-canary-abc123"]
+
+
+def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
+    monkeypatch.setattr(
+        canary,
+        "read_demo_project",
+        lambda name: {
+            "status": {
+                "phase": "Error",
+                "message": "Image build failed; workload resources were not reconciled.",
+                "buildStatus": {"phase": "Error"},
+            }
+        },
+    )
+
+    result = canary.wait_for_registry_operator_canary_promotion(cleanup_plan())
+
+    assert result["phase"] == "Failed"
+    assert result["ok"] is False
+    assert result["message"] == (
+        "Canary project failed before promotion: "
+        "Image build failed; workload resources were not reconciled."
+    )
+
+
+def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
+    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(
+        canary,
+        "read_config_map",
+        lambda namespace, name: {
+            "data": {
+                "operator-canary-abc123.json": json.dumps(
+                    {"phase": "Promoted"}
+                )
+            }
+        },
+    )
+
+    result = canary.check_registry_operator_canary_cleanup(cleanup_plan())
+
+    assert result["phase"] == "CleanupPending"
+    assert result["ok"] is False
+    assert result["waitingOn"] == ["catalog"]
+    assert result["catalog"]["ok"] is False
+
+
+def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
+    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(
+        canary,
+        "read_config_map",
+        lambda namespace, name: {
+            "data": {
+                "operator-canary-abc123.json": json.dumps(
+                    {
+                        "phase": "Finalized",
+                        "finalizeStatus": {
+                            "externalResources": {"phase": "Deleted"}
+                        },
+                    }
+                )
+            }
+        },
+    )
+
+    result = canary.check_registry_operator_canary_cleanup(cleanup_plan())
+
+    assert result["phase"] == "Deleted"
+    assert result["ok"] is True
+
+
+def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
+    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(
+        canary,
+        "read_config_map",
+        lambda namespace, name: {
+            "data": {
+                "operator-canary-abc123.json": json.dumps(
+                    {
+                        "phase": "Finalized",
+                        "finalizeStatus": {
+                            "externalResources": {"phase": "Deleted"}
+                        },
+                    }
+                )
+            }
+        },
+    )
+
+    result = canary.wait_registry_operator_canary_cleanup(
+        {
+            **cleanup_plan(),
+            "deleteAction": "deleting",
+        }
+    )
+
+    assert result["phase"] == "Deleted"
+    assert result["ok"] is True
+    assert result["deleteAction"] == "deleting"
+
+
+def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
+    monkeypatch.setattr(canary, "read_namespace", lambda name: {"phase": "Active"})
+    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(
+        canary,
+        "read_config_map",
+        lambda namespace, name: {
+            "data": {
+                "operator-canary-abc123.json": json.dumps(
+                    {
+                        "phase": "Finalized",
+                        "finalizeStatus": {
+                            "externalResources": {"phase": "Deleted"}
+                        },
+                    }
+                )
+            }
+        },
+    )
+
+    result = canary.wait_registry_operator_canary_cleanup(cleanup_plan())
+
+    assert result["phase"] == "CleanupFailed"
+    assert result["ok"] is False
+    assert result["waitingOn"] == ["namespace"]

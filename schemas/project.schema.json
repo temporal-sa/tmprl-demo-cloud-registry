@@ -1,0 +1,786 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry/schemas/project.schema.json",
+  "title": "DemoProject",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.tmprl-demo.cloud/v1alpha1"
+    },
+    "kind": {
+      "const": "DemoProject"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "builds", "components"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo"],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "gitRepository": {
+              "$ref": "#/$defs/sourceGitRepository"
+            }
+          }
+        },
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "builds": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/build"
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/userSecret"
+          }
+        },
+        "components": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/component"
+          }
+        },
+        "ingress": {
+          "$ref": "#/$defs/ingress"
+        },
+        "rollout": {
+          "$ref": "#/$defs/rollout"
+        },
+        "smokeCheck": {
+          "$ref": "#/$defs/smokeCheck"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context"],
+      "properties": {
+        "context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["dockerfile", "buildpack"],
+          "default": "dockerfile"
+        },
+        "dockerfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "builder": {
+          "type": "string",
+          "minLength": 1
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/envName"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "processes": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "strategy": {
+              "enum": ["dockerfile"]
+            }
+          },
+          "required": ["dockerfile"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["builder"]
+              },
+              {
+                "required": ["processes"]
+              }
+            ]
+          }
+        },
+        {
+          "properties": {
+            "strategy": {
+              "const": "buildpack"
+            }
+          },
+          "required": ["strategy", "builder"],
+          "not": {
+            "required": ["dockerfile"]
+          }
+        }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build"],
+      "properties": {
+        "build": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "serviceName": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "automountServiceAccountToken": {
+          "type": "boolean",
+          "default": false
+        },
+        "command": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "args": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/componentPort"
+          }
+        },
+        "env": {
+          "$ref": "#/$defs/envList"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dnsLabel"
+          }
+        },
+        "temporalAccess": {
+          "type": "boolean",
+          "default": false
+        },
+        "temporalProxy": {
+          "$ref": "#/$defs/temporalProxy"
+        },
+        "worker": {
+          "$ref": "#/$defs/worker"
+        }
+      }
+    },
+    "componentPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["containerPort"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "containerPort": {
+          "$ref": "#/$defs/portNumber"
+        },
+        "servicePort": {
+          "$ref": "#/$defs/portNumber"
+        }
+      }
+    },
+    "dnsLabel": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "minLength": 1,
+      "maxLength": 63
+    },
+    "envList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/envVar"
+      }
+    },
+    "envVar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/envName"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subdomain"],
+      "properties": {
+        "subdomain": {
+          "$ref": "#/$defs/subdomain"
+        },
+        "temporalAuthRequired": {
+          "type": "boolean",
+          "default": true
+        },
+        "component": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "port": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ingressRoute"
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["component", "port"],
+          "not": {
+            "required": ["routes"]
+          }
+        },
+        {
+          "required": ["routes"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["component"]
+              },
+              {
+                "required": ["port"]
+              }
+            ]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["component"]
+              },
+              {
+                "required": ["port"]
+              },
+              {
+                "required": ["routes"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ingressRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "port"],
+      "properties": {
+        "pathPrefix": {
+          "type": "string",
+          "pattern": "^/.*$"
+        },
+        "component": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "port": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "passHostHeader": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether Traefik should pass the original request Host header to this route's upstream service."
+        }
+      }
+    },
+    "portNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "displayOrder": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readiness": {
+          "$ref": "#/$defs/registryReadiness"
+        },
+        "tags": {
+          "$ref": "#/$defs/registryLabels"
+        },
+        "temporalSdks": {
+          "$ref": "#/$defs/registryLabels"
+        },
+        "links": {
+          "$ref": "#/$defs/registryLinks"
+        },
+        "assets": {
+          "$ref": "#/$defs/registryAssets"
+        }
+      }
+    },
+    "registryAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "kind"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "kind": {
+          "$ref": "#/$defs/registryLabel"
+        }
+      }
+    },
+    "registryAssetList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/registryAsset"
+      }
+    },
+    "registryAssets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "technical": {
+          "$ref": "#/$defs/registryAssetList"
+        },
+        "nonTechnical": {
+          "$ref": "#/$defs/registryAssetList"
+        }
+      }
+    },
+    "registryLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "registryLabels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/registryLabel"
+      }
+    },
+    "registryLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        }
+      }
+    },
+    "registryLinks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "speakerNotes": {
+          "$ref": "#/$defs/registryLink"
+        }
+      }
+    },
+    "registryReadiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "maxScore"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxScore": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageOverrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sourceCommitSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{7,40}$"
+        }
+      }
+    },
+    "smokeCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "expectedStatus"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/.*$"
+        },
+        "expectedStatus": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 10
+        }
+      }
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://[^\\s]+$"
+    },
+    "temporalProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "addressEnv": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
+    },
+    "userSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredProperties": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
+    },
+    "stringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "subdomain": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+      "not": {
+        "pattern": "(^|\\.)tmprl-demo\\.cloud$"
+      }
+    },
+    "sourceGitRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authSecret": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "sparseCheckout": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ignore": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "worker": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["versioning"],
+          "properties": {
+            "versioning": {
+              "$ref": "#/$defs/workerVersioning"
+            }
+          }
+        }
+      ]
+    },
+    "workerVersioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "taskQueue"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "taskQueue": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "rollout": {
+          "$ref": "#/$defs/workerRollout"
+        },
+        "sunset": {
+          "$ref": "#/$defs/workerSunset"
+        }
+      }
+    },
+    "workerRollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["AllAtOnce", "Manual", "Progressive"],
+          "default": "AllAtOnce"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/workerRolloutStep"
+          }
+        },
+        "gate": {
+          "$ref": "#/$defs/workerRolloutGate"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "Progressive"
+              }
+            },
+            "required": ["strategy"]
+          },
+          "then": {
+            "required": ["steps"]
+          }
+        }
+      ]
+    },
+    "workerRolloutGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowType"],
+      "properties": {
+        "workflowType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input": {
+          "type": "object"
+        },
+        "inputFrom": {
+          "$ref": "#/$defs/workerRolloutGateInputFrom"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["input"],
+          "not": {
+            "required": ["inputFrom"]
+          }
+        },
+        {
+          "required": ["inputFrom"],
+          "not": {
+            "required": ["input"]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["input"]
+              },
+              {
+                "required": ["inputFrom"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "workerRolloutGateInputFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["configMapKeyRef"],
+          "not": {
+            "required": ["secretKeyRef"]
+          }
+        },
+        {
+          "required": ["secretKeyRef"],
+          "not": {
+            "required": ["configMapKeyRef"]
+          }
+        }
+      ],
+      "properties": {
+        "configMapKeyRef": {
+          "$ref": "#/$defs/localObjectKeyRef"
+        },
+        "secretKeyRef": {
+          "$ref": "#/$defs/localObjectKeyRef"
+        }
+      }
+    },
+    "workerRolloutStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rampPercentage", "pauseDuration"],
+      "properties": {
+        "rampPercentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99
+        },
+        "pauseDuration": {
+          "$ref": "#/$defs/goDuration"
+        }
+      }
+    },
+    "workerSunset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scaledownDelay": {
+          "$ref": "#/$defs/goDuration"
+        },
+        "deleteDelay": {
+          "$ref": "#/$defs/goDuration"
+        }
+      }
+    },
+    "localObjectKeyRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "goDuration": {
+      "type": "string",
+      "pattern": "^[0-9]+(ns|us|ms|s|m|h)$"
+    }
+  }
+}

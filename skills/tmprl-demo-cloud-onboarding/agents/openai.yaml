@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo Cloud Onboarding"
+  short_description: "Assess demos and draft project YAML"
+  default_prompt: "Use $tmprl-demo-cloud-onboarding to inspect this demo repo end to end and draft only the DemoProject YAML or a required-changes report."

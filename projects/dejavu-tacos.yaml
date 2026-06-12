@@ -1,0 +1,72 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: dejavu-tacos
+spec:
+  registry:
+    title: Deja Vu Tacos
+    summary: Interactive order management demo comparing direct service calls with Temporal workflows, retries, signals, and compensation.
+    tags:
+      - Food Service
+      - Workflows
+      - Saga
+      - Order Management
+    temporalSdks:
+      - Python
+      - Go
+      - TypeScript
+      - Java
+      - .NET
+
+  source:
+    repo: https://github.com/temporal-sa/demo-dejavu-tacos
+    # branch defaults to main
+
+  builds:
+    frontend:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    backend:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    worker-python:
+      context: .
+      dockerfile: docker/worker-python.Dockerfile
+
+  components:
+    # nginx serves the UI and proxies /api -> backend; servicePort 80 makes this
+    # the public catch-all (single unnamed port becomes "http").
+    frontend:
+      build: frontend
+      ports:
+        - containerPort: 5173
+          servicePort: 80
+
+    # Starts workflows and sends signals, so it needs Temporal credentials.
+    backend:
+      build: backend
+      temporalAccess: true
+      env:
+        - name: DEJAVU_WORKER_LANGUAGE
+          value: python
+      ports:
+        - containerPort: 8000
+          servicePort: 8000
+
+    # Temporal worker; listens on the app's built-in dejavu-tacos task queue.
+    worker:
+      build: worker-python
+      worker: true
+      env:
+        - name: DEJAVU_BACKEND_URL
+          value: http://backend:8000
+
+  ingress:
+    subdomain: dejavu-tacos
+    temporalAuthRequired: false
+    # routes default to a catch-all at the servicePort-80 component (frontend)
+
+  # Smoke /api/health routes through the frontend nginx proxy to the backend.
+  smokeCheck:
+    path: /api/health
+    expectedStatus: 200

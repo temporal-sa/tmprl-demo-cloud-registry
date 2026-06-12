@@ -1,0 +1,112 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-install
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/addons/external-secrets/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-stores
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-install
+  interval: 5m
+  path: ./clusters/sa-demo/addons/external-secrets/stores
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: temporal-worker-controller
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/addons/temporal-worker-controller/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller-crds
+      namespace: tmprl-dem-cld-worker-controller
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller
+      namespace: tmprl-dem-cld-worker-controller
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-crds
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/bootstrap/crds
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-operator
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-stores
+    - name: registry-crds
+    - name: temporal-worker-controller
+  interval: 5m
+  path: ./clusters/sa-demo/bootstrap/registry-operator
+  # The operator WorkerDeployment is now rendered by the registry-operator
+  # DemoProject. Keep bootstrap non-pruning so the existing worker survives the
+  # handoff when Flux stops owning that object.
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-projects
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: registry-operator
+    - name: temporal-worker-controller
+  interval: 5m
+  # DemoProject CRs authored directly under projects/. The kustomize-controller
+  # auto-includes every manifest here, so adding a demo is just dropping one file.
+  path: ./projects
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true

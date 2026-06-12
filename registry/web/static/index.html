@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Demo Cloud Registry</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Temporal demo platform</p>
+          <h1>Demo Cloud Registry</h1>
+          <p class="summary">Reviewed demos, owned routes, and lifecycle state from the registry operator.</p>
+        </div>
+        <section class="stats" aria-label="Catalog summary">
+          <div class="stat">
+            <span class="stat-value" data-project-count>0</span>
+            <span class="stat-label">Projects</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" data-live-status-count>0</span>
+            <span class="stat-label">Live Status</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" data-auth-count>0</span>
+            <span class="stat-label">Protected</span>
+          </div>
+        </section>
+      </header>
+
+      <section class="toolbar" aria-label="Catalog filters">
+        <input class="input" data-search type="search" placeholder="Search projects">
+        <select class="select" data-phase aria-label="Filter by phase">
+          <option value="all">All phases</option>
+        </select>
+      </section>
+
+      <section class="project-grid" data-project-grid aria-live="polite">
+        <div class="empty">Loading catalog.</div>
+      </section>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

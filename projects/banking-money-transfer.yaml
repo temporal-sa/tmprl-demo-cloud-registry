@@ -1,0 +1,65 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: banking-money-transfer
+spec:
+  registry:
+    title: Banking Money Transfer
+    summary: Durable money-transfer banking demo — a web UI and API backed by a Temporal worker running the money-transfer saga.
+    tags:
+      - Banking
+      - Workflows
+      - Saga
+    temporalSdks:
+      - Python
+
+  source:
+    repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
+    # branch defaults to main
+
+  builds:
+    frontend:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    backend:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    worker:
+      context: .
+      dockerfile: docker/worker-python.Dockerfile
+
+  components:
+    # nginx serves the UI and proxies /api -> backend; servicePort 80 makes this
+    # the public catch-all (single unnamed port becomes "http").
+    frontend:
+      build: frontend
+      ports:
+        - containerPort: 5173
+          servicePort: 80
+
+    # Starts/queries workflows, so it needs Temporal credentials injected.
+    backend:
+      build: backend
+      temporalAccess: true
+      ports:
+        - containerPort: 8000
+          servicePort: 8000
+
+    # Temporal worker; uses the app's default task queue (MoneyTransfer), which
+    # the backend also defaults to, so they match without injecting one.
+    worker:
+      build: worker
+      worker: true
+      env:
+        - name: BANKING_BACKEND_URL
+          value: http://backend:8000
+
+  ingress:
+    subdomain: banking-app
+    temporalAuthRequired: false
+    # routes default to a catch-all at the servicePort-80 component (frontend)
+
+  # Smoke /api/health routes through the frontend nginx proxy to the backend.
+  smokeCheck:
+    path: /api/health
+    expectedStatus: 200

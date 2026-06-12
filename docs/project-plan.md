@@ -1,0 +1,780 @@
+# Project Plan
+
+Last updated: 2026-06-13
+
+This document is the steering record for the `tmprl-demo.cloud` GitOps platform.
+Keep it current as phases move from design to implementation.
+
+For the current canonical picture, read **[architecture.md](architecture.md)**
+(what we're building, how it works, and design intent for what's not built yet)
+and **[operations.md](operations.md)** (runbook + operational gotchas). The
+sections in this file below the status table are an older design history.
+
+> **Architecture update:** The platform moved to an **operator-derives model with
+> no generation step.** Projects are authored directly as `DemoProject` CRs under
+> `projects/`; Flux applies them and the operator derives namespaces/host/prefixes
+> at reconcile time and publishes the catalog ConfigMap itself.
+> `scripts/generate_projects.py`, the `clusters/sa-demo/generated/` tree, the
+> `--check` CI gate, and the `spec.derived` block were removed; `plan` modes were
+> dropped (the operator provisions for real). Sections below that describe a
+> generator, generated manifests, plan modes, or a baked `registry.json` are
+> retained as design history — for the current contract see `README.md`,
+> `projects/README.md`, and `schemas/project.schema.json`.
+
+## Current Status
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| 1. Validation | Done | `scripts/validate_projects.py` validates each `DemoProject` CR against `schemas/project.schema.json` (CR envelope) plus cross-file checks; runs in CI on `main`. No generate `--check` gate. |
+| 2. Generator | Removed | Replaced by the operator-derives model: projects are authored as `DemoProject` CRs under `projects/` and Flux applies them directly. `scripts/generate_projects.py`, `clusters/sa-demo/generated/`, and the `--check` gate were deleted; the operator computes all derived values at reconcile time. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA were bootstrapped for `sa-demo`; the operator creates/verifies ECR repositories, verifies Secrets Manager paths/properties, and creates/verifies the Temporal Cloud namespace, scoped service account, and 30-day API key via the Cloud Operations API (cloud-api mode). Custom-secret values and the platform bootstrap credential remain manual. |
+| 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
+| 5. Build Pipeline | In progress | The operator builds via `aws-codebuild` by default: it starts a pre-created CodeBuild project that clones the source repo and pushes immutable `git-<sha>` ECR tags, then writes resolved images into candidate rollout status. `local-docker` remains an opt-in alternative. CodeBuild project/role provisioning remains external setup. |
+| 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
+| 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
+| 8. Registry App | Partial | The operator publishes the catalog as a `registry-catalog` ConfigMap (built from all CRs) and the web image is built to mount it at `/app/data` + catalog-status at `/app/status`. BUT the registry web is **not actually deployed**: the registry is control-plane-guarded (and its CR still has the circular operator `worker` component), so it sits at `WaitingForImages` with no IngressRoute. Fix = make the registry web a normal project (architecture.md §2). |
+| 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
+| 10. Registry Operator | Working (E2E proven) | Python worker in `tmprl-dem-cld-registry-operator`. **`banking-money-transfer` was taken fully automatically from a dropped CR to a promoted, live deployment** (Temporal Cloud namespace + scoped key, ECR, CodeBuild images, candidate deploy, readiness probe, smoke `/api/health` 200, Traefik + TLS). Hardening shipped: start-signal clobber fix, patch markers removed, smoke polling, readiness probe, activity decomposition, typed retry/non-retryable policies, and build retry/reattach. Remaining: image-exists build skip, operator self-management (architecture.md §3). |
+| 11. SA Onboarding Skill | Scaffolded | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/` and covers repo assessment, migration lift, config generation, secrets instructions, validation checks, and lifecycle status surfaces. |
+
+## Decisions
+
+- Use Flux, not Argo.
+- Project source repositories must be in the `temporal-sa` GitHub organization.
+- Project owners add one reviewed project config file under `projects/`.
+- Project owners specify `metadata.name` as the project identity.
+- Project owners do not specify a raw Kubernetes namespace.
+- Project owners define build inputs, not output image repositories or image
+  tags. ECR repositories and immutable tags are platform-derived.
+- Project owners do not define Temporal Cloud namespace names or Temporal env
+  var names. The platform derives the namespace from `metadata.name` and injects
+  standard Temporal env vars.
+- Projects may define multiple builds, including separate Dockerfiles for
+  separate runtime components.
+- Multiple runtime components may reuse one build when that is natural, but the
+  platform must not require a single image with different command overrides.
+- Runtime components produce stable Kubernetes Services when ports are declared.
+  The default service name is the component name; an optional `serviceName`
+  override is allowed when a project needs a different DNS name.
+- Every project config includes registry display metadata for the demo landing
+  page. The platform derives app, Temporal Cloud, and source repository links
+  where possible; owners provide human-facing title, summary, tags, SDKs, and
+  optional supporting assets.
+- Kubernetes namespaces are derived by the platform as
+  `tmprl-dem-cld-<metadata.name>`.
+- Derived namespaces must fit Kubernetes DNS label limits. If truncation is
+  needed, use deterministic hash-suffix truncation rather than plain truncation
+  so two long project names cannot silently collapse to the same namespace.
+- Project configs specify only a subdomain. The platform appends
+  `tmprl-demo.cloud`.
+- Project configs must explicitly specify the ingress target service and port.
+- Project owners should not need direct Kubernetes access for routine deploys.
+- Project owners should not manually manage Temporal namespace or API key
+  lifecycle.
+- Generated destructive external resources, especially Temporal namespaces,
+  should not be deleted by ordinary config removal.
+- Temporal API keys injected into project pods must be scoped only to that
+  project's Temporal namespace.
+- Temporal credentials are injected automatically into worker components.
+  Non-worker components that need Temporal credentials declare
+  `temporalAccess: true`.
+- User-managed secrets are constrained to platform-derived AWS Secrets Manager
+  paths: `tmprl-dem-cld/<metadata.name>/<secret-name>`. Components receive
+  them only when they explicitly reference a top-level `secrets.<name>`
+  declaration. Every JSON key in the AWS secret is injected as an environment
+  variable for those components, and declared `requiredProperties` are verified
+  before runtime workloads are deployed in opt-in AWS external-resource mode.
+- The `DemoProject` CRD schema includes the same top-level
+  `spec.secrets.<name>.requiredProperties` contract so Kubernetes preserves
+  those requirements for the operator.
+- Project IAM roles must be scoped to the project secret prefix only, for
+  example `tmprl-dem-cld/<metadata.name>/*`, so a compromised project cannot
+  read or mutate secrets belonging to other demos or non-demo systems.
+- Initial Temporal API key lifetime can be one year, but key rotation and
+  reconciliation must be designed before real provider automation is enabled.
+- Project ingress auth is secure by default. If the auth field is omitted, the
+  platform requires shared Temporal employee auth. Public demos must explicitly
+  opt out with `temporalAuthRequired: false`.
+- The registry is itself a demo. After initial bootstrap, it should be
+  represented by `projects/registry.yaml`, reconciled as a `DemoProject`,
+  and rolled out through the same build, smoke-test, auth, and status machinery
+  as other demos.
+- `DemoProject` CRs are now the applied project contract after bootstrap. Older
+  generated Kubernetes files remain review artifacts until the operator fully
+  owns reconciliation for those resource kinds.
+- First deployment testing targets `dejavu-tacos`; image builds are still a
+  manual substitute represented by the
+  `registry.tmprl-demo.cloud/image-overrides` annotation.
+- The first Deja Vu test reused the registry-prefixed namespace
+  `tmprl-dem-cld-dejavu-tacos`, which had already been created during the
+  initial manual registry test. The old manual namespace
+  `temporal-dejavu-tacos` was deleted after promotion. A future test must prove
+  namespace creation from zero using a namespace that does not already exist.
+- Leftover manual Deja Vu test routes and TLS artifacts named
+  `dejavu-tacos-registry-test*` were removed from
+  `tmprl-dem-cld-dejavu-tacos` after the promoted route was verified.
+
+## Live sa-demo Checkpoint
+
+As of 2026-06-13:
+
+- Flux controllers are installed in `flux-system`.
+- `GitRepository/cluster-gitops-config` reconciles `main` over SSH with a
+  read-only GitHub deploy key.
+- External Secrets Operator is installed in `external-secrets`.
+- `ClusterSecretStore/platform-secrets` is Ready and reads AWS Secrets Manager
+  in `us-west-1`.
+- Registry operator runs in `tmprl-dem-cld-registry-operator` using image
+  `429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry/worker:20260612-214200-amd64`.
+- Registry Temporal namespace:
+  `tmprl-demo-cloud-registry.a2dd6`.
+- `DemoProject/dejavu-tacos` is `Promoted`; public checks return HTTP 200 for
+  `https://dejavu-tacos.tmprl-demo.cloud/` and
+  `https://dejavu-tacos.tmprl-demo.cloud/api/health`.
+- `DemoProject/demo-registry` and `DemoProject/temporal-agent-harness` are
+  `WaitingForImages`; only base namespace/RBAC/metadata resources were applied
+  for those projects.
+- `temporal-agent-harness` is the chosen second rollout target. It uses one
+  `app` build for web, API, and worker components, requires
+  `tmprl-dem-cld/temporal-agent-harness/anthropic-credentials` with
+  required JSON property `ANTHROPIC_API_KEY`, and now declares smoke check path
+  `/api/auth/google/configured`.
+
+Next validation target:
+
+- Finish a full end-to-end rollout loop without manual substitutes:
+  - create a previously absent namespace;
+  - create/verify ECR repositories; opt-in `aws` mode now handles this safe
+    subset for project repositories;
+  - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
+    mode now verifies required paths and JSON property names for
+    platform-managed Temporal secrets and declared project-owned secrets, and
+    runtime status records
+    ExternalSecret Ready conditions after Kubernetes reconcile. When required
+    secret values are missing or malformed, the operator holds back runtime
+    workloads with `WaitingForExternalResources` and records
+    `externalResourceBlock`;
+  - create/verify Temporal Cloud namespace and namespace-scoped API key through
+    the Cloud Operations API; one-time API key capture is written directly to
+    AWS Secrets Manager and not exposed in status;
+  - build immutable images from the source repo; opt-in `aws-codebuild` now
+    provides an AWS-side test path using a pre-created CodeBuild project, while
+    `local-docker` remains available for trusted isolated tests;
+  - deploy a candidate release;
+  - run smoke checks against the candidate;
+  - promote Traefik routing only after success;
+  - leave all state visible on the `DemoProject` status and registry UI.
+
+## Architecture Pivot: Registry Operator
+
+We are exploring a pivot from "GitOps generates every final resource" to
+"GitOps declares desired demo resources, and a Temporal-backed registry operator
+reconciles them."
+
+Proposed shape:
+
+- Flux bootstraps the registry/operator deployment, CRDs, RBAC, and the
+  reviewed `DemoProject` custom resources.
+- The registry/operator bootstrap is the only special case. Once it is running,
+  the registry's own `DemoProject` entity workflow manages the registry demo.
+- Each project config is rendered into a `DemoProject` CR, or eventually
+  authored directly as that CR shape if the owner-facing API stabilizes there.
+- The registry worker watches `DemoProject` resources and starts one durable
+  entity workflow per project, keyed by project name.
+- The entity workflow owns reconciliation for namespace/RBAC, ECR repositories,
+  image build orchestration, Temporal Cloud namespace/API key lifecycle, AWS
+  Secrets Manager paths, ExternalSecret wiring, Traefik routing, app
+  deployments, Worker Controller resources, and registry metadata/status.
+- The workflow writes status back to the `DemoProject` resource and/or registry
+  data so users can see whether the demo is healthy, rolling out, blocked, or
+  waiting for approval.
+
+Why this is attractive:
+
+- Temporal is a better fit than static YAML for lifecycle tasks such as API key
+  rotation, external-resource deletion guards, build retries, smoke tests,
+  approval gates, and ephemeral demo environment cleanup.
+- Git and Flux still provide reviewed desired state and cluster bootstrap.
+- The operator can use narrow credentials and explicit workflows instead of
+  giving project owners direct Kubernetes, AWS, or Temporal admin access.
+
+Bootstrap cost:
+
+- The registry/operator has to be installed manually or through a small
+  bootstrap path before it can manage other demos.
+- The bootstrap path should install only the minimum viable registry/operator
+  control plane: CRDs, RBAC, service account/IAM, initial image, and enough
+  configuration to reconcile the `demo-registry` `DemoProject`.
+- After bootstrap, registry upgrades should go through the same candidate
+  rollout, smoke-test, and promotion workflow as other demos.
+- The operator service account/IAM role becomes high-value and must be scoped,
+  audited, and separated from project runtime credentials.
+- CRD versioning and workflow versioning become part of the platform contract.
+
+Pragmatic migration path:
+
+- Keep the current owner-facing project YAML and validator for now.
+- Generate a `DemoProject` CR per project as the next contract artifact.
+- Keep existing generated manifests/plans as review/reference output while
+  moving source-of-truth reconciliation into the operator.
+- Teach the operator to reconcile one narrow thing first, such as project
+  namespace and status.
+- Expand reconciliation in controlled slices: ECR, secrets, Temporal namespace
+  and API keys, build orchestration, app rollout, Worker Controller resources,
+  and ephemeral environments.
+
+## Phase 1: Validation
+
+Goal: make project config review safe before any generator or external mutation
+exists.
+
+Implemented scaffold:
+
+- `scripts/validate_projects.py`
+- `.github/workflows/validate-projects.yaml`
+- `requirements-dev.txt`
+- README validation instructions
+
+Remaining Phase 1 work:
+
+- Review the simplified schema and `projects/dejavu-tacos.yaml` contract.
+- Decide whether Phase 1 should include optional readiness/liveness probe
+  fields or leave probes for the generator phase.
+- Decide whether the standard Temporal env vars are exactly
+  `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and
+  `TEMPORAL_TLS`.
+- Decide whether registry readiness score is useful enough to keep in the
+  schema or should remain out of the first implementation.
+- Keep CI PR/push-only with no cluster or external-provider mutations.
+
+Proposed namespace derivation:
+
+```text
+prefix = tmprl-dem-cld-
+raw = prefix + metadata.name
+if len(raw) <= 63:
+  namespace = raw
+else:
+  namespace = raw[:54] + "-" + sha256(raw)[:8]
+```
+
+The exact truncation boundary should be implemented by code, not duplicated
+manually in project configs.
+
+Target owner-facing config shape:
+
+```yaml
+metadata:
+  name: dejavu-tacos
+
+registry:
+  title: Deja Vu Tacos
+  summary: Interactive taco shop demo showing Temporal workflows replacing fragile checkout orchestration with durable execution, retries, and recoverable failures.
+  tags:
+    - Durable Execution
+    - Retries
+    - Sagas
+    - Compensation
+    - Signals
+    - Queries
+  temporalSdks:
+    - Python
+    - Go
+    - TypeScript
+    - Java
+    - .NET
+
+source:
+  repo: https://github.com/temporal-sa/taco-app-temporal-demo
+  branch: main
+
+builds:
+  frontend:
+    context: .
+    dockerfile: docker/frontend.Dockerfile
+  backend:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  worker-python:
+    context: .
+    dockerfile: docker/worker-python.Dockerfile
+
+components:
+  frontend:
+    build: frontend
+    ports:
+      - name: http
+        containerPort: 5173
+        servicePort: 80
+
+  backend:
+    build: backend
+    serviceName: backend
+    temporalAccess: true
+    ports:
+      - name: http
+        containerPort: 8000
+        servicePort: 8000
+    env:
+      - name: DEJAVU_RELOAD
+        value: "0"
+      - name: DEJAVU_WORKER_LANGUAGE
+        value: python
+
+  worker-python:
+    build: worker-python
+    worker: true
+    env:
+      - name: DEJAVU_BACKEND_URL
+        value: http://backend:8000
+
+ingress:
+  subdomain: dejavu-tacos
+  routes:
+    - pathPrefix: /api
+      component: backend
+      port: http
+    - component: frontend
+      port: http
+```
+
+Projects that use separate images define multiple builds and point each
+component at the right build:
+
+```yaml
+builds:
+  web:
+    context: web
+    dockerfile: Dockerfile
+  worker:
+    context: worker
+    dockerfile: Dockerfile
+
+components:
+  web:
+    build: web
+  worker:
+    build: worker
+```
+
+Projects can also reuse one build across multiple components when that is the
+real application shape. For example, `projects/temporal-agent-harness.yaml`
+uses one `app` build for `web`, `api`, and `worker`, with each component
+providing its own command as an inline string array. The `api` and `worker`
+components reference the user-managed `anthropic-credentials` secret, which
+declares required JSON property `ANTHROPIC_API_KEY` and maps to:
+
+```text
+tmprl-dem-cld/temporal-agent-harness/anthropic-credentials
+```
+
+Generated service DNS:
+
+- default: `<component>.<namespace>.svc.cluster.local`
+- same namespace shorthand: `http://<component>`
+- optional override:
+
+```yaml
+components:
+  api:
+    serviceName: agent-api
+```
+
+Simple ingress shorthand:
+
+```yaml
+ingress:
+  subdomain: demo.testing
+  temporalAuthRequired: true
+  component: web
+  port: http
+```
+
+## Phase 2: Generator
+
+Goal: render reviewed project intent into deterministic Kubernetes manifests
+under `clusters/sa-demo/generated/<project>/`.
+
+Initial generated resources:
+
+- `Namespace`
+- service account and namespace-scoped RBAC skeleton
+- Traefik `IngressRoute`
+- Kubernetes `Service` resources for components with ports
+- ExternalSecret placeholder wiring
+- ConfigMap and Secret names for injected environment
+- unapplied Deployment templates for each component with placeholder image refs
+- generated `build-plan.json` with source repo, context, Dockerfile, derived
+  image repository/tag templates, and build consumers
+- generated `codebuild-setup-plan.json` with shared CodeBuild project shape,
+  operator IAM permissions, CodeBuild service-role permissions, source repo
+  access, and project/build repository ARN templates
+- bootstrap registry-operator `configMapGenerator` for reviewed non-secret
+  mode changes; the defaults keep external-resource and build mutation in
+  `plan`, while a committed config change can roll the worker into
+  `aws-codebuild` testing after IAM and CodeBuild setup are ready
+- generated `external-resources-plan.json` with ECR, Temporal Cloud,
+  AWS Secrets Manager, bootstrap credential, runtime secret property, and scoped
+  IAM intent
+- generated but unapplied `DemoProject` CR templates as the desired-state
+  handoff to the registry operator
+- registry landing page data from project configs
+- Worker Controller placeholder/template resources when enabled
+- Optional auth middleware references when shared auth is required
+
+Deployment templates are generated for review and for the future build pipeline,
+but they are not referenced from generated `kustomization.yaml` files while
+their image refs point at `registry.invalid`.
+
+Out of scope for this phase:
+
+- real Terraform/OpenTofu resources
+- real Temporal Cloud namespace creation from the operator
+- real API key creation
+- real AWS Secrets Manager writes
+
+## Phase 3: Platform Infra
+
+Goal: provision external assets with deletion controls and least privilege.
+
+Assets:
+
+- ECR repo per project
+- Temporal Cloud namespace per project
+- Temporal service account/API key scoped only to that namespace
+- AWS Secrets Manager secret for generated Temporal API key
+- IAM/IRSA or access policy so External Secrets can read only that project's
+  secrets
+- per-project IAM permissions limited to the exact secret prefix
+  `tmprl-dem-cld/<metadata.name>/*`
+
+The generator produces `external-resources-plan.json` as Phase 3 input. It is
+review data only until Terraform/OpenTofu automation is added.
+
+The operator's opt-in `aws` external resource mode currently creates or
+verifies ECR repositories, verifies Secrets Manager path existence, and checks
+required JSON property names for the Temporal Cloud bootstrap secret and each
+platform-managed project Temporal credential, plus any project-owned secret
+requirements declared in `secrets.<name>.requiredProperties`. It does not write
+secret values and it leaves Temporal Cloud namespace/API key lifecycle manual
+until the provider contract is reviewed.
+
+Temporal API key rotation design:
+
+- Initial TTL: one year.
+- Platform must track key expiration.
+- Reconcile before expiry, for example when less than 30-60 days remain.
+- Write the replacement key to AWS Secrets Manager.
+- Allow External Secrets to sync the new value into Kubernetes.
+- Roll dependent pods after sync.
+- Revoke the old key only after an overlap window.
+- Failed rotation must alert and must not delete the currently working key.
+
+Provider verification needed:
+
+- current Temporal Cloud Operations API resource names
+- current support for namespace-scoped service accounts or API keys
+- current API key expiry/rotation semantics
+
+## Phase 4: Flux Bootstrap
+
+Goal: have Flux reconcile generated Kubernetes state from inside the cluster.
+
+Requirements:
+
+- Flux source points at this repo.
+- Flux reconciles the generated cluster path.
+- Tenant resources use namespace-scoped service accounts where practical.
+- Kubernetes generated resources may use prune.
+- External destructive resources must not be pruned by routine project config
+  removal.
+
+## Phase 5: Build Pipeline
+
+Goal: platform-owned image builds from project source repos.
+
+Requirements:
+
+- Build each declared build from the project config's source repo, branch,
+  context, and Dockerfile.
+- Support multiple build definitions per project so different components can
+  use different Dockerfiles.
+- Allow multiple components to reference the same build when they intentionally
+  share an image.
+- Push immutable image tags to platform-derived per-project or per-build ECR
+  repos.
+- Write resolved image tags into `DemoProject.status.buildStatus` and
+  `DemoProject.status.candidateRolloutStatus`; generated deployment templates
+  remain review artifacts until a Git-backed deploy-state update is needed.
+- Let Flux roll out from inside the cluster.
+- Build credentials must be limited to that project's image repository.
+- Build workers must not have Temporal admin privileges or broad AWS access.
+- Current implementation supports default non-mutating build planning,
+  image-override compatibility, an opt-in `local-docker` activity for trusted
+  tests, and an opt-in `aws-codebuild` activity that starts and polls a
+  configured CodeBuild project. The CodeBuild project and service role are
+  provisioned outside the operator using the generated
+  `codebuild-setup-plan.json`; the service role should have source-repo read
+  access plus ECR push access scoped to the project/build repositories.
+  CodeBuild execution details, including build ID and CloudWatch logs, are
+  recorded under `DemoProject.status.buildStatus.codebuild` and mirrored into
+  catalog status.
+
+Operator rollout direction:
+
+- A source push starts or signals the project entity workflow.
+- The workflow resolves images first, either from existing immutable overrides
+  or from the build activity, then deploys candidate pods without immediately
+  moving public traffic.
+- Build-resolved image maps now drive both candidate resources and promoted
+  Traefik routes, so the non-manual build path does not need image override
+  annotations.
+- Current operator implementation creates candidate Deployments and Services
+  with deterministic version suffixes, using `git-<source-sha>` when the
+  source commit annotation is present.
+- The project config should allow a simple owner-defined smoke or health check
+  for the published demo path.
+- The workflow waits for candidate Deployment readiness, records
+  `DemoProject.status.readinessStatus`, and then runs the smoke check against
+  the candidate version.
+- Traefik routing moves to the candidate's versioned Services only after the
+  smoke check succeeds.
+- On failure, the workflow keeps the previous healthy route active, records
+  failure status, and avoids promoting the broken version.
+- Rollout status should be visible in the registry and on the `DemoProject`
+  custom resource.
+
+Open choice:
+
+- Whether CodeBuild project/role creation should remain bootstrap/IaC or move
+  behind an explicit operator approval workflow.
+- Whether to add distinct preview routes or weighted Traefik services after
+  versioned candidate Services are proven.
+
+## Phase 6: Temporal Worker Controller
+
+Goal: generate Worker Controller resources for project workers.
+
+Requirements:
+
+- Verify current Worker Controller CRD names and shapes before implementation.
+- Wire image tag, task queue, Temporal namespace, and Temporal API key env.
+- Support rollout policy.
+- Only generate worker resources for services marked `worker: true`.
+- Worker versioning is platform intent, not app-authored static env values.
+  Projects may map app-specific env names for versioning fields, but the
+  platform derives the actual build/version values from image/build state.
+
+## Phase 7: Shared Auth
+
+Goal: let project owners choose whether a demo is public or protected by shared
+Temporal employee Google auth.
+
+Owner-facing intent:
+
+```yaml
+ingress:
+  temporalAuthRequired: true
+```
+
+If `temporalAuthRequired` is omitted, it defaults to `true`. Public demos must
+set it to `false` explicitly.
+
+Design direction:
+
+- Run a shared auth service at `auth.tmprl-demo.cloud`.
+- Use Google sign-in restricted to Temporal employees.
+- For protected projects, generated Traefik routing must call the shared auth
+  service before proxying to the project service.
+- The shared auth service validates the user's session and returns a
+  platform-signed JWT or identity headers to Traefik.
+- Traefik forwards the JWT to the downstream app, for example in
+  `X-Temporal-Auth-JWT`.
+- The platform should validate all protected route calls before they reach the
+  project app.
+- Downstream apps do not need to implement login to be private.
+- Downstream apps may optionally consume and verify the JWT for user-aware
+  behavior.
+- Public demos remain possible by leaving auth disabled.
+
+JWT requirements:
+
+- Signed by a platform-owned key, not by individual project apps.
+- Includes issuer, audience, subject, email, hosted domain, issued-at, expiry,
+  and the project host or project name.
+- Short-lived enough that stolen forwarded headers have limited value.
+- Verification material should be published internally, for example through a
+  JWKS endpoint, if apps are expected to validate the JWT themselves.
+
+Important security notes:
+
+- Protected apps must trust identity only from Traefik-injected headers, not
+  from client-supplied headers.
+- The route/middleware must strip inbound identity headers before auth runs.
+- Auth bypass for health checks, static assets, or internal callbacks must be
+  explicit, reviewed, and generated rather than project-defined free-form rules.
+
+## Open Questions
+
+- Should generated files be committed to this repo, or generated in CI and
+  applied by Flux from an artifact or branch?
+- Should project config support multiple environments in one file, or one file
+  per environment?
+- Should Temporal namespace deletion require an explicit `deletionApproved`
+  field or a separate removal workflow?
+- What is the final naming convention for Temporal Cloud namespaces?
+- How should host collision be checked against existing Traefik routes outside
+  this repo?
+- Which build system should run untrusted project Dockerfiles?
+- Do project repos provide only Dockerfiles, or optional deployment overlays?
+- How much of app deployment should be generated versus project-owned?
+- What exact shared-auth field name should the project schema expose?
+- Should protected routes cover every path by default, or support generated
+  exceptions for health/readiness/callback paths?
+- What JWT header name and claims should be contractually supported for
+  downstream apps?
+
+## Phase 8: Registry App
+
+Goal: build the registry landing page and operator worker as the first
+self-managed demo.
+
+Initial project config:
+
+- `projects/registry.yaml`
+- source repo: this repo
+- ingress subdomain: `registry`
+- components: `web` and `worker`
+
+Bootstrap rule:
+
+- The initial registry/operator install is manual or handled by a minimal
+  bootstrap path because the operator cannot create itself from nothing.
+- Once running, the registry is reconciled from its own `DemoProject` and uses
+  the same smoke-test-gated rollout path as other demos.
+
+Registry web responsibilities:
+
+- render project cards from reviewed project configs;
+- expose derived links for app UI, source repository, and Temporal Cloud
+  namespace;
+- display owner-provided registry metadata such as title, summary, tags, SDKs,
+  speaker notes, and assets;
+- current scaffold serves `/`, `/health`, `/registry.json`, `/api/registry`,
+  and `/api/catalog` from the generated catalog data;
+- read live lifecycle entries from a mounted
+  `registry-catalog-status` ConfigMap using the per-project
+  `<project>.json` key advertised in generated `registry.json`;
+- trigger or inspect registry worker workflows if the UI needs active demo
+  environment operations.
+
+Current live-status wiring:
+
+- the worker writes status to the control-plane ConfigMap
+  `tmprl-dem-cld-registry-operator/registry-catalog-status` and mirrors the same
+  per-project JSON keys into the registry web namespace;
+- the generated registry web Deployment mounts the mirrored ConfigMap at
+  `/app/status` and points `CATALOG_STATUS_DIR` there;
+- live lifecycle display becomes active after the updated worker and web images
+  are built and rolled out.
+
+Registry worker direction:
+
+- implement registry/operator workflows in Python;
+- generalize the temporary environment management currently being explored in
+  `temporal-agent-harness-example`;
+- provide lifecycle workflows for published demos rather than one-off
+  project-specific environment code;
+- create, inspect, refresh, and clean up temporary demo environments through
+  reviewed platform APIs and narrow credentials;
+- avoid giving project apps broad Kubernetes, AWS, or Temporal admin access.
+
+Open registry questions:
+
+- Should the landing page live at `registry.tmprl-demo.cloud` first, or should
+  the platform support the apex `tmprl-demo.cloud` host for this project?
+- Should registry page data be generated as static JSON committed under
+  `clusters/sa-demo/generated`, generated into the registry image at build time,
+  or loaded dynamically from this repo?
+
+## Phase 9: Ephemeral Demo Environments
+
+Goal: let the registry create temporary demo environments with their own local
+Temporal dev server and UI when a user needs an inspectable Temporal environment.
+
+Status: deferred until core validation, generation, infra, Flux, build, and
+worker-controller flows are working.
+
+Decision:
+
+- Do not add a per-project self-hosted Temporal UI pointed at Temporal Cloud as
+  the default plan. That path requires solving UI-to-Cloud auth, API key
+  scoping, read-only behavior, and codec behavior. Instead, keep Cloud
+  namespaces focused on the real deployed demo, and use temporary environments
+  when an interactive Temporal UI is needed.
+
+Design direction:
+
+- The registry worker owns lifecycle for temporary demo environments.
+- A temporary environment gets a generated Kubernetes namespace with a bounded
+  TTL and an owner/request id.
+- The registry deploys a local Temporal dev server pod in that namespace, using
+  a containerized Temporal CLI/server-dev mode rather than Temporal Cloud.
+- The registry deploys the demo app components into the same temporary
+  namespace, configured to talk to the local Temporal dev server instead of the
+  project's Temporal Cloud namespace.
+- The registry exposes the temporary app and Temporal UI through protected
+  routes.
+- Temporary environments are disposable and are not the source of truth for the
+  published demo's Cloud namespace or durable production-like state.
+- Cleanup must delete the temporary namespace and all child resources after the
+  TTL or explicit user action.
+
+POC questions:
+
+- Confirm the exact container image and entrypoint for running the Temporal CLI
+  dev server in Kubernetes.
+- Decide whether temporary namespaces should reuse the generated deployment
+  templates with substituted image tags or use a separate registry-worker
+  rendering path.
+- Define the temporary namespace naming convention and TTL labels.
+- Define how the registry worker rewrites Temporal connection env vars for
+  local dev-server mode.
+- Decide route shape for temporary app and Temporal UI access.
+- Decide whether temporary environments should support payload codecs and, if
+  so, how codec endpoints are routed.
+- Define resource quotas and concurrency limits so temporary environments
+  cannot exhaust the demo cluster.
+
+## Phase 11: SA Onboarding Skill
+
+Goal: provide a companion Codex skill that helps SAs migrate demo repositories
+onto the demo registry platform.
+
+The skill should behave like a guided wizard:
+
+- assess the target demo repo before editing;
+- check the registry for an existing matching or similar demo;
+- identify app components, Temporal workers, Dockerfiles, deployment manifests,
+  environment variables, health endpoints, custom secrets, and local-only
+  assumptions;
+- estimate migration lift and explain the required changes;
+- discuss the plan with the SA before making code changes;
+- create or update Dockerfiles when needed;
+- update apps/workers to read Temporal connection settings and secrets from
+  environment variables;
+- generate the project config file for this registry;
+- generate AWS Secrets Manager instructions for custom secrets under
+  `tmprl-dem-cld/<project-name>/<secret-name>`;
+- run project validation and generation checks after producing the config.
+
+The first version should prefer the platform-managed deployment path. If a demo
+repo already contains Flux/Kustomize/Kubernetes overlays, the skill should
+assess them and explain migration options, but it should not make arbitrary BYO
+manifest support the default path.
+
+Suggested implementation location:
+
+```text
+skills/tmprl-demo-cloud-onboarding/SKILL.md
+```

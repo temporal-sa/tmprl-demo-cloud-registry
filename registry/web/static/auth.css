@@ -1,0 +1,137 @@
+:root {
+    color-scheme: dark;
+    --color-bg-primary: #141414;
+    --color-bg-secondary: #0f172a;
+    --color-bg-tertiary: #1e293b;
+    --color-bg-hover: #273860;
+    --color-bg-active: #444ce729;
+    --color-border: #273860;
+    --color-text-primary: #f8fafc;
+    --color-text-secondary: #92a4c3;
+    --color-danger-hover: #ff4518;
+    --shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.4);
+    --space-md: 16px;
+    --space-lg: 24px;
+    --radius-lg: 8px;
+    --font-family:
+        "Inter", "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+        "Segoe UI", Roboto, sans-serif;
+    --font-size-sm: 12px;
+    --font-size-md: 14px;
+    --font-size-lg: 16px;
+    --transition-fast: 150ms ease;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font: var(--font-size-md)/1.5 var(--font-family);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: var(--space-md);
+    background: var(--color-bg-primary);
+}
+
+.login-card {
+    width: min(380px, 100%);
+    padding: var(--space-lg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+    box-shadow: var(--shadow-lg);
+}
+
+.login-card h1 {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: var(--space-lg);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.login-card h1::before {
+    content: "";
+    width: 144px;
+    height: 144px;
+    flex: 0 0 auto;
+    background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjM1MS45IDM1My40IDQ2My4yIDQ2My4yIj48cGF0aCBmaWxsPSIjRjJGMkYyIiBkPSJNNjUxLjE0LDUxNy4zNUM2NDIuMDIsNDQ5LjAzLDYxOC45NCwzOTIsNTgzLjQ5LDM5MnMtNTguNTMsNTcuMDMtNjcuNjUsMTI1LjM1CgljLTY4LjMyLDkuMTItMTI1LjM1LDMyLjItMTI1LjM1LDY3LjY1czU3LjA0LDU4LjUzLDEyNS4zNSw2Ny42NWM5LjEyLDY4LjMxLDMyLjIsMTI1LjM1LDY3LjY1LDEyNS4zNXM1OC41My01Ny4wNCw2Ny42NS0xMjUuMzUKCWM2OC4zMi05LjEyLDEyNS4zNS0zMi4yLDEyNS4zNS02Ny42NVM3MTkuNDUsNTI2LjQ3LDY1MS4xNCw1MTcuMzV6IE01MTMuNjEsNjMyLjc1Yy02NS40My05LjQ1LTEwMy41OS0zMS4wOC0xMDMuNTktNDcuNzUKCXMzOC4xNi0zOC4zLDEwMy41OS00Ny43NWMtMS40NCwxNS43NS0yLjE5LDMxLjgzLTIuMTksNDcuNzVDNTExLjQyLDYwMC45Miw1MTIuMTcsNjE3LjAxLDUxMy42MSw2MzIuNzV6IE01ODMuNDksNDExLjUzCgljMTYuNjcsMCwzOC4zLDM4LjE2LDQ3Ljc1LDEwMy41OWMtMTUuNzQtMS40NC0zMS44My0yLjE5LTQ3Ljc1LTIuMTlzLTMyLjAxLDAuNzUtNDcuNzUsMi4xOQoJQzU0NS4xOSw0NDkuNjksNTY2LjgyLDQxMS41Myw1ODMuNDksNDExLjUzeiBNNjUzLjM3LDYzMi43NWMtMy4yMiwwLjQ3LTE2LjQzLDIuMDItMTkuNzcsMi4zNWMtMC4zMywzLjM1LTEuODksMTYuNTUtMi4zNSwxOS43NwoJYy05LjQ1LDY1LjQzLTMxLjA4LDEwMy41OS00Ny43NSwxMDMuNTlzLTM4LjMtMzguMTYtNDcuNzUtMTAzLjU5Yy0wLjQ2LTMuMjItMi4wMi0xNi40My0yLjM1LTE5Ljc3CgljLTEuNTItMTUuNTEtMi40NC0zMi4xNy0yLjQ0LTUwLjFzMC45Mi0zNC41OSwyLjQ0LTUwLjExYzE1LjUxLTEuNTIsMzIuMTctMi40NCw1MC4xLTIuNDRzMzQuNTksMC45Miw1MC4xLDIuNDQKCWMzLjM1LDAuMzMsMTYuNTUsMS44OSwxOS43NywyLjM1YzY1LjQzLDkuNDUsMTAzLjYsMzEuMDksMTAzLjYsNDcuNzVTNzE4LjgsNjIzLjMsNjUzLjM3LDYzMi43NXoiLz48L3N2Zz4=")
+        center / contain no-repeat;
+}
+
+.login-form {
+    display: grid;
+    gap: var(--space-md);
+}
+
+.login-error {
+    min-height: 18px;
+    color: var(--color-danger-hover);
+    font-size: var(--font-size-sm);
+}
+
+.login-subtitle {
+    margin-bottom: var(--space-md);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.login-subtitle:empty {
+    display: none;
+}
+
+.login-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 48px;
+    width: 100%;
+    border-radius: var(--radius-lg);
+    text-decoration: none;
+    font-weight: 600;
+    font: inherit;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    border: 2px solid transparent;
+    background:
+        linear-gradient(var(--color-bg-secondary), var(--color-bg-secondary))
+            padding-box,
+        linear-gradient(90deg, #444ce7, #ff61fa) border-box;
+    transition: filter var(--transition-fast);
+}
+
+.login-button:hover {
+    filter: brightness(1.2);
+}
+
+.login-google[aria-disabled="true"] {
+    opacity: 0.6;
+    pointer-events: none;
+}
