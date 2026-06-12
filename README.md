@@ -37,7 +37,8 @@ Kubernetes namespaces, Temporal Cloud namespaces, Temporal API keys, ECR
 repositories, image tags, and standard Temporal env vars are derived by the
 platform.
 
-See [projects/dejavu-tacos.yaml](projects/dejavu-tacos.yaml)
+See [projects/dejavu-tacos.yaml](projects/dejavu-tacos.yaml),
+[projects/temporal-agent-harness.yaml](projects/temporal-agent-harness.yaml),
 and [schemas/project.schema.json](schemas/project.schema.json).
 
 See [docs/project-plan.md](docs/project-plan.md) for the phased implementation
@@ -46,11 +47,12 @@ plan, current decisions, and open steering questions.
 ## Validation
 
 Project config validation runs in GitHub Actions on pull requests and pushes.
-To run the same validation locally:
+To run the same validation and generation checks locally:
 
 ```sh
 python3 -m pip install -r requirements-dev.txt
 python3 scripts/validate_projects.py
+python3 scripts/generate_projects.py --check
 ```
 
 The validator checks each `projects/*.yaml` file against the project schema and
@@ -58,6 +60,19 @@ also enforces cross-file and cross-field rules, including unique project names,
 derived namespaces, ingress subdomains, valid build/component references, valid
 ingress routes, stable service DNS, registry display metadata, `temporal-sa`
 source repositories, and subdomain-only host configuration.
+
+## Generation
+
+Generated cluster output lives under `clusters/sa-demo/generated/` and is
+committed for review. Regenerate it after changing project configs:
+
+```sh
+python3 scripts/generate_projects.py
+```
+
+The generator writes Kubernetes namespace/RBAC skeletons, Services,
+Traefik routes, ExternalSecret placeholders, worker-controller placeholders,
+project metadata, and registry landing page data.
 
 ## Generated Assets
 

@@ -112,6 +112,12 @@
         "env": {
           "$ref": "#/$defs/envList"
         },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dnsLabel"
+          }
+        },
         "temporalAccess": {
           "type": "boolean",
           "default": false
@@ -436,6 +442,34 @@
         "taskQueue": {
           "type": "string",
           "minLength": 1
+        },
+        "versioning": {
+          "$ref": "#/$defs/workerVersioning"
+        }
+      }
+    },
+    "workerVersioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "$ref": "#/$defs/envName"
+            },
+            "buildId": {
+              "$ref": "#/$defs/envName"
+            },
+            "deploymentName": {
+              "$ref": "#/$defs/envName"
+            }
+          }
         }
       }
     }

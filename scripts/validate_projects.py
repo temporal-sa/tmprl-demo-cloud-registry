@@ -117,6 +117,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_service_names(document))
         errors.extend(validate_ingress_routes(document))
         errors.extend(validate_service_url_refs(document))
+        errors.extend(validate_project_secrets(document))
         errors.extend(validate_registry(document))
 
     return errors
@@ -352,6 +353,32 @@ def validate_service_url_refs(document: ProjectDocument) -> list[ProjectError]:
                     allow_default_port=True,
                 )
             )
+
+    return errors
+
+
+def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+
+    for component_name, component in components(document).items():
+        references = component.get("secrets")
+        if not isinstance(references, list):
+            continue
+
+        seen: dict[str, int] = {}
+        for index, secret_name in enumerate(references):
+            if not isinstance(secret_name, str):
+                continue
+
+            if secret_name in seen:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"components.{component_name}.secrets[{index}] {secret_name!r} duplicates secrets[{seen[secret_name]}]",
+                    )
+                )
+            else:
+                seen[secret_name] = index
 
     return errors
 

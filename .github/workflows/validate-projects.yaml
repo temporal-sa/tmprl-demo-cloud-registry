@@ -27,3 +27,6 @@ jobs:
 
       - name: Validate project configs
         run: python scripts/validate_projects.py
+
+      - name: Check generated output
+        run: python scripts/generate_projects.py --check

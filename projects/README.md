@@ -18,6 +18,8 @@ Rules:
 - `builds` declare source build inputs. The platform derives ECR repositories
   and immutable image tags.
 - `components` declare runtime pods and point at one declared build.
+- `components.<name>.command` accepts a list of strings. Inline YAML arrays are
+  valid and usually easier to read for process commands.
 - A component gets stable Kubernetes service DNS when it declares `ports`.
   The default Service name is the component name, with optional `serviceName`
   override for cases like `http://backend:8000`.
@@ -30,9 +32,50 @@ Rules:
 - Worker components automatically receive Temporal connection env vars and a
   namespace-scoped API key. Set `temporalAccess: true` only on non-worker
   components, such as an API server, that need to start or query workflows.
+- Worker versioning belongs under `components.<name>.worker.versioning`. The
+  project may map app-specific env var names there, but should not hard-code
+  worker build/version env values in `components.<name>.env`.
 - The platform injects standard Temporal env vars:
   `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and
   `TEMPORAL_TLS`.
+- User-managed secrets are allowed only through component secret references.
+  The platform derives the AWS Secrets Manager path as
+  `tmprl-cloud-demo/<metadata.name>/<secret-name>`.
+- Components receive user-managed secrets only when they list the secret name in
+  `components.<name>.secrets`. Every JSON key in the AWS secret is injected as
+  an environment variable, so keep each secret narrow and use env-var-shaped
+  JSON keys.
+
+Example user-managed secret:
+
+```yaml
+components:
+  worker:
+    secrets:
+      - anthropic-credentials
+```
+
+Before deployment, create this AWS Secrets Manager secret:
+
+```text
+tmprl-cloud-demo/<metadata.name>/anthropic-credentials
+```
+
+with JSON keys that should become environment variables:
+
+```json
+{
+  "ANTHROPIC_API_KEY": "..."
+}
+```
+
+The platform IAM role for the project should be scoped to only:
+
+```text
+tmprl-cloud-demo/<metadata.name>/*
+```
+
+so it cannot read or mutate secrets for other demos.
 
 ## Local to Cloud Shape
 

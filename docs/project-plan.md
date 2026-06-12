@@ -10,7 +10,7 @@ Keep it current as phases move from design to implementation.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
-| 2. Generator | Not started | Should wait until the Phase 1 project contract is stable; includes generated cluster manifests and registry landing page data. |
+| 2. Generator | In progress | Initial deterministic generator writes cluster manifests and registry landing page data under `clusters/sa-demo/generated/`; deployment/build resources remain placeholders. |
 | 3. Platform Infra | Not started | Needs provider verification for Temporal Cloud resources and scoped API key support. |
 | 4. Flux Bootstrap | Not started | Must reconcile generated Kubernetes state from inside the cluster. |
 | 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
@@ -59,6 +59,13 @@ Keep it current as phases move from design to implementation.
 - Temporal credentials are injected automatically into worker components.
   Non-worker components that need Temporal credentials declare
   `temporalAccess: true`.
+- User-managed secrets are constrained to platform-derived AWS Secrets Manager
+  paths: `tmprl-cloud-demo/<metadata.name>/<secret-name>`. Components receive
+  them only when they explicitly reference the secret. Every JSON key in the AWS
+  secret is injected as an environment variable for those components.
+- Project IAM roles must be scoped to the project secret prefix only, for
+  example `tmprl-cloud-demo/<metadata.name>/*`, so a compromised project cannot
+  read or mutate secrets belonging to other demos or non-demo systems.
 - Initial Temporal API key lifetime can be one year, but key rotation and
   reconciliation must be designed before real provider automation is enabled.
 - Project ingress auth is secure by default. If the auth field is omitted, the
@@ -205,6 +212,17 @@ components:
     build: worker
 ```
 
+Projects can also reuse one build across multiple components when that is the
+real application shape. For example, `projects/temporal-agent-harness.yaml`
+uses one `app` build for `web`, `api`, and `worker`, with each component
+providing its own command as an inline string array. The `api` and `worker`
+components reference the user-managed `anthropic-credentials` secret, which
+maps to:
+
+```text
+tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
+```
+
 Generated service DNS:
 
 - default: `<component>.<namespace>.svc.cluster.local`
@@ -263,6 +281,8 @@ Assets:
 - AWS Secrets Manager secret for generated Temporal API key
 - IAM/IRSA or access policy so External Secrets can read only that project's
   secrets
+- per-project IAM permissions limited to the exact secret prefix
+  `tmprl-cloud-demo/<metadata.name>/*`
 
 Temporal API key rotation design:
 
@@ -327,6 +347,9 @@ Requirements:
 - Wire image tag, task queue, Temporal namespace, and Temporal API key env.
 - Support rollout policy.
 - Only generate worker resources for services marked `worker: true`.
+- Worker versioning is platform intent, not app-authored static env values.
+  Projects may map app-specific env names for versioning fields, but the
+  platform derives the actual build/version values from image/build state.
 
 ## Phase 7: Shared Auth
 
