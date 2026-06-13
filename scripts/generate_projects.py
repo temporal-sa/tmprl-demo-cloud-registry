@@ -48,6 +48,10 @@ TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
+CATALOG_STATUS_MOUNT_PATH = "/app/status"
+CATALOG_STATUS_VOLUME_NAME = "catalog-status"
+REGISTRY_PROJECT_NAME = "demo-registry"
+REGISTRY_WEB_COMPONENT_NAME = "web"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
     "TEMPORAL_CLOUD_ACCOUNT_ID",
@@ -432,15 +436,11 @@ def deployments(project: Project) -> list[dict[str, Any]]:
                         "metadata": {
                             "labels": component_labels(project, component_name),
                         },
-                        "spec": {
-                            "serviceAccountName": service_account_for_component(
-                                component_name
-                            ),
-                            "automountServiceAccountToken": False,
-                            "containers": [
-                                container(project, component_name, component),
-                            ],
-                        },
+                        "spec": deployment_pod_spec(
+                            project,
+                            component_name,
+                            component,
+                        ),
                     },
                 },
             }
@@ -482,8 +482,56 @@ def container(
     env = env_vars(project, component)
     if env:
         rendered["env"] = env
+    if mounts_catalog_status(project, component_name):
+        rendered.setdefault("env", []).append(
+            {
+                "name": "CATALOG_STATUS_DIR",
+                "value": CATALOG_STATUS_MOUNT_PATH,
+            }
+        )
+        rendered["volumeMounts"] = [
+            {
+                "name": CATALOG_STATUS_VOLUME_NAME,
+                "mountPath": CATALOG_STATUS_MOUNT_PATH,
+                "readOnly": True,
+            }
+        ]
 
     return rendered
+
+
+def deployment_pod_spec(
+    project: Project,
+    component_name: str,
+    component: dict[str, Any],
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "serviceAccountName": service_account_for_component(component_name),
+        "automountServiceAccountToken": False,
+        "containers": [
+            container(project, component_name, component),
+        ],
+    }
+    if mounts_catalog_status(project, component_name):
+        spec["volumes"] = [catalog_status_volume()]
+    return spec
+
+
+def mounts_catalog_status(project: Project, component_name: str) -> bool:
+    return (
+        project.name == REGISTRY_PROJECT_NAME
+        and component_name == REGISTRY_WEB_COMPONENT_NAME
+    )
+
+
+def catalog_status_volume() -> dict[str, Any]:
+    return {
+        "name": CATALOG_STATUS_VOLUME_NAME,
+        "configMap": {
+            "name": CATALOG_STATUS_CONFIGMAP,
+            "optional": True,
+        },
+    }
 
 
 def env_from_refs(project: Project, component: dict[str, Any]) -> list[dict[str, Any]]:

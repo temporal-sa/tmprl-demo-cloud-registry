@@ -49,6 +49,8 @@ spec:
               value: demo-registry-system
             - name: DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP
               value: demo-registry-catalog-status
+            - name: DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE
+              value: tmprl-cloud-demo-demo-registry
             - name: DEMO_REGISTRY_ACTIVITY_WORKERS
               value: "20"
           resources:

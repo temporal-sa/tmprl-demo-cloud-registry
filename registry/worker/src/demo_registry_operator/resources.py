@@ -13,6 +13,10 @@ TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
 CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
+CATALOG_STATUS_MOUNT_PATH = "/app/status"
+CATALOG_STATUS_VOLUME_NAME = "catalog-status"
+REGISTRY_PROJECT_NAME = "demo-registry"
+REGISTRY_WEB_COMPONENT_NAME = "web"
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -379,6 +383,21 @@ def deployment_resources(
         if not isinstance(build_name, str) or build_name not in image_overrides:
             continue
 
+        pod_spec: dict[str, Any] = {
+            "serviceAccountName": service_account_for_component(component_name),
+            "automountServiceAccountToken": False,
+            "containers": [
+                container(
+                    demo_project,
+                    component_name,
+                    component,
+                    image_overrides[build_name],
+                )
+            ],
+        }
+        if mounts_catalog_status(demo_project, component_name):
+            pod_spec["volumes"] = [catalog_status_volume()]
+
         resources.append(
             {
                 "apiVersion": "apps/v1",
@@ -414,20 +433,7 @@ def deployment_resources(
                                 version,
                             ),
                         },
-                        "spec": {
-                            "serviceAccountName": service_account_for_component(
-                                component_name
-                            ),
-                            "automountServiceAccountToken": False,
-                            "containers": [
-                                container(
-                                    demo_project,
-                                    component_name,
-                                    component,
-                                    image_overrides[build_name],
-                                )
-                            ],
-                        },
+                        "spec": pod_spec,
                     },
                 },
             }
@@ -469,8 +475,39 @@ def container(
     env = env_vars(component)
     if env:
         rendered["env"] = env
+    if mounts_catalog_status(demo_project, component_name):
+        rendered.setdefault("env", []).append(
+            {
+                "name": "CATALOG_STATUS_DIR",
+                "value": CATALOG_STATUS_MOUNT_PATH,
+            }
+        )
+        rendered["volumeMounts"] = [
+            {
+                "name": CATALOG_STATUS_VOLUME_NAME,
+                "mountPath": CATALOG_STATUS_MOUNT_PATH,
+                "readOnly": True,
+            }
+        ]
 
     return rendered
+
+
+def mounts_catalog_status(demo_project: dict[str, Any], component_name: str) -> bool:
+    return (
+        project_name(demo_project) == REGISTRY_PROJECT_NAME
+        and component_name == REGISTRY_WEB_COMPONENT_NAME
+    )
+
+
+def catalog_status_volume() -> dict[str, Any]:
+    return {
+        "name": CATALOG_STATUS_VOLUME_NAME,
+        "configMap": {
+            "name": CATALOG_STATUS_CONFIGMAP,
+            "optional": True,
+        },
+    }
 
 
 def env_from_refs(

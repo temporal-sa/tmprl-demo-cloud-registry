@@ -38,6 +38,18 @@ spec:
         envFrom:
         - secretRef:
             name: temporal-credentials
+        env:
+        - name: CATALOG_STATUS_DIR
+          value: /app/status
+        volumeMounts:
+        - name: catalog-status
+          mountPath: /app/status
+          readOnly: true
+      volumes:
+      - name: catalog-status
+        configMap:
+          name: demo-registry-catalog-status
+          optional: true
 ---
 apiVersion: apps/v1
 kind: Deployment

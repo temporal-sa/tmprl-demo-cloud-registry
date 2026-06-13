@@ -76,7 +76,9 @@ entry to the configured status ConfigMap. By default each project is written as
 `demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
 phase, namespace, external-resource blockers, external-secret sync, build,
 external-resource, candidate, readiness, smoke-check, and active version fields
-for the registry/catalog UI.
+for the registry/catalog UI. The worker also mirrors the same keys into
+`DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE` so the self-managed registry web
+Deployment can mount the ConfigMap in its own namespace.
 
 Environment variables:
 
@@ -110,6 +112,8 @@ Environment variables:
 - `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `demo-registry-system`
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
   `demo-registry-catalog-status`
+- `DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE`, default
+  `tmprl-cloud-demo-demo-registry`
 
 `local-docker` build mode requires `git`, `docker`, network read access to the
 project source repo, Docker daemon access, and ECR push credentials scoped to

@@ -16,7 +16,7 @@ Keep it current as phases move from design to implementation.
 | 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, opt-in `local-docker` can clone/build/push for trusted tests, and opt-in `aws-codebuild` can start a pre-created CodeBuild project for AWS-side immutable image builds. CodeBuild project/role provisioning remains external setup. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
-| 8. Registry App | Scaffolded | The registry landing page is itself a project in this repo; `registry/web/Dockerfile` now builds a dependency-free catalog service from generated `registry.json` and can merge per-project status JSON files when the live catalog status source is mounted or proxied. |
+| 8. Registry App | Scaffolded | The registry landing page is itself a project in this repo; `registry/web/Dockerfile` now builds a dependency-free catalog service from generated `registry.json`, and the generated registry web Deployment mounts a mirrored catalog status ConfigMap for live lifecycle JSON. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 | 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. Agent Harness is the second rollout target and now has a generated smoke check. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
@@ -634,20 +634,22 @@ Registry web responsibilities:
   speaker notes, and assets;
 - current scaffold serves `/`, `/health`, `/registry.json`, `/api/registry`,
   and `/api/catalog` from the generated catalog data;
-- read live lifecycle entries from
-  `demo-registry-system/demo-registry-catalog-status` using the per-project
+- read live lifecycle entries from a mounted
+  `demo-registry-catalog-status` ConfigMap using the per-project
   `<project>.json` key advertised in generated `registry.json`;
 - trigger or inspect registry worker workflows if the UI needs active demo
   environment operations.
 
-Current live-status gap:
+Current live-status wiring:
 
-- the web service can merge status JSON files from `CATALOG_STATUS_DIR`, but
-  the generated `demo-registry` web Deployment does not yet mount or proxy the
-  cross-namespace catalog status ConfigMap;
-- until that wiring exists, the deployed web image is a buildable static
-  catalog and live lifecycle status remains available through
-  `DemoProject.status` and `demo-registry-system/demo-registry-catalog-status`.
+- the worker writes status to the control-plane ConfigMap
+  `demo-registry-system/demo-registry-catalog-status` and mirrors the same
+  per-project JSON keys into
+  `tmprl-cloud-demo-demo-registry/demo-registry-catalog-status`;
+- the generated `demo-registry` web Deployment mounts the mirrored ConfigMap at
+  `/app/status` and points `CATALOG_STATUS_DIR` there;
+- live lifecycle display becomes active after the updated worker and web images
+  are built and rolled out.
 
 Registry worker direction:
 

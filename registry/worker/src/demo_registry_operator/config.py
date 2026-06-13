@@ -10,6 +10,7 @@ DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
 )
 DEFAULT_CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 DEFAULT_CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
+DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-cloud-demo-demo-registry"
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class WorkerConfig:
     temporal_cloud_region: str | None
     catalog_status_namespace: str
     catalog_status_configmap: str
+    catalog_status_mirror_namespace: str
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -118,6 +120,10 @@ class WorkerConfig:
             catalog_status_configmap=env_first(
                 "DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP",
                 default=DEFAULT_CATALOG_STATUS_CONFIGMAP,
+            ),
+            catalog_status_mirror_namespace=env_first(
+                "DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE",
+                default=DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE,
             ),
         )
 

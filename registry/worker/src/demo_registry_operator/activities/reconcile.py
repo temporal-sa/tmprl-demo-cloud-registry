@@ -523,22 +523,36 @@ def patch_catalog_status(
     status: dict[str, Any],
     config: WorkerConfig,
 ) -> None:
+    primary = catalog_status_configmap(
+        demo_project,
+        status,
+        namespace=config.catalog_status_namespace,
+        name=config.catalog_status_configmap,
+    )
     try:
-        apply_resources(
-            [
-                catalog_status_configmap(
-                    demo_project,
-                    status,
-                    namespace=config.catalog_status_namespace,
-                    name=config.catalog_status_configmap,
-                )
-            ],
-            dry_run=config.reconcile_mode != "apply",
-        )
+        apply_resources([primary], dry_run=config.reconcile_mode != "apply")
     except Exception:
         activity.logger.exception(
             "Catalog status patch failed project=%s",
             project_name(demo_project),
+        )
+
+    if config.catalog_status_mirror_namespace == config.catalog_status_namespace:
+        return
+
+    mirror = catalog_status_configmap(
+        demo_project,
+        status,
+        namespace=config.catalog_status_mirror_namespace,
+        name=config.catalog_status_configmap,
+    )
+    try:
+        apply_resources([mirror], dry_run=config.reconcile_mode != "apply")
+    except Exception:
+        activity.logger.exception(
+            "Catalog status mirror patch failed project=%s namespace=%s",
+            project_name(demo_project),
+            config.catalog_status_mirror_namespace,
         )
 
 
