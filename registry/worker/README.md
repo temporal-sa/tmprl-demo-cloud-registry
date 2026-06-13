@@ -78,7 +78,7 @@ is visible even while images are missing or a build has failed.
 
 Every `record_project_status` activity also writes a compact catalog lifecycle
 entry to the configured status ConfigMap. By default each project is written as
-`demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
+`tmprl-dem-cld-registry-operator/registry-catalog-status` key `<project>.json`, with
 phase, namespace, external-resource blockers, external-secret sync, build,
 external-resource, candidate, readiness, smoke-check, and active version fields
 for the registry/catalog UI. The worker also mirrors the same keys into
@@ -91,7 +91,7 @@ Environment variables:
 - `TEMPORAL_NAMESPACE`, default `default`
 - `TEMPORAL_API_KEY`, optional
 - `TEMPORAL_TLS`, default `false`
-- `DEMO_REGISTRY_TASK_QUEUE`, default `demo-registry-management`
+- `DEMO_REGISTRY_TASK_QUEUE`, default `registry-management`
 - `DEMO_REGISTRY_ACTIVITY_WORKERS`, default `20`
 - `DEMO_REGISTRY_WATCH_ENABLED`, default `false`
 - `DEMO_REGISTRY_WATCH_INTERVAL_SECONDS`, default `15`
@@ -119,9 +119,9 @@ Environment variables:
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION`, default `v0.17.0` (sent as the
   `temporal-cloud-api-version` header to the Cloud Operations API)
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_OPS_HOST`, default `saas-api.tmprl.cloud:443`
-- `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `demo-registry-system`
+- `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `tmprl-dem-cld-registry-operator`
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
-  `demo-registry-catalog-status`
+  `registry-catalog-status`
 - `DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE`, default
   `tmprl-dem-cld-registry`
 

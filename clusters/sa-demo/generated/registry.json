@@ -8,8 +8,8 @@
       "catalogStatus": {
         "configMap": {
           "key": "registry.json",
-          "name": "demo-registry-catalog-status",
-          "namespace": "demo-registry-system"
+          "name": "registry-catalog-status",
+          "namespace": "tmprl-dem-cld-registry-operator"
         },
         "demoProject": "registry",
         "fields": [

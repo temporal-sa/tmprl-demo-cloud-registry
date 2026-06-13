@@ -1,19 +1,19 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: demo-registry-operator
-  namespace: demo-registry-system
+  name: registry-operator
+  namespace: tmprl-dem-cld-registry-operator
   labels:
-    app.kubernetes.io/name: demo-registry-operator
+    app.kubernetes.io/name: registry-operator
   annotations:
     platform.temporal.io/aws-role: not-required-yet
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: demo-registry-operator
+  name: registry-operator
   labels:
-    app.kubernetes.io/name: demo-registry-operator
+    app.kubernetes.io/name: registry-operator
 rules:
   - apiGroups:
       - registry.tmprl-demo.cloud
@@ -95,14 +95,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: demo-registry-operator
+  name: registry-operator
   labels:
-    app.kubernetes.io/name: demo-registry-operator
+    app.kubernetes.io/name: registry-operator
 subjects:
   - kind: ServiceAccount
-    name: demo-registry-operator
-    namespace: demo-registry-system
+    name: registry-operator
+    namespace: tmprl-dem-cld-registry-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: demo-registry-operator
+  name: registry-operator

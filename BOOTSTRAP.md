@@ -74,8 +74,8 @@ aws secretsmanager create-secret \
   --region <aws-region> \
   --name tmprl-dem-cld/platform/registry-worker-temporal \
   --secret-string '{
-    "TEMPORAL_ADDRESS": "tmprl-dem-cld-registry.<temporal-account-id>.tmprl.cloud:7233",
-    "TEMPORAL_NAMESPACE": "tmprl-dem-cld-registry.<temporal-account-id>",
+    "TEMPORAL_ADDRESS": "tmprl-dem-cld-registry-operator.<temporal-account-id>.tmprl.cloud:7233",
+    "TEMPORAL_NAMESPACE": "tmprl-dem-cld-registry-operator.<temporal-account-id>",
     "TEMPORAL_API_KEY": "<registry-worker-namespace-api-key>",
     "TEMPORAL_TLS": "true"
   }'
@@ -153,7 +153,7 @@ Create an IAM role for the registry/operator service account. The bootstrap
 manifests expect this annotation until you replace it:
 
 ```text
-arn:aws:iam::<aws-account-id>:role/tmprl-demo-registry-operator
+arn:aws:iam::<aws-account-id>:role/tmprl-registry-operator
 ```
 
 Scope the role to:
@@ -303,7 +303,7 @@ Also replace the IRSA role placeholder in
 ```sh
 kubectl config use-context <kube-context>
 kubectl apply -k clusters/sa-demo/bootstrap
-kubectl -n demo-registry-system rollout status deploy/demo-registry-operator
+kubectl -n tmprl-dem-cld-registry-operator rollout status deploy/registry-operator
 kubectl get demoprojects
 ```
 
@@ -416,14 +416,14 @@ For a temporary live test, patch the operator Deployment and let the restarted
 watch loop signal every `DemoProject` again:
 
 ```sh
-kubectl -n demo-registry-system set env deploy/demo-registry-operator \
+kubectl -n tmprl-dem-cld-registry-operator set env deploy/registry-operator \
   DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws \
   DEMO_REGISTRY_BUILD_MODE=aws-codebuild \
   DEMO_REGISTRY_CODEBUILD_PROJECT=<codebuild-project-name> \
   DEMO_REGISTRY_AWS_REGION=<aws-region> \
   DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 
-kubectl -n demo-registry-system rollout status deploy/demo-registry-operator
+kubectl -n tmprl-dem-cld-registry-operator rollout status deploy/registry-operator
 ```
 
 For the GitOps-managed path, make the same environment change in
@@ -497,7 +497,7 @@ Watch the operator:
 ```sh
 kubectl get demoproject dejavu-tacos -o yaml
 kubectl -n tmprl-dem-cld-dejavu-tacos get deploy,svc,externalsecret,ingressroute
-kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
+kubectl -n tmprl-dem-cld-registry-operator get configmap registry-catalog-status \
   -o jsonpath='{.data.dejavu-tacos\.json}'
 ```
 
@@ -619,7 +619,7 @@ Watch both status surfaces:
 ```sh
 kubectl get demoproject temporal-agent-harness -o yaml
 kubectl -n tmprl-dem-cld-temporal-agent-harness get deploy,svc,externalsecret,ingressroute
-kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
+kubectl -n tmprl-dem-cld-registry-operator get configmap registry-catalog-status \
   -o jsonpath='{.data.temporal-agent-harness\.json}'
 ```
 
@@ -641,7 +641,7 @@ These are intentional gaps for the first deployment test:
   middleware path is fixed so the service can be added later.
 - `demo-registry` web image is buildable from `registry/web/Dockerfile`.
   The updated worker mirrors catalog status into
-  `tmprl-dem-cld-registry/demo-registry-catalog-status`, and the
+  `tmprl-dem-cld-registry/registry-catalog-status`, and the
   generated web Deployment mounts it at `/app/status`. Until those updated
   images are rolled out, inspect live lifecycle state with the `kubectl`
   commands above.

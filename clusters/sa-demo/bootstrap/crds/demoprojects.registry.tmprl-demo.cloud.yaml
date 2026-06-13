@@ -3,7 +3,7 @@ kind: CustomResourceDefinition
 metadata:
   name: demoprojects.registry.tmprl-demo.cloud
   labels:
-    app.kubernetes.io/name: demo-registry-operator
+    app.kubernetes.io/name: registry-operator
     app.kubernetes.io/managed-by: flux
 spec:
   group: registry.tmprl-demo.cloud

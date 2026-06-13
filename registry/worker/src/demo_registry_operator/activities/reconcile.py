@@ -171,7 +171,7 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
     checked_at = datetime.now(UTC).isoformat()
 
     try:
-        request = Request(url, headers={"User-Agent": "demo-registry-operator/0"})
+        request = Request(url, headers={"User-Agent": "registry-operator/0"})
         with urlopen(request, timeout=timeout) as response:
             actual_status = int(response.status)
     except HTTPError as error:

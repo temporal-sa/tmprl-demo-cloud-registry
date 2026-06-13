@@ -13,5 +13,5 @@ metadata:
     platform.temporal.io/description: Replace with Temporal Worker Controller resources
       after CRD shape is verified.
 data:
-  workers.yaml: "worker:\n  taskQueue: demo-registry-management\n  temporalNamespace:\
-    \ tmprl-dem-cld-registry\n  versioning:\n    enabled: false\n"
+  workers.yaml: "worker:\n  taskQueue: registry-management\n  temporalNamespace: tmprl-dem-cld-registry\n\
+    \  versioning:\n    enabled: false\n"

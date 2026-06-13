@@ -32,7 +32,7 @@ messages and no mention of the agent/tool that made them.
     from GitHub over SSH using a read-only deploy key.
   - External Secrets Operator is installed and
     `ClusterSecretStore/platform-secrets` is Ready.
-  - The registry operator is running in `demo-registry-system` as a Python
+  - The registry operator is running in `tmprl-dem-cld-registry-operator` as a Python
     Temporal worker on namespace `tmprl-demo-cloud-registry.a2dd6`.
   - Generated `DemoProject` resources are applied by Flux.
   - `DemoProject/dejavu-tacos` is `Promoted` and

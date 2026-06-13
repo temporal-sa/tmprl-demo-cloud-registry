@@ -48,7 +48,7 @@ spec:
       volumes:
       - name: catalog-status
         configMap:
-          name: demo-registry-catalog-status
+          name: registry-catalog-status
           optional: true
 ---
 apiVersion: apps/v1
@@ -93,4 +93,4 @@ spec:
             name: temporal-credentials
         env:
         - name: DEMO_REGISTRY_TASK_QUEUE
-          value: demo-registry-management
+          value: registry-management

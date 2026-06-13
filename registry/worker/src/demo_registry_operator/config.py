@@ -10,8 +10,8 @@ DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
 )
 DEFAULT_TEMPORAL_CLOUD_API_VERSION = "v0.17.0"
 DEFAULT_TEMPORAL_CLOUD_OPS_HOST = "saas-api.tmprl.cloud:443"
-DEFAULT_CATALOG_STATUS_NAMESPACE = "demo-registry-system"
-DEFAULT_CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
+DEFAULT_CATALOG_STATUS_NAMESPACE = "tmprl-dem-cld-registry-operator"
+DEFAULT_CATALOG_STATUS_CONFIGMAP = "registry-catalog-status"
 DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-dem-cld-registry"
 
 
@@ -53,7 +53,7 @@ class WorkerConfig:
             temporal_namespace=os.getenv("TEMPORAL_NAMESPACE", "default"),
             task_queue=os.getenv(
                 "DEMO_REGISTRY_TASK_QUEUE",
-                "demo-registry-management",
+                "registry-management",
             ),
             temporal_api_key=os.getenv("TEMPORAL_API_KEY"),
             temporal_tls=env_bool("TEMPORAL_TLS", default=False),

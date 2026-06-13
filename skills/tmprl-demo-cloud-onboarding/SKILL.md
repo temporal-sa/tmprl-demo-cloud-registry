@@ -126,10 +126,10 @@ If generation is out of date, run:
     - Generated `registry.json` includes `catalogStatus.configMap` for each
       project.
     - The operator writes compact lifecycle summaries to
-      `demo-registry-system/demo-registry-catalog-status` under
+      `tmprl-dem-cld-registry-operator/registry-catalog-status` under
       `<project>.json`.
     - The registry worker mirrors those entries into
-      `tmprl-dem-cld-registry/demo-registry-catalog-status`, which the
+      `tmprl-dem-cld-registry/registry-catalog-status`, which the
       self-managed registry web component mounts at `/app/status`.
     - After the registry web image is rolled out, `/api/catalog` and the
       registry page show the merged lifecycle status.

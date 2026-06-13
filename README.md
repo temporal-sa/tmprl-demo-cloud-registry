@@ -98,7 +98,7 @@ IAM access that future platform infra automation should provision.
 
 Generated `registry.json` also includes a `catalogStatus` pointer per project.
 The operator writes each live lifecycle summary to
-`demo-registry-system/demo-registry-catalog-status` under `<project>.json` so a
+`tmprl-dem-cld-registry-operator/registry-catalog-status` under `<project>.json` so a
 registry UI can show rollout phase, build state, external-resource state,
 candidate readiness, smoke-check result, active version, and last error.
 

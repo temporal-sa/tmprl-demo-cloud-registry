@@ -1,15 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: demo-registry-system
+namespace: tmprl-dem-cld-registry-operator
 resources:
   - namespace.yaml
   - rbac.yaml
   - external-secrets.yaml
   - deployment.yaml
 configMapGenerator:
-  - name: demo-registry-operator-config
+  - name: registry-operator-config
     literals:
-      - DEMO_REGISTRY_TASK_QUEUE=demo-registry-management
+      - DEMO_REGISTRY_TASK_QUEUE=registry-management
       - DEMO_REGISTRY_WATCH_ENABLED=true
       - DEMO_REGISTRY_WATCH_INTERVAL_SECONDS=15
       - DEMO_REGISTRY_RECONCILE_MODE=apply
@@ -18,8 +18,8 @@ configMapGenerator:
       - DEMO_REGISTRY_BUILD_MODE=plan
       - DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS=300
       - DEMO_REGISTRY_READINESS_POLL_SECONDS=5
-      - DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE=demo-registry-system
-      - DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP=demo-registry-catalog-status
+      - DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE=tmprl-dem-cld-registry-operator
+      - DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP=registry-catalog-status
       - DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE=tmprl-dem-cld-registry
       - DEMO_REGISTRY_ACTIVITY_WORKERS=20
 images:

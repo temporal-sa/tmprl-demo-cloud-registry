@@ -11,8 +11,8 @@ IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
-CATALOG_STATUS_NAMESPACE = "demo-registry-system"
-CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
+CATALOG_STATUS_NAMESPACE = "tmprl-dem-cld-registry-operator"
+CATALOG_STATUS_CONFIGMAP = "registry-catalog-status"
 CATALOG_STATUS_MOUNT_PATH = "/app/status"
 CATALOG_STATUS_VOLUME_NAME = "catalog-status"
 REGISTRY_PROJECT_NAME = "registry"
@@ -1245,7 +1245,7 @@ def catalog_status_configmap(
             "labels": {
                 "app.kubernetes.io/name": "demo-registry",
                 "app.kubernetes.io/component": "catalog-status",
-                "platform.temporal.io/managed-by": "demo-registry-operator",
+                "platform.temporal.io/managed-by": "registry-operator",
             },
             "annotations": {
                 "platform.temporal.io/catalog-status": "true",
