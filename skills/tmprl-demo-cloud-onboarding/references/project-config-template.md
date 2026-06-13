@@ -19,6 +19,9 @@ source:
   branch: main
 
 builds:
+  api:
+    context: .
+    dockerfile: <path/to/api.Dockerfile>
   web:
     context: .
     dockerfile: <path/to/web.Dockerfile>
@@ -27,6 +30,14 @@ builds:
     dockerfile: <path/to/worker.Dockerfile>
 
 components:
+  api:
+    build: api
+    temporalAccess: true
+    ports:
+      - name: http
+        containerPort: 8000
+        servicePort: 80
+
   web:
     build: web
     ports:
@@ -45,11 +56,14 @@ components:
 ingress:
   subdomain: <left-hand-subdomain-only>
   routes:
+    - component: api
+      pathPrefix: /api
+      port: http
     - component: web
       port: http
 
 smokeCheck:
-  path: /health
+  path: /api/health
   expectedStatus: 200
 ```
 
@@ -75,5 +89,38 @@ with JSON keys matching the environment variables the component expects:
 ```json
 {
   "ANTHROPIC_API_KEY": "..."
+}
+```
+
+For components with Temporal access, the platform syncs this managed secret:
+
+```text
+tmprl-cloud-demo/<project-name>/temporal
+```
+
+with JSON keys:
+
+```json
+{
+  "address": "<region>.<cloud-provider>.api.temporal.io:7233",
+  "namespace": "<project-temporal-namespace>.<temporal-account-id>",
+  "apiKey": "<namespace-scoped-api-key>",
+  "tls": "true"
+}
+```
+
+The platform bootstrap credential remains outside project configs:
+
+```text
+tmprl-cloud-demo/platform/temporal-cloud-bootstrap
+```
+
+with JSON keys:
+
+```json
+{
+  "TEMPORAL_CLOUD_API_KEY": "<bootstrap-cloud-ops-api-key>",
+  "TEMPORAL_CLOUD_ACCOUNT_ID": "<temporal-account-id>",
+  "TEMPORAL_CLOUD_REGION": "<temporal-region>"
 }
 ```
