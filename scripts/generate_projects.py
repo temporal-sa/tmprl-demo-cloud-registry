@@ -42,6 +42,9 @@ IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
 IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
+CODEBUILD_PROJECT_NAME_PLACEHOLDER = "<codebuild-project-name>"
+AWS_REGION_PLACEHOLDER = "${awsRegion}"
+AWS_ACCOUNT_ID_PLACEHOLDER = "${awsAccountId}"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
@@ -155,6 +158,9 @@ def load_projects(paths: list[str]) -> list[Project]:
 def render_all(projects: list[Project]) -> dict[Path, str]:
     files: dict[Path, str] = {
         Path("build-plan.json"): render_json(build_plan_payload(projects)),
+        Path("codebuild-setup-plan.json"): render_json(
+            codebuild_setup_plan_payload(projects)
+        ),
         Path("demoprojects.yaml"): render_yaml_documents(
             [
                 demo_project_resource(project, review_artifact=False)
@@ -938,6 +944,157 @@ def build_plan_payload(projects: list[Project]) -> dict[str, Any]:
         },
         "projects": [project_build_plan(project) for project in projects],
     }
+
+
+def codebuild_setup_plan_payload(projects: list[Project]) -> dict[str, Any]:
+    repository_names = sorted(
+        {
+            image_repository_name(project, build_name)
+            for project in projects
+            for build_name in builds(project_document(project))
+        }
+    )
+    repository_arns = [
+        ecr_repository_arn_template(repository_name)
+        for repository_name in repository_names
+    ]
+    return {
+        "apiVersion": "tmprl-demo.cloud/v1alpha1",
+        "kind": "CodeBuildSetupPlan",
+        "mode": "manual-bootstrap",
+        "codeBuildProject": {
+            "name": CODEBUILD_PROJECT_NAME_PLACEHOLDER,
+            "type": "LINUX_CONTAINER",
+            "image": "aws/codebuild/standard:7.0",
+            "computeType": "BUILD_GENERAL1_SMALL",
+            "privilegedMode": True,
+            "source": {
+                "type": "GITHUB",
+                "location": "<placeholder-overridden-by-operator>",
+                "buildspec": "<placeholder-overridden-by-operator>",
+                "gitCloneDepth": 1,
+            },
+            "description": (
+                "Shared tmprl-demo.cloud build runner. The registry operator "
+                "uses StartBuild source/buildspec overrides for each DemoProject."
+            ),
+        },
+        "operatorEnvironment": {
+            "DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE": "aws",
+            "DEMO_REGISTRY_BUILD_MODE": "aws-codebuild",
+            "DEMO_REGISTRY_CODEBUILD_PROJECT": CODEBUILD_PROJECT_NAME_PLACEHOLDER,
+            "DEMO_REGISTRY_AWS_REGION": "<aws-region>",
+            "DEMO_REGISTRY_AWS_ACCOUNT_ID": "<aws-account-id>",
+        },
+        "operatorIamPolicy": {
+            "description": "Attach to the registry operator role.",
+            "statements": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "codebuild:StartBuild",
+                        "codebuild:BatchGetBuilds",
+                    ],
+                    "Resource": codebuild_project_arn_template(
+                        CODEBUILD_PROJECT_NAME_PLACEHOLDER
+                    ),
+                }
+            ],
+        },
+        "serviceRolePolicy": {
+            "description": "Attach to the CodeBuild service role.",
+            "statements": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["ecr:GetAuthorizationToken"],
+                    "Resource": "*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ecr:BatchCheckLayerAvailability",
+                        "ecr:CompleteLayerUpload",
+                        "ecr:DescribeRepositories",
+                        "ecr:InitiateLayerUpload",
+                        "ecr:PutImage",
+                        "ecr:UploadLayerPart",
+                    ],
+                    "Resource": repository_arns,
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                    ],
+                    "Resource": [
+                        (
+                            "arn:aws:logs:"
+                            f"{AWS_REGION_PLACEHOLDER}:"
+                            f"{AWS_ACCOUNT_ID_PLACEHOLDER}:"
+                            "log-group:/aws/codebuild/*"
+                        ),
+                        (
+                            "arn:aws:logs:"
+                            f"{AWS_REGION_PLACEHOLDER}:"
+                            f"{AWS_ACCOUNT_ID_PLACEHOLDER}:"
+                            "log-group:/aws/codebuild/*:log-stream:*"
+                        )
+                    ],
+                },
+            ],
+        },
+        "sourceAccess": {
+            "required": True,
+            "description": (
+                "Configure CodeBuild GitHub source credentials or a CodeBuild "
+                "GitHub connection with read access to these temporal-sa repos."
+            ),
+            "repositories": sorted(
+                {project.data["source"]["repo"] for project in projects}
+            ),
+        },
+        "projects": [project_codebuild_setup(project) for project in projects],
+    }
+
+
+def project_codebuild_setup(project: Project) -> dict[str, Any]:
+    return {
+        "name": project.name,
+        "source": project.data["source"],
+        "builds": [
+            {
+                "name": build_name,
+                "dockerfile": build["dockerfile"],
+                "context": build["context"],
+                "repositoryName": image_repository_name(project, build_name),
+                "repositoryArn": ecr_repository_arn_template(
+                    image_repository_name(project, build_name)
+                ),
+                "components": components_for_build(project, build_name),
+            }
+            for build_name, build in sorted(builds(project_document(project)).items())
+        ],
+    }
+
+
+def codebuild_project_arn_template(project_name: str) -> str:
+    return (
+        "arn:aws:codebuild:"
+        f"{AWS_REGION_PLACEHOLDER}:"
+        f"{AWS_ACCOUNT_ID_PLACEHOLDER}:"
+        f"project/{project_name}"
+    )
+
+
+def ecr_repository_arn_template(repository_name: str) -> str:
+    return (
+        "arn:aws:ecr:"
+        f"{AWS_REGION_PLACEHOLDER}:"
+        f"{AWS_ACCOUNT_ID_PLACEHOLDER}:"
+        f"repository/{repository_name}"
+    )
 
 
 def external_resources_plan_payload(projects: list[Project]) -> dict[str, Any]:

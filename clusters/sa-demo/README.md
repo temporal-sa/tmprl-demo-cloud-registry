@@ -12,6 +12,9 @@ Generated files should be deterministic and reviewable.
 - `generated/<project>/` contains per-project Kubernetes review artifacts and
   unapplied Deployment templates. The registry operator reconciles the active
   resources from `DemoProject` specs.
+- `generated/build-plan.json`, `generated/codebuild-setup-plan.json`, and
+  `generated/external-resources-plan.json` describe the build runner, image
+  repositories, and external-resource bootstrap contracts.
 
 Regenerate project output from the repository root:
 

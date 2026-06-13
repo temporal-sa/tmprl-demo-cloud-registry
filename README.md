@@ -87,6 +87,11 @@ Dockerfiles, derived ECR repository names, tag templates, and the components
 that consume each build. It is review data for now; it does not trigger image
 builds.
 
+The generated `codebuild-setup-plan.json` turns the same build declarations
+into a manual AWS CodeBuild bootstrap plan: shared project settings, required
+operator permissions, CodeBuild service-role permissions, source repositories,
+and exact ECR repository ARN templates.
+
 The generated `external-resources-plan.json` lists the ECR repositories,
 Temporal Cloud namespace/API key intent, AWS Secrets Manager paths, and scoped
 IAM access that future platform infra automation should provision.

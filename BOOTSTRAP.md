@@ -326,7 +326,13 @@ The operator now has three build paths:
 
 Prefer `aws-codebuild` for full rollout testing because the Docker daemon and
 source checkout run in a short-lived AWS build environment instead of the
-long-running registry operator pod. The operator role needs only:
+long-running registry operator pod. Use
+`clusters/sa-demo/generated/codebuild-setup-plan.json` as the reviewed setup
+source for the shared CodeBuild project shape, source repository access,
+operator IAM policy, CodeBuild service-role policy, and ECR repository ARN
+templates.
+
+The operator role needs only:
 
 ```text
 codebuild:StartBuild

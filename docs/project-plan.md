@@ -384,6 +384,9 @@ Initial generated resources:
 - unapplied Deployment templates for each component with placeholder image refs
 - generated `build-plan.json` with source repo, context, Dockerfile, derived
   image repository/tag templates, and build consumers
+- generated `codebuild-setup-plan.json` with shared CodeBuild project shape,
+  operator IAM permissions, CodeBuild service-role permissions, source repo
+  access, and project/build repository ARN templates
 - generated `external-resources-plan.json` with ECR, Temporal Cloud,
   AWS Secrets Manager, bootstrap credential, runtime secret property, and scoped
   IAM intent
@@ -487,10 +490,12 @@ Requirements:
   image-override compatibility, an opt-in `local-docker` activity for trusted
   tests, and an opt-in `aws-codebuild` activity that starts and polls a
   configured CodeBuild project. The CodeBuild project and service role are
-  provisioned outside the operator and should have source-repo read access plus
-  ECR push access scoped to the project/build repositories. CodeBuild
-  execution details, including build ID and CloudWatch logs, are recorded under
-  `DemoProject.status.buildStatus.codebuild` and mirrored into catalog status.
+  provisioned outside the operator using the generated
+  `codebuild-setup-plan.json`; the service role should have source-repo read
+  access plus ECR push access scoped to the project/build repositories.
+  CodeBuild execution details, including build ID and CloudWatch logs, are
+  recorded under `DemoProject.status.buildStatus.codebuild` and mirrored into
+  catalog status.
 
 Operator rollout direction:
 
