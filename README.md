@@ -91,6 +91,12 @@ The generated `external-resources-plan.json` lists the ECR repositories,
 Temporal Cloud namespace/API key intent, AWS Secrets Manager paths, and scoped
 IAM access that future platform infra automation should provision.
 
+Generated `registry.json` also includes a `catalogStatus` pointer per project.
+The operator writes each live lifecycle summary to
+`demo-registry-system/demo-registry-catalog-status` under `<project>.json` so a
+registry UI can show rollout phase, build state, external-resource state,
+candidate readiness, smoke-check result, active version, and last error.
+
 Generated `demoprojects.yaml` is referenced from the generated
 `kustomization.yaml` and is the desired state consumed by the registry
 operator after bootstrap. Per-project `demoproject-template.yaml` files remain

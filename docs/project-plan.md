@@ -16,7 +16,7 @@ Keep it current as phases move from design to implementation.
 | 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, and opt-in `local-docker` mode can clone/build/push immutable ECR tags from project configs for trusted tests. A hardened AWS-side builder remains to be implemented. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
-| 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
+| 8. Registry App | Design | The registry landing page is itself a project in this repo; generated `registry.json` now points each entry at the catalog status ConfigMap key written by the operator. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 | 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
@@ -611,6 +611,9 @@ Registry web responsibilities:
   namespace;
 - display owner-provided registry metadata such as title, summary, tags, SDKs,
   speaker notes, and assets;
+- read live lifecycle entries from
+  `demo-registry-system/demo-registry-catalog-status` using the per-project
+  `<project>.json` key advertised in generated `registry.json`;
 - trigger or inspect registry worker workflows if the UI needs active demo
   environment operations.
 

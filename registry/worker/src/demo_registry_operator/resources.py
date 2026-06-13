@@ -11,6 +11,8 @@ IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
+CATALOG_STATUS_NAMESPACE = "demo-registry-system"
+CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -956,6 +958,132 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def catalog_status_configmap(
+    demo_project: dict[str, Any],
+    status: dict[str, Any],
+    *,
+    namespace: str,
+    name: str,
+) -> dict[str, Any]:
+    project = project_name(demo_project)
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "demo-registry",
+                "app.kubernetes.io/component": "catalog-status",
+                "platform.temporal.io/managed-by": "demo-registry-operator",
+            },
+            "annotations": {
+                "platform.temporal.io/catalog-status": "true",
+            },
+        },
+        "data": {
+            f"{project}.json": json.dumps(
+                catalog_status_entry(demo_project, status),
+                sort_keys=True,
+            ),
+        },
+    }
+
+
+def catalog_status_entry(
+    demo_project: dict[str, Any],
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "tmprl-demo.cloud/v1alpha1",
+        "kind": "DemoProjectCatalogStatus",
+        "project": project_name(demo_project),
+        "updatedAt": datetime.now(UTC).isoformat(),
+        "phase": status.get("phase"),
+        "message": status.get("message"),
+        "host": project_host(demo_project),
+        "appUrl": f"https://{project_host(demo_project)}",
+        "kubernetesNamespace": project_namespace(demo_project),
+        "temporalNamespace": temporal_namespace_for_status(demo_project, status),
+        "activeImageVersion": status.get("activeImageVersion"),
+        "activeImages": status.get("activeImages", {}),
+        "activeRouteServices": status.get("activeRouteServices", {}),
+        "externalResources": external_resource_summary(
+            status.get("externalResources")
+        ),
+        "build": build_summary(status.get("buildStatus")),
+        "candidate": candidate_summary(status.get("candidateRolloutStatus")),
+        "readiness": status.get("readinessStatus"),
+        "smokeCheck": status.get("smokeCheckStatus"),
+        "lastError": status.get("lastError"),
+    }
+
+
+def temporal_namespace_for_status(
+    demo_project: dict[str, Any],
+    status: dict[str, Any],
+) -> str:
+    external_resources = status.get("externalResources")
+    if isinstance(external_resources, dict):
+        temporal_cloud = external_resources.get("temporalCloud")
+        if isinstance(temporal_cloud, dict):
+            namespace = temporal_cloud.get("namespace")
+            if isinstance(namespace, dict) and isinstance(namespace.get("name"), str):
+                return namespace["name"]
+    return project_name(demo_project)
+
+
+def external_resource_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "phase": value.get("phase"),
+        "mode": value.get("mode"),
+        "checkedAt": value.get("checkedAt"),
+        "ecr": phase_summary(value.get("ecr")),
+        "secretsManager": phase_summary(value.get("secretsManager")),
+        "temporalCloud": phase_summary(value.get("temporalCloud")),
+    }
+
+
+def build_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "phase": value.get("phase"),
+        "mode": value.get("mode"),
+        "imageVersion": value.get("imageVersion"),
+        "images": value.get("images", {}),
+        "missingImages": value.get("missingImages", []),
+        "lastError": value.get("lastError"),
+    }
+
+
+def candidate_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "phase": value.get("phase"),
+        "message": value.get("message"),
+        "sourceCommitSha": value.get("sourceCommitSha"),
+        "imageVersion": value.get("imageVersion"),
+        "images": value.get("images", {}),
+        "services": value.get("services", {}),
+        "deployments": value.get("deployments", {}),
+        "url": value.get("url"),
+    }
+
+
+def phase_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value.get(key)
+        for key in ("phase", "message", "checkedAt")
+        if key in value
+    }
+
+
 def smoke_check_status(demo_project: dict[str, Any], phase: str) -> dict[str, Any]:
     smoke_check = spec_of(demo_project).get("smokeCheck")
     if not isinstance(smoke_check, dict):
@@ -1095,6 +1223,26 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         "sourceRepo": spec.get("source", {}).get("repo") if isinstance(spec.get("source"), dict) else None,
         "temporalNamespace": project_name(demo_project),
         "authRequired": auth_required(demo_project),
+        "catalogStatus": {
+            "source": "DemoProject.status",
+            "demoProject": project_name(demo_project),
+            "configMap": {
+                "namespace": CATALOG_STATUS_NAMESPACE,
+                "name": CATALOG_STATUS_CONFIGMAP,
+                "key": f"{project_name(demo_project)}.json",
+            },
+            "fields": [
+                "phase",
+                "message",
+                "externalResources",
+                "build",
+                "candidate",
+                "readiness",
+                "smokeCheck",
+                "activeImageVersion",
+                "lastError",
+            ],
+        },
         "tags": registry.get("tags", []),
         "temporalSdks": registry.get("temporalSdks", []),
         "links": registry.get("links", {}),

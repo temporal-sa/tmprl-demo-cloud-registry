@@ -18,6 +18,7 @@ from demo_registry_operator.resources import (
     SOURCE_COMMIT_ANNOTATION,
     base_resources,
     build_reconcile_status,
+    catalog_status_configmap,
     missing_image_overrides,
     parse_image_overrides,
     promotion_resources,
@@ -325,6 +326,7 @@ def record_project_status(request: dict[str, Any]) -> dict[str, Any]:
     config = WorkerConfig.from_env()
     name = project_name(demo_project)
     patch_status(name, status, dry_run=config.reconcile_mode != "apply")
+    patch_catalog_status(demo_project, status, config)
     return status
 
 
@@ -351,6 +353,30 @@ def patch_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
         patch_demo_project_status(name, status, dry_run=dry_run)
     except Exception:
         activity.logger.exception("DemoProject status patch failed project=%s", name)
+
+
+def patch_catalog_status(
+    demo_project: dict[str, Any],
+    status: dict[str, Any],
+    config: WorkerConfig,
+) -> None:
+    try:
+        apply_resources(
+            [
+                catalog_status_configmap(
+                    demo_project,
+                    status,
+                    namespace=config.catalog_status_namespace,
+                    name=config.catalog_status_configmap,
+                )
+            ],
+            dry_run=config.reconcile_mode != "apply",
+        )
+    except Exception:
+        activity.logger.exception(
+            "Catalog status patch failed project=%s",
+            project_name(demo_project),
+        )
 
 
 def demo_project_from_request(request: dict[str, Any]) -> dict[str, Any]:

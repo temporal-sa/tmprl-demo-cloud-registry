@@ -5,6 +5,26 @@
       "appUrl": "https://dejavu-tacos.tmprl-demo.cloud",
       "assets": {},
       "authRequired": false,
+      "catalogStatus": {
+        "configMap": {
+          "key": "dejavu-tacos.json",
+          "name": "demo-registry-catalog-status",
+          "namespace": "demo-registry-system"
+        },
+        "demoProject": "dejavu-tacos",
+        "fields": [
+          "phase",
+          "message",
+          "externalResources",
+          "build",
+          "candidate",
+          "readiness",
+          "smokeCheck",
+          "activeImageVersion",
+          "lastError"
+        ],
+        "source": "DemoProject.status"
+      },
       "host": "dejavu-tacos.tmprl-demo.cloud",
       "links": {},
       "name": "dejavu-tacos",
@@ -32,6 +52,26 @@
       "appUrl": "https://registry.tmprl-demo.cloud",
       "assets": {},
       "authRequired": true,
+      "catalogStatus": {
+        "configMap": {
+          "key": "demo-registry.json",
+          "name": "demo-registry-catalog-status",
+          "namespace": "demo-registry-system"
+        },
+        "demoProject": "demo-registry",
+        "fields": [
+          "phase",
+          "message",
+          "externalResources",
+          "build",
+          "candidate",
+          "readiness",
+          "smokeCheck",
+          "activeImageVersion",
+          "lastError"
+        ],
+        "source": "DemoProject.status"
+      },
       "host": "registry.tmprl-demo.cloud",
       "links": {},
       "name": "demo-registry",
@@ -53,6 +93,26 @@
       "appUrl": "https://agent-harness-demo.testing.tmprl-demo.cloud",
       "assets": {},
       "authRequired": true,
+      "catalogStatus": {
+        "configMap": {
+          "key": "temporal-agent-harness.json",
+          "name": "demo-registry-catalog-status",
+          "namespace": "demo-registry-system"
+        },
+        "demoProject": "temporal-agent-harness",
+        "fields": [
+          "phase",
+          "message",
+          "externalResources",
+          "build",
+          "candidate",
+          "readiness",
+          "smokeCheck",
+          "activeImageVersion",
+          "lastError"
+        ],
+        "source": "DemoProject.status"
+      },
       "host": "agent-harness-demo.testing.tmprl-demo.cloud",
       "links": {},
       "name": "temporal-agent-harness",

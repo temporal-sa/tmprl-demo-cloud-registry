@@ -246,6 +246,18 @@ class DemoProjectWorkflow:
                     start_to_close_timeout=timedelta(minutes=1),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
+            elif workflow.patched(
+                f"record-non-smoke-status-v1-{self._reconcile_sequence}"
+            ):
+                await workflow.execute_activity(
+                    record_project_status,
+                    {
+                        "demoProject": demo_project,
+                        "status": self._status,
+                    },
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
 
         self._status = {
             "project": project_name,

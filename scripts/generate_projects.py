@@ -46,6 +46,8 @@ DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+CATALOG_STATUS_NAMESPACE = "demo-registry-system"
+CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
     "TEMPORAL_CLOUD_ACCOUNT_ID",
@@ -1031,6 +1033,26 @@ def registry_entry(project: Project) -> dict[str, Any]:
         "sourceRepo": project.data["source"]["repo"],
         "temporalNamespace": project.name,
         "authRequired": auth_required(project),
+        "catalogStatus": {
+            "source": "DemoProject.status",
+            "demoProject": project.name,
+            "configMap": {
+                "namespace": CATALOG_STATUS_NAMESPACE,
+                "name": CATALOG_STATUS_CONFIGMAP,
+                "key": f"{project.name}.json",
+            },
+            "fields": [
+                "phase",
+                "message",
+                "externalResources",
+                "build",
+                "candidate",
+                "readiness",
+                "smokeCheck",
+                "activeImageVersion",
+                "lastError",
+            ],
+        },
         "tags": registry.get("tags", []),
         "temporalSdks": registry.get("temporalSdks", []),
         "links": registry.get("links", {}),

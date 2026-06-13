@@ -45,6 +45,12 @@ candidate Deployment to report available replicas before running the smoke
 check. If readiness times out, the active route is not promoted and
 `DemoProject.status.readinessStatus` records the Deployment states.
 
+Every `record_project_status` activity also writes a compact catalog lifecycle
+entry to the configured status ConfigMap. By default each project is written as
+`demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
+phase, build, external-resource, candidate, readiness, smoke-check, and active
+version fields for the registry/catalog UI.
+
 Environment variables:
 
 - `TEMPORAL_ADDRESS`, default `localhost:7233`
@@ -70,6 +76,9 @@ Environment variables:
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
   to `TEMPORAL_CLOUD_REGION`
+- `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `demo-registry-system`
+- `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
+  `demo-registry-catalog-status`
 
 `local-docker` build mode requires `git`, `docker`, network read access to the
 project source repo, Docker daemon access, and ECR push credentials scoped to

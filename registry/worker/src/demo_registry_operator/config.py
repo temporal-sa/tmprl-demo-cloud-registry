@@ -8,6 +8,8 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
     "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 )
+DEFAULT_CATALOG_STATUS_NAMESPACE = "demo-registry-system"
+DEFAULT_CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ class WorkerConfig:
     temporal_cloud_bootstrap_secret_path: str
     temporal_cloud_account_id: str | None
     temporal_cloud_region: str | None
+    catalog_status_namespace: str
+    catalog_status_configmap: str
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -94,6 +98,14 @@ class WorkerConfig:
             temporal_cloud_region=env_first_optional(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_REGION",
                 "TEMPORAL_CLOUD_REGION",
+            ),
+            catalog_status_namespace=env_first(
+                "DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE",
+                default=DEFAULT_CATALOG_STATUS_NAMESPACE,
+            ),
+            catalog_status_configmap=env_first(
+                "DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP",
+                default=DEFAULT_CATALOG_STATUS_CONFIGMAP,
             ),
         )
 

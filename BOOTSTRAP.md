@@ -336,6 +336,8 @@ Watch the operator:
 ```sh
 kubectl get demoproject dejavu-tacos -o yaml
 kubectl -n tmprl-cloud-demo-dejavu-tacos get deploy,svc,externalsecret,ingressroute
+kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
+  -o jsonpath='{.data.dejavu-tacos\.json}'
 ```
 
 Before running the smoke check, the workflow waits for all candidate
@@ -378,6 +380,10 @@ success. Promotion is recorded in `DemoProject.status.phase=Promoted` and
 `DemoProject.status.activeImageVersion=git-$SOURCE_SHA`. If the endpoint
 differs in the source app, update `projects/dejavu-tacos.yaml`, regenerate, and
 commit the reviewed config before testing again.
+
+The registry/catalog status ConfigMap entry mirrors the lifecycle fields the UI
+should show: phase, message, external-resource phases, build output, candidate
+deployment/services, readiness, smoke check, active version, and last error.
 
 ## Current Manual Substitutes
 
