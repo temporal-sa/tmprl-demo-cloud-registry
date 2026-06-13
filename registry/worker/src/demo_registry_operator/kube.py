@@ -8,9 +8,10 @@ DEMO_PROJECT_VERSION = "v1alpha1"
 DEMO_PROJECT_PLURAL = "demoprojects"
 
 CUSTOM_RESOURCE_PLURALS = {
+    ("cert-manager.io", "v1", "Certificate"): "certificates",
     ("external-secrets.io", "v1", "ExternalSecret"): "externalsecrets",
-    ("traefik.io", "v1alpha1", "IngressRoute"): "ingressroutes",
-    ("traefik.io", "v1alpha1", "Middleware"): "middlewares",
+    ("traefik.containo.us", "v1alpha1", "IngressRoute"): "ingressroutes",
+    ("traefik.containo.us", "v1alpha1", "Middleware"): "middlewares",
 }
 
 
