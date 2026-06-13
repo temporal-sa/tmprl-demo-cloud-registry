@@ -1,59 +1,8 @@
 {
   "apiVersion": "tmprl-demo.cloud/v1alpha1",
-  "imageRepositoryPrefix": "tmprl-cloud-demo",
+  "imageRepositoryPrefix": "tmprl-dem-cld",
   "kind": "BuildPlan",
   "projects": [
-    {
-      "builds": [
-        {
-          "components": [
-            "backend"
-          ],
-          "context": ".",
-          "dockerfile": "docker/backend.Dockerfile",
-          "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/dejavu-tacos/backend:git-sha",
-            "repositoryName": "tmprl-cloud-demo/dejavu-tacos/backend",
-            "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/dejavu-tacos/backend:git-${sourceCommitSha}"
-          },
-          "name": "backend"
-        },
-        {
-          "components": [
-            "frontend"
-          ],
-          "context": ".",
-          "dockerfile": "docker/frontend.Dockerfile",
-          "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/dejavu-tacos/frontend:git-sha",
-            "repositoryName": "tmprl-cloud-demo/dejavu-tacos/frontend",
-            "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/dejavu-tacos/frontend:git-${sourceCommitSha}"
-          },
-          "name": "frontend"
-        },
-        {
-          "components": [
-            "worker-python"
-          ],
-          "context": ".",
-          "dockerfile": "docker/worker-python.Dockerfile",
-          "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/dejavu-tacos/worker-python:git-sha",
-            "repositoryName": "tmprl-cloud-demo/dejavu-tacos/worker-python",
-            "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/dejavu-tacos/worker-python:git-${sourceCommitSha}"
-          },
-          "name": "worker-python"
-        }
-      ],
-      "name": "dejavu-tacos",
-      "source": {
-        "branch": "main",
-        "repo": "https://github.com/temporal-sa/demo-dejavu-tacos"
-      }
-    },
     {
       "builds": [
         {
@@ -63,10 +12,10 @@
           "context": ".",
           "dockerfile": "registry/web/Dockerfile",
           "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/demo-registry/web:git-sha",
-            "repositoryName": "tmprl-cloud-demo/demo-registry/web",
+            "placeholder": "registry.invalid/tmprl-dem-cld/registry/web:git-sha",
+            "repositoryName": "tmprl-dem-cld/registry/web",
             "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/demo-registry/web:git-${sourceCommitSha}"
+            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-dem-cld/registry/web:git-${sourceCommitSha}"
           },
           "name": "web"
         },
@@ -77,43 +26,18 @@
           "context": ".",
           "dockerfile": "registry/worker/Dockerfile",
           "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/demo-registry/worker:git-sha",
-            "repositoryName": "tmprl-cloud-demo/demo-registry/worker",
+            "placeholder": "registry.invalid/tmprl-dem-cld/registry/worker:git-sha",
+            "repositoryName": "tmprl-dem-cld/registry/worker",
             "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/demo-registry/worker:git-${sourceCommitSha}"
+            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-dem-cld/registry/worker:git-${sourceCommitSha}"
           },
           "name": "worker"
         }
       ],
-      "name": "demo-registry",
+      "name": "registry",
       "source": {
         "branch": "main",
         "repo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry"
-      }
-    },
-    {
-      "builds": [
-        {
-          "components": [
-            "api",
-            "web",
-            "worker"
-          ],
-          "context": ".",
-          "dockerfile": "simple_chat_agent/Dockerfile",
-          "image": {
-            "placeholder": "registry.invalid/tmprl-cloud-demo/temporal-agent-harness/app:git-sha",
-            "repositoryName": "tmprl-cloud-demo/temporal-agent-harness/app",
-            "tagTemplate": "git-${sourceCommitSha}",
-            "uriTemplate": "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/tmprl-cloud-demo/temporal-agent-harness/app:git-${sourceCommitSha}"
-          },
-          "name": "app"
-        }
-      ],
-      "name": "temporal-agent-harness",
-      "source": {
-        "branch": "main",
-        "repo": "https://github.com/temporal-sa/temporal-agent-harness-example"
       }
     }
   ],

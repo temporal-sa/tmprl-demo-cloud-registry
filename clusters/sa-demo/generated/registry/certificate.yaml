@@ -2,12 +2,12 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: demo-registry-tls
-  namespace: tmprl-cloud-demo-demo-registry
+  name: registry-tls
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
 spec:
   dnsNames:
   - registry.tmprl-demo.cloud
@@ -17,4 +17,4 @@ spec:
     name: letsencrypt
   privateKey:
     rotationPolicy: Always
-  secretName: demo-registry-tls
+  secretName: registry-tls

@@ -6,13 +6,13 @@ from dataclasses import dataclass
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
-    "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+    "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
 )
 DEFAULT_TEMPORAL_CLOUD_API_VERSION = "v0.17.0"
 DEFAULT_TEMPORAL_CLOUD_OPS_HOST = "saas-api.tmprl.cloud:443"
 DEFAULT_CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 DEFAULT_CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
-DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-cloud-demo-demo-registry"
+DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-dem-cld-registry"
 
 
 @dataclass(frozen=True)

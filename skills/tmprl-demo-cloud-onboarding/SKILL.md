@@ -1,6 +1,6 @@
 ---
 name: tmprl-demo-cloud-onboarding
-description: Migrate Temporal SA demo repositories into the tmprl-demo.cloud registry. Use when assessing a demo repo for onboarding, estimating migration lift, creating or updating Dockerfiles/env handling, generating registry project YAML configs, documenting AWS Secrets Manager setup under the tmprl-cloud-demo project secret prefix, or adapting existing Docker Compose/Kubernetes/Flux demos to the platform-managed DemoProject path.
+description: Migrate Temporal SA demo repositories into the tmprl-demo.cloud registry. Use when assessing a demo repo for onboarding, estimating migration lift, creating or updating Dockerfiles/env handling, generating registry project YAML configs, documenting AWS Secrets Manager setup under the tmprl-dem-cld project secret prefix, or adapting existing Docker Compose/Kubernetes/Flux demos to the platform-managed DemoProject path.
 ---
 
 # Tmprl Demo Cloud Onboarding
@@ -51,6 +51,11 @@ Use this skill as a wizard for moving an SA-owned demo repo into the
 
 6. Create or update the registry project config.
    - Use the platform-managed contract, not arbitrary project-owned overlays.
+   - Choose a concise `metadata.name` that does NOT include the word "demo" —
+     every platform is already a demo, so the platform derives namespaces, ECR
+     repos, and the Temporal Cloud namespace from this name and "demo" is
+     redundant (and eats into the ~39-char Temporal namespace limit). For
+     example, prefer `banking-money-transfer` over `demo-banking-money-transfer`.
    - Do not set raw Kubernetes namespaces, Temporal namespace names, standard
      Temporal env var names, ECR repos, image tags, or full `tmprl-demo.cloud`
      hostnames.
@@ -67,18 +72,18 @@ Use this skill as a wizard for moving an SA-owned demo repo into the
 
 7. Document custom secrets exactly.
    - Required path format:
-     `tmprl-cloud-demo/<project-name>/<secret-name>`.
+     `tmprl-dem-cld/<project-name>/<secret-name>`.
    - Every JSON key in the AWS secret becomes an environment variable for
      components that list the secret.
    - Declare each custom secret under top-level `secrets.<name>` and include
      `requiredProperties` for keys the operator must verify before deployment.
    - Keep secrets narrow and attach them only to components that need them.
    - Project Temporal credentials are platform-managed and use:
-     `tmprl-cloud-demo/<project-name>/temporal`.
+     `tmprl-dem-cld/<project-name>/temporal`.
    - The Temporal Cloud bootstrap credential is platform-level and uses:
-     `tmprl-cloud-demo/platform/temporal-cloud-bootstrap`.
+     `tmprl-dem-cld/platform/temporal-cloud-bootstrap`.
    - For Agent Harness, document the required custom secret path:
-     `tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials`.
+     `tmprl-dem-cld/temporal-agent-harness/anthropic-credentials`.
 
 8. Run registry checks from the registry repo after config changes.
 
@@ -124,7 +129,7 @@ If generation is out of date, run:
       `demo-registry-system/demo-registry-catalog-status` under
       `<project>.json`.
     - The registry worker mirrors those entries into
-      `tmprl-cloud-demo-demo-registry/demo-registry-catalog-status`, which the
+      `tmprl-dem-cld-registry/demo-registry-catalog-status`, which the
       self-managed registry web component mounts at `/app/status`.
     - After the registry web image is rolled out, `/api/catalog` and the
       registry page show the merged lifecycle status.

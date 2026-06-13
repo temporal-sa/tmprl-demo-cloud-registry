@@ -5,194 +5,30 @@
     {
       "ecrRepositories": [
         {
-          "build": "backend",
-          "components": [
-            "backend"
-          ],
-          "name": "tmprl-cloud-demo/dejavu-tacos/backend"
-        },
-        {
-          "build": "frontend",
-          "components": [
-            "frontend"
-          ],
-          "name": "tmprl-cloud-demo/dejavu-tacos/frontend"
-        },
-        {
-          "build": "worker-python",
-          "components": [
-            "worker-python"
-          ],
-          "name": "tmprl-cloud-demo/dejavu-tacos/worker-python"
-        }
-      ],
-      "iam": {
-        "buildPushRepositories": [
-          "tmprl-cloud-demo/dejavu-tacos/backend",
-          "tmprl-cloud-demo/dejavu-tacos/frontend",
-          "tmprl-cloud-demo/dejavu-tacos/worker-python"
-        ],
-        "externalSecretsReadPath": "tmprl-cloud-demo/dejavu-tacos/*"
-      },
-      "kubernetesNamespace": "tmprl-cloud-demo-dejavu-tacos",
-      "name": "dejavu-tacos",
-      "secretPrefix": "tmprl-cloud-demo/dejavu-tacos",
-      "secretsManager": {
-        "temporalBootstrap": {
-          "managedBy": "platform",
-          "properties": [
-            "TEMPORAL_CLOUD_API_KEY",
-            "TEMPORAL_CLOUD_ACCOUNT_ID",
-            "TEMPORAL_CLOUD_REGION"
-          ],
-          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
-          "required": true
-        },
-        "temporalCredentials": {
-          "managedBy": "platform",
-          "properties": [
-            "address",
-            "namespace",
-            "apiKey",
-            "tls"
-          ],
-          "remotePath": "tmprl-cloud-demo/dejavu-tacos/temporal",
-          "required": true
-        },
-        "userManaged": []
-      },
-      "temporalCloud": {
-        "apiKey": {
-          "action": "create-or-verify-or-rotate",
-          "components": [
-            "backend",
-            "worker-python"
-          ],
-          "namespace": "dejavu-tacos",
-          "rotateBeforeExpiryDays": 60,
-          "scope": "namespace",
-          "secretProperties": [
-            "address",
-            "namespace",
-            "apiKey",
-            "tls"
-          ],
-          "secretRemotePath": "tmprl-cloud-demo/dejavu-tacos/temporal",
-          "ttlDays": 365
-        },
-        "bootstrapCredential": {
-          "kubernetesSecret": "temporal-cloud-bootstrap",
-          "requiredProperties": [
-            "TEMPORAL_CLOUD_API_KEY",
-            "TEMPORAL_CLOUD_ACCOUNT_ID",
-            "TEMPORAL_CLOUD_REGION"
-          ],
-          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
-        },
-        "mode": "manual-until-provider-contract-is-implemented",
-        "namespace": {
-          "action": "create-or-verify",
-          "deletionPolicy": "retain-until-explicitly-approved",
-          "name": "dejavu-tacos"
-        },
-        "provider": "temporal-cloud",
-        "required": true,
-        "tcldCommandPlan": [
-          {
-            "command": [
-              "tcld",
-              "namespace",
-              "get",
-              "--namespace",
-              "dejavu-tacos"
-            ],
-            "step": "verify-namespace"
-          },
-          {
-            "command": [
-              "tcld",
-              "namespace",
-              "create",
-              "--namespace",
-              "dejavu-tacos",
-              "--region",
-              "<temporal-region>",
-              "--auth-method",
-              "api_key",
-              "--enable-delete-protection"
-            ],
-            "step": "create-namespace"
-          },
-          {
-            "command": [
-              "tcld",
-              "service-account",
-              "create-scoped",
-              "--name",
-              "dejavu-tacos-runtime",
-              "--namespace-permission",
-              "dejavu-tacos=Write"
-            ],
-            "step": "create-scoped-service-account"
-          },
-          {
-            "command": [
-              "tcld",
-              "apikey",
-              "create",
-              "--name",
-              "dejavu-tacos-runtime",
-              "--description",
-              "tmprl-demo.cloud runtime key for dejavu-tacos",
-              "--duration",
-              "365d",
-              "--service-account-id",
-              "<service-account-id>"
-            ],
-            "step": "create-service-account-api-key"
-          },
-          {
-            "command": [
-              "tcld",
-              "apikey",
-              "list",
-              "--owner-type",
-              "service-account",
-              "--owner-id",
-              "<service-account-id>"
-            ],
-            "step": "list-service-account-api-keys"
-          }
-        ]
-      }
-    },
-    {
-      "ecrRepositories": [
-        {
           "build": "web",
           "components": [
             "web"
           ],
-          "name": "tmprl-cloud-demo/demo-registry/web"
+          "name": "tmprl-dem-cld/registry/web"
         },
         {
           "build": "worker",
           "components": [
             "worker"
           ],
-          "name": "tmprl-cloud-demo/demo-registry/worker"
+          "name": "tmprl-dem-cld/registry/worker"
         }
       ],
       "iam": {
         "buildPushRepositories": [
-          "tmprl-cloud-demo/demo-registry/web",
-          "tmprl-cloud-demo/demo-registry/worker"
+          "tmprl-dem-cld/registry/web",
+          "tmprl-dem-cld/registry/worker"
         ],
-        "externalSecretsReadPath": "tmprl-cloud-demo/demo-registry/*"
+        "externalSecretsReadPath": "tmprl-dem-cld/registry/*"
       },
-      "kubernetesNamespace": "tmprl-cloud-demo-demo-registry",
-      "name": "demo-registry",
-      "secretPrefix": "tmprl-cloud-demo/demo-registry",
+      "kubernetesNamespace": "tmprl-dem-cld-registry",
+      "name": "registry",
+      "secretPrefix": "tmprl-dem-cld/registry",
       "secretsManager": {
         "temporalBootstrap": {
           "managedBy": "platform",
@@ -201,7 +37,7 @@
             "TEMPORAL_CLOUD_ACCOUNT_ID",
             "TEMPORAL_CLOUD_REGION"
           ],
-          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
+          "remotePath": "tmprl-dem-cld/platform/temporal-cloud-bootstrap",
           "required": true
         },
         "temporalCredentials": {
@@ -212,7 +48,7 @@
             "apiKey",
             "tls"
           ],
-          "remotePath": "tmprl-cloud-demo/demo-registry/temporal",
+          "remotePath": "tmprl-dem-cld/registry/temporal",
           "required": true
         },
         "userManaged": []
@@ -224,7 +60,7 @@
             "web",
             "worker"
           ],
-          "namespace": "demo-registry",
+          "namespace": "tmprl-dem-cld-registry",
           "rotateBeforeExpiryDays": 60,
           "scope": "namespace",
           "secretProperties": [
@@ -233,7 +69,7 @@
             "apiKey",
             "tls"
           ],
-          "secretRemotePath": "tmprl-cloud-demo/demo-registry/temporal",
+          "secretRemotePath": "tmprl-dem-cld/registry/temporal",
           "ttlDays": 365
         },
         "bootstrapCredential": {
@@ -243,13 +79,13 @@
             "TEMPORAL_CLOUD_ACCOUNT_ID",
             "TEMPORAL_CLOUD_REGION"
           ],
-          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+          "secretRemotePath": "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
         },
         "mode": "manual-until-provider-contract-is-implemented",
         "namespace": {
           "action": "create-or-verify",
           "deletionPolicy": "retain-until-explicitly-approved",
-          "name": "demo-registry"
+          "name": "tmprl-dem-cld-registry"
         },
         "provider": "temporal-cloud",
         "required": true,
@@ -260,7 +96,7 @@
               "namespace",
               "get",
               "--namespace",
-              "demo-registry"
+              "tmprl-dem-cld-registry"
             ],
             "step": "verify-namespace"
           },
@@ -270,7 +106,7 @@
               "namespace",
               "create",
               "--namespace",
-              "demo-registry",
+              "tmprl-dem-cld-registry",
               "--region",
               "<temporal-region>",
               "--auth-method",
@@ -285,9 +121,9 @@
               "service-account",
               "create-scoped",
               "--name",
-              "demo-registry-runtime",
+              "registry-runtime",
               "--namespace-permission",
-              "demo-registry=Write"
+              "tmprl-dem-cld-registry=Write"
             ],
             "step": "create-scoped-service-account"
           },
@@ -297,172 +133,9 @@
               "apikey",
               "create",
               "--name",
-              "demo-registry-runtime",
+              "registry-runtime",
               "--description",
-              "tmprl-demo.cloud runtime key for demo-registry",
-              "--duration",
-              "365d",
-              "--service-account-id",
-              "<service-account-id>"
-            ],
-            "step": "create-service-account-api-key"
-          },
-          {
-            "command": [
-              "tcld",
-              "apikey",
-              "list",
-              "--owner-type",
-              "service-account",
-              "--owner-id",
-              "<service-account-id>"
-            ],
-            "step": "list-service-account-api-keys"
-          }
-        ]
-      }
-    },
-    {
-      "ecrRepositories": [
-        {
-          "build": "app",
-          "components": [
-            "api",
-            "web",
-            "worker"
-          ],
-          "name": "tmprl-cloud-demo/temporal-agent-harness/app"
-        }
-      ],
-      "iam": {
-        "buildPushRepositories": [
-          "tmprl-cloud-demo/temporal-agent-harness/app"
-        ],
-        "externalSecretsReadPath": "tmprl-cloud-demo/temporal-agent-harness/*"
-      },
-      "kubernetesNamespace": "tmprl-cloud-demo-temporal-agent-harness",
-      "name": "temporal-agent-harness",
-      "secretPrefix": "tmprl-cloud-demo/temporal-agent-harness",
-      "secretsManager": {
-        "temporalBootstrap": {
-          "managedBy": "platform",
-          "properties": [
-            "TEMPORAL_CLOUD_API_KEY",
-            "TEMPORAL_CLOUD_ACCOUNT_ID",
-            "TEMPORAL_CLOUD_REGION"
-          ],
-          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
-          "required": true
-        },
-        "temporalCredentials": {
-          "managedBy": "platform",
-          "properties": [
-            "address",
-            "namespace",
-            "apiKey",
-            "tls"
-          ],
-          "remotePath": "tmprl-cloud-demo/temporal-agent-harness/temporal",
-          "required": true
-        },
-        "userManaged": [
-          {
-            "components": [
-              "api",
-              "worker"
-            ],
-            "managedBy": "project-owner",
-            "name": "anthropic-credentials",
-            "remotePath": "tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials",
-            "requiredProperties": [
-              "ANTHROPIC_API_KEY"
-            ]
-          }
-        ]
-      },
-      "temporalCloud": {
-        "apiKey": {
-          "action": "create-or-verify-or-rotate",
-          "components": [
-            "api",
-            "worker"
-          ],
-          "namespace": "temporal-agent-harness",
-          "rotateBeforeExpiryDays": 60,
-          "scope": "namespace",
-          "secretProperties": [
-            "address",
-            "namespace",
-            "apiKey",
-            "tls"
-          ],
-          "secretRemotePath": "tmprl-cloud-demo/temporal-agent-harness/temporal",
-          "ttlDays": 365
-        },
-        "bootstrapCredential": {
-          "kubernetesSecret": "temporal-cloud-bootstrap",
-          "requiredProperties": [
-            "TEMPORAL_CLOUD_API_KEY",
-            "TEMPORAL_CLOUD_ACCOUNT_ID",
-            "TEMPORAL_CLOUD_REGION"
-          ],
-          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
-        },
-        "mode": "manual-until-provider-contract-is-implemented",
-        "namespace": {
-          "action": "create-or-verify",
-          "deletionPolicy": "retain-until-explicitly-approved",
-          "name": "temporal-agent-harness"
-        },
-        "provider": "temporal-cloud",
-        "required": true,
-        "tcldCommandPlan": [
-          {
-            "command": [
-              "tcld",
-              "namespace",
-              "get",
-              "--namespace",
-              "temporal-agent-harness"
-            ],
-            "step": "verify-namespace"
-          },
-          {
-            "command": [
-              "tcld",
-              "namespace",
-              "create",
-              "--namespace",
-              "temporal-agent-harness",
-              "--region",
-              "<temporal-region>",
-              "--auth-method",
-              "api_key",
-              "--enable-delete-protection"
-            ],
-            "step": "create-namespace"
-          },
-          {
-            "command": [
-              "tcld",
-              "service-account",
-              "create-scoped",
-              "--name",
-              "temporal-agent-harness-runtime",
-              "--namespace-permission",
-              "temporal-agent-harness=Write"
-            ],
-            "step": "create-scoped-service-account"
-          },
-          {
-            "command": [
-              "tcld",
-              "apikey",
-              "create",
-              "--name",
-              "temporal-agent-harness-runtime",
-              "--description",
-              "tmprl-demo.cloud runtime key for temporal-agent-harness",
+              "tmprl-demo.cloud runtime key for registry",
               "--duration",
               "365d",
               "--service-account-id",

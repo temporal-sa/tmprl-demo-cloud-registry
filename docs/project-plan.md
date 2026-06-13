@@ -45,7 +45,7 @@ Keep it current as phases move from design to implementation.
   where possible; owners provide human-facing title, summary, tags, SDKs, and
   optional supporting assets.
 - Kubernetes namespaces are derived by the platform as
-  `tmprl-cloud-demo-<metadata.name>`.
+  `tmprl-dem-cld-<metadata.name>`.
 - Derived namespaces must fit Kubernetes DNS label limits. If truncation is
   needed, use deterministic hash-suffix truncation rather than plain truncation
   so two long project names cannot silently collapse to the same namespace.
@@ -63,7 +63,7 @@ Keep it current as phases move from design to implementation.
   Non-worker components that need Temporal credentials declare
   `temporalAccess: true`.
 - User-managed secrets are constrained to platform-derived AWS Secrets Manager
-  paths: `tmprl-cloud-demo/<metadata.name>/<secret-name>`. Components receive
+  paths: `tmprl-dem-cld/<metadata.name>/<secret-name>`. Components receive
   them only when they explicitly reference a top-level `secrets.<name>`
   declaration. Every JSON key in the AWS secret is injected as an environment
   variable for those components, and declared `requiredProperties` are verified
@@ -72,7 +72,7 @@ Keep it current as phases move from design to implementation.
   `spec.secrets.<name>.requiredProperties` contract so Kubernetes preserves
   those requirements for the operator.
 - Project IAM roles must be scoped to the project secret prefix only, for
-  example `tmprl-cloud-demo/<metadata.name>/*`, so a compromised project cannot
+  example `tmprl-dem-cld/<metadata.name>/*`, so a compromised project cannot
   read or mutate secrets belonging to other demos or non-demo systems.
 - Initial Temporal API key lifetime can be one year, but key rotation and
   reconciliation must be designed before real provider automation is enabled.
@@ -80,7 +80,7 @@ Keep it current as phases move from design to implementation.
   platform requires shared Temporal employee auth. Public demos must explicitly
   opt out with `temporalAuthRequired: false`.
 - The registry is itself a demo. After initial bootstrap, it should be
-  represented by `projects/demo-registry.yaml`, reconciled as a `DemoProject`,
+  represented by `projects/registry.yaml`, reconciled as a `DemoProject`,
   and rolled out through the same build, smoke-test, auth, and status machinery
   as other demos.
 - `DemoProject` CRs are now the applied project contract after bootstrap. Older
@@ -90,13 +90,13 @@ Keep it current as phases move from design to implementation.
   manual substitute represented by the
   `registry.tmprl-demo.cloud/image-overrides` annotation.
 - The first Deja Vu test reused the registry-prefixed namespace
-  `tmprl-cloud-demo-dejavu-tacos`, which had already been created during the
+  `tmprl-dem-cld-dejavu-tacos`, which had already been created during the
   initial manual registry test. The old manual namespace
   `temporal-dejavu-tacos` was deleted after promotion. A future test must prove
   namespace creation from zero using a namespace that does not already exist.
 - Leftover manual Deja Vu test routes and TLS artifacts named
   `dejavu-tacos-registry-test*` were removed from
-  `tmprl-cloud-demo-dejavu-tacos` after the promoted route was verified.
+  `tmprl-dem-cld-dejavu-tacos` after the promoted route was verified.
 
 ## Live sa-demo Checkpoint
 
@@ -109,7 +109,7 @@ As of 2026-06-13:
 - `ClusterSecretStore/platform-secrets` is Ready and reads AWS Secrets Manager
   in `us-west-1`.
 - Registry operator runs in `demo-registry-system` using image
-  `429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-cloud-demo/demo-registry/worker:20260612-214200-amd64`.
+  `429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry/worker:20260612-214200-amd64`.
 - Registry Temporal namespace:
   `tmprl-demo-cloud-registry.a2dd6`.
 - `DemoProject/dejavu-tacos` is `Promoted`; public checks return HTTP 200 for
@@ -120,7 +120,7 @@ As of 2026-06-13:
   for those projects.
 - `temporal-agent-harness` is the chosen second rollout target. It uses one
   `app` build for web, API, and worker components, requires
-  `tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials` with
+  `tmprl-dem-cld/temporal-agent-harness/anthropic-credentials` with
   required JSON property `ANTHROPIC_API_KEY`, and now declares smoke check path
   `/api/auth/google/configured`.
 
@@ -236,7 +236,7 @@ Remaining Phase 1 work:
 Proposed namespace derivation:
 
 ```text
-prefix = tmprl-cloud-demo-
+prefix = tmprl-dem-cld-
 raw = prefix + metadata.name
 if len(raw) <= 63:
   namespace = raw
@@ -352,7 +352,7 @@ components reference the user-managed `anthropic-credentials` secret, which
 declares required JSON property `ANTHROPIC_API_KEY` and maps to:
 
 ```text
-tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
+tmprl-dem-cld/temporal-agent-harness/anthropic-credentials
 ```
 
 Generated service DNS:
@@ -433,7 +433,7 @@ Assets:
 - IAM/IRSA or access policy so External Secrets can read only that project's
   secrets
 - per-project IAM permissions limited to the exact secret prefix
-  `tmprl-cloud-demo/<metadata.name>/*`
+  `tmprl-dem-cld/<metadata.name>/*`
 
 The generator produces `external-resources-plan.json` as Phase 3 input. It is
 review data only until Terraform/OpenTofu automation is added.
@@ -632,7 +632,7 @@ self-managed demo.
 
 Initial project config:
 
-- `projects/demo-registry.yaml`
+- `projects/registry.yaml`
 - source repo: this repo
 - ingress subdomain: `registry`
 - components: `web` and `worker`
@@ -664,7 +664,7 @@ Current live-status wiring:
 - the worker writes status to the control-plane ConfigMap
   `demo-registry-system/demo-registry-catalog-status` and mirrors the same
   per-project JSON keys into
-  `tmprl-cloud-demo-demo-registry/demo-registry-catalog-status`;
+  `tmprl-dem-cld-registry/demo-registry-catalog-status`;
 - the generated `demo-registry` web Deployment mounts the mirrored ConfigMap at
   `/app/status` and points `CATALOG_STATUS_DIR` there;
 - live lifecycle display becomes active after the updated worker and web images
@@ -757,7 +757,7 @@ The skill should behave like a guided wizard:
   environment variables;
 - generate the project config file for this registry;
 - generate AWS Secrets Manager instructions for custom secrets under
-  `tmprl-cloud-demo/<project-name>/<secret-name>`;
+  `tmprl-dem-cld/<project-name>/<secret-name>`;
 - run project validation and generation checks after producing the config.
 
 The first version should prefer the platform-managed deployment path. If a demo

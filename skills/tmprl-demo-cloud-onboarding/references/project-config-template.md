@@ -86,7 +86,7 @@ components:
 Create this AWS Secrets Manager value before deployment:
 
 ```text
-tmprl-cloud-demo/<project-name>/llm
+tmprl-dem-cld/<project-name>/llm
 ```
 
 with JSON keys matching the environment variables the component expects:
@@ -100,7 +100,7 @@ with JSON keys matching the environment variables the component expects:
 For components with Temporal access, the platform syncs this managed secret:
 
 ```text
-tmprl-cloud-demo/<project-name>/temporal
+tmprl-dem-cld/<project-name>/temporal
 ```
 
 with JSON keys:
@@ -117,7 +117,7 @@ with JSON keys:
 The platform bootstrap credential remains outside project configs:
 
 ```text
-tmprl-cloud-demo/platform/temporal-cloud-bootstrap
+tmprl-dem-cld/platform/temporal-cloud-bootstrap
 ```
 
 with JSON keys:

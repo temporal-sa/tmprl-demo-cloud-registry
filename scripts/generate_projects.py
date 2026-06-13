@@ -21,6 +21,7 @@ from validate_projects import (
     component_ports,
     components,
     derive_namespace,
+    derive_temporal_namespace,
     discover_project_paths,
     effective_service_name,
     ingress_routes,
@@ -40,7 +41,7 @@ TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
 IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
-IMAGE_REPOSITORY_PREFIX = "tmprl-cloud-demo"
+IMAGE_REPOSITORY_PREFIX = "tmprl-dem-cld"
 IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
 CODEBUILD_PROJECT_NAME_PLACEHOLDER = "<codebuild-project-name>"
 AWS_REGION_PLACEHOLDER = "${awsRegion}"
@@ -48,12 +49,12 @@ AWS_ACCOUNT_ID_PLACEHOLDER = "${awsAccountId}"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
-TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
 CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 CATALOG_STATUS_MOUNT_PATH = "/app/status"
 CATALOG_STATUS_VOLUME_NAME = "catalog-status"
-REGISTRY_PROJECT_NAME = "demo-registry"
+REGISTRY_PROJECT_NAME = "registry"
 REGISTRY_WEB_COMPONENT_NAME = "web"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -263,7 +264,7 @@ def demo_project_resource(project: Project, *, review_artifact: bool) -> dict[st
         "derived": {
             "host": project.host,
             "kubernetesNamespace": project.namespace,
-            "temporalNamespace": project.name,
+            "temporalNamespace": derive_temporal_namespace(project.name),
             "secretPrefix": project_secret_prefix(project),
             "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
         },
@@ -875,7 +876,7 @@ def temporal_secret_remote_path(project: Project) -> str:
 
 
 def project_secret_prefix(project: Project) -> str:
-    return f"tmprl-cloud-demo/{project.name}"
+    return f"tmprl-dem-cld/{project.name}"
 
 
 def platform_metadata_configmap(project: Project) -> dict[str, Any]:
@@ -915,7 +916,7 @@ def worker_controller_placeholder(
                 {
                     component_name: {
                         "taskQueue": component["worker"]["taskQueue"],
-                        "temporalNamespace": project.name,
+                        "temporalNamespace": derive_temporal_namespace(project.name),
                         "versioning": component["worker"].get(
                             "versioning",
                             {"enabled": False},
@@ -1142,14 +1143,14 @@ def temporal_cloud_resources(project: Project) -> dict[str, Any]:
         "mode": "manual-until-provider-contract-is-implemented",
         "required": bool(components_requiring_temporal),
         "namespace": {
-            "name": project.name,
+            "name": derive_temporal_namespace(project.name),
             "action": "create-or-verify",
             "deletionPolicy": "retain-until-explicitly-approved",
         },
         "apiKey": {
             "action": "create-or-verify-or-rotate",
             "scope": "namespace",
-            "namespace": project.name,
+            "namespace": derive_temporal_namespace(project.name),
             "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
             "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
             "secretRemotePath": temporal_secret_remote_path(project),
@@ -1167,6 +1168,7 @@ def temporal_cloud_resources(project: Project) -> dict[str, Any]:
 
 def temporal_cloud_tcld_command_plan(project: Project) -> list[dict[str, Any]]:
     service_account_name = f"{project.name}-runtime"
+    namespace = derive_temporal_namespace(project.name)
     return [
         {
             "step": "verify-namespace",
@@ -1175,7 +1177,7 @@ def temporal_cloud_tcld_command_plan(project: Project) -> list[dict[str, Any]]:
                 "namespace",
                 "get",
                 "--namespace",
-                project.name,
+                namespace,
             ],
         },
         {
@@ -1185,7 +1187,7 @@ def temporal_cloud_tcld_command_plan(project: Project) -> list[dict[str, Any]]:
                 "namespace",
                 "create",
                 "--namespace",
-                project.name,
+                namespace,
                 "--region",
                 "<temporal-region>",
                 "--auth-method",
@@ -1202,7 +1204,7 @@ def temporal_cloud_tcld_command_plan(project: Project) -> list[dict[str, Any]]:
                 "--name",
                 service_account_name,
                 "--namespace-permission",
-                f"{project.name}=Write",
+                f"{namespace}=Write",
             ],
         },
         {
@@ -1315,7 +1317,7 @@ def registry_entry(project: Project) -> dict[str, Any]:
         "host": project.host,
         "appUrl": f"https://{project.host}",
         "sourceRepo": project.data["source"]["repo"],
-        "temporalNamespace": project.name,
+        "temporalNamespace": derive_temporal_namespace(project.name),
         "authRequired": auth_required(project),
         "catalogStatus": {
             "source": "DemoProject.status",
@@ -1368,7 +1370,7 @@ def project_metadata(project: Project) -> dict[str, Any]:
             for secret_name in user_secret_names(project)
         },
         "temporal": {
-            "namespace": project.name,
+            "namespace": derive_temporal_namespace(project.name),
             "secretPrefix": project_secret_prefix(project),
             "remotePath": temporal_secret_remote_path(project),
             "standardEnv": STANDARD_TEMPORAL_ENV,

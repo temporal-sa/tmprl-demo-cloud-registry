@@ -3,11 +3,11 @@ apiVersion: traefik.containo.us/v1alpha1
 kind: Middleware
 metadata:
   name: temporal-auth-required
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
   annotations:
     platform.temporal.io/placeholder: 'true'
     platform.temporal.io/description: Temporal employee catalog auth forward-auth

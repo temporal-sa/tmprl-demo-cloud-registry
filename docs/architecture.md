@@ -41,12 +41,12 @@ automatically; non-worker components opt in with `temporalAccess: true`.
 
 User-managed secrets are constrained to platform-derived AWS Secrets Manager
 paths. A project may declare a secret name such as `llm`, and the platform maps
-it to `tmprl-cloud-demo/<project-name>/llm`. Components must explicitly list
+it to `tmprl-dem-cld/<project-name>/llm`. Components must explicitly list
 which user secrets they receive. Every JSON key in that AWS secret is injected
 as an environment variable for those components.
 
 Per-project IAM roles should allow access only to that project's secret prefix,
-for example `tmprl-cloud-demo/<project-name>/*`. This makes AWS IAM a second
+for example `tmprl-dem-cld/<project-name>/*`. This makes AWS IAM a second
 enforcement layer if a project or ExternalSecret is misconfigured.
 
 ## Hostnames

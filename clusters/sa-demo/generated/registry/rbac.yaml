@@ -3,11 +3,11 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: web
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
     app.kubernetes.io/component: web
   annotations:
     platform.temporal.io/component: web
@@ -17,11 +17,11 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: worker
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
     app.kubernetes.io/component: worker
   annotations:
     platform.temporal.io/component: worker
@@ -31,27 +31,27 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tenant-baseline
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
 rules: []
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: web-tenant-baseline
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
     app.kubernetes.io/component: web
 subjects:
 - kind: ServiceAccount
   name: web
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -61,16 +61,16 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: worker-tenant-baseline
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
     app.kubernetes.io/component: worker
 subjects:
 - kind: ServiceAccount
   name: worker
-  namespace: tmprl-cloud-demo-demo-registry
+  namespace: tmprl-dem-cld-registry
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

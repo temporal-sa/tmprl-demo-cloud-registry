@@ -3,15 +3,15 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: worker-controller-placeholder
-  namespace: tmprl-cloud-demo-dejavu-tacos
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: dejavu-tacos
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: dejavu-tacos
+    platform.temporal.io/project: registry
   annotations:
     platform.temporal.io/placeholder: 'true'
     platform.temporal.io/description: Replace with Temporal Worker Controller resources
       after CRD shape is verified.
 data:
-  workers.yaml: "worker-python:\n  taskQueue: dejavu-tacos\n  temporalNamespace: dejavu-tacos\n\
-    \  versioning:\n    enabled: false\n"
+  workers.yaml: "worker:\n  taskQueue: demo-registry-management\n  temporalNamespace:\
+    \ tmprl-dem-cld-registry\n  versioning:\n    enabled: false\n"

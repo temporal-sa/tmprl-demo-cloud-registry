@@ -55,7 +55,7 @@ Store the credential outside git:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/platform/temporal-cloud-bootstrap \
+  --name tmprl-dem-cld/platform/temporal-cloud-bootstrap \
   --secret-string '{
     "TEMPORAL_CLOUD_API_KEY": "<bootstrap-cloud-ops-api-key>",
     "TEMPORAL_CLOUD_ACCOUNT_ID": "<temporal-account-id>",
@@ -72,10 +72,10 @@ connection values:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/platform/registry-worker-temporal \
+  --name tmprl-dem-cld/platform/registry-worker-temporal \
   --secret-string '{
-    "TEMPORAL_ADDRESS": "<region>.<cloud-provider>.api.temporal.io:7233",
-    "TEMPORAL_NAMESPACE": "demo-registry.<temporal-account-id>",
+    "TEMPORAL_ADDRESS": "tmprl-dem-cld-registry.<temporal-account-id>.tmprl.cloud:7233",
+    "TEMPORAL_NAMESPACE": "tmprl-dem-cld-registry.<temporal-account-id>",
     "TEMPORAL_API_KEY": "<registry-worker-namespace-api-key>",
     "TEMPORAL_TLS": "true"
   }'
@@ -116,7 +116,7 @@ Copy the generated API key secret immediately; Temporal Cloud does not let you
 retrieve it later. Store the SDK connection values in:
 
 ```text
-tmprl-cloud-demo/<project-name>/temporal
+tmprl-dem-cld/<project-name>/temporal
 ```
 
 using the JSON shape documented below. Full mutation from the operator remains
@@ -129,7 +129,7 @@ Create the ECR repository needed for the bootstrap worker image before the
 operator exists:
 
 ```sh
-aws ecr create-repository --region <aws-region> --repository-name tmprl-cloud-demo/demo-registry/worker
+aws ecr create-repository --region <aws-region> --repository-name tmprl-dem-cld/registry/worker
 ```
 
 After the operator is running, project ECR repositories can be created or
@@ -158,17 +158,17 @@ arn:aws:iam::<aws-account-id>:role/tmprl-demo-registry-operator
 
 Scope the role to:
 
-- create/read/write ECR repositories under `tmprl-cloud-demo/*`;
-- read/write Secrets Manager values under `tmprl-cloud-demo/*`;
-- read `tmprl-cloud-demo/platform/registry-worker-temporal`;
-- read `tmprl-cloud-demo/platform/temporal-cloud-bootstrap`;
+- create/read/write ECR repositories under `tmprl-dem-cld/*`;
+- read/write Secrets Manager values under `tmprl-dem-cld/*`;
+- read `tmprl-dem-cld/platform/registry-worker-temporal`;
+- read `tmprl-dem-cld/platform/temporal-cloud-bootstrap`;
 - use the EKS service account through IRSA.
 
 Do not grant project runtime pods broad AWS access. Project runtime secret
 access should stay under the project prefix, for example:
 
 ```text
-tmprl-cloud-demo/dejavu-tacos/*
+tmprl-dem-cld/dejavu-tacos/*
 ```
 
 Before deploying a demo that needs Temporal credentials or custom secrets,
@@ -176,9 +176,9 @@ create the required secret values. The operator verifies these paths in
 `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`:
 
 ```text
-tmprl-cloud-demo/platform/temporal-cloud-bootstrap
-tmprl-cloud-demo/<project-name>/temporal
-tmprl-cloud-demo/<project-name>/<custom-secret-name>
+tmprl-dem-cld/platform/temporal-cloud-bootstrap
+tmprl-dem-cld/<project-name>/temporal
+tmprl-dem-cld/<project-name>/<custom-secret-name>
 ```
 
 The platform bootstrap secret must contain:
@@ -231,7 +231,7 @@ Deployments/Services/routes until the required AWS secret values verify.
 For Agent Harness, the custom secret path is:
 
 ```text
-tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
+tmprl-dem-cld/temporal-agent-harness/anthropic-credentials
 ```
 
 The project config declares `ANTHROPIC_API_KEY` as a required JSON property for
@@ -246,7 +246,7 @@ auth-protected demos:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/platform/shared-auth \
+  --name tmprl-dem-cld/platform/shared-auth \
   --secret-string '{
     "GOOGLE_CLIENT_ID": "<google-oauth-client-id>",
     "GOOGLE_CLIENT_SECRET": "<google-oauth-client-secret>",
@@ -279,10 +279,10 @@ aws ecr get-login-password --region "$AWS_REGION" \
 
 docker build \
   -f registry/worker/Dockerfile \
-  -t "$ECR_BASE/tmprl-cloud-demo/demo-registry/worker:$GIT_SHA" \
+  -t "$ECR_BASE/tmprl-dem-cld/registry/worker:$GIT_SHA" \
   .
 
-docker push "$ECR_BASE/tmprl-cloud-demo/demo-registry/worker:$GIT_SHA"
+docker push "$ECR_BASE/tmprl-dem-cld/registry/worker:$GIT_SHA"
 ```
 
 Edit `clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml` and
@@ -356,7 +356,7 @@ ecr:PutImage
 ecr:DescribeRepositories
 ```
 
-scoped to the project/build repositories under `tmprl-cloud-demo/*`, plus read
+scoped to the project/build repositories under `tmprl-dem-cld/*`, plus read
 access to the `temporal-sa` source repositories through the configured
 CodeBuild source connection.
 
@@ -373,9 +373,9 @@ For `dejavu-tacos`, the build worker needs read access to
 `temporal-sa/demo-dejavu-tacos` and push access only to:
 
 ```text
-tmprl-cloud-demo/dejavu-tacos/frontend
-tmprl-cloud-demo/dejavu-tacos/backend
-tmprl-cloud-demo/dejavu-tacos/worker-python
+tmprl-dem-cld/dejavu-tacos/frontend
+tmprl-dem-cld/dejavu-tacos/backend
+tmprl-dem-cld/dejavu-tacos/worker-python
 ```
 
 Set these environment variables on the build-capable worker:
@@ -455,13 +455,13 @@ cd /tmp/demo-dejavu-tacos
 export SOURCE_SHA=$(git rev-parse --short=12 HEAD)
 export ECR_BASE="<aws-account-id>.dkr.ecr.<aws-region>.amazonaws.com"
 
-docker build -f docker/frontend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA" .
-docker build -f docker/backend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA" .
-docker build -f docker/worker-python.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA" .
+docker build -f docker/frontend.Dockerfile -t "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/frontend:git-$SOURCE_SHA" .
+docker build -f docker/backend.Dockerfile -t "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/backend:git-$SOURCE_SHA" .
+docker build -f docker/worker-python.Dockerfile -t "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/worker-python:git-$SOURCE_SHA" .
 
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA"
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA"
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/frontend:git-$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/backend:git-$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-dem-cld/dejavu-tacos/worker-python:git-$SOURCE_SHA"
 ```
 
 Manually create the project Temporal credential until provider automation is
@@ -470,7 +470,7 @@ implemented:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/dejavu-tacos/temporal \
+  --name tmprl-dem-cld/dejavu-tacos/temporal \
   --secret-string '{
     "address": "<region>.<cloud-provider>.api.temporal.io:7233",
     "namespace": "dejavu-tacos.<temporal-account-id>",
@@ -488,7 +488,7 @@ kubectl annotate demoproject dejavu-tacos \
   --overwrite
 
 kubectl annotate demoproject dejavu-tacos \
-  "registry.tmprl-demo.cloud/image-overrides={\"frontend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA\",\"backend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA\",\"worker-python\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA\"}" \
+  "registry.tmprl-demo.cloud/image-overrides={\"frontend\":\"$ECR_BASE/tmprl-dem-cld/dejavu-tacos/frontend:git-$SOURCE_SHA\",\"backend\":\"$ECR_BASE/tmprl-dem-cld/dejavu-tacos/backend:git-$SOURCE_SHA\",\"worker-python\":\"$ECR_BASE/tmprl-dem-cld/dejavu-tacos/worker-python:git-$SOURCE_SHA\"}" \
   --overwrite
 ```
 
@@ -496,7 +496,7 @@ Watch the operator:
 
 ```sh
 kubectl get demoproject dejavu-tacos -o yaml
-kubectl -n tmprl-cloud-demo-dejavu-tacos get deploy,svc,externalsecret,ingressroute
+kubectl -n tmprl-dem-cld-dejavu-tacos get deploy,svc,externalsecret,ingressroute
 kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
   -o jsonpath='{.data.dejavu-tacos\.json}'
 ```
@@ -523,7 +523,7 @@ value above, the backend candidate Service is named
 `backend-git-$SOURCE_SHA`:
 
 ```text
-http://backend-git-$SOURCE_SHA.tmprl-cloud-demo-dejavu-tacos.svc.cluster.local:8000/api/health
+http://backend-git-$SOURCE_SHA.tmprl-dem-cld-dejavu-tacos.svc.cluster.local:8000/api/health
 ```
 
 Only after that returns HTTP 200 does the promotion activity apply the Traefik
@@ -552,7 +552,7 @@ Use Agent Harness to prove the single-image/multiple-component path and, if the
 namespace does not exist yet, namespace creation from zero:
 
 ```sh
-kubectl get namespace tmprl-cloud-demo-temporal-agent-harness
+kubectl get namespace tmprl-dem-cld-temporal-agent-harness
 ```
 
 If that returns `NotFound`, do not create it manually; let the operator create
@@ -563,7 +563,7 @@ The project has one build consumed by web, API, and worker components:
 ```text
 source repo: https://github.com/temporal-sa/temporal-agent-harness-example
 dockerfile: simple_chat_agent/Dockerfile
-ECR repository: tmprl-cloud-demo/temporal-agent-harness/app
+ECR repository: tmprl-dem-cld/temporal-agent-harness/app
 ```
 
 Create the project Temporal credential:
@@ -571,7 +571,7 @@ Create the project Temporal credential:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/temporal-agent-harness/temporal \
+  --name tmprl-dem-cld/temporal-agent-harness/temporal \
   --secret-string '{
     "address": "<region>.<cloud-provider>.api.temporal.io:7233",
     "namespace": "temporal-agent-harness.<temporal-account-id>",
@@ -585,7 +585,7 @@ Create the Agent Harness custom secret:
 ```sh
 aws secretsmanager create-secret \
   --region <aws-region> \
-  --name tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials \
+  --name tmprl-dem-cld/temporal-agent-harness/anthropic-credentials \
   --secret-string '{
     "ANTHROPIC_API_KEY": "<anthropic-api-key>"
   }'
@@ -618,7 +618,7 @@ Watch both status surfaces:
 
 ```sh
 kubectl get demoproject temporal-agent-harness -o yaml
-kubectl -n tmprl-cloud-demo-temporal-agent-harness get deploy,svc,externalsecret,ingressroute
+kubectl -n tmprl-dem-cld-temporal-agent-harness get deploy,svc,externalsecret,ingressroute
 kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
   -o jsonpath='{.data.temporal-agent-harness\.json}'
 ```
@@ -636,12 +636,12 @@ These are intentional gaps for the first deployment test:
 - Temporal Cloud Namespace/API key lifecycle is manual. Do not automate delete
   or rotation until the provider contract is reviewed.
 - Project Temporal credentials are written manually to
-  `tmprl-cloud-demo/<project>/temporal`.
+  `tmprl-dem-cld/<project>/temporal`.
 - Shared auth service deployment is not implemented here; the Traefik
   middleware path is fixed so the service can be added later.
 - `demo-registry` web image is buildable from `registry/web/Dockerfile`.
   The updated worker mirrors catalog status into
-  `tmprl-cloud-demo-demo-registry/demo-registry-catalog-status`, and the
+  `tmprl-dem-cld-registry/demo-registry-catalog-status`, and the
   generated web Deployment mounts it at `/app/status`. Until those updated
   images are rolled out, inspect live lifecycle state with the `kubectl`
   commands above.

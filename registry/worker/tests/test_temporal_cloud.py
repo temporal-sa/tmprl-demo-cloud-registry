@@ -20,7 +20,7 @@ PROJECT = {
         },
     },
 }
-RUNTIME_PATH = "tmprl-cloud-demo/demo-banking-app-money-transfer/temporal"
+RUNTIME_PATH = "tmprl-dem-cld/demo-banking-app-money-transfer/temporal"
 
 
 class FakeReconciler:

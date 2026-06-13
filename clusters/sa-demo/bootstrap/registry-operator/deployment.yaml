@@ -21,7 +21,7 @@ spec:
       serviceAccountName: demo-registry-operator
       containers:
         - name: worker
-          image: registry.invalid/tmprl-cloud-demo/demo-registry/worker:bootstrap
+          image: registry.invalid/tmprl-dem-cld/registry/worker:bootstrap
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

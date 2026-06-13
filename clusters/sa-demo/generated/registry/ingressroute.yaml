@@ -2,12 +2,12 @@
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRoute
 metadata:
-  name: demo-registry
-  namespace: tmprl-cloud-demo-demo-registry
+  name: registry
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
   annotations:
     platform.temporal.io/host: registry.tmprl-demo.cloud
     platform.temporal.io/temporal-auth-required: 'true'
@@ -20,24 +20,24 @@ spec:
     priority: 1000
     services:
     - name: web
-      namespace: tmprl-cloud-demo-demo-registry
+      namespace: tmprl-dem-cld-registry
       passHostHeader: true
       port: 80
     middlewares:
     - name: temporal-auth-required
-      namespace: tmprl-cloud-demo-demo-registry
+      namespace: tmprl-dem-cld-registry
   tls:
-    secretName: demo-registry-tls
+    secretName: registry-tls
 ---
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRoute
 metadata:
-  name: demo-registry-http
-  namespace: tmprl-cloud-demo-demo-registry
+  name: registry-http
+  namespace: tmprl-dem-cld-registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
   annotations:
     platform.temporal.io/host: registry.tmprl-demo.cloud
     platform.temporal.io/temporal-auth-required: 'true'
@@ -50,9 +50,9 @@ spec:
     priority: 1000
     services:
     - name: web
-      namespace: tmprl-cloud-demo-demo-registry
+      namespace: tmprl-dem-cld-registry
       passHostHeader: true
       port: 80
     middlewares:
     - name: temporal-auth-required
-      namespace: tmprl-cloud-demo-demo-registry
+      namespace: tmprl-dem-cld-registry

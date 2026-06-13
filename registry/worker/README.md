@@ -109,7 +109,7 @@ Environment variables:
   `AWS_DEFAULT_REGION`, then `us-west-1`
 - `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH`, default
-  `tmprl-cloud-demo/platform/temporal-cloud-bootstrap`
+  `tmprl-dem-cld/platform/temporal-cloud-bootstrap`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID`, optional status metadata; falls
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
@@ -123,7 +123,7 @@ Environment variables:
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
   `demo-registry-catalog-status`
 - `DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE`, default
-  `tmprl-cloud-demo-demo-registry`
+  `tmprl-dem-cld-registry`
 
 `local-docker` build mode requires `git`, `docker`, network read access to the
 project source repo, Docker daemon access, and ECR push credentials scoped to
@@ -132,7 +132,7 @@ operator pod unless those permissions are intentionally isolated.
 
 `aws-codebuild` mode requires a pre-created CodeBuild project whose service
 role has read access to the `temporal-sa` source repositories and push access
-only to `tmprl-cloud-demo/<project>/<build>` ECR repositories. The registry
+only to `tmprl-dem-cld/<project>/<build>` ECR repositories. The registry
 operator role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds`
 for that project plus read/create/verify permissions for the ECR repositories
 it passes to the build.
@@ -173,15 +173,15 @@ As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:
 
 ```sh
-kubectl annotate demoproject demo-registry \
-  'registry.tmprl-demo.cloud/image-overrides={"web":"<account>.dkr.ecr.<region>.amazonaws.com/tmprl-cloud-demo/demo-registry/web:<sha>","worker":"<account>.dkr.ecr.<region>.amazonaws.com/tmprl-cloud-demo/demo-registry/worker:<sha>"}' \
+kubectl annotate demoproject registry \
+  'registry.tmprl-demo.cloud/image-overrides={"web":"<account>.dkr.ecr.<region>.amazonaws.com/tmprl-dem-cld/registry/web:<sha>","worker":"<account>.dkr.ecr.<region>.amazonaws.com/tmprl-dem-cld/registry/worker:<sha>"}' \
   --overwrite
 ```
 
 Optionally record the source revision that produced those images:
 
 ```sh
-kubectl annotate demoproject demo-registry \
+kubectl annotate demoproject registry \
   registry.tmprl-demo.cloud/source-commit-sha=<git-sha> \
   --overwrite
 ```

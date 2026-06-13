@@ -28,7 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCHEMA = ROOT / "schemas" / "project.schema.json"
 DEFAULT_PROJECT_GLOB = "projects/*.yaml"
 DOMAIN = "tmprl-demo.cloud"
-NAMESPACE_PREFIX = "tmprl-cloud-demo-"
+NAMESPACE_PREFIX = "tmprl-dem-cld-"
+TEMPORAL_NAMESPACE_PREFIX = "tmprl-dem-cld-"
+# Temporal Cloud namespace names (before the account suffix) cap at 39 chars.
+TEMPORAL_NAMESPACE_MAX_LENGTH = 39
 TEMPORAL_SA_REPO_PATH = re.compile(r"^/temporal-sa/[A-Za-z0-9_.-]+/?$")
 
 
@@ -590,12 +593,22 @@ def effective_service_name(component_name: str, component: dict[str, Any]) -> st
 
 
 def derive_namespace(project_name: str) -> str:
-    raw = f"{NAMESPACE_PREFIX}{project_name}"
-    if len(raw) <= 63:
+    return _prefixed_truncated(NAMESPACE_PREFIX, project_name, 63)
+
+
+def derive_temporal_namespace(project_name: str) -> str:
+    return _prefixed_truncated(
+        TEMPORAL_NAMESPACE_PREFIX, project_name, TEMPORAL_NAMESPACE_MAX_LENGTH
+    )
+
+
+def _prefixed_truncated(prefix: str, project_name: str, limit: int) -> str:
+    raw = f"{prefix}{project_name}"
+    if len(raw) <= limit:
         return raw
 
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
-    stem = raw[: 63 - len(digest) - 1].rstrip("-")
+    stem = raw[: limit - len(digest) - 1].rstrip("-")
     return f"{stem}-{digest}"
 
 

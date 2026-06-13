@@ -750,7 +750,7 @@ def repository_name_for_build(
     if isinstance(repository, dict) and isinstance(repository.get("name"), str):
         return repository["name"]
     derived = spec_of(demo_project).get("derived", {})
-    prefix = "tmprl-cloud-demo"
+    prefix = "tmprl-dem-cld"
     if isinstance(derived, dict) and isinstance(derived.get("imageRepositoryPrefix"), str):
         prefix = derived["imageRepositoryPrefix"]
     return f"{prefix}/{project_name(demo_project)}/{build_name}"

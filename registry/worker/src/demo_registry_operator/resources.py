@@ -15,9 +15,9 @@ CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 CATALOG_STATUS_MOUNT_PATH = "/app/status"
 CATALOG_STATUS_VOLUME_NAME = "catalog-status"
-REGISTRY_PROJECT_NAME = "demo-registry"
+REGISTRY_PROJECT_NAME = "registry"
 REGISTRY_WEB_COMPONENT_NAME = "web"
-TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
     "TEMPORAL_CLOUD_ACCOUNT_ID",
@@ -45,7 +45,7 @@ def project_namespace(demo_project: dict[str, Any]) -> str:
     derived = spec.get("derived", {})
     if isinstance(derived, dict) and isinstance(derived.get("kubernetesNamespace"), str):
         return derived["kubernetesNamespace"]
-    return f"tmprl-cloud-demo-{project_name(demo_project)}"
+    return f"tmprl-dem-cld-{project_name(demo_project)}"
 
 
 def project_host(demo_project: dict[str, Any]) -> str:
@@ -66,7 +66,7 @@ def project_secret_prefix(demo_project: dict[str, Any]) -> str:
     derived = spec.get("derived", {})
     if isinstance(derived, dict) and isinstance(derived.get("secretPrefix"), str):
         return derived["secretPrefix"]
-    return f"tmprl-cloud-demo/{project_name(demo_project)}"
+    return f"tmprl-dem-cld/{project_name(demo_project)}"
 
 
 def spec_of(demo_project: dict[str, Any]) -> dict[str, Any]:
@@ -1089,7 +1089,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
         "ecr": {
             "phase": "ManualSetupRequired",
             "repositories": [
-                f"tmprl-cloud-demo/{project_name(demo_project)}/{build_name}"
+                f"tmprl-dem-cld/{project_name(demo_project)}/{build_name}"
                 for build_name in build_names
             ],
         },

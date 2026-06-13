@@ -2,13 +2,13 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  name: demo-registry
+  name: registry
   labels:
-    app.kubernetes.io/name: demo-registry
+    app.kubernetes.io/name: registry
     app.kubernetes.io/managed-by: demo-registry
-    platform.temporal.io/project: demo-registry
+    platform.temporal.io/project: registry
   annotations:
-    platform.temporal.io/source: projects/demo-registry.yaml
+    platform.temporal.io/source: projects/registry.yaml
     platform.temporal.io/review-artifact: 'true'
 spec:
   source:
@@ -58,10 +58,10 @@ spec:
       port: http
   derived:
     host: registry.tmprl-demo.cloud
-    kubernetesNamespace: tmprl-cloud-demo-demo-registry
-    temporalNamespace: demo-registry
-    secretPrefix: tmprl-cloud-demo/demo-registry
-    imageRepositoryPrefix: tmprl-cloud-demo
+    kubernetesNamespace: tmprl-dem-cld-registry
+    temporalNamespace: tmprl-dem-cld-registry
+    secretPrefix: tmprl-dem-cld/registry
+    imageRepositoryPrefix: tmprl-dem-cld
   smokeCheck:
     path: /health
     expectedStatus: 200

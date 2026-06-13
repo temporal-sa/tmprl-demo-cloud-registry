@@ -10,7 +10,7 @@ Rules:
 
 - `source.repo` must be in the `temporal-sa` GitHub organization.
 - `metadata.name` is the project identity. The platform derives the Kubernetes
-  namespace as `tmprl-cloud-demo-<metadata.name>`.
+  namespace as `tmprl-dem-cld-<metadata.name>`.
 - `registry` controls how the project appears on the demo landing page.
   App UI, Temporal Cloud namespace, and source repository links should be
   platform-derived where possible; use registry assets for runbooks, speaker
@@ -43,7 +43,7 @@ Rules:
   `TEMPORAL_TLS`.
 - User-managed secrets must be declared under top-level `secrets` and then
   referenced by components. The platform derives the AWS Secrets Manager path
-  as `tmprl-cloud-demo/<metadata.name>/<secret-name>`.
+  as `tmprl-dem-cld/<metadata.name>/<secret-name>`.
 - Components receive user-managed secrets only when they list the secret name in
   `components.<name>.secrets`. Every JSON key in the AWS secret is injected as
   an environment variable, so keep each secret narrow and use env-var-shaped
@@ -70,7 +70,7 @@ components:
 Before deployment, create this AWS Secrets Manager secret:
 
 ```text
-tmprl-cloud-demo/<metadata.name>/anthropic-credentials
+tmprl-dem-cld/<metadata.name>/anthropic-credentials
 ```
 
 with JSON keys that should become environment variables:
@@ -88,7 +88,7 @@ malformed required keys under
 The platform IAM role for the project should be scoped to only:
 
 ```text
-tmprl-cloud-demo/<metadata.name>/*
+tmprl-dem-cld/<metadata.name>/*
 ```
 
 so it cannot read or mutate secrets for other demos.

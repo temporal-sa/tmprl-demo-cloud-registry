@@ -41,52 +41,13 @@
       "builds": [
         {
           "components": [
-            "backend"
-          ],
-          "context": ".",
-          "dockerfile": "docker/backend.Dockerfile",
-          "name": "backend",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/backend",
-          "repositoryName": "tmprl-cloud-demo/dejavu-tacos/backend"
-        },
-        {
-          "components": [
-            "frontend"
-          ],
-          "context": ".",
-          "dockerfile": "docker/frontend.Dockerfile",
-          "name": "frontend",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/frontend",
-          "repositoryName": "tmprl-cloud-demo/dejavu-tacos/frontend"
-        },
-        {
-          "components": [
-            "worker-python"
-          ],
-          "context": ".",
-          "dockerfile": "docker/worker-python.Dockerfile",
-          "name": "worker-python",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/worker-python",
-          "repositoryName": "tmprl-cloud-demo/dejavu-tacos/worker-python"
-        }
-      ],
-      "name": "dejavu-tacos",
-      "source": {
-        "branch": "main",
-        "repo": "https://github.com/temporal-sa/demo-dejavu-tacos"
-      }
-    },
-    {
-      "builds": [
-        {
-          "components": [
             "web"
           ],
           "context": ".",
           "dockerfile": "registry/web/Dockerfile",
           "name": "web",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/demo-registry/web",
-          "repositoryName": "tmprl-cloud-demo/demo-registry/web"
+          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/web",
+          "repositoryName": "tmprl-dem-cld/registry/web"
         },
         {
           "components": [
@@ -95,35 +56,14 @@
           "context": ".",
           "dockerfile": "registry/worker/Dockerfile",
           "name": "worker",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/demo-registry/worker",
-          "repositoryName": "tmprl-cloud-demo/demo-registry/worker"
+          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/worker",
+          "repositoryName": "tmprl-dem-cld/registry/worker"
         }
       ],
-      "name": "demo-registry",
+      "name": "registry",
       "source": {
         "branch": "main",
         "repo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry"
-      }
-    },
-    {
-      "builds": [
-        {
-          "components": [
-            "api",
-            "web",
-            "worker"
-          ],
-          "context": ".",
-          "dockerfile": "simple_chat_agent/Dockerfile",
-          "name": "app",
-          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/temporal-agent-harness/app",
-          "repositoryName": "tmprl-cloud-demo/temporal-agent-harness/app"
-        }
-      ],
-      "name": "temporal-agent-harness",
-      "source": {
-        "branch": "main",
-        "repo": "https://github.com/temporal-sa/temporal-agent-harness-example"
       }
     }
   ],
@@ -148,12 +88,8 @@
         ],
         "Effect": "Allow",
         "Resource": [
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/backend",
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/frontend",
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/dejavu-tacos/worker-python",
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/demo-registry/web",
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/demo-registry/worker",
-          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-cloud-demo/temporal-agent-harness/app"
+          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/web",
+          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/worker"
         ]
       },
       {
@@ -173,8 +109,6 @@
   "sourceAccess": {
     "description": "Configure CodeBuild GitHub source credentials or a CodeBuild GitHub connection with read access to these temporal-sa repos.",
     "repositories": [
-      "https://github.com/temporal-sa/demo-dejavu-tacos",
-      "https://github.com/temporal-sa/temporal-agent-harness-example",
       "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry"
     ],
     "required": true

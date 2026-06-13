@@ -43,7 +43,7 @@ messages and no mention of the agent/tool that made them.
     routing after smoke check, but it did not yet build images or create
     external resources itself.
   - Deja Vu did not prove namespace creation from zero during the Flux/operator
-    run because `tmprl-cloud-demo-dejavu-tacos` already existed from an earlier
+    run because `tmprl-dem-cld-dejavu-tacos` already existed from an earlier
     manual registry test. The old manual namespace `temporal-dejavu-tacos` has
     been deleted.
   - `DemoProject/demo-registry` and `DemoProject/temporal-agent-harness` are
@@ -55,7 +55,7 @@ Read these files first:
 - `docs/project-plan.md`
 - `README.md`
 - `projects/README.md`
-- `projects/demo-registry.yaml`
+- `projects/registry.yaml`
 - `projects/dejavu-tacos.yaml`
 - `projects/temporal-agent-harness.yaml`
 - `scripts/validate_projects.py`
@@ -164,7 +164,7 @@ Instructions must say:
 
 ```text
 AWS Secrets Manager:
-tmprl-cloud-demo/platform/temporal-cloud-bootstrap
+tmprl-dem-cld/platform/temporal-cloud-bootstrap
 ```
 
 Suggested JSON shape:
@@ -187,8 +187,8 @@ Document the AWS region/account assumptions and required setup:
 - EKS cluster name and context.
 - OIDC provider/IRSA enabled for the cluster.
 - IAM role for registry/operator with narrow permissions for:
-  - ECR repo create/read/write for `tmprl-cloud-demo/*`;
-  - Secrets Manager read/write only under `tmprl-cloud-demo/*`;
+  - ECR repo create/read/write for `tmprl-dem-cld/*`;
+  - Secrets Manager read/write only under `tmprl-dem-cld/*`;
   - reading the platform bootstrap secret path;
   - whatever Kubernetes access is required via service account/RBAC.
 - External Secrets Operator installed or bootstrap instructions to install it.
@@ -338,7 +338,7 @@ Skill requirements:
   required path:
 
 ```text
-tmprl-cloud-demo/<project-name>/<secret-name>
+tmprl-dem-cld/<project-name>/<secret-name>
 ```
 
 - Explain the JSON key-to-environment-variable mapping for custom secrets.
