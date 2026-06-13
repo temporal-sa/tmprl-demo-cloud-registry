@@ -598,5 +598,7 @@ These are intentional gaps for the first deployment test:
   `tmprl-cloud-demo/<project>/temporal`.
 - Shared auth service deployment is not implemented here; the Traefik
   middleware path is fixed so the service can be added later.
-- `demo-registry` web deployment is not the first test target because
-  `registry/web/Dockerfile` is not present yet.
+- `demo-registry` web image is now buildable from `registry/web/Dockerfile`.
+  Live registry status still needs a generated mount or API bridge for
+  `demo-registry-system/demo-registry-catalog-status`; until then, inspect
+  live lifecycle state with the `kubectl` commands above.
