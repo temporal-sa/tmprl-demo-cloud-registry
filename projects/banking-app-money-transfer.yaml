@@ -1,6 +1,15 @@
 metadata:
   name: banking-app-money-transfer
 
+registry:
+  title: Banking App - Money Transfer
+  summary: Demo of a money transfer process, using a simulated banking application that highlights the code as it is executed
+  tags:
+    - Banking
+    - Money Transfer
+  temporalSdks:
+    - Python
+
 source:
   repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
   branch: main
