@@ -388,6 +388,25 @@ DEMO_REGISTRY_AWS_REGION=<aws-region>
 DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 ```
 
+The GitOps-managed operator reads non-secret runtime settings from the
+`configMapGenerator` in
+`clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml`. Keep the
+committed defaults at `plan` until the CodeBuild project, operator IAM policy,
+AWS account/region, and required secret values are ready. To run a reviewed
+full rollout test, update that generator with:
+
+```yaml
+DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
+DEMO_REGISTRY_BUILD_MODE=aws-codebuild
+DEMO_REGISTRY_CODEBUILD_PROJECT=<codebuild-project-name>
+DEMO_REGISTRY_AWS_REGION=<aws-region>
+DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
+```
+
+Kustomize gives the generated ConfigMap a content hash and rewrites the
+Deployment reference, so a committed config change rolls the operator pod
+through Flux.
+
 For a temporary live test, patch the operator Deployment and let the restarted
 watch loop signal every `DemoProject` again:
 
@@ -403,8 +422,8 @@ kubectl -n demo-registry-system rollout status deploy/demo-registry-operator
 ```
 
 For the GitOps-managed path, make the same environment change in
-`clusters/sa-demo/bootstrap/registry-operator/deployment.yaml`, commit it, and
-let Flux reconcile the Deployment. In `aws-codebuild` mode, do not add
+`clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml`, commit it,
+and let Flux reconcile the Deployment. In `aws-codebuild` mode, do not add
 `registry.tmprl-demo.cloud/image-overrides`; the workflow starts CodeBuild,
 records `DemoProject.status.buildStatus.codebuild` with the build ID/logs, and
 uses `DemoProject.status.buildStatus.images` for the candidate rollout and
@@ -604,8 +623,9 @@ kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
 These are intentional gaps for the first deployment test:
 
 - ECR repositories can be created/verified by opt-in
-  `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, or created manually while testing
-  in `plan` mode.
+  `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, enabled through the bootstrap
+  operator config generator after IAM is ready, or created manually while
+  testing in `plan` mode.
 - Image builds can be run by opt-in `aws-codebuild`, by trusted
   `local-docker`, or manually via immutable image annotations.
 - Temporal Cloud Namespace/API key lifecycle is manual. Do not automate delete

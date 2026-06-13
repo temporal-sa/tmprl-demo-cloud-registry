@@ -391,6 +391,10 @@ Initial generated resources:
 - generated `codebuild-setup-plan.json` with shared CodeBuild project shape,
   operator IAM permissions, CodeBuild service-role permissions, source repo
   access, and project/build repository ARN templates
+- bootstrap registry-operator `configMapGenerator` for reviewed non-secret
+  mode changes; the defaults keep external-resource and build mutation in
+  `plan`, while a committed config change can roll the worker into
+  `aws-codebuild` testing after IAM and CodeBuild setup are ready
 - generated `external-resources-plan.json` with ECR, Temporal Cloud,
   AWS Secrets Manager, bootstrap credential, runtime secret property, and scoped
   IAM intent

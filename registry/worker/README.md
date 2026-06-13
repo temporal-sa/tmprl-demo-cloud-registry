@@ -24,9 +24,9 @@ default `plan` mode it records expected ECR repositories, Secrets Manager
 paths, and Temporal Cloud resources in `DemoProject.status.externalResources`
 without mutating cloud providers. In `aws` mode it creates or verifies missing
 ECR repositories and verifies required Secrets Manager paths plus JSON property
-names for platform-managed Temporal credentials. Secret values and Temporal
-Cloud namespace/API key lifecycle remain manual until those provider contracts
-are implemented.
+names for platform-managed Temporal credentials and declared project-owned
+secret requirements. Secret values and Temporal Cloud namespace/API key
+lifecycle remain manual until those provider contracts are implemented.
 `DemoProject.status.externalResources.temporalCloud.tcldCommandPlan` records
 the verified `tcld` namespace, scoped service-account, and API-key command
 sequence needed for the manual step.
@@ -126,6 +126,12 @@ only to `tmprl-cloud-demo/<project>/<build>` ECR repositories. The registry
 operator role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds`
 for that project plus read/create/verify permissions for the ECR repositories
 it passes to the build.
+
+On `sa-demo`, non-secret runtime settings for the bootstrapped operator live in
+`clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml` as a
+Kustomize `configMapGenerator`. Keep the committed defaults in `plan` until the
+AWS/CodeBuild setup is ready; changing that generator to `aws-codebuild` rolls
+the operator through Flux because the generated ConfigMap name changes.
 
 As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:

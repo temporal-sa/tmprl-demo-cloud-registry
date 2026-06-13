@@ -24,35 +24,12 @@ spec:
           image: registry.invalid/tmprl-cloud-demo/demo-registry/worker:bootstrap
           imagePullPolicy: IfNotPresent
           envFrom:
+            - configMapRef:
+                name: demo-registry-operator-config
             - secretRef:
                 name: registry-worker-temporal
             - secretRef:
                 name: temporal-cloud-bootstrap
-          env:
-            - name: DEMO_REGISTRY_TASK_QUEUE
-              value: demo-registry-management
-            - name: DEMO_REGISTRY_WATCH_ENABLED
-              value: "true"
-            - name: DEMO_REGISTRY_WATCH_INTERVAL_SECONDS
-              value: "15"
-            - name: DEMO_REGISTRY_RECONCILE_MODE
-              value: apply
-            - name: DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE
-              value: plan
-            - name: DEMO_REGISTRY_BUILD_MODE
-              value: plan
-            - name: DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS
-              value: "300"
-            - name: DEMO_REGISTRY_READINESS_POLL_SECONDS
-              value: "5"
-            - name: DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE
-              value: demo-registry-system
-            - name: DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP
-              value: demo-registry-catalog-status
-            - name: DEMO_REGISTRY_CATALOG_STATUS_MIRROR_NAMESPACE
-              value: tmprl-cloud-demo-demo-registry
-            - name: DEMO_REGISTRY_ACTIVITY_WORKERS
-              value: "20"
           resources:
             requests:
               cpu: 100m
