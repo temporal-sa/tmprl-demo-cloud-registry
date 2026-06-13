@@ -1,0 +1,49 @@
+{
+  "baseDomain": "tmprl-demo.cloud",
+  "projects": [
+    {
+      "appUrl": "https://registry.tmprl-demo.cloud",
+      "assets": {},
+      "authRequired": true,
+      "catalogStatus": {
+        "configMap": {
+          "key": "registry.json",
+          "name": "registry-catalog-status",
+          "namespace": "tmprl-dem-cld-registry-operator"
+        },
+        "demoProject": "registry",
+        "fields": [
+          "phase",
+          "message",
+          "kubernetesNamespaceStatus",
+          "externalResources",
+          "externalResourceBlock",
+          "externalSecrets",
+          "build",
+          "candidate",
+          "readiness",
+          "smokeCheck",
+          "activeImageVersion",
+          "lastError"
+        ],
+        "source": "DemoProject.status"
+      },
+      "host": "registry.tmprl-demo.cloud",
+      "links": {},
+      "name": "registry",
+      "sourceRepo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry",
+      "summary": "Landing page for Temporal demo projects, generated from reviewed project configs and backed by platform workflows for demo environment management.",
+      "tags": [
+        "Registry",
+        "Platform",
+        "Demo Management",
+        "Temporal Cloud"
+      ],
+      "temporalNamespace": "tmprl-dem-cld-registry",
+      "temporalSdks": [
+        "Python"
+      ],
+      "title": "Demo Cloud Registry"
+    }
+  ]
+}

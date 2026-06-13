@@ -1,0 +1,116 @@
+{
+  "apiVersion": "tmprl-demo.cloud/v1alpha1",
+  "codeBuildProject": {
+    "computeType": "BUILD_GENERAL1_SMALL",
+    "description": "Shared tmprl-demo.cloud build runner. The registry operator uses StartBuild source/buildspec overrides for each DemoProject.",
+    "image": "aws/codebuild/standard:7.0",
+    "name": "<codebuild-project-name>",
+    "privilegedMode": true,
+    "source": {
+      "buildspec": "<placeholder-overridden-by-operator>",
+      "gitCloneDepth": 1,
+      "location": "<placeholder-overridden-by-operator>",
+      "type": "GITHUB"
+    },
+    "type": "LINUX_CONTAINER"
+  },
+  "kind": "CodeBuildSetupPlan",
+  "mode": "manual-bootstrap",
+  "operatorEnvironment": {
+    "DEMO_REGISTRY_AWS_ACCOUNT_ID": "<aws-account-id>",
+    "DEMO_REGISTRY_AWS_REGION": "<aws-region>",
+    "DEMO_REGISTRY_BUILD_MODE": "aws-codebuild",
+    "DEMO_REGISTRY_CODEBUILD_PROJECT": "<codebuild-project-name>",
+    "DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE": "aws"
+  },
+  "operatorIamPolicy": {
+    "description": "Attach to the registry operator role.",
+    "statements": [
+      {
+        "Action": [
+          "codebuild:StartBuild",
+          "codebuild:BatchGetBuilds"
+        ],
+        "Effect": "Allow",
+        "Resource": "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/<codebuild-project-name>"
+      }
+    ]
+  },
+  "projects": [
+    {
+      "builds": [
+        {
+          "components": [
+            "web"
+          ],
+          "context": ".",
+          "dockerfile": "registry/web/Dockerfile",
+          "name": "web",
+          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/web",
+          "repositoryName": "tmprl-dem-cld/registry/web"
+        },
+        {
+          "components": [
+            "worker"
+          ],
+          "context": ".",
+          "dockerfile": "registry/worker/Dockerfile",
+          "name": "worker",
+          "repositoryArn": "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/worker",
+          "repositoryName": "tmprl-dem-cld/registry/worker"
+        }
+      ],
+      "name": "registry",
+      "source": {
+        "branch": "main",
+        "repo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry"
+      }
+    }
+  ],
+  "serviceRolePolicy": {
+    "description": "Attach to the CodeBuild service role.",
+    "statements": [
+      {
+        "Action": [
+          "ecr:GetAuthorizationToken"
+        ],
+        "Effect": "Allow",
+        "Resource": "*"
+      },
+      {
+        "Action": [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:CompleteLayerUpload",
+          "ecr:DescribeRepositories",
+          "ecr:InitiateLayerUpload",
+          "ecr:PutImage",
+          "ecr:UploadLayerPart"
+        ],
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/web",
+          "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/tmprl-dem-cld/registry/worker"
+        ]
+      },
+      {
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/*",
+          "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/*:log-stream:*"
+        ]
+      }
+    ]
+  },
+  "sourceAccess": {
+    "description": "Configure CodeBuild GitHub source credentials or a CodeBuild GitHub connection with read access to these temporal-sa repos.",
+    "repositories": [
+      "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry"
+    ],
+    "required": true
+  }
+}

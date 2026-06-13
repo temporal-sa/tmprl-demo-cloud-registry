@@ -1,0 +1,32 @@
+name: Validate project configs
+
+"on":
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-projects:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate project configs
+        run: python scripts/validate_projects.py
+
+      - name: Check generated output
+        run: python scripts/generate_projects.py --check

@@ -1,0 +1,328 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+DEMO_PROJECT_GROUP = "registry.tmprl-demo.cloud"
+DEMO_PROJECT_VERSION = "v1alpha1"
+DEMO_PROJECT_PLURAL = "demoprojects"
+
+CUSTOM_RESOURCE_PLURALS = {
+    ("cert-manager.io", "v1", "Certificate"): "certificates",
+    ("external-secrets.io", "v1", "ExternalSecret"): "externalsecrets",
+    ("traefik.containo.us", "v1alpha1", "IngressRoute"): "ingressroutes",
+    ("traefik.containo.us", "v1alpha1", "Middleware"): "middlewares",
+}
+
+
+def list_demo_projects() -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    response = api.list_cluster_custom_object(
+        group=DEMO_PROJECT_GROUP,
+        version=DEMO_PROJECT_VERSION,
+        plural=DEMO_PROJECT_PLURAL,
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def apply_resources(
+    resources: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    results = []
+    for resource in resources:
+        metadata = resource.get("metadata", {})
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        namespace = metadata.get("namespace") if isinstance(metadata, dict) else None
+        summary = {
+            "apiVersion": resource.get("apiVersion"),
+            "kind": resource.get("kind"),
+            "name": name,
+            "action": "planned" if dry_run else "applied",
+        }
+        if namespace:
+            summary["namespace"] = namespace
+        if not dry_run:
+            summary["action"] = apply_resource(resource)
+        results.append(summary)
+    return results
+
+
+def apply_resource(resource: dict[str, Any]) -> str:
+    client = _client_module()
+    load_kubernetes_config()
+    kind = resource.get("kind")
+    metadata = resource.get("metadata", {})
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("name"), str):
+        raise ValueError(f"{kind} resource is missing metadata.name")
+
+    name = metadata["name"]
+    namespace = metadata.get("namespace")
+
+    if kind == "Namespace":
+        core = client.CoreV1Api()
+        return _create_or_patch(
+            read=lambda: core.read_namespace(name),
+            create=lambda: core.create_namespace(resource),
+            patch=lambda: core.patch_namespace(name, resource),
+        )
+
+    if not isinstance(namespace, str):
+        raise ValueError(f"{kind} {name} is missing metadata.namespace")
+
+    if kind == "ServiceAccount":
+        core = client.CoreV1Api()
+        return _create_or_patch(
+            read=lambda: core.read_namespaced_service_account(name, namespace),
+            create=lambda: core.create_namespaced_service_account(namespace, resource),
+            patch=lambda: core.patch_namespaced_service_account(
+                name,
+                namespace,
+                resource,
+            ),
+        )
+
+    if kind == "ConfigMap":
+        core = client.CoreV1Api()
+        return _create_or_patch(
+            read=lambda: core.read_namespaced_config_map(name, namespace),
+            create=lambda: core.create_namespaced_config_map(namespace, resource),
+            patch=lambda: core.patch_namespaced_config_map(name, namespace, resource),
+        )
+
+    if kind == "Service":
+        core = client.CoreV1Api()
+        return _create_or_patch(
+            read=lambda: core.read_namespaced_service(name, namespace),
+            create=lambda: core.create_namespaced_service(namespace, resource),
+            patch=lambda: core.patch_namespaced_service(name, namespace, resource),
+        )
+
+    if kind == "Deployment":
+        apps = client.AppsV1Api()
+        return _create_or_patch(
+            read=lambda: apps.read_namespaced_deployment(name, namespace),
+            create=lambda: apps.create_namespaced_deployment(namespace, resource),
+            patch=lambda: apps.patch_namespaced_deployment(name, namespace, resource),
+        )
+
+    if kind == "Role":
+        rbac = client.RbacAuthorizationV1Api()
+        return _create_or_patch(
+            read=lambda: rbac.read_namespaced_role(name, namespace),
+            create=lambda: rbac.create_namespaced_role(namespace, resource),
+            patch=lambda: rbac.patch_namespaced_role(name, namespace, resource),
+        )
+
+    if kind == "RoleBinding":
+        rbac = client.RbacAuthorizationV1Api()
+        return _create_or_patch(
+            read=lambda: rbac.read_namespaced_role_binding(name, namespace),
+            create=lambda: rbac.create_namespaced_role_binding(namespace, resource),
+            patch=lambda: rbac.patch_namespaced_role_binding(
+                name,
+                namespace,
+                resource,
+            ),
+        )
+
+    if isinstance(resource.get("apiVersion"), str):
+        return apply_custom_resource(resource, name=name, namespace=namespace)
+
+    raise ValueError(f"Unsupported resource kind {kind!r}")
+
+
+def apply_custom_resource(
+    resource: dict[str, Any],
+    *,
+    name: str,
+    namespace: str,
+) -> str:
+    api_version = resource["apiVersion"]
+    if "/" not in api_version:
+        raise ValueError(f"Unsupported custom apiVersion {api_version!r}")
+
+    group, version = api_version.split("/", 1)
+    kind = resource.get("kind")
+    plural = CUSTOM_RESOURCE_PLURALS.get((group, version, str(kind)))
+    if not plural:
+        raise ValueError(f"Unsupported custom resource {api_version}/{kind}")
+
+    client = _client_module()
+    custom = client.CustomObjectsApi()
+    return _create_or_patch(
+        read=lambda: custom.get_namespaced_custom_object(
+            group,
+            version,
+            namespace,
+            plural,
+            name,
+        ),
+        create=lambda: custom.create_namespaced_custom_object(
+            group,
+            version,
+            namespace,
+            plural,
+            resource,
+        ),
+        patch=lambda: custom.patch_namespaced_custom_object(
+            group,
+            version,
+            namespace,
+            plural,
+            name,
+            resource,
+        ),
+    )
+
+
+def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
+    if dry_run:
+        return
+
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    api.patch_cluster_custom_object_status(
+        group=DEMO_PROJECT_GROUP,
+        version=DEMO_PROJECT_VERSION,
+        plural=DEMO_PROJECT_PLURAL,
+        name=name,
+        body={"status": status},
+    )
+
+
+def read_deployment_status(namespace: str, name: str) -> dict[str, Any]:
+    client = _client_module()
+    load_kubernetes_config()
+    deployment = client.AppsV1Api().read_namespaced_deployment(name, namespace)
+    metadata = getattr(deployment, "metadata", None)
+    spec = getattr(deployment, "spec", None)
+    status = getattr(deployment, "status", None)
+    return {
+        "name": name,
+        "namespace": namespace,
+        "generation": getattr(metadata, "generation", None),
+        "replicas": getattr(spec, "replicas", None),
+        "observedGeneration": getattr(status, "observed_generation", None),
+        "replicasStatus": getattr(status, "replicas", None),
+        "readyReplicas": getattr(status, "ready_replicas", None),
+        "availableReplicas": getattr(status, "available_replicas", None),
+        "updatedReplicas": getattr(status, "updated_replicas", None),
+        "conditions": deployment_conditions(status),
+    }
+
+
+def read_external_secret_status(namespace: str, name: str) -> dict[str, Any]:
+    client = _client_module()
+    load_kubernetes_config()
+    resource = client.CustomObjectsApi().get_namespaced_custom_object(
+        "external-secrets.io",
+        "v1",
+        namespace,
+        "externalsecrets",
+        name,
+    )
+    status = resource.get("status", {}) if isinstance(resource, dict) else {}
+    conditions = status.get("conditions", []) if isinstance(status, dict) else []
+    rendered_conditions = [
+        external_secret_condition(condition)
+        for condition in conditions
+        if isinstance(condition, dict)
+    ]
+    ready_condition = next(
+        (
+            condition
+            for condition in rendered_conditions
+            if condition.get("type") == "Ready"
+        ),
+        {},
+    )
+    ready = ready_condition.get("status") == "True"
+    return {
+        "name": name,
+        "namespace": namespace,
+        "phase": "Ready" if ready else "Waiting",
+        "ready": ready,
+        "reason": ready_condition.get("reason"),
+        "message": ready_condition.get("message"),
+        "refreshTime": status.get("refreshTime") if isinstance(status, dict) else None,
+        "syncedResourceVersion": (
+            status.get("syncedResourceVersion") if isinstance(status, dict) else None
+        ),
+        "conditions": rendered_conditions,
+    }
+
+
+def _create_or_patch(read: Any, create: Any, patch: Any) -> str:
+    try:
+        read()
+    except Exception as error:
+        if _api_status(error) == 404:
+            create()
+            return "created"
+        raise
+    patch()
+    return "patched"
+
+
+def _api_status(error: Exception) -> int | None:
+    status = getattr(error, "status", None)
+    return int(status) if isinstance(status, int) else None
+
+
+def deployment_conditions(status: Any) -> list[dict[str, Any]]:
+    conditions = getattr(status, "conditions", None)
+    if not conditions:
+        return []
+    return [
+        {
+            "type": getattr(condition, "type", None),
+            "status": getattr(condition, "status", None),
+            "reason": getattr(condition, "reason", None),
+            "message": getattr(condition, "message", None),
+        }
+        for condition in conditions
+    ]
+
+
+def external_secret_condition(condition: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": condition.get("type"),
+        "status": condition.get("status"),
+        "reason": condition.get("reason"),
+        "message": condition.get("message"),
+        "lastTransitionTime": condition.get("lastTransitionTime"),
+    }
+
+
+def load_kubernetes_config() -> None:
+    config = _config_module()
+    try:
+        config.load_incluster_config()
+    except Exception:
+        config.load_kube_config()
+
+
+def _client_module() -> Any:
+    try:
+        from kubernetes import client
+    except ImportError as error:
+        raise RuntimeError(
+            "The kubernetes package is required for operator reconcile mode."
+        ) from error
+    return client
+
+
+def _config_module() -> Any:
+    try:
+        from kubernetes import config
+    except ImportError as error:
+        raise RuntimeError(
+            "The kubernetes package is required for operator reconcile mode."
+        ) from error
+    return config

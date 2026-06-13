@@ -1,0 +1,1 @@
+"""Temporal-backed registry operator."""

@@ -1,9 +1,27 @@
 # macos
 .DS_Store
 
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+*.egg
+
 # local tooling
 .venv/
+venv/
 node_modules/
+
+# local secrets / environment (never commit)
+.env
+.env.*
+!.env.example
 
 # generated build output
 dist/

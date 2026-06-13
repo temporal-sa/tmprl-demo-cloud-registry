@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo Cloud Onboarding"
+  short_description: "Migrate demos into tmprl-demo.cloud"
+  default_prompt: "Use $tmprl-demo-cloud-onboarding to assess this demo repo and create a reviewed project config."

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-operator
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry-operator
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registry-operator
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: registry-operator
+      containers:
+        - name: worker
+          image: registry.invalid/tmprl-dem-cld/registry/worker:bootstrap
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: registry-operator-config
+            - secretRef:
+                name: registry-worker-temporal
+            - secretRef:
+                name: temporal-cloud-bootstrap
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

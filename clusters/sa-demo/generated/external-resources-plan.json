@@ -1,0 +1,162 @@
+{
+  "apiVersion": "tmprl-demo.cloud/v1alpha1",
+  "kind": "ExternalResourcesPlan",
+  "projects": [
+    {
+      "ecrRepositories": [
+        {
+          "build": "web",
+          "components": [
+            "web"
+          ],
+          "name": "tmprl-dem-cld/registry/web"
+        },
+        {
+          "build": "worker",
+          "components": [
+            "worker"
+          ],
+          "name": "tmprl-dem-cld/registry/worker"
+        }
+      ],
+      "iam": {
+        "buildPushRepositories": [
+          "tmprl-dem-cld/registry/web",
+          "tmprl-dem-cld/registry/worker"
+        ],
+        "externalSecretsReadPath": "tmprl-dem-cld/registry/*"
+      },
+      "kubernetesNamespace": "tmprl-dem-cld-registry",
+      "name": "registry",
+      "secretPrefix": "tmprl-dem-cld/registry",
+      "secretsManager": {
+        "temporalBootstrap": {
+          "managedBy": "platform",
+          "properties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "remotePath": "tmprl-dem-cld/platform/temporal-cloud-bootstrap",
+          "required": true
+        },
+        "temporalCredentials": {
+          "managedBy": "platform",
+          "properties": [
+            "address",
+            "namespace",
+            "apiKey",
+            "tls"
+          ],
+          "remotePath": "tmprl-dem-cld/registry/temporal",
+          "required": true
+        },
+        "userManaged": []
+      },
+      "temporalCloud": {
+        "apiKey": {
+          "action": "create-or-verify-or-rotate",
+          "components": [
+            "web",
+            "worker"
+          ],
+          "namespace": "tmprl-dem-cld-registry",
+          "rotateBeforeExpiryDays": 60,
+          "scope": "namespace",
+          "secretProperties": [
+            "address",
+            "namespace",
+            "apiKey",
+            "tls"
+          ],
+          "secretRemotePath": "tmprl-dem-cld/registry/temporal",
+          "ttlDays": 365
+        },
+        "bootstrapCredential": {
+          "kubernetesSecret": "temporal-cloud-bootstrap",
+          "requiredProperties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "secretRemotePath": "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
+        },
+        "mode": "manual-until-provider-contract-is-implemented",
+        "namespace": {
+          "action": "create-or-verify",
+          "deletionPolicy": "retain-until-explicitly-approved",
+          "name": "tmprl-dem-cld-registry"
+        },
+        "provider": "temporal-cloud",
+        "required": true,
+        "tcldCommandPlan": [
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "get",
+              "--namespace",
+              "tmprl-dem-cld-registry"
+            ],
+            "step": "verify-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "create",
+              "--namespace",
+              "tmprl-dem-cld-registry",
+              "--region",
+              "<temporal-region>",
+              "--auth-method",
+              "api_key",
+              "--enable-delete-protection"
+            ],
+            "step": "create-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "service-account",
+              "create-scoped",
+              "--name",
+              "registry-runtime",
+              "--namespace-permission",
+              "tmprl-dem-cld-registry=Write"
+            ],
+            "step": "create-scoped-service-account"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "create",
+              "--name",
+              "registry-runtime",
+              "--description",
+              "tmprl-demo.cloud runtime key for registry",
+              "--duration",
+              "365d",
+              "--service-account-id",
+              "<service-account-id>"
+            ],
+            "step": "create-service-account-api-key"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "list",
+              "--owner-type",
+              "service-account",
+              "--owner-id",
+              "<service-account-id>"
+            ],
+            "step": "list-service-account-api-keys"
+          }
+        ]
+      }
+    }
+  ]
+}
