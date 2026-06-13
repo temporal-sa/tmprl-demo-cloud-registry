@@ -121,3 +121,6 @@ spec:
     temporalNamespace: temporal-agent-harness
     secretPrefix: tmprl-cloud-demo/temporal-agent-harness
     imageRepositoryPrefix: tmprl-cloud-demo
+  smokeCheck:
+    path: /api/auth/google/configured
+    expectedStatus: 200

@@ -18,7 +18,7 @@ Keep it current as phases move from design to implementation.
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo; generated `registry.json` now points each entry at the catalog status ConfigMap key written by the operator. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
-| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. |
+| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. Agent Harness is the second rollout target and now has a generated smoke check. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
 
 ## Decisions
@@ -113,6 +113,10 @@ As of 2026-06-13:
 - `DemoProject/demo-registry` and `DemoProject/temporal-agent-harness` are
   `WaitingForImages`; only base namespace/RBAC/metadata resources were applied
   for those projects.
+- `temporal-agent-harness` is the chosen second rollout target. It uses one
+  `app` build for web, API, and worker components, requires
+  `tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials`, and now
+  declares smoke check path `/api/auth/google/configured`.
 
 Next validation target:
 

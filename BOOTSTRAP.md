@@ -385,6 +385,71 @@ The registry/catalog status ConfigMap entry mirrors the lifecycle fields the UI
 should show: phase, message, external-resource phases, build output, candidate
 deployment/services, readiness, smoke check, active version, and last error.
 
+## Second Test Target: `temporal-agent-harness`
+
+Use Agent Harness to prove the single-image/multiple-component path and, if the
+namespace does not exist yet, namespace creation from zero:
+
+```sh
+kubectl get namespace tmprl-cloud-demo-temporal-agent-harness
+```
+
+If that returns `NotFound`, do not create it manually; let the operator create
+it from `DemoProject/temporal-agent-harness`.
+
+The project has one build consumed by web, API, and worker components:
+
+```text
+source repo: https://github.com/temporal-sa/temporal-agent-harness-example
+dockerfile: simple_chat_agent/Dockerfile
+ECR repository: tmprl-cloud-demo/temporal-agent-harness/app
+```
+
+Create the project Temporal credential:
+
+```sh
+aws secretsmanager create-secret \
+  --region <aws-region> \
+  --name tmprl-cloud-demo/temporal-agent-harness/temporal \
+  --secret-string '{
+    "address": "<region>.<cloud-provider>.api.temporal.io:7233",
+    "namespace": "temporal-agent-harness.<temporal-account-id>",
+    "apiKey": "<temporal-agent-harness-namespace-api-key>",
+    "tls": "true"
+  }'
+```
+
+Create the Agent Harness custom secret:
+
+```sh
+aws secretsmanager create-secret \
+  --region <aws-region> \
+  --name tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials \
+  --secret-string '{
+    "ANTHROPIC_API_KEY": "<anthropic-api-key>"
+  }'
+```
+
+Then use `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` and either
+`DEMO_REGISTRY_BUILD_MODE=local-docker` from an isolated trusted build worker,
+or manually build and annotate the immutable app image. The generated smoke
+check is:
+
+```yaml
+smokeCheck:
+  path: /api/auth/google/configured
+  expectedStatus: 200
+```
+
+Watch both status surfaces:
+
+```sh
+kubectl get demoproject temporal-agent-harness -o yaml
+kubectl -n tmprl-cloud-demo-temporal-agent-harness get deploy,svc,externalsecret,ingressroute
+kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
+  -o jsonpath='{.data.temporal-agent-harness\.json}'
+```
+
 ## Current Manual Substitutes
 
 These are intentional gaps for the first deployment test:

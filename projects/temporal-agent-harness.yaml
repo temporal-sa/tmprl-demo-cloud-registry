@@ -89,3 +89,7 @@ ingress:
       port: http
     - component: web
       port: http
+
+smokeCheck:
+  path: /api/auth/google/configured
+  expectedStatus: 200
