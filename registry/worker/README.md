@@ -19,9 +19,10 @@ External resource reconciliation runs before Kubernetes reconciliation. In the
 default `plan` mode it records expected ECR repositories, Secrets Manager
 paths, and Temporal Cloud resources in `DemoProject.status.externalResources`
 without mutating cloud providers. In `aws` mode it creates or verifies missing
-ECR repositories and verifies required Secrets Manager paths. Secret values and
-Temporal Cloud namespace/API key lifecycle remain manual until those provider
-contracts are implemented.
+ECR repositories and verifies required Secrets Manager paths plus JSON property
+names for platform-managed Temporal credentials. Secret values and Temporal
+Cloud namespace/API key lifecycle remain manual until those provider contracts
+are implemented.
 
 Candidate resource names use `git-<source-sha>` when the
 `registry.tmprl-demo.cloud/source-commit-sha` annotation is present. Public
@@ -63,6 +64,12 @@ Environment variables:
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
   `AWS_DEFAULT_REGION`, then `us-west-1`
 - `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH`, default
+  `tmprl-cloud-demo/platform/temporal-cloud-bootstrap`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID`, optional status metadata; falls
+  back to `TEMPORAL_CLOUD_ACCOUNT_ID`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
+  to `TEMPORAL_CLOUD_REGION`
 
 `local-docker` build mode requires `git`, `docker`, network read access to the
 project source repo, Docker daemon access, and ECR push credentials scoped to

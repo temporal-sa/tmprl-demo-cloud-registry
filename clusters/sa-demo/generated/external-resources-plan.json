@@ -38,6 +38,16 @@
       "name": "dejavu-tacos",
       "secretPrefix": "tmprl-cloud-demo/dejavu-tacos",
       "secretsManager": {
+        "temporalBootstrap": {
+          "managedBy": "platform",
+          "properties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
+          "required": true
+        },
         "temporalCredentials": {
           "managedBy": "platform",
           "properties": [
@@ -46,12 +56,14 @@
             "apiKey",
             "tls"
           ],
-          "remotePath": "tmprl-cloud-demo/dejavu-tacos/temporal"
+          "remotePath": "tmprl-cloud-demo/dejavu-tacos/temporal",
+          "required": true
         },
         "userManaged": []
       },
       "temporalCloud": {
         "apiKey": {
+          "action": "create-or-verify-or-rotate",
           "components": [
             "backend",
             "worker-python"
@@ -59,13 +71,32 @@
           "namespace": "dejavu-tacos",
           "rotateBeforeExpiryDays": 60,
           "scope": "namespace",
+          "secretProperties": [
+            "address",
+            "namespace",
+            "apiKey",
+            "tls"
+          ],
           "secretRemotePath": "tmprl-cloud-demo/dejavu-tacos/temporal",
           "ttlDays": 365
         },
+        "bootstrapCredential": {
+          "kubernetesSecret": "temporal-cloud-bootstrap",
+          "requiredProperties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+        },
+        "mode": "manual-until-provider-contract-is-implemented",
         "namespace": {
+          "action": "create-or-verify",
           "deletionPolicy": "retain-until-explicitly-approved",
           "name": "dejavu-tacos"
-        }
+        },
+        "provider": "temporal-cloud",
+        "required": true
       }
     },
     {
@@ -96,6 +127,16 @@
       "name": "demo-registry",
       "secretPrefix": "tmprl-cloud-demo/demo-registry",
       "secretsManager": {
+        "temporalBootstrap": {
+          "managedBy": "platform",
+          "properties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
+          "required": true
+        },
         "temporalCredentials": {
           "managedBy": "platform",
           "properties": [
@@ -104,12 +145,14 @@
             "apiKey",
             "tls"
           ],
-          "remotePath": "tmprl-cloud-demo/demo-registry/temporal"
+          "remotePath": "tmprl-cloud-demo/demo-registry/temporal",
+          "required": true
         },
         "userManaged": []
       },
       "temporalCloud": {
         "apiKey": {
+          "action": "create-or-verify-or-rotate",
           "components": [
             "web",
             "worker"
@@ -117,13 +160,32 @@
           "namespace": "demo-registry",
           "rotateBeforeExpiryDays": 60,
           "scope": "namespace",
+          "secretProperties": [
+            "address",
+            "namespace",
+            "apiKey",
+            "tls"
+          ],
           "secretRemotePath": "tmprl-cloud-demo/demo-registry/temporal",
           "ttlDays": 365
         },
+        "bootstrapCredential": {
+          "kubernetesSecret": "temporal-cloud-bootstrap",
+          "requiredProperties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+        },
+        "mode": "manual-until-provider-contract-is-implemented",
         "namespace": {
+          "action": "create-or-verify",
           "deletionPolicy": "retain-until-explicitly-approved",
           "name": "demo-registry"
-        }
+        },
+        "provider": "temporal-cloud",
+        "required": true
       }
     },
     {
@@ -148,6 +210,16 @@
       "name": "temporal-agent-harness",
       "secretPrefix": "tmprl-cloud-demo/temporal-agent-harness",
       "secretsManager": {
+        "temporalBootstrap": {
+          "managedBy": "platform",
+          "properties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "remotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap",
+          "required": true
+        },
         "temporalCredentials": {
           "managedBy": "platform",
           "properties": [
@@ -156,7 +228,8 @@
             "apiKey",
             "tls"
           ],
-          "remotePath": "tmprl-cloud-demo/temporal-agent-harness/temporal"
+          "remotePath": "tmprl-cloud-demo/temporal-agent-harness/temporal",
+          "required": true
         },
         "userManaged": [
           {
@@ -172,6 +245,7 @@
       },
       "temporalCloud": {
         "apiKey": {
+          "action": "create-or-verify-or-rotate",
           "components": [
             "api",
             "worker"
@@ -179,13 +253,32 @@
           "namespace": "temporal-agent-harness",
           "rotateBeforeExpiryDays": 60,
           "scope": "namespace",
+          "secretProperties": [
+            "address",
+            "namespace",
+            "apiKey",
+            "tls"
+          ],
           "secretRemotePath": "tmprl-cloud-demo/temporal-agent-harness/temporal",
           "ttlDays": 365
         },
+        "bootstrapCredential": {
+          "kubernetesSecret": "temporal-cloud-bootstrap",
+          "requiredProperties": [
+            "TEMPORAL_CLOUD_API_KEY",
+            "TEMPORAL_CLOUD_ACCOUNT_ID",
+            "TEMPORAL_CLOUD_REGION"
+          ],
+          "secretRemotePath": "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+        },
+        "mode": "manual-until-provider-contract-is-implemented",
         "namespace": {
+          "action": "create-or-verify",
           "deletionPolicy": "retain-until-explicitly-approved",
           "name": "temporal-agent-harness"
-        }
+        },
+        "provider": "temporal-cloud",
+        "required": true
       }
     }
   ]

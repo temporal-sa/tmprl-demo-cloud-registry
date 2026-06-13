@@ -11,7 +11,7 @@ Keep it current as phases move from design to implementation.
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
-| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify is implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify plus Secrets Manager path/property verification are implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
 | 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, and opt-in `local-docker` mode can clone/build/push immutable ECR tags from project configs for trusted tests. A hardened AWS-side builder remains to be implemented. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
@@ -120,7 +120,9 @@ Next validation target:
   - create a previously absent namespace;
   - create/verify ECR repositories; opt-in `aws` mode now handles this safe
     subset for project repositories;
-  - create/verify AWS Secrets Manager paths and ExternalSecrets;
+  - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
+    mode now verifies required paths and JSON property names for
+    platform-managed Temporal secrets;
   - create/verify Temporal Cloud namespace and namespace-scoped API key;
   - build immutable images from the source repo; opt-in `local-docker` mode now
     provides a trusted test path, while the hardened AWS-side builder remains
@@ -373,7 +375,8 @@ Initial generated resources:
 - generated `build-plan.json` with source repo, context, Dockerfile, derived
   image repository/tag templates, and build consumers
 - generated `external-resources-plan.json` with ECR, Temporal Cloud,
-  AWS Secrets Manager, and scoped IAM intent
+  AWS Secrets Manager, bootstrap credential, runtime secret property, and scoped
+  IAM intent
 - generated but unapplied `DemoProject` CR templates as the desired-state
   handoff to the registry operator
 - registry landing page data from project configs
@@ -408,6 +411,13 @@ Assets:
 
 The generator produces `external-resources-plan.json` as Phase 3 input. It is
 review data only until Terraform/OpenTofu automation is added.
+
+The operator's opt-in `aws` external resource mode currently creates or
+verifies ECR repositories, verifies Secrets Manager path existence, and checks
+required JSON property names for the Temporal Cloud bootstrap secret and each
+platform-managed project Temporal credential. It does not write secret values
+and it leaves Temporal Cloud namespace/API key lifecycle manual until the
+provider contract is reviewed.
 
 Temporal API key rotation design:
 

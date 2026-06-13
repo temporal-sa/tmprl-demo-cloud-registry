@@ -11,6 +11,13 @@ IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
+TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
+    "TEMPORAL_CLOUD_API_KEY",
+    "TEMPORAL_CLOUD_ACCOUNT_ID",
+    "TEMPORAL_CLOUD_REGION",
+]
+TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -880,7 +887,10 @@ def fallback_build_status(
 def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     prefix = project_secret_prefix(demo_project)
     build_names = sorted(builds(demo_project))
+    temporal_required = bool(temporal_components(demo_project))
     return {
+        "phase": "ManualSetupRequired",
+        "kubernetesNamespace": project_namespace(demo_project),
         "ecr": {
             "phase": "ManualSetupRequired",
             "repositories": [
@@ -890,16 +900,58 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
         },
         "secretsManager": {
             "phase": "ManualSetupRequired",
-            "temporalCredentials": temporal_secret_remote_path(demo_project),
+            "secretPrefix": prefix,
+            "temporalBootstrap": {
+                "path": TEMPORAL_BOOTSTRAP_SECRET_PATH,
+                "required": temporal_required,
+                "managedBy": "platform",
+                "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+                "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
+            },
+            "temporalCredentials": {
+                "path": temporal_secret_remote_path(demo_project),
+                "required": temporal_required,
+                "managedBy": "platform",
+                "requiredProperties": TEMPORAL_SECRET_PROPERTIES,
+                "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
+            },
             "userManaged": [
-                user_secret_remote_path(demo_project, name)
+                {
+                    "path": user_secret_remote_path(demo_project, name),
+                    "required": True,
+                    "managedBy": "project-owner",
+                    "components": sorted(
+                        components_for_user_secret(demo_project, name)
+                    ),
+                    "phase": "ManualSetupRequired",
+                }
                 for name in user_secret_names(demo_project)
             ],
         },
         "temporalCloud": {
-            "phase": "ManualSetupRequired",
-            "namespace": project_name(demo_project),
-            "credentialsSecret": temporal_secret_remote_path(demo_project),
+            "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
+            "provider": "temporal-cloud",
+            "mode": "manual",
+            "namespace": {
+                "name": project_name(demo_project),
+                "action": "create-or-verify",
+                "deletionPolicy": "retain-until-explicitly-approved",
+            },
+            "apiKey": {
+                "action": "create-or-verify-or-rotate",
+                "scope": "namespace",
+                "namespace": project_name(demo_project),
+                "ttlDays": 365,
+                "rotateBeforeExpiryDays": 60,
+                "secretRemotePath": temporal_secret_remote_path(demo_project),
+                "secretProperties": TEMPORAL_SECRET_PROPERTIES,
+                "components": sorted(temporal_components(demo_project)),
+            },
+            "bootstrapCredential": {
+                "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
+                "kubernetesSecret": "temporal-cloud-bootstrap",
+                "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+            },
         },
     }
 

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
+    "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,9 @@ class WorkerConfig:
     readiness_poll_seconds: int
     aws_region: str
     aws_account_id: str | None
+    temporal_cloud_bootstrap_secret_path: str
+    temporal_cloud_account_id: str | None
+    temporal_cloud_region: str | None
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -77,6 +83,18 @@ class WorkerConfig:
                 default="us-west-1",
             ),
             aws_account_id=env_optional("DEMO_REGISTRY_AWS_ACCOUNT_ID"),
+            temporal_cloud_bootstrap_secret_path=env_first(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH",
+                default=DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH,
+            ),
+            temporal_cloud_account_id=env_first_optional(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID",
+                "TEMPORAL_CLOUD_ACCOUNT_ID",
+            ),
+            temporal_cloud_region=env_first_optional(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_REGION",
+                "TEMPORAL_CLOUD_REGION",
+            ),
         )
 
 
@@ -120,3 +138,11 @@ def env_optional(name: str) -> str | None:
         return None
     parsed = value.strip()
     return parsed or None
+
+
+def env_first_optional(*names: str) -> str | None:
+    for name in names:
+        value = env_optional(name)
+        if value:
+            return value
+    return None

@@ -102,7 +102,9 @@ DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 In the default `plan` mode, the operator records the expected ECR repositories
 and secret paths on `DemoProject.status.externalResources` without mutating
 AWS. In `aws` mode it creates or verifies ECR repositories and verifies
-Secrets Manager paths. It does not create placeholder secret values.
+Secrets Manager paths. For platform-managed Temporal secrets it also verifies
+the JSON property names without returning secret values in status. It does not
+create placeholder secret values.
 
 Create an IAM role for the registry/operator service account. The bootstrap
 manifests expect this annotation until you replace it:
@@ -131,8 +133,36 @@ create the required secret values. The operator verifies these paths in
 `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`:
 
 ```text
+tmprl-cloud-demo/platform/temporal-cloud-bootstrap
 tmprl-cloud-demo/<project-name>/temporal
 tmprl-cloud-demo/<project-name>/<custom-secret-name>
+```
+
+The platform bootstrap secret must contain:
+
+```json
+{
+  "TEMPORAL_CLOUD_API_KEY": "<bootstrap-cloud-ops-api-key>",
+  "TEMPORAL_CLOUD_ACCOUNT_ID": "<temporal-account-id>",
+  "TEMPORAL_CLOUD_REGION": "<temporal-region>"
+}
+```
+
+Each project Temporal credential secret must contain:
+
+```json
+{
+  "address": "<region>.<cloud-provider>.api.temporal.io:7233",
+  "namespace": "<project-temporal-namespace>.<temporal-account-id>",
+  "apiKey": "<namespace-scoped-api-key>",
+  "tls": "true"
+}
+```
+
+Missing keys are reported under:
+
+```text
+DemoProject.status.externalResources.secretsManager
 ```
 
 For Agent Harness, the custom secret path is:

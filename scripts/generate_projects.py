@@ -45,6 +45,13 @@ IMAGE_TAG_TEMPLATE = "git-${sourceCommitSha}"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
+TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
+TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
+    "TEMPORAL_CLOUD_API_KEY",
+    "TEMPORAL_CLOUD_ACCOUNT_ID",
+    "TEMPORAL_CLOUD_REGION",
+]
+TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -919,28 +926,47 @@ def project_external_resources(project: Project) -> dict[str, Any]:
 
 
 def temporal_cloud_resources(project: Project) -> dict[str, Any]:
+    components_requiring_temporal = sorted(temporal_components(project))
     return {
+        "provider": "temporal-cloud",
+        "mode": "manual-until-provider-contract-is-implemented",
+        "required": bool(components_requiring_temporal),
         "namespace": {
             "name": project.name,
+            "action": "create-or-verify",
             "deletionPolicy": "retain-until-explicitly-approved",
         },
         "apiKey": {
+            "action": "create-or-verify-or-rotate",
             "scope": "namespace",
             "namespace": project.name,
             "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
             "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
             "secretRemotePath": temporal_secret_remote_path(project),
-            "components": sorted(temporal_components(project)),
+            "secretProperties": TEMPORAL_SECRET_PROPERTIES,
+            "components": components_requiring_temporal,
+        },
+        "bootstrapCredential": {
+            "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
+            "kubernetesSecret": "temporal-cloud-bootstrap",
+            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
         },
     }
 
 
 def secrets_manager_resources(project: Project) -> dict[str, Any]:
     return {
+        "temporalBootstrap": {
+            "managedBy": "platform",
+            "remotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
+            "required": bool(temporal_components(project)),
+            "properties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+        },
         "temporalCredentials": {
             "managedBy": "platform",
             "remotePath": temporal_secret_remote_path(project),
-            "properties": ["address", "namespace", "apiKey", "tls"],
+            "required": bool(temporal_components(project)),
+            "properties": TEMPORAL_SECRET_PROPERTIES,
         },
         "userManaged": [
             {

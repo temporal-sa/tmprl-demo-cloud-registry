@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,8 +23,12 @@ from demo_registry_operator.resources import (
 
 TEMPORAL_API_KEY_TTL_DAYS = 365
 TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
-TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
+TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
+    "TEMPORAL_CLOUD_API_KEY",
+    "TEMPORAL_CLOUD_ACCOUNT_ID",
+    "TEMPORAL_CLOUD_REGION",
+]
 
 
 @activity.defn
@@ -72,8 +77,12 @@ def planned_external_resources(
                 for build_name in sorted(builds(demo_project))
             ],
         },
-        "secretsManager": planned_secrets_manager_status(demo_project),
-        "temporalCloud": temporal_cloud_status(demo_project, phase="ManualSetupRequired"),
+        "secretsManager": planned_secrets_manager_status(demo_project, config),
+        "temporalCloud": temporal_cloud_status(
+            demo_project,
+            config,
+            phase="ManualSetupRequired",
+        ),
     }
 
 
@@ -120,14 +129,20 @@ def aws_external_resources(
     secrets_status = verify_secrets_manager_paths(
         secretsmanager,
         demo_project,
+        config,
         checked_at=now,
     )
     ecr_phase = aggregate_phase(repositories)
+    temporal_status = temporal_cloud_status(
+        demo_project,
+        config,
+        phase="ManualSetupRequired",
+    )
     phase = aggregate_top_level_phase(
         [
             ecr_phase,
             secrets_status["phase"],
-            "ManualSetupRequired",
+            temporal_status["phase"],
         ]
     )
 
@@ -143,7 +158,7 @@ def aws_external_resources(
             "repositories": repositories,
         },
         "secretsManager": secrets_status,
-        "temporalCloud": temporal_cloud_status(demo_project, phase="ManualSetupRequired"),
+        "temporalCloud": temporal_status,
     }
 
 
@@ -184,10 +199,18 @@ def ensure_ecr_repository(ecr: Any, repository: dict[str, Any]) -> dict[str, Any
 def verify_secrets_manager_paths(
     secretsmanager: Any,
     demo_project: dict[str, Any],
+    config: WorkerConfig,
     *,
     checked_at: str,
 ) -> dict[str, Any]:
     temporal_required = bool(temporal_components(demo_project))
+    temporal_bootstrap = secret_status(
+        secretsmanager,
+        config.temporal_cloud_bootstrap_secret_path,
+        required=temporal_required,
+        managed_by="platform",
+        required_properties=TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+    )
     temporal_secret = secret_status(
         secretsmanager,
         temporal_secret_remote_path(demo_project),
@@ -205,12 +228,13 @@ def verify_secrets_manager_paths(
         )
         for secret_name in user_secret_names(demo_project)
     ]
-    all_secret_statuses = [temporal_secret, *user_managed]
+    all_secret_statuses = [temporal_bootstrap, temporal_secret, *user_managed]
     phase = aggregate_secret_phase(all_secret_statuses)
     return {
         "phase": phase,
         "checkedAt": checked_at,
         "secretPrefix": project_secret_prefix(demo_project),
+        "temporalBootstrap": temporal_bootstrap,
         "temporalCredentials": temporal_secret,
         "userManaged": user_managed,
     }
@@ -257,19 +281,111 @@ def secret_status(
             "message": str(error),
         }
 
-    return {
+    rendered = {
         **status,
         "phase": "Ready",
         "arn": response.get("ARN"),
         "lastChangedDate": isoformat_datetime(response.get("LastChangedDate")),
     }
+    if required_properties:
+        rendered.update(
+            verify_secret_properties(
+                secretsmanager,
+                path,
+                required_properties=required_properties,
+            )
+        )
+    return rendered
 
 
-def planned_secrets_manager_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+def verify_secret_properties(
+    secretsmanager: Any,
+    path: str,
+    *,
+    required_properties: list[str],
+) -> dict[str, Any]:
+    try:
+        response = secretsmanager.get_secret_value(SecretId=path)
+    except Exception as error:
+        return {
+            "phase": "Error",
+            "message": f"Secret exists but value properties could not be verified: {error}",
+        }
+
+    secret_string = response.get("SecretString")
+    if not isinstance(secret_string, str):
+        return missing_properties_status(
+            required_properties,
+            message="Secret value must be a JSON object with the required properties.",
+        )
+
+    try:
+        decoded = json.loads(secret_string)
+    except json.JSONDecodeError as error:
+        return missing_properties_status(
+            required_properties,
+            message=f"Secret value must be valid JSON: {error}",
+        )
+
+    if not isinstance(decoded, dict):
+        return missing_properties_status(
+            required_properties,
+            message="Secret value must be a JSON object with the required properties.",
+        )
+
+    missing = [
+        name
+        for name in required_properties
+        if not secret_property_present(decoded.get(name))
+    ]
+    if missing:
+        return {
+            "phase": "MissingProperties",
+            "message": "Secret value is missing required JSON properties.",
+            "missingProperties": missing,
+        }
+
+    return {
+        "phase": "Ready",
+        "verifiedProperties": sorted(required_properties),
+    }
+
+
+def missing_properties_status(
+    required_properties: list[str],
+    *,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "phase": "MissingProperties",
+        "message": message,
+        "missingProperties": sorted(required_properties),
+    }
+
+
+def secret_property_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def planned_secrets_manager_status(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+) -> dict[str, Any]:
     temporal_required = bool(temporal_components(demo_project))
     return {
         "phase": "Planned",
         "secretPrefix": project_secret_prefix(demo_project),
+        "temporalBootstrap": {
+            "path": config.temporal_cloud_bootstrap_secret_path,
+            "required": temporal_required,
+            "managedBy": "platform",
+            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+            "phase": "Planned" if temporal_required else "NotRequired",
+        },
         "temporalCredentials": {
             "path": temporal_secret_remote_path(demo_project),
             "required": temporal_required,
@@ -292,23 +408,51 @@ def planned_secrets_manager_status(demo_project: dict[str, Any]) -> dict[str, An
     }
 
 
-def temporal_cloud_status(demo_project: dict[str, Any], *, phase: str) -> dict[str, Any]:
+def temporal_cloud_status(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    phase: str,
+) -> dict[str, Any]:
+    temporal_required = bool(temporal_components(demo_project))
+    if not temporal_required:
+        return {
+            "phase": "NotRequired",
+            "provider": "temporal-cloud",
+            "mode": "manual",
+            "message": "No component currently requires Temporal credentials.",
+        }
+
     return {
         "phase": phase,
-        "provider": "manual-until-temporal-cloud-contract-is-implemented",
+        "provider": "temporal-cloud",
+        "mode": "manual",
+        "accountId": config.temporal_cloud_account_id,
+        "region": config.temporal_cloud_region,
+        "message": (
+            "Create or verify the Temporal Cloud namespace and namespace-scoped "
+            "API key manually until provider automation is implemented."
+        ),
         "namespace": {
             "name": temporal_namespace(demo_project),
+            "action": "create-or-verify",
             "deletionPolicy": "retain-until-explicitly-approved",
         },
         "apiKey": {
+            "action": "create-or-verify-or-rotate",
             "scope": "namespace",
             "namespace": temporal_namespace(demo_project),
             "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
             "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
             "secretRemotePath": temporal_secret_remote_path(demo_project),
+            "secretProperties": TEMPORAL_SECRET_PROPERTIES,
             "components": sorted(temporal_components(demo_project)),
         },
-        "bootstrapCredential": TEMPORAL_BOOTSTRAP_SECRET_PATH,
+        "bootstrapCredential": {
+            "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
+            "kubernetesSecret": "temporal-cloud-bootstrap",
+            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+        },
     }
 
 
@@ -368,7 +512,7 @@ def aggregate_secret_phase(resources: list[dict[str, Any]]) -> str:
     phases = {resource.get("phase") for resource in resources}
     if "Error" in phases:
         return "Error"
-    if "MissingValue" in phases:
+    if "MissingValue" in phases or "MissingProperties" in phases:
         return "ValuesRequired"
     if phases and phases <= {"Ready", "NotRequired"}:
         return "Ready"
@@ -384,7 +528,7 @@ def aggregate_top_level_phase(phases: list[str]) -> str:
         return "ManualSetupRequired"
     if "ValuesRequired" in phases:
         return "ValuesRequired"
-    if phases and set(phases) == {"Ready"}:
+    if phases and set(phases) <= {"Ready", "NotRequired"}:
         return "Ready"
     if "Planned" in phases:
         return "Planned"
