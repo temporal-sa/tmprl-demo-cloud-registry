@@ -11,9 +11,11 @@ from temporalio import activity
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.kube import (
     apply_resources,
+    delete_namespace,
     patch_demo_project_status,
     read_deployment_status,
     read_external_secret_status,
+    remove_demo_project_finalizer,
 )
 from demo_registry_operator.resources import (
     SOURCE_COMMIT_ANNOTATION,
@@ -128,6 +130,48 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         )
         patch_status(name, status, dry_run=dry_run)
         return status
+
+
+@activity.defn
+def finalize_project(request: dict[str, Any]) -> dict[str, Any]:
+    """Tear down a removed project: delete its Kubernetes namespace and external
+    resources (Temporal Cloud namespace/SA/key/secret, ECR repos), then remove
+    the operator finalizer so Kubernetes can complete the DemoProject deletion.
+
+    Driven by the project file being removed from git (the explicit deletion
+    approval). Idempotent and safe to retry."""
+
+    from demo_registry_operator.activities.external_resources import (
+        finalize_external_resources,
+    )
+
+    demo_project = demo_project_from_request(request)
+    config = WorkerConfig.from_env()
+    name = project_name(demo_project)
+    namespace = project_namespace(demo_project)
+    dry_run = config.reconcile_mode != "apply"
+    activity.logger.info(
+        "Finalizing project=%s namespace=%s dry_run=%s", name, namespace, dry_run
+    )
+
+    namespace_action = delete_namespace(namespace, dry_run=dry_run)
+    external = (
+        finalize_external_resources(demo_project, config)
+        if not dry_run
+        else {"phase": "Planned"}
+    )
+    # Remove the finalizer last, so the DemoProject stays present (Terminating)
+    # until teardown succeeds; on failure the activity retries and the CR is not
+    # prematurely deleted.
+    remove_demo_project_finalizer(name, dry_run=dry_run)
+
+    return {
+        "phase": "Finalized",
+        "project": name,
+        "checkedAt": datetime.now(UTC).isoformat(),
+        "kubernetesNamespace": {"name": namespace, "action": namespace_action},
+        "externalResources": external,
+    }
 
 
 @activity.defn

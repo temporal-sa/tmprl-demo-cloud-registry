@@ -12,6 +12,7 @@ with workflow.unsafe.imports_passed_through():
         reconcile_external_resources,
     )
     from demo_registry_operator.activities.reconcile import (
+        finalize_project,
         plan_rollout,
         promote_candidate,
         record_project_status,
@@ -33,6 +34,8 @@ class DemoProjectWorkflow:
         self._pending_spec: dict[str, Any] | None = None
         self._reconcile_sequence = 0
         self._shutdown = False
+        self._finalize = False
+        self._finalize_spec: dict[str, Any] | None = None
         self._status: dict[str, Any] = {
             "phase": "Starting",
             "message": "Workflow has not received project state.",
@@ -58,10 +61,16 @@ class DemoProjectWorkflow:
 
         while not self._shutdown:
             await workflow.wait_condition(
-                lambda: self._pending_spec is not None or self._shutdown
+                lambda: self._pending_spec is not None
+                or self._finalize
+                or self._shutdown
             )
             if self._shutdown:
                 break
+
+            if self._finalize:
+                await self._run_finalize(project_name)
+                return
 
             demo_project = self._pending_spec
             self._pending_spec = None
@@ -285,8 +294,33 @@ class DemoProjectWorkflow:
         self._pending_spec = demo_project
 
     @workflow.signal
+    def finalize(self, demo_project: dict[str, Any]) -> None:
+        self._finalize_spec = demo_project
+        self._finalize = True
+
+    @workflow.signal
     def shutdown(self) -> None:
         self._shutdown = True
+
+    async def _run_finalize(self, project_name: str) -> None:
+        demo_project = self._finalize_spec or self._pending_spec or {
+            "metadata": {"name": project_name}
+        }
+        result = await workflow.execute_activity(
+            finalize_project,
+            {"demoProject": demo_project},
+            start_to_close_timeout=timedelta(minutes=15),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=RetryPolicy(maximum_attempts=10),
+        )
+        # The finalize activity removes the operator finalizer, so the DemoProject
+        # is now free to be deleted by Kubernetes; this workflow completes.
+        self._status = {
+            "project": project_name,
+            "phase": "Finalized",
+            "message": "Project removed from git; resources torn down and workflow completed.",
+            "finalizeStatus": result,
+        }
 
     @workflow.query
     def status(self) -> dict[str, Any]:

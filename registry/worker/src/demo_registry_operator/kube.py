@@ -180,6 +180,86 @@ def apply_custom_resource(
     )
 
 
+DEMO_PROJECT_FINALIZER = "registry.tmprl-demo.cloud/finalize"
+
+
+def demo_project_deletion_timestamp(demo_project: dict[str, Any]) -> str | None:
+    metadata = demo_project.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("deletionTimestamp")
+    return value if isinstance(value, str) and value else None
+
+
+def demo_project_finalizers(demo_project: dict[str, Any]) -> list[str]:
+    metadata = demo_project.get("metadata", {})
+    finalizers = metadata.get("finalizers") if isinstance(metadata, dict) else None
+    return [f for f in finalizers if isinstance(f, str)] if isinstance(finalizers, list) else []
+
+
+def ensure_demo_project_finalizer(name: str, *, dry_run: bool = False) -> bool:
+    """Add the operator finalizer to a DemoProject if absent. Returns True if added."""
+    if dry_run:
+        return False
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    obj = api.get_cluster_custom_object(
+        DEMO_PROJECT_GROUP, DEMO_PROJECT_VERSION, DEMO_PROJECT_PLURAL, name
+    )
+    finalizers = demo_project_finalizers(obj)
+    if DEMO_PROJECT_FINALIZER in finalizers:
+        return False
+    api.patch_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        DEMO_PROJECT_PLURAL,
+        name,
+        {"metadata": {"finalizers": [*finalizers, DEMO_PROJECT_FINALIZER]}},
+    )
+    return True
+
+
+def remove_demo_project_finalizer(name: str, *, dry_run: bool = False) -> None:
+    """Remove the operator finalizer so Kubernetes can complete deletion."""
+    if dry_run:
+        return
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    try:
+        obj = api.get_cluster_custom_object(
+            DEMO_PROJECT_GROUP, DEMO_PROJECT_VERSION, DEMO_PROJECT_PLURAL, name
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return
+        raise
+    finalizers = [f for f in demo_project_finalizers(obj) if f != DEMO_PROJECT_FINALIZER]
+    api.patch_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        DEMO_PROJECT_PLURAL,
+        name,
+        {"metadata": {"finalizers": finalizers}},
+    )
+
+
+def delete_namespace(name: str, *, dry_run: bool = False) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    core = client.CoreV1Api()
+    try:
+        core.delete_namespace(name)
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
 def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
