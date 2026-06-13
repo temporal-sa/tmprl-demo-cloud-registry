@@ -1,5 +1,5 @@
 metadata:
-  name: banking-app-money-transfer
+  name: banking-money-transfer
 
 registry:
   title: Banking App - Money Transfer
@@ -34,6 +34,7 @@ components:
         servicePort: 80
   backend:
     build: backend
+    temporalAccess: true
     ports:
       - name: http
         containerPort: 8000
