@@ -300,12 +300,9 @@ class DemoProjectWorkflow:
             and not workflow.info().is_continue_as_new_suggested()
         ):
             return
-        if workflow.patched(
-            f"demo-project-continue-as-new-v1-{self._reconcile_sequence}"
-        ):
-            workflow.continue_as_new(
-                args=[project_name, self._status, self._pending_spec],
-            )
+        workflow.continue_as_new(
+            args=[project_name, self._status, self._pending_spec],
+        )
 
 
 @workflow.defn
