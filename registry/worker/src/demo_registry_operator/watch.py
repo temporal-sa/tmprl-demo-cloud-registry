@@ -7,7 +7,6 @@ import logging
 from typing import Any
 
 from temporalio.client import Client
-from temporalio.common import WorkflowIDConflictPolicy
 
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.kube import (
@@ -104,12 +103,14 @@ async def signal_workflow(
     level-triggered: a missed or duplicate signal converges on the next resync.
     """
     name = project_name(demo_project)
+    # SignalWithStart: signals the existing run if present, otherwise starts the
+    # workflow and signals it. (Do not set id_conflict_policy here — combined with
+    # start_signal it suppresses delivery to an already-running workflow.)
     await temporal_client.start_workflow(
         DemoProjectWorkflow.run,
         args=[name],
         id=f"demo-project/{name}",
         task_queue=config.task_queue,
-        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
         start_signal=signal_name,
         start_signal_args=[demo_project],
     )
