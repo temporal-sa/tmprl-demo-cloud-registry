@@ -448,12 +448,92 @@ def temporal_cloud_status(
             "secretProperties": TEMPORAL_SECRET_PROPERTIES,
             "components": sorted(temporal_components(demo_project)),
         },
+        "tcldCommandPlan": temporal_cloud_tcld_command_plan(
+            demo_project,
+            region=config.temporal_cloud_region,
+        ),
         "bootstrapCredential": {
             "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
             "kubernetesSecret": "temporal-cloud-bootstrap",
             "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
         },
     }
+
+
+def temporal_cloud_tcld_command_plan(
+    demo_project: dict[str, Any],
+    *,
+    region: str | None,
+) -> list[dict[str, Any]]:
+    namespace = temporal_namespace(demo_project)
+    service_account_name = f"{project_name(demo_project)}-runtime"
+    return [
+        {
+            "step": "verify-namespace",
+            "command": [
+                "tcld",
+                "namespace",
+                "get",
+                "--namespace",
+                namespace,
+            ],
+        },
+        {
+            "step": "create-namespace",
+            "command": [
+                "tcld",
+                "namespace",
+                "create",
+                "--namespace",
+                namespace,
+                "--region",
+                region or "<temporal-region>",
+                "--auth-method",
+                "api_key",
+                "--enable-delete-protection",
+            ],
+        },
+        {
+            "step": "create-scoped-service-account",
+            "command": [
+                "tcld",
+                "service-account",
+                "create-scoped",
+                "--name",
+                service_account_name,
+                "--namespace-permission",
+                f"{namespace}=Write",
+            ],
+        },
+        {
+            "step": "create-service-account-api-key",
+            "command": [
+                "tcld",
+                "apikey",
+                "create",
+                "--name",
+                f"{project_name(demo_project)}-runtime",
+                "--description",
+                f"tmprl-demo.cloud runtime key for {project_name(demo_project)}",
+                "--duration",
+                f"{TEMPORAL_API_KEY_TTL_DAYS}d",
+                "--service-account-id",
+                "<service-account-id>",
+            ],
+        },
+        {
+            "step": "list-service-account-api-keys",
+            "command": [
+                "tcld",
+                "apikey",
+                "list",
+                "--owner-type",
+                "service-account",
+                "--owner-id",
+                "<service-account-id>",
+            ],
+        },
+    ]
 
 
 def repository_plan_entry(demo_project: dict[str, Any], build_name: str) -> dict[str, Any]:

@@ -96,7 +96,74 @@
           "name": "dejavu-tacos"
         },
         "provider": "temporal-cloud",
-        "required": true
+        "required": true,
+        "tcldCommandPlan": [
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "get",
+              "--namespace",
+              "dejavu-tacos"
+            ],
+            "step": "verify-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "create",
+              "--namespace",
+              "dejavu-tacos",
+              "--region",
+              "<temporal-region>",
+              "--auth-method",
+              "api_key",
+              "--enable-delete-protection"
+            ],
+            "step": "create-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "service-account",
+              "create-scoped",
+              "--name",
+              "dejavu-tacos-runtime",
+              "--namespace-permission",
+              "dejavu-tacos=Write"
+            ],
+            "step": "create-scoped-service-account"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "create",
+              "--name",
+              "dejavu-tacos-runtime",
+              "--description",
+              "tmprl-demo.cloud runtime key for dejavu-tacos",
+              "--duration",
+              "365d",
+              "--service-account-id",
+              "<service-account-id>"
+            ],
+            "step": "create-service-account-api-key"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "list",
+              "--owner-type",
+              "service-account",
+              "--owner-id",
+              "<service-account-id>"
+            ],
+            "step": "list-service-account-api-keys"
+          }
+        ]
       }
     },
     {
@@ -185,7 +252,74 @@
           "name": "demo-registry"
         },
         "provider": "temporal-cloud",
-        "required": true
+        "required": true,
+        "tcldCommandPlan": [
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "get",
+              "--namespace",
+              "demo-registry"
+            ],
+            "step": "verify-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "create",
+              "--namespace",
+              "demo-registry",
+              "--region",
+              "<temporal-region>",
+              "--auth-method",
+              "api_key",
+              "--enable-delete-protection"
+            ],
+            "step": "create-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "service-account",
+              "create-scoped",
+              "--name",
+              "demo-registry-runtime",
+              "--namespace-permission",
+              "demo-registry=Write"
+            ],
+            "step": "create-scoped-service-account"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "create",
+              "--name",
+              "demo-registry-runtime",
+              "--description",
+              "tmprl-demo.cloud runtime key for demo-registry",
+              "--duration",
+              "365d",
+              "--service-account-id",
+              "<service-account-id>"
+            ],
+            "step": "create-service-account-api-key"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "list",
+              "--owner-type",
+              "service-account",
+              "--owner-id",
+              "<service-account-id>"
+            ],
+            "step": "list-service-account-api-keys"
+          }
+        ]
       }
     },
     {
@@ -278,7 +412,74 @@
           "name": "temporal-agent-harness"
         },
         "provider": "temporal-cloud",
-        "required": true
+        "required": true,
+        "tcldCommandPlan": [
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "get",
+              "--namespace",
+              "temporal-agent-harness"
+            ],
+            "step": "verify-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "namespace",
+              "create",
+              "--namespace",
+              "temporal-agent-harness",
+              "--region",
+              "<temporal-region>",
+              "--auth-method",
+              "api_key",
+              "--enable-delete-protection"
+            ],
+            "step": "create-namespace"
+          },
+          {
+            "command": [
+              "tcld",
+              "service-account",
+              "create-scoped",
+              "--name",
+              "temporal-agent-harness-runtime",
+              "--namespace-permission",
+              "temporal-agent-harness=Write"
+            ],
+            "step": "create-scoped-service-account"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "create",
+              "--name",
+              "temporal-agent-harness-runtime",
+              "--description",
+              "tmprl-demo.cloud runtime key for temporal-agent-harness",
+              "--duration",
+              "365d",
+              "--service-account-id",
+              "<service-account-id>"
+            ],
+            "step": "create-service-account-api-key"
+          },
+          {
+            "command": [
+              "tcld",
+              "apikey",
+              "list",
+              "--owner-type",
+              "service-account",
+              "--owner-id",
+              "<service-account-id>"
+            ],
+            "step": "list-service-account-api-keys"
+          }
+        ]
       }
     }
   ]

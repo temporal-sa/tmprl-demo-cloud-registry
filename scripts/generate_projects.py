@@ -948,12 +948,84 @@ def temporal_cloud_resources(project: Project) -> dict[str, Any]:
             "secretProperties": TEMPORAL_SECRET_PROPERTIES,
             "components": components_requiring_temporal,
         },
+        "tcldCommandPlan": temporal_cloud_tcld_command_plan(project),
         "bootstrapCredential": {
             "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
             "kubernetesSecret": "temporal-cloud-bootstrap",
             "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
         },
     }
+
+
+def temporal_cloud_tcld_command_plan(project: Project) -> list[dict[str, Any]]:
+    service_account_name = f"{project.name}-runtime"
+    return [
+        {
+            "step": "verify-namespace",
+            "command": [
+                "tcld",
+                "namespace",
+                "get",
+                "--namespace",
+                project.name,
+            ],
+        },
+        {
+            "step": "create-namespace",
+            "command": [
+                "tcld",
+                "namespace",
+                "create",
+                "--namespace",
+                project.name,
+                "--region",
+                "<temporal-region>",
+                "--auth-method",
+                "api_key",
+                "--enable-delete-protection",
+            ],
+        },
+        {
+            "step": "create-scoped-service-account",
+            "command": [
+                "tcld",
+                "service-account",
+                "create-scoped",
+                "--name",
+                service_account_name,
+                "--namespace-permission",
+                f"{project.name}=Write",
+            ],
+        },
+        {
+            "step": "create-service-account-api-key",
+            "command": [
+                "tcld",
+                "apikey",
+                "create",
+                "--name",
+                f"{project.name}-runtime",
+                "--description",
+                f"tmprl-demo.cloud runtime key for {project.name}",
+                "--duration",
+                f"{TEMPORAL_API_KEY_TTL_DAYS}d",
+                "--service-account-id",
+                "<service-account-id>",
+            ],
+        },
+        {
+            "step": "list-service-account-api-keys",
+            "command": [
+                "tcld",
+                "apikey",
+                "list",
+                "--owner-type",
+                "service-account",
+                "--owner-id",
+                "<service-account-id>",
+            ],
+        },
+    ]
 
 
 def secrets_manager_resources(project: Project) -> dict[str, Any]:

@@ -11,7 +11,7 @@ Keep it current as phases move from design to implementation.
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
-| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify plus Secrets Manager path/property verification are implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify plus Secrets Manager path/property verification are implemented behind opt-in AWS mode, and generated/runtime status now records the verified `tcld` command contract for Temporal Cloud namespaces, scoped service accounts, and API keys. Secret values and Temporal Cloud mutation remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
 | 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, opt-in `local-docker` can clone/build/push for trusted tests, and opt-in `aws-codebuild` can start a pre-created CodeBuild project for AWS-side immutable image builds. CodeBuild project/role provisioning remains external setup. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
@@ -127,7 +127,9 @@ Next validation target:
   - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
     mode now verifies required paths and JSON property names for
     platform-managed Temporal secrets;
-  - create/verify Temporal Cloud namespace and namespace-scoped API key;
+  - create/verify Temporal Cloud namespace and namespace-scoped API key; status
+    now records a verified `tcld` command plan, while mutation and one-time API
+    key capture remain manual;
   - build immutable images from the source repo; opt-in `aws-codebuild` now
     provides an AWS-side test path using a pre-created CodeBuild project, while
     `local-docker` remains available for trusted isolated tests;
@@ -394,7 +396,7 @@ their image refs point at `registry.invalid`.
 Out of scope for this phase:
 
 - real Terraform/OpenTofu resources
-- real Temporal Cloud namespace creation
+- real Temporal Cloud namespace creation from the operator
 - real API key creation
 - real AWS Secrets Manager writes
 
@@ -439,6 +441,10 @@ Provider verification needed:
 - current Temporal Terraform/OpenTofu provider resource names
 - current support for namespace-scoped service accounts or API keys
 - current API key expiry/rotation semantics
+- verified `tcld` CLI surface as of 2026-06-13:
+  `namespace create --auth-method api_key --enable-delete-protection`,
+  `service-account create-scoped --namespace-permission <namespace>=Write`, and
+  `apikey create --service-account-id <service-account-id> --duration 365d`.
 
 ## Phase 4: Flux Bootstrap
 

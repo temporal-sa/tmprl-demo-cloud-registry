@@ -23,6 +23,9 @@ ECR repositories and verifies required Secrets Manager paths plus JSON property
 names for platform-managed Temporal credentials. Secret values and Temporal
 Cloud namespace/API key lifecycle remain manual until those provider contracts
 are implemented.
+`DemoProject.status.externalResources.temporalCloud.tcldCommandPlan` records
+the verified `tcld` namespace, scoped service-account, and API-key command
+sequence needed for the manual step.
 
 Candidate resource names use `git-<source-sha>` when the
 `registry.tmprl-demo.cloud/source-commit-sha` annotation is present. Public

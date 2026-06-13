@@ -81,6 +81,48 @@ aws secretsmanager create-secret \
   }'
 ```
 
+## Project Temporal Cloud Resources
+
+The generated external resource plan and
+`DemoProject.status.externalResources.temporalCloud.tcldCommandPlan` now record
+the current `tcld` command contract for each project. Verify the target account
+and region, then run equivalent commands with the platform bootstrap API key
+outside git:
+
+```sh
+export TEMPORAL_CLOUD_API_KEY=<bootstrap-cloud-ops-api-key>
+
+tcld namespace get \
+  --namespace <project-name>
+
+tcld namespace create \
+  --namespace <project-name> \
+  --region <temporal-region> \
+  --auth-method api_key \
+  --enable-delete-protection
+
+tcld service-account create-scoped \
+  --name <project-name>-runtime \
+  --namespace-permission <project-name>=Write
+
+tcld apikey create \
+  --name <project-name>-runtime \
+  --description "tmprl-demo.cloud runtime key for <project-name>" \
+  --duration 365d \
+  --service-account-id <service-account-id>
+```
+
+Copy the generated API key secret immediately; Temporal Cloud does not let you
+retrieve it later. Store the SDK connection values in:
+
+```text
+tmprl-cloud-demo/<project-name>/temporal
+```
+
+using the JSON shape documented below. Full mutation from the operator remains
+manual until the provider flow can safely create the API key and write the
+one-time secret to AWS Secrets Manager without exposing it in logs/status.
+
 ## AWS Bootstrap
 
 Create the ECR repository needed for the bootstrap worker image before the
