@@ -98,7 +98,8 @@ def build_project_images(request: dict[str, Any]) -> dict[str, Any]:
         source_commit_sha=source_commit_sha(demo_project),
         message=(
             "Build plan recorded without building images. Set "
-            "DEMO_REGISTRY_BUILD_MODE=local-docker to build and push images."
+            "DEMO_REGISTRY_BUILD_MODE=aws-codebuild or local-docker to build "
+            "and push images."
         ),
         missing_images=missing_images,
         build_entries=[
