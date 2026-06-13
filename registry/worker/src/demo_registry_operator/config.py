@@ -65,18 +65,18 @@ class WorkerConfig:
             ),
             reconcile_mode=env_choice(
                 "DEMO_REGISTRY_RECONCILE_MODE",
-                default="plan",
-                choices={"plan", "apply"},
+                default="apply",
+                choices={"apply"},
             ),
             external_resource_mode=env_choice(
                 "DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE",
-                default="plan",
-                choices={"plan", "aws"},
+                default="aws",
+                choices={"aws"},
             ),
             build_mode=env_choice(
                 "DEMO_REGISTRY_BUILD_MODE",
-                default="plan",
-                choices={"plan", "local-docker", "aws-codebuild"},
+                default="aws-codebuild",
+                choices={"local-docker", "aws-codebuild"},
             ),
             build_workspace=env_first(
                 "DEMO_REGISTRY_BUILD_WORKSPACE",
@@ -120,8 +120,8 @@ class WorkerConfig:
             ),
             temporal_cloud_mode=env_choice(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_MODE",
-                default="manual",
-                choices={"manual", "tcld-verify", "cloud-api"},
+                default="cloud-api",
+                choices={"cloud-api"},
             ),
             temporal_cloud_api_version=env_first(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION",
