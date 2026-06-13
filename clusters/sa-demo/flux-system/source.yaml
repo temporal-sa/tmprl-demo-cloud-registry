@@ -5,6 +5,8 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1m
+  secretRef:
+    name: cluster-gitops-config-auth
   url: https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git
   ref:
     branch: build-platform-generator
