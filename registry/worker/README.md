@@ -10,14 +10,20 @@ Kubernetes slice:
 - project namespace;
 - component service accounts and tenant-baseline RBAC;
 - platform metadata ConfigMap;
-- Services, ExternalSecrets, and Deployments when every build has an immutable
-  image override.
+- versioned candidate Deployments and Services when every build has an
+  immutable image override;
 - Traefik middleware and IngressRoutes after a configured smoke check passes,
   or immediately for projects without a smoke check.
 
 External ECR, AWS Secrets Manager, and Temporal Cloud resources are still
 manual setup or future provider automation. The worker records those expected
 paths in `DemoProject.status.externalResources`.
+
+Candidate resource names use `git-<source-sha>` when the
+`registry.tmprl-demo.cloud/source-commit-sha` annotation is present. Public
+Traefik routes point at the versioned candidate Services only after the
+configured smoke check succeeds, so a failed candidate does not repoint the
+existing healthy route.
 
 Environment variables:
 

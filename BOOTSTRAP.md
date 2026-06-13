@@ -257,10 +257,12 @@ smokeCheck:
 ```
 
 The workflow runs the smoke check from the operator against the in-cluster
-candidate service URL:
+candidate service URL. With the `SOURCE_SHA=$(git rev-parse --short=12 HEAD)`
+value above, the backend candidate Service is named
+`backend-git-$SOURCE_SHA`:
 
 ```text
-http://backend.tmprl-cloud-demo-dejavu-tacos.svc.cluster.local:8000/api/health
+http://backend-git-$SOURCE_SHA.tmprl-cloud-demo-dejavu-tacos.svc.cluster.local:8000/api/health
 ```
 
 Only after that returns HTTP 200 does the promotion activity apply the Traefik
@@ -270,7 +272,12 @@ route for:
 https://dejavu-tacos.tmprl-demo.cloud
 ```
 
-Promotion is recorded in `DemoProject.status.phase=Promoted`. If the endpoint
+The promoted Traefik route points at the versioned candidate Services recorded
+in `DemoProject.status.activeRouteServices`. The operator may also patch the
+stable same-namespace Services, such as `backend`, to the latest candidate for
+candidate-internal traffic, but the public route is not repointed until smoke
+success. Promotion is recorded in `DemoProject.status.phase=Promoted` and
+`DemoProject.status.activeImageVersion=git-$SOURCE_SHA`. If the endpoint
 differs in the source app, update `projects/dejavu-tacos.yaml`, regenerate, and
 commit the reviewed config before testing again.
 

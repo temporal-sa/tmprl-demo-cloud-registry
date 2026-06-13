@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,7 @@ STANDARD_TEMPORAL_ENV = {
     "api_key": "TEMPORAL_API_KEY",
     "tls": "TEMPORAL_TLS",
 }
+MAX_DNS_LABEL_LENGTH = 63
 
 
 def project_name(demo_project: dict[str, Any]) -> str:
@@ -124,7 +126,7 @@ def runtime_resources(
     include_routes: bool = True,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
-    resources.extend(service_resources(demo_project))
+    resources.extend(service_resources(demo_project, image_overrides))
 
     if temporal_components(demo_project):
         resources.append(external_secret(demo_project))
@@ -139,11 +141,12 @@ def runtime_resources(
 
 def promotion_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     resources = []
+    image_overrides = parse_image_overrides(demo_project)
     if ingress_routes(demo_project):
         resources.append(certificate_resource(demo_project))
     if auth_required(demo_project):
         resources.append(auth_middleware(demo_project))
-    resources.extend(ingress_resources(demo_project))
+    resources.extend(ingress_resources(demo_project, image_overrides=image_overrides))
     return resources
 
 
@@ -236,29 +239,45 @@ def platform_metadata_configmap(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def service_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+def service_resources(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     namespace = project_namespace(demo_project)
+    version = candidate_version(demo_project, image_overrides or {})
     for component_name, component in sorted(components(demo_project).items()):
         ports = component_ports(component)
         if not ports:
             continue
+
+        base_name = effective_service_name(component_name, component)
+        selector = (
+            rollout_selector_labels(demo_project, component_name, version)
+            if version
+            else selector_labels(demo_project, component_name)
+        )
+        annotations = {
+            "platform.temporal.io/component": component_name,
+        }
+        labels = component_labels(demo_project, component_name)
+        if version:
+            annotations["platform.temporal.io/rollout-version"] = version
+            labels = rollout_labels(demo_project, component_name, version)
 
         resources.append(
             {
                 "apiVersion": "v1",
                 "kind": "Service",
                 "metadata": {
-                    "name": effective_service_name(component_name, component),
+                    "name": base_name,
                     "namespace": namespace,
-                    "labels": component_labels(demo_project, component_name),
-                    "annotations": {
-                        "platform.temporal.io/component": component_name,
-                    },
+                    "labels": labels,
+                    "annotations": annotations,
                 },
                 "spec": {
                     "type": "ClusterIP",
-                    "selector": selector_labels(demo_project, component_name),
+                    "selector": selector,
                     "ports": [
                         {
                             "name": port["name"],
@@ -270,6 +289,40 @@ def service_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
                 },
             }
         )
+
+        if version:
+            resources.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "metadata": {
+                        "name": candidate_service_name(
+                            demo_project,
+                            component_name,
+                            component,
+                            version,
+                        ),
+                        "namespace": namespace,
+                        "labels": labels,
+                        "annotations": {
+                            **annotations,
+                            "platform.temporal.io/stable-service": base_name,
+                        },
+                    },
+                    "spec": {
+                        "type": "ClusterIP",
+                        "selector": selector,
+                        "ports": [
+                            {
+                                "name": port["name"],
+                                "port": port["servicePort"],
+                                "targetPort": port["containerPort"],
+                            }
+                            for port in ports
+                        ],
+                    },
+                }
+            )
     return resources
 
 
@@ -279,6 +332,7 @@ def deployment_resources(
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     namespace = project_namespace(demo_project)
+    version = candidate_version(demo_project, image_overrides)
     for component_name, component in sorted(components(demo_project).items()):
         build_name = component.get("build")
         if not isinstance(build_name, str) or build_name not in image_overrides:
@@ -289,21 +343,35 @@ def deployment_resources(
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
                 "metadata": {
-                    "name": component_name,
+                    "name": candidate_deployment_name(
+                        demo_project,
+                        component_name,
+                        version,
+                    ),
                     "namespace": namespace,
-                    "labels": component_labels(demo_project, component_name),
+                    "labels": rollout_labels(demo_project, component_name, version),
                     "annotations": {
                         "platform.temporal.io/build": build_name,
+                        "platform.temporal.io/component": component_name,
+                        "platform.temporal.io/rollout-version": version,
                     },
                 },
                 "spec": {
                     "replicas": component.get("replicas", 1),
                     "selector": {
-                        "matchLabels": selector_labels(demo_project, component_name),
+                        "matchLabels": rollout_selector_labels(
+                            demo_project,
+                            component_name,
+                            version,
+                        ),
                     },
                     "template": {
                         "metadata": {
-                            "labels": component_labels(demo_project, component_name),
+                            "labels": rollout_labels(
+                                demo_project,
+                                component_name,
+                                version,
+                            ),
                         },
                         "spec": {
                             "serviceAccountName": service_account_for_component(
@@ -434,12 +502,32 @@ def worker_versioning_env(worker: dict[str, Any]) -> list[dict[str, str]]:
     return rendered
 
 
-def ingress_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+def ingress_resources(
+    demo_project: dict[str, Any],
+    *,
+    image_overrides: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     route_specs = ingress_routes(demo_project)
     if not route_specs:
         return []
 
-    routes = [ingress_route(demo_project, route_spec) for route_spec in route_specs]
+    version = candidate_version(demo_project, image_overrides or {})
+    routes = [
+        ingress_route(
+            demo_project,
+            route_spec,
+            image_overrides=image_overrides or {},
+        )
+        for route_spec in route_specs
+    ]
+    annotations = {
+        "platform.temporal.io/host": project_host(demo_project),
+        "platform.temporal.io/temporal-auth-required": str(
+            auth_required(demo_project)
+        ).lower(),
+    }
+    if version:
+        annotations["platform.temporal.io/rollout-version"] = version
     base = {
         "apiVersion": TRAEFIK_API_VERSION,
         "kind": "IngressRoute",
@@ -447,12 +535,7 @@ def ingress_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
             "name": project_name(demo_project),
             "namespace": project_namespace(demo_project),
             "labels": common_labels(demo_project),
-            "annotations": {
-                "platform.temporal.io/host": project_host(demo_project),
-                "platform.temporal.io/temporal-auth-required": str(
-                    auth_required(demo_project)
-                ).lower(),
-            },
+            "annotations": annotations,
         },
         "spec": {
             "entryPoints": ["websecure"],
@@ -506,6 +589,8 @@ def certificate_resource(demo_project: dict[str, Any]) -> dict[str, Any]:
 def ingress_route(
     demo_project: dict[str, Any],
     route_spec: dict[str, Any],
+    *,
+    image_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     match = f"Host(`{project_host(demo_project)}`)"
     path_prefix = route_spec.get("pathPrefix")
@@ -514,13 +599,22 @@ def ingress_route(
 
     component_name = route_spec["component"]
     component = components(demo_project)[component_name]
+    version = candidate_version(demo_project, image_overrides or {})
+    service_name = effective_service_name(component_name, component)
+    if version:
+        service_name = candidate_service_name(
+            demo_project,
+            component_name,
+            component,
+            version,
+        )
     route: dict[str, Any] = {
         "kind": "Rule",
         "match": match,
         "priority": 1000,
         "services": [
             {
-                "name": effective_service_name(component_name, component),
+                "name": service_name,
                 "namespace": project_namespace(demo_project),
                 "passHostHeader": True,
                 "port": service_port(component, route_spec["port"]),
@@ -679,7 +773,7 @@ def build_reconcile_status(
         "message": (
             f"Missing image override(s): {', '.join(missing_images)}"
             if missing_images
-            else "Image overrides are present for every build."
+            else "Candidate resources are versioned and ready for smoke testing."
         ),
     }
     commit_sha = source_commit_sha(demo_project)
@@ -688,6 +782,17 @@ def build_reconcile_status(
     candidate_url = smoke_check_internal_url(demo_project)
     if candidate_url and not missing_images:
         candidate_status["url"] = candidate_url
+    if image_overrides and not missing_images:
+        version = candidate_version(demo_project, image_overrides)
+        candidate_status["imageVersion"] = version
+        candidate_status["services"] = candidate_service_status(
+            demo_project,
+            image_overrides,
+        )
+        candidate_status["deployments"] = candidate_deployment_status(
+            demo_project,
+            image_overrides,
+        )
 
     status: dict[str, Any] = {
         "observedGeneration": generation if isinstance(generation, int) else 0,
@@ -722,10 +827,14 @@ def build_reconcile_status(
         "reconcileMode": mode,
     }
 
-    if image_overrides and not missing_images:
-        version = source_commit_sha(demo_project) or "manual-image-overrides"
+    if image_overrides and not missing_images and phase in {"Promoted", "Ready"}:
+        version = candidate_version(demo_project, image_overrides)
         status["activeImageVersion"] = version
         status["activeImages"] = image_overrides
+        status["activeRouteServices"] = candidate_service_status(
+            demo_project,
+            image_overrides,
+        )
 
     if error:
         status["lastError"] = {
@@ -800,6 +909,15 @@ def smoke_check_internal_url(demo_project: dict[str, Any]) -> str | None:
         return None
 
     service_name = effective_service_name(component_name, component)
+    image_overrides = parse_image_overrides(demo_project)
+    if image_overrides and not missing_image_overrides(demo_project, image_overrides):
+        version = candidate_version(demo_project, image_overrides)
+        service_name = candidate_service_name(
+            demo_project,
+            component_name,
+            component,
+            version,
+        )
     port = service_port(component, port_name)
     namespace = project_namespace(demo_project)
     return f"http://{service_name}.{namespace}.svc.cluster.local:{port}{path}"
@@ -822,6 +940,62 @@ def best_route_for_path(
     if prefixed:
         return sorted(prefixed, key=lambda item: item[0], reverse=True)[0][1]
     return catchall
+
+
+def candidate_version(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+) -> str | None:
+    if missing_image_overrides(demo_project, image_overrides):
+        return None
+
+    commit_sha = source_commit_sha(demo_project)
+    if commit_sha:
+        return dns_label(f"git-{commit_sha[:12]}")
+
+    encoded = json.dumps(image_overrides, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+    return f"images-{digest}"
+
+
+def candidate_service_status(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+) -> dict[str, str]:
+    version = candidate_version(demo_project, image_overrides)
+    if not version:
+        return {}
+
+    return {
+        component_name: candidate_service_name(
+            demo_project,
+            component_name,
+            component,
+            version,
+        )
+        for component_name, component in sorted(components(demo_project).items())
+        if component_ports(component)
+    }
+
+
+def candidate_deployment_status(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+) -> dict[str, str]:
+    version = candidate_version(demo_project, image_overrides)
+    if not version:
+        return {}
+
+    return {
+        component_name: candidate_deployment_name(
+            demo_project,
+            component_name,
+            version,
+        )
+        for component_name, component in sorted(components(demo_project).items())
+        if isinstance(component.get("build"), str)
+        and component["build"] in image_overrides
+    }
 
 
 def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
@@ -967,6 +1141,51 @@ def user_secret_kubernetes_name(secret_name: str) -> str:
     return f"user-secret-{secret_name}"
 
 
+def candidate_service_name(
+    demo_project: dict[str, Any],
+    component_name: str,
+    component: dict[str, Any],
+    version: str,
+) -> str:
+    base_name = effective_service_name(component_name, component)
+    return suffixed_dns_name(base_name, version)
+
+
+def candidate_deployment_name(
+    demo_project: dict[str, Any],
+    component_name: str,
+    version: str,
+) -> str:
+    return suffixed_dns_name(component_name, version)
+
+
+def suffixed_dns_name(base_name: str, suffix: str) -> str:
+    candidate = f"{base_name}-{suffix}"
+    if len(candidate) <= MAX_DNS_LABEL_LENGTH:
+        return candidate
+
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:8]
+    suffix_part = f"{suffix}-{digest}"
+    stem_length = MAX_DNS_LABEL_LENGTH - len(suffix_part) - 1
+    stem = base_name[:stem_length].rstrip("-")
+    return f"{stem}-{suffix_part}"
+
+
+def dns_label(value: str) -> str:
+    rendered = "".join(
+        character if character.isalnum() or character == "-" else "-"
+        for character in value.lower()
+    ).strip("-")
+    if not rendered:
+        rendered = "unknown"
+    if len(rendered) <= MAX_DNS_LABEL_LENGTH:
+        return rendered
+
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:8]
+    stem = rendered[: MAX_DNS_LABEL_LENGTH - len(digest) - 1].rstrip("-")
+    return f"{stem}-{digest}"
+
+
 def effective_service_name(component_name: str, component: dict[str, Any]) -> str:
     service_name = component.get("serviceName")
     if isinstance(service_name, str):
@@ -1004,6 +1223,18 @@ def component_labels(
     }
 
 
+def rollout_labels(
+    demo_project: dict[str, Any],
+    component_name: str,
+    version: str,
+) -> dict[str, str]:
+    return {
+        **component_labels(demo_project, component_name),
+        "platform.temporal.io/rollout-role": "candidate",
+        "platform.temporal.io/rollout-version": version,
+    }
+
+
 def selector_labels(
     demo_project: dict[str, Any],
     component_name: str,
@@ -1011,4 +1242,15 @@ def selector_labels(
     return {
         "app.kubernetes.io/name": project_name(demo_project),
         "app.kubernetes.io/component": component_name,
+    }
+
+
+def rollout_selector_labels(
+    demo_project: dict[str, Any],
+    component_name: str,
+    version: str,
+) -> dict[str, str]:
+    return {
+        **selector_labels(demo_project, component_name),
+        "platform.temporal.io/rollout-version": version,
     }

@@ -167,6 +167,10 @@ spec:
                   type: object
                   additionalProperties:
                     type: string
+                activeRouteServices:
+                  type: object
+                  additionalProperties:
+                    type: string
                 candidateRolloutStatus:
                   type: object
                   properties:
@@ -179,6 +183,14 @@ spec:
                     url:
                       type: string
                     images:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    services:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    deployments:
                       type: object
                       additionalProperties:
                         type: string

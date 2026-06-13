@@ -74,10 +74,19 @@ class DemoProjectWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=1),
                 )
                 if not smoke_result.get("ok"):
+                    candidate_status = reconcile_status.get(
+                        "candidateRolloutStatus",
+                        {},
+                    )
                     self._status = {
                         **reconcile_status,
                         "phase": "SmokeCheckFailed",
                         "message": "Candidate smoke check failed; active route was not promoted.",
+                        "candidateRolloutStatus": {
+                            **candidate_status,
+                            "phase": "SmokeCheckFailed",
+                            "message": "Candidate smoke check failed; active route was not promoted.",
+                        },
                         "smokeCheckStatus": {
                             "phase": "Failed",
                             "path": smoke_result.get("smokeCheck", {}).get("path"),
@@ -94,10 +103,22 @@ class DemoProjectWorkflow:
                         start_to_close_timeout=timedelta(minutes=5),
                         retry_policy=RetryPolicy(maximum_attempts=3),
                     )
-                    self._status = {
+                    candidate_status = promotion.get(
+                        "candidate",
+                        reconcile_status.get("candidateRolloutStatus", {}),
+                    )
+                    promoted_status = {
                         **reconcile_status,
                         "phase": promotion.get("phase", "Promoted"),
                         "message": promotion.get("message"),
+                        "activeImages": candidate_status.get("images", {}),
+                        "activeRouteServices": candidate_status.get("services", {}),
+                        "candidateRolloutStatus": {
+                            **candidate_status,
+                            "phase": "Promoted",
+                            "completedAt": smoke_result.get("checkedAt"),
+                            "message": "Candidate passed smoke check and was promoted.",
+                        },
                         "appliedResources": [
                             *reconcile_status.get("appliedResources", []),
                             *promotion.get("appliedResources", []),
@@ -111,6 +132,10 @@ class DemoProjectWorkflow:
                             "message": smoke_result.get("message"),
                         },
                     }
+                    active_version = candidate_status.get("imageVersion")
+                    if isinstance(active_version, str):
+                        promoted_status["activeImageVersion"] = active_version
+                    self._status = promoted_status
 
                 await workflow.execute_activity(
                     record_project_status,
