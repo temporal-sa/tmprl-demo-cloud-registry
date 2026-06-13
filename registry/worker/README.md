@@ -52,6 +52,9 @@ execution IDs and CloudWatch log references are recorded under
 `DemoProject.status.buildStatus.codebuild` and mirrored into catalog status.
 The same resolved image map drives candidate resources and promoted Traefik
 routes, so `aws-codebuild` does not require image override annotations.
+Build failures are reported on `DemoProject.status.buildStatus`, set the
+top-level phase to `Error`, and set
+`DemoProject.status.candidateRolloutStatus.phase=BuildFailed`.
 
 When a project has a smoke check, the workflow waits for every versioned
 candidate Deployment to report available replicas before running the smoke

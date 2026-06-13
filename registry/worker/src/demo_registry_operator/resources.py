@@ -812,6 +812,7 @@ def build_reconcile_status(
     now = datetime.now(UTC).isoformat()
     metadata = demo_project.get("metadata", {})
     generation = metadata.get("generation", 0) if isinstance(metadata, dict) else 0
+    build_failed = bool(build_status and build_status.get("phase") == "Error")
     candidate_status: dict[str, Any] = {
         "phase": "WaitingForImages" if missing_images else "CandidateApplied",
         "images": image_overrides,
@@ -824,16 +825,19 @@ def build_reconcile_status(
     commit_sha = source_commit_sha(demo_project)
     if commit_sha:
         candidate_status["sourceCommitSha"] = commit_sha
-    if external_resource_block and not missing_images:
+    if build_failed:
+        candidate_status["phase"] = "BuildFailed"
+        candidate_status["message"] = build_failure_message(build_status)
+    if external_resource_block and not missing_images and not build_failed:
         candidate_status["phase"] = "WaitingForExternalResources"
         candidate_status["message"] = external_resource_block["message"]
     candidate_url = smoke_check_internal_url(
         demo_project,
         image_overrides=image_overrides,
     )
-    if candidate_url and not missing_images:
+    if candidate_url and not missing_images and not build_failed:
         candidate_status["url"] = candidate_url
-    if image_overrides and not missing_images:
+    if image_overrides and not missing_images and not build_failed:
         version = candidate_version(demo_project, image_overrides)
         candidate_status["imageVersion"] = version
         candidate_status["services"] = candidate_service_status(
@@ -844,6 +848,20 @@ def build_reconcile_status(
             demo_project,
             image_overrides,
         )
+    images_ready_reason = (
+        "BuildFailed"
+        if build_failed
+        else "MissingImages"
+        if missing_images
+        else "ImagesResolved"
+    )
+    images_ready_message = (
+        build_failure_message(build_status)
+        if build_failed
+        else f"Missing image(s): {', '.join(missing_images)}"
+        if missing_images
+        else "Every build has an immutable image."
+    )
 
     status: dict[str, Any] = {
         "observedGeneration": generation if isinstance(generation, int) else 0,
@@ -866,7 +884,7 @@ def build_reconcile_status(
         "conditions": [
             {
                 "type": "Reconciled",
-                "status": "False" if error else "True",
+                "status": "False" if error or phase == "Error" else "True",
                 "observedGeneration": generation if isinstance(generation, int) else 0,
                 "reason": "Error" if error else phase,
                 "message": error or message,
@@ -874,14 +892,10 @@ def build_reconcile_status(
             },
             {
                 "type": "ImagesReady",
-                "status": "False" if missing_images else "True",
+                "status": "False" if missing_images or build_failed else "True",
                 "observedGeneration": generation if isinstance(generation, int) else 0,
-                "reason": "MissingImageOverrides" if missing_images else "ImagesResolved",
-                "message": (
-                    f"Missing image(s): {', '.join(missing_images)}"
-                    if missing_images
-                    else "Every build has an immutable image."
-                ),
+                "reason": images_ready_reason,
+                "message": images_ready_message,
                 "lastTransitionTime": now,
             },
             {
@@ -926,6 +940,16 @@ def build_reconcile_status(
         }
 
     return status
+
+
+def build_failure_message(build_status: dict[str, Any] | None) -> str:
+    if not isinstance(build_status, dict):
+        return "Image build failed."
+    last_error = build_status.get("lastError")
+    if isinstance(last_error, dict) and isinstance(last_error.get("message"), str):
+        return last_error["message"]
+    message = build_status.get("message")
+    return message if isinstance(message, str) and message else "Image build failed."
 
 
 def kubernetes_namespace_status(
