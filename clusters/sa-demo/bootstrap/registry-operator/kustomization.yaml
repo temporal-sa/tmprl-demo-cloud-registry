@@ -9,4 +9,4 @@ resources:
 images:
   - name: registry.invalid/tmprl-cloud-demo/demo-registry/worker
     newName: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-cloud-demo/demo-registry/worker
-    newTag: 20260612-225805
+    newTag: 20260612-213600-amd64
