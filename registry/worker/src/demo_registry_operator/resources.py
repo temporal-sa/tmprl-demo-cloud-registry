@@ -815,6 +815,12 @@ def build_reconcile_status(
             image_overrides,
             missing_images,
         ),
+        "kubernetesNamespaceStatus": kubernetes_namespace_status(
+            demo_project,
+            applied_resources,
+            mode=mode,
+            error=error,
+        ),
         "candidateRolloutStatus": candidate_status,
         "smokeCheckStatus": smoke_check_status(demo_project, phase),
         "conditions": [
@@ -860,6 +866,72 @@ def build_reconcile_status(
         }
 
     return status
+
+
+def kubernetes_namespace_status(
+    demo_project: dict[str, Any],
+    applied_resources: list[dict[str, Any]],
+    *,
+    mode: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    namespace = project_namespace(demo_project)
+    namespace_summary = next(
+        (
+            resource
+            for resource in applied_resources
+            if resource.get("kind") == "Namespace"
+            and resource.get("name") == namespace
+        ),
+        None,
+    )
+    action = (
+        namespace_summary.get("action")
+        if isinstance(namespace_summary, dict)
+        else None
+    )
+    status: dict[str, Any] = {
+        "name": namespace,
+        "mode": mode,
+    }
+
+    if error:
+        return {
+            **status,
+            "phase": "Error",
+            "message": "Namespace reconcile did not complete.",
+            "error": error,
+        }
+
+    if mode == "plan":
+        return {
+            **status,
+            "phase": "Planned",
+            "action": action or "planned",
+            "message": "Namespace would be created or patched.",
+        }
+
+    if action == "created":
+        return {
+            **status,
+            "phase": "Ready",
+            "action": action,
+            "message": "Namespace was created.",
+        }
+
+    if action == "patched":
+        return {
+            **status,
+            "phase": "Ready",
+            "action": action,
+            "message": "Namespace was patched.",
+        }
+
+    return {
+        **status,
+        "phase": "Unknown",
+        "message": "Namespace was not present in the applied resource summary.",
+    }
 
 
 def fallback_build_status(
@@ -1077,6 +1149,7 @@ def catalog_status_entry(
         "host": project_host(demo_project),
         "appUrl": f"https://{project_host(demo_project)}",
         "kubernetesNamespace": project_namespace(demo_project),
+        "kubernetesNamespaceStatus": status.get("kubernetesNamespaceStatus"),
         "temporalNamespace": temporal_namespace_for_status(demo_project, status),
         "activeImageVersion": status.get("activeImageVersion"),
         "activeImages": status.get("activeImages", {}),
@@ -1307,6 +1380,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
             "fields": [
                 "phase",
                 "message",
+                "kubernetesNamespaceStatus",
                 "externalResources",
                 "build",
                 "candidate",

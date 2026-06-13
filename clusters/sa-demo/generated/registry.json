@@ -15,6 +15,7 @@
         "fields": [
           "phase",
           "message",
+          "kubernetesNamespaceStatus",
           "externalResources",
           "build",
           "candidate",
@@ -62,6 +63,7 @@
         "fields": [
           "phase",
           "message",
+          "kubernetesNamespaceStatus",
           "externalResources",
           "build",
           "candidate",
@@ -103,6 +105,7 @@
         "fields": [
           "phase",
           "message",
+          "kubernetesNamespaceStatus",
           "externalResources",
           "build",
           "candidate",

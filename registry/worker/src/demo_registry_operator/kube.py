@@ -47,12 +47,12 @@ def apply_resources(
         if namespace:
             summary["namespace"] = namespace
         if not dry_run:
-            apply_resource(resource)
+            summary["action"] = apply_resource(resource)
         results.append(summary)
     return results
 
 
-def apply_resource(resource: dict[str, Any]) -> None:
+def apply_resource(resource: dict[str, Any]) -> str:
     client = _client_module()
     load_kubernetes_config()
     kind = resource.get("kind")
@@ -65,19 +65,18 @@ def apply_resource(resource: dict[str, Any]) -> None:
 
     if kind == "Namespace":
         core = client.CoreV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: core.read_namespace(name),
             create=lambda: core.create_namespace(resource),
             patch=lambda: core.patch_namespace(name, resource),
         )
-        return
 
     if not isinstance(namespace, str):
         raise ValueError(f"{kind} {name} is missing metadata.namespace")
 
     if kind == "ServiceAccount":
         core = client.CoreV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: core.read_namespaced_service_account(name, namespace),
             create=lambda: core.create_namespaced_service_account(namespace, resource),
             patch=lambda: core.patch_namespaced_service_account(
@@ -86,47 +85,42 @@ def apply_resource(resource: dict[str, Any]) -> None:
                 resource,
             ),
         )
-        return
 
     if kind == "ConfigMap":
         core = client.CoreV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: core.read_namespaced_config_map(name, namespace),
             create=lambda: core.create_namespaced_config_map(namespace, resource),
             patch=lambda: core.patch_namespaced_config_map(name, namespace, resource),
         )
-        return
 
     if kind == "Service":
         core = client.CoreV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: core.read_namespaced_service(name, namespace),
             create=lambda: core.create_namespaced_service(namespace, resource),
             patch=lambda: core.patch_namespaced_service(name, namespace, resource),
         )
-        return
 
     if kind == "Deployment":
         apps = client.AppsV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: apps.read_namespaced_deployment(name, namespace),
             create=lambda: apps.create_namespaced_deployment(namespace, resource),
             patch=lambda: apps.patch_namespaced_deployment(name, namespace, resource),
         )
-        return
 
     if kind == "Role":
         rbac = client.RbacAuthorizationV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: rbac.read_namespaced_role(name, namespace),
             create=lambda: rbac.create_namespaced_role(namespace, resource),
             patch=lambda: rbac.patch_namespaced_role(name, namespace, resource),
         )
-        return
 
     if kind == "RoleBinding":
         rbac = client.RbacAuthorizationV1Api()
-        _create_or_patch(
+        return _create_or_patch(
             read=lambda: rbac.read_namespaced_role_binding(name, namespace),
             create=lambda: rbac.create_namespaced_role_binding(namespace, resource),
             patch=lambda: rbac.patch_namespaced_role_binding(
@@ -135,11 +129,9 @@ def apply_resource(resource: dict[str, Any]) -> None:
                 resource,
             ),
         )
-        return
 
     if isinstance(resource.get("apiVersion"), str):
-        apply_custom_resource(resource, name=name, namespace=namespace)
-        return
+        return apply_custom_resource(resource, name=name, namespace=namespace)
 
     raise ValueError(f"Unsupported resource kind {kind!r}")
 
@@ -149,7 +141,7 @@ def apply_custom_resource(
     *,
     name: str,
     namespace: str,
-) -> None:
+) -> str:
     api_version = resource["apiVersion"]
     if "/" not in api_version:
         raise ValueError(f"Unsupported custom apiVersion {api_version!r}")
@@ -162,7 +154,7 @@ def apply_custom_resource(
 
     client = _client_module()
     custom = client.CustomObjectsApi()
-    _create_or_patch(
+    return _create_or_patch(
         read=lambda: custom.get_namespaced_custom_object(
             group,
             version,
@@ -225,15 +217,16 @@ def read_deployment_status(namespace: str, name: str) -> dict[str, Any]:
     }
 
 
-def _create_or_patch(read: Any, create: Any, patch: Any) -> None:
+def _create_or_patch(read: Any, create: Any, patch: Any) -> str:
     try:
         read()
     except Exception as error:
         if _api_status(error) == 404:
             create()
-            return
+            return "created"
         raise
     patch()
+    return "patched"
 
 
 def _api_status(error: Exception) -> int | None:

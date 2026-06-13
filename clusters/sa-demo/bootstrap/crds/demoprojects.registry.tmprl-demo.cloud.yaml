@@ -172,6 +172,21 @@ spec:
                   type: object
                   additionalProperties:
                     type: string
+                kubernetesNamespaceStatus:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    phase:
+                      type: string
+                    action:
+                      type: string
+                    mode:
+                      type: string
+                    message:
+                      type: string
+                    error:
+                      type: string
                 buildStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

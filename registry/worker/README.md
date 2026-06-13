@@ -57,8 +57,8 @@ check. If readiness times out, the active route is not promoted and
 Every `record_project_status` activity also writes a compact catalog lifecycle
 entry to the configured status ConfigMap. By default each project is written as
 `demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
-phase, build, external-resource, candidate, readiness, smoke-check, and active
-version fields for the registry/catalog UI.
+phase, namespace, build, external-resource, candidate, readiness, smoke-check,
+and active version fields for the registry/catalog UI.
 
 Environment variables:
 

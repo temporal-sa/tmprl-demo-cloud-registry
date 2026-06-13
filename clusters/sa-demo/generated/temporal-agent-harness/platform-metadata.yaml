@@ -22,9 +22,9 @@ data:
   registry.json: '{"appUrl": "https://agent-harness-demo.testing.tmprl-demo.cloud",
     "assets": {}, "authRequired": true, "catalogStatus": {"configMap": {"key": "temporal-agent-harness.json",
     "name": "demo-registry-catalog-status", "namespace": "demo-registry-system"},
-    "demoProject": "temporal-agent-harness", "fields": ["phase", "message", "externalResources",
-    "build", "candidate", "readiness", "smokeCheck", "activeImageVersion", "lastError"],
-    "source": "DemoProject.status"}, "host": "agent-harness-demo.testing.tmprl-demo.cloud",
+    "demoProject": "temporal-agent-harness", "fields": ["phase", "message", "kubernetesNamespaceStatus",
+    "externalResources", "build", "candidate", "readiness", "smokeCheck", "activeImageVersion",
+    "lastError"], "source": "DemoProject.status"}, "host": "agent-harness-demo.testing.tmprl-demo.cloud",
     "links": {}, "name": "temporal-agent-harness", "sourceRepo": "https://github.com/temporal-sa/temporal-agent-harness-example",
     "summary": "Multi-agent chat and tool orchestration demo showing durable agent
     execution, streaming progress, human approvals, and managed demo workspaces.",

@@ -19,9 +19,10 @@ data:
   registry.json: '{"appUrl": "https://registry.tmprl-demo.cloud", "assets": {}, "authRequired":
     true, "catalogStatus": {"configMap": {"key": "demo-registry.json", "name": "demo-registry-catalog-status",
     "namespace": "demo-registry-system"}, "demoProject": "demo-registry", "fields":
-    ["phase", "message", "externalResources", "build", "candidate", "readiness", "smokeCheck",
-    "activeImageVersion", "lastError"], "source": "DemoProject.status"}, "host": "registry.tmprl-demo.cloud",
-    "links": {}, "name": "demo-registry", "sourceRepo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry",
+    ["phase", "message", "kubernetesNamespaceStatus", "externalResources", "build",
+    "candidate", "readiness", "smokeCheck", "activeImageVersion", "lastError"], "source":
+    "DemoProject.status"}, "host": "registry.tmprl-demo.cloud", "links": {}, "name":
+    "demo-registry", "sourceRepo": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry",
     "summary": "Landing page for Temporal demo projects, generated from reviewed project
     configs and backed by platform workflows for demo environment management.", "tags":
     ["Registry", "Platform", "Demo Management", "Temporal Cloud"], "temporalNamespace":
