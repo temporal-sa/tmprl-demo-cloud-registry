@@ -9,4 +9,4 @@ spec:
     name: cluster-gitops-config-auth
   url: ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git
   ref:
-    branch: build-platform-generator
+    branch: main
