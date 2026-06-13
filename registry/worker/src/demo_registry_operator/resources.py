@@ -790,7 +790,10 @@ def build_reconcile_status(
     commit_sha = source_commit_sha(demo_project)
     if commit_sha:
         candidate_status["sourceCommitSha"] = commit_sha
-    candidate_url = smoke_check_internal_url(demo_project)
+    candidate_url = smoke_check_internal_url(
+        demo_project,
+        image_overrides=image_overrides,
+    )
     if candidate_url and not missing_images:
         candidate_status["url"] = candidate_url
     if image_overrides and not missing_images:
@@ -1247,7 +1250,11 @@ def smoke_check_status(demo_project: dict[str, Any], phase: str) -> dict[str, An
     }
 
 
-def smoke_check_internal_url(demo_project: dict[str, Any]) -> str | None:
+def smoke_check_internal_url(
+    demo_project: dict[str, Any],
+    *,
+    image_overrides: dict[str, str],
+) -> str | None:
     smoke_check = spec_of(demo_project).get("smokeCheck")
     if not isinstance(smoke_check, dict) or not isinstance(smoke_check.get("path"), str):
         return None
@@ -1267,7 +1274,6 @@ def smoke_check_internal_url(demo_project: dict[str, Any]) -> str | None:
         return None
 
     service_name = effective_service_name(component_name, component)
-    image_overrides = parse_image_overrides(demo_project)
     if image_overrides and not missing_image_overrides(demo_project, image_overrides):
         version = candidate_version(demo_project, image_overrides)
         service_name = candidate_service_name(
