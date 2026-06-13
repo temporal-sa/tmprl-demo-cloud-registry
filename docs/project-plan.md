@@ -68,6 +68,9 @@ Keep it current as phases move from design to implementation.
   declaration. Every JSON key in the AWS secret is injected as an environment
   variable for those components, and declared `requiredProperties` are verified
   before runtime workloads are deployed in opt-in AWS external-resource mode.
+- The `DemoProject` CRD schema includes the same top-level
+  `spec.secrets.<name>.requiredProperties` contract so Kubernetes preserves
+  those requirements for the operator.
 - Project IAM roles must be scoped to the project secret prefix only, for
   example `tmprl-cloud-demo/<metadata.name>/*`, so a compromised project cannot
   read or mutate secrets belonging to other demos or non-demo systems.
