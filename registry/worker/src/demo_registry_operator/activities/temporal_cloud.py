@@ -71,6 +71,12 @@ class TemporalCloudReconciler(Protocol):
 
     async def find_namespace(self, name: str) -> NamespaceInfo | None: ...
 
+    async def delete_namespace(self, qualified_name: str) -> str: ...
+
+    async def delete_api_key(self, key_id: str) -> str: ...
+
+    async def delete_service_account(self, service_account_id: str) -> str: ...
+
     async def create_namespace(
         self,
         name: str,
@@ -96,6 +102,8 @@ class SecretStore(Protocol):
     def write_json(
         self, path: str, value: dict[str, Any], description: str | None = None
     ) -> None: ...
+
+    def delete(self, path: str) -> str: ...
 
 
 def desired_namespace_name(demo_project: dict[str, Any]) -> str:
@@ -245,6 +253,62 @@ async def reconcile_temporal_cloud(
             "expiryTime": expiry_time,
             "components": sorted(temporal_components(demo_project)),
         },
+    }
+
+
+async def finalize_temporal_cloud(
+    demo_project: dict[str, Any],
+    *,
+    reconciler: TemporalCloudReconciler,
+    secret_store: SecretStore,
+    checked_at: str,
+) -> dict[str, Any]:
+    """Delete the project's Temporal Cloud namespace, service account, API key,
+    and runtime secret. Idempotent: anything already gone is treated as deleted.
+
+    Driven by project removal from git (the explicit deletion approval), so this
+    is allowed to destroy the namespace (disabling delete protection first)."""
+
+    if not temporal_components(demo_project):
+        return {
+            "phase": "NotRequired",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "message": "No Temporal Cloud resources to delete.",
+        }
+
+    runtime_path = temporal_secret_remote_path(demo_project)
+    existing = secret_store.read_json(runtime_path)
+    existing = existing if isinstance(existing, dict) else {}
+    key_id = existing.get("keyId")
+    service_account_id = existing.get("serviceAccountId")
+    qualified = existing.get("namespace")
+
+    deleted: dict[str, Any] = {}
+    if key_id:
+        deleted["apiKey"] = await reconciler.delete_api_key(key_id)
+    if service_account_id:
+        deleted["serviceAccount"] = await reconciler.delete_service_account(
+            service_account_id
+        )
+
+    if not qualified:
+        found = await reconciler.find_namespace(desired_namespace_name(demo_project))
+        qualified = found.qualified_name if found else None
+    if qualified:
+        deleted["namespace"] = await reconciler.delete_namespace(qualified)
+
+    if existing:
+        deleted["secret"] = secret_store.delete(runtime_path)
+
+    return {
+        "phase": "Deleted",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "namespace": {"name": qualified},
+        "deleted": deleted,
     }
 
 
@@ -399,6 +463,82 @@ class CloudApiReconciler:
             expiry_time=expiry.isoformat(),
         )
 
+    async def delete_namespace(self, qualified_name: str) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            DeleteNamespaceRequest,
+            GetNamespaceRequest,
+            UpdateNamespaceRequest,
+        )
+
+        try:
+            got = await self._cs.get_namespace(
+                GetNamespaceRequest(namespace=qualified_name)
+            )
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _is_not_found(error):
+                return "not-found"
+            raise
+
+        namespace = got.namespace
+        # Delete protection must be disabled before the namespace can be deleted.
+        if namespace.spec.lifecycle.enable_delete_protection:
+            spec = namespace.spec
+            spec.lifecycle.enable_delete_protection = False
+            response = await self._cs.update_namespace(
+                UpdateNamespaceRequest(
+                    namespace=qualified_name,
+                    spec=spec,
+                    resource_version=namespace.resource_version,
+                )
+            )
+            await self._await_operation(
+                response.async_operation,
+                label=f"disable-delete-protection:{qualified_name}",
+            )
+            got = await self._cs.get_namespace(
+                GetNamespaceRequest(namespace=qualified_name)
+            )
+            namespace = got.namespace
+
+        response = await self._cs.delete_namespace(
+            DeleteNamespaceRequest(
+                namespace=qualified_name,
+                resource_version=namespace.resource_version,
+            )
+        )
+        await self._await_operation(
+            response.async_operation, label=f"delete-namespace:{qualified_name}"
+        )
+        return "deleted"
+
+    async def delete_api_key(self, key_id: str) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import DeleteApiKeyRequest
+
+        try:
+            response = await self._cs.delete_api_key(DeleteApiKeyRequest(key_id=key_id))
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _is_not_found(error):
+                return "not-found"
+            raise
+        await self._await_operation(response.async_operation, label=f"delete-api-key:{key_id}")
+        return "deleted"
+
+    async def delete_service_account(self, service_account_id: str) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import DeleteServiceAccountRequest
+
+        try:
+            response = await self._cs.delete_service_account(
+                DeleteServiceAccountRequest(service_account_id=service_account_id)
+            )
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _is_not_found(error):
+                return "not-found"
+            raise
+        await self._await_operation(
+            response.async_operation, label=f"delete-service-account:{service_account_id}"
+        )
+        return "deleted"
+
     async def _await_operation(self, async_operation: Any, *, label: str) -> None:
         from temporalio.api.cloud.cloudservice.v1 import GetAsyncOperationRequest
         from temporalio.api.cloud.operation.v1 import AsyncOperation
@@ -489,6 +629,17 @@ class SecretsManagerStore:
             kwargs["Tags"] = [{"Key": "managed-by", "Value": "demo-registry"}]
             self._client.create_secret(**kwargs)
 
+    def delete(self, path: str) -> str:
+        # Schedule deletion with a recovery window rather than force-deleting, so
+        # a credential torn down by mistake can still be restored.
+        try:
+            self._client.delete_secret(SecretId=path, RecoveryWindowInDays=7)
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _error_code(error) == "ResourceNotFoundException":
+                return "not-found"
+            raise
+        return "scheduled-deletion"
+
 
 async def run_cloud_api_reconcile(
     demo_project: dict[str, Any],
@@ -532,6 +683,52 @@ async def run_cloud_api_reconcile(
         checked_at=checked_at,
         enable_delete_protection=enable_delete_protection,
     )
+
+
+async def run_cloud_api_finalize(
+    demo_project: dict[str, Any],
+    *,
+    bootstrap: dict[str, Any],
+    secret_store: SecretStore,
+    checked_at: str,
+    target_host: str = DEFAULT_OPS_TARGET_HOST,
+    api_version: str | None = None,
+    heartbeat: Any = None,
+) -> dict[str, Any]:
+    """Connect the Cloud Operations client and tear down Temporal Cloud resources."""
+
+    from temporalio.client import CloudOperationsClient
+
+    api_key = bootstrap.get("TEMPORAL_CLOUD_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "Temporal Cloud bootstrap secret must include TEMPORAL_CLOUD_API_KEY."
+        )
+
+    connect_kwargs: dict[str, Any] = {"api_key": api_key, "target_host": target_host}
+    if api_version:
+        connect_kwargs["version"] = api_version
+    client = await CloudOperationsClient.connect(**connect_kwargs)
+
+    reconciler = CloudApiReconciler(
+        client.cloud_service,
+        account_id=bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID"),
+        heartbeat=heartbeat,
+    )
+    return await finalize_temporal_cloud(
+        demo_project,
+        reconciler=reconciler,
+        secret_store=secret_store,
+        checked_at=checked_at,
+    )
+
+
+def _is_not_found(error: Exception) -> bool:
+    try:
+        from temporalio.service import RPCError, RPCStatusCode
+    except ImportError:
+        return False
+    return isinstance(error, RPCError) and error.status == RPCStatusCode.NOT_FOUND
 
 
 def _error_code(error: Exception) -> str | None:

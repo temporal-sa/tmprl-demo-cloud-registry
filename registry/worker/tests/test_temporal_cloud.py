@@ -6,6 +6,7 @@ import json
 from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     NamespaceInfo,
+    finalize_temporal_cloud,
     reconcile_temporal_cloud,
 )
 
@@ -66,6 +67,18 @@ class FakeReconciler:
             expiry_time="2027-06-13T00:00:00+00:00",
         )
 
+    async def delete_namespace(self, qualified_name):
+        self.calls.append(("delete_namespace", qualified_name))
+        return "deleted"
+
+    async def delete_api_key(self, key_id):
+        self.calls.append(("delete_api_key", key_id))
+        return "deleted"
+
+    async def delete_service_account(self, service_account_id):
+        self.calls.append(("delete_service_account", service_account_id))
+        return "deleted"
+
     def called(self, name):
         return [call for call in self.calls if call[0] == name]
 
@@ -81,6 +94,13 @@ class FakeSecretStore:
     def write_json(self, path, value, description=None):
         self.writes.append((path, value, description))
         self.store[path] = value
+
+    def delete(self, path):
+        self.deletes = getattr(self, "deletes", [])
+        self.deletes.append(path)
+        existed = path in self.store
+        self.store.pop(path, None)
+        return "scheduled-deletion" if existed else "not-found"
 
 
 def reconcile(reconciler, secret_store, demo_project=PROJECT):
@@ -207,3 +227,67 @@ def test_not_required_when_no_temporal_components():
     assert status["phase"] == "NotRequired"
     assert reconciler.calls == []
     assert secrets.writes == []
+
+
+def finalize(reconciler, secret_store, demo_project=PROJECT):
+    return asyncio.run(
+        finalize_temporal_cloud(
+            demo_project,
+            reconciler=reconciler,
+            secret_store=secret_store,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+
+def test_finalize_deletes_namespace_service_account_key_and_secret():
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore(
+        {
+            RUNTIME_PATH: {
+                "namespace": "demo-banking-app-money-transfer.acct1",
+                "apiKey": "KEY",
+                "keyId": "key-abc",
+                "serviceAccountId": "sa-123",
+            }
+        }
+    )
+
+    status = finalize(reconciler, secrets)
+
+    assert status["phase"] == "Deleted"
+    assert reconciler.called("delete_api_key") == [("delete_api_key", "key-abc")]
+    assert reconciler.called("delete_service_account") == [
+        ("delete_service_account", "sa-123")
+    ]
+    assert reconciler.called("delete_namespace") == [
+        ("delete_namespace", "demo-banking-app-money-transfer.acct1")
+    ]
+    assert RUNTIME_PATH not in secrets.store
+    assert status["deleted"]["secret"] == "scheduled-deletion"
+
+
+def test_finalize_is_idempotent_when_nothing_exists():
+    reconciler = FakeReconciler()  # find_namespace returns None
+    secrets = FakeSecretStore()  # no runtime secret
+
+    status = finalize(reconciler, secrets)
+
+    assert status["phase"] == "Deleted"
+    assert reconciler.called("delete_namespace") == []
+    assert reconciler.called("delete_api_key") == []
+    assert "secret" not in status["deleted"]
+
+
+def test_finalize_not_required_without_temporal_components():
+    project = {
+        "metadata": {"name": "static-site"},
+        "spec": {"components": {"frontend": {"build": "app"}}},
+    }
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore()
+
+    status = finalize(reconciler, secrets, demo_project=project)
+
+    assert status["phase"] == "NotRequired"
+    assert reconciler.calls == []
