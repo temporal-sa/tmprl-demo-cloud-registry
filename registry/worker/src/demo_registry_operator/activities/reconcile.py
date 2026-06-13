@@ -22,6 +22,7 @@ from demo_registry_operator.resources import (
     base_resources,
     build_reconcile_status,
     catalog_status_configmap,
+    is_control_plane_project,
     missing_image_overrides,
     parse_image_overrides,
     promotion_resources,
@@ -149,6 +150,18 @@ def finalize_project(request: dict[str, Any]) -> dict[str, Any]:
     config = WorkerConfig.from_env()
     name = project_name(demo_project)
     namespace = project_namespace(demo_project)
+
+    # Never tear down the control plane, even if a finalize somehow reached it.
+    if is_control_plane_project(demo_project):
+        activity.logger.warning(
+            "Refusing to finalize control-plane project=%s", name
+        )
+        return {
+            "phase": "Skipped",
+            "project": name,
+            "message": "Control-plane project is not finalized.",
+        }
+
     dry_run = config.reconcile_mode != "apply"
     activity.logger.info(
         "Finalizing project=%s namespace=%s dry_run=%s", name, namespace, dry_run

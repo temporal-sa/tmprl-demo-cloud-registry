@@ -12,6 +12,7 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import (
     builds,
     components_for_user_secret,
+    is_control_plane_project,
     project_name,
     project_namespace,
     project_secret_prefix,
@@ -52,6 +53,17 @@ def reconcile_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]
         project_name(demo_project),
         config.external_resource_mode,
     )
+
+    if is_control_plane_project(demo_project):
+        return {
+            "phase": "BootstrapManaged",
+            "mode": config.external_resource_mode,
+            "checkedAt": datetime.now(UTC).isoformat(),
+            "message": (
+                "Registry control-plane external resources are managed by "
+                "bootstrap; not reconciled as a project."
+            ),
+        }
 
     if config.external_resource_mode == "aws":
         return aws_external_resources(demo_project, config)
