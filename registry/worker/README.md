@@ -50,6 +50,8 @@ AWS CodeBuild project with source, buildspec, and ECR image overrides, waits
 for completion, and records the immutable images pushed by the build. CodeBuild
 execution IDs and CloudWatch log references are recorded under
 `DemoProject.status.buildStatus.codebuild` and mirrored into catalog status.
+The same resolved image map drives candidate resources and promoted Traefik
+routes, so `aws-codebuild` does not require image override annotations.
 
 When a project has a smoke check, the workflow waits for every versioned
 candidate Deployment to report available replicas before running the smoke

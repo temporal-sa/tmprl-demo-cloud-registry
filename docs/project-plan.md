@@ -495,6 +495,9 @@ Operator rollout direction:
 - The workflow resolves images first, either from existing immutable overrides
   or from the build activity, then deploys candidate pods without immediately
   moving public traffic.
+- Build-resolved image maps now drive both candidate resources and promoted
+  Traefik routes, so the non-manual build path does not need image override
+  annotations.
 - Current operator implementation creates candidate Deployments and Services
   with deterministic version suffixes, using `git-<source-sha>` when the
   source commit annotation is present.

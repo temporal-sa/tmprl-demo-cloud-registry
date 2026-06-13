@@ -144,18 +144,31 @@ def runtime_resources(
     resources.extend(deployment_resources(demo_project, image_overrides))
 
     if include_routes:
-        resources.extend(promotion_resources(demo_project))
+        resources.extend(
+            promotion_resources(
+                demo_project,
+                image_overrides=image_overrides,
+            )
+        )
     return resources
 
 
-def promotion_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+def promotion_resources(
+    demo_project: dict[str, Any],
+    *,
+    image_overrides: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     resources = []
-    image_overrides = parse_image_overrides(demo_project)
+    resolved_images = (
+        image_overrides
+        if image_overrides is not None
+        else parse_image_overrides(demo_project)
+    )
     if ingress_routes(demo_project):
         resources.append(certificate_resource(demo_project))
     if auth_required(demo_project):
         resources.append(auth_middleware(demo_project))
-    resources.extend(ingress_resources(demo_project, image_overrides=image_overrides))
+    resources.extend(ingress_resources(demo_project, image_overrides=resolved_images))
     return resources
 
 

@@ -386,9 +386,9 @@ For the GitOps-managed path, make the same environment change in
 let Flux reconcile the Deployment. In `aws-codebuild` mode, do not add
 `registry.tmprl-demo.cloud/image-overrides`; the workflow starts CodeBuild,
 records `DemoProject.status.buildStatus.codebuild` with the build ID/logs, and
-uses `DemoProject.status.buildStatus.images` for the candidate rollout. To pin
-an exact source revision instead of building branch HEAD, annotate only the
-source commit:
+uses `DemoProject.status.buildStatus.images` for the candidate rollout and
+promoted Traefik routes. To pin an exact source revision instead of building
+branch HEAD, annotate only the source commit:
 
 ```sh
 kubectl annotate demoproject dejavu-tacos \

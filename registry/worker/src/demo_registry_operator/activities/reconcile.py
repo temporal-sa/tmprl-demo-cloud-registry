@@ -264,10 +264,19 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
     project_name = plan.get("project", "unknown")
     config = WorkerConfig.from_env()
     demo_project = plan.get("demoProject")
+    candidate = plan.get("candidate")
+    candidate_images = (
+        candidate.get("images")
+        if isinstance(candidate, dict) and isinstance(candidate.get("images"), dict)
+        else None
+    )
     applied = []
     if isinstance(demo_project, dict):
         applied = apply_resources(
-            promotion_resources(demo_project),
+            promotion_resources(
+                demo_project,
+                image_overrides=candidate_images,
+            ),
             dry_run=config.reconcile_mode != "apply",
         )
     activity.logger.info("Promoting candidate for project=%s", project_name)
@@ -275,7 +284,7 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
         "project": project_name,
         "phase": "Promoted",
         "message": "Candidate passed smoke check; active route resources were promoted.",
-        "candidate": plan.get("candidate", {}),
+        "candidate": candidate or {},
         "appliedResources": applied,
     }
 
