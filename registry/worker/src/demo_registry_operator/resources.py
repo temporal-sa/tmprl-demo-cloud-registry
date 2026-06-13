@@ -1201,6 +1201,7 @@ def build_summary(value: Any) -> dict[str, Any]:
         "imageVersion": value.get("imageVersion"),
         "images": value.get("images", {}),
         "missingImages": value.get("missingImages", []),
+        "codebuild": value.get("codebuild"),
         "lastError": value.get("lastError"),
     }
 

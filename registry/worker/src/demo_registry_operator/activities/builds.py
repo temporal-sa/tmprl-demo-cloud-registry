@@ -154,6 +154,7 @@ def build_with_codebuild(
     source = source_config(demo_project)
     requested_version = source_commit_sha(demo_project) or source["branch"]
     image_templates: dict[str, str] = {}
+    codebuild_build: dict[str, Any] | None = None
     try:
         for build_name in sorted(builds(demo_project)):
             repository_uri = repository_uri_for_build(build_name, external_resources)
@@ -188,11 +189,12 @@ def build_with_codebuild(
         )
         response = codebuild.start_build(**start_args)
         build = response.get("build", {})
+        codebuild_build = build if isinstance(build, dict) else None
         build_id = build.get("id")
         if not isinstance(build_id, str):
             raise RuntimeError("CodeBuild start_build response did not include build.id")
 
-        build = wait_for_codebuild_build(
+        codebuild_build = wait_for_codebuild_build(
             codebuild,
             build_id,
             config=config,
@@ -209,10 +211,21 @@ def build_with_codebuild(
             message="AWS CodeBuild image build failed.",
             build_entries=[],
             error=str(error),
+            codebuild_status=codebuild_status_summary(
+                codebuild_build,
+                project_name=config.codebuild_project,
+            ),
         )
 
-    status = build.get("buildStatus")
-    resolved_commit = resolved_codebuild_source_version(build, requested_version)
+    status = codebuild_build.get("buildStatus")
+    resolved_commit = resolved_codebuild_source_version(
+        codebuild_build,
+        requested_version,
+    )
+    codebuild_status = codebuild_status_summary(
+        codebuild_build,
+        project_name=config.codebuild_project,
+    )
     if status != "SUCCEEDED":
         return build_status(
             demo_project,
@@ -229,7 +242,8 @@ def build_with_codebuild(
                 external_resources=external_resources,
                 phase="Failed",
             ),
-            error=codebuild_error_message(build),
+            error=codebuild_error_message(codebuild_build),
+            codebuild_status=codebuild_status,
         )
 
     if not resolved_commit or not looks_like_commit_sha(resolved_commit):
@@ -247,6 +261,7 @@ def build_with_codebuild(
                 "commit SHA; annotate registry.tmprl-demo.cloud/source-commit-sha "
                 "or verify the CodeBuild source provider."
             ),
+            codebuild_status=codebuild_status,
         )
 
     images = {
@@ -272,6 +287,7 @@ def build_with_codebuild(
             )
             for build_name in sorted(builds(demo_project))
         ],
+        codebuild_status=codebuild_status,
     )
 
 
@@ -379,6 +395,7 @@ def build_status(
     build_entries: list[dict[str, Any]],
     missing_images: list[str] | None = None,
     error: str | None = None,
+    codebuild_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     completed_at = datetime.now(UTC).isoformat()
     status: dict[str, Any] = {
@@ -400,7 +417,53 @@ def build_status(
             "message": error,
             "lastTransitionTime": completed_at,
         }
+    if codebuild_status:
+        status["codebuild"] = codebuild_status
     return status
+
+
+def codebuild_status_summary(
+    build: dict[str, Any] | None,
+    *,
+    project_name: str | None,
+) -> dict[str, Any] | None:
+    if not isinstance(build, dict):
+        if project_name:
+            return {
+                "projectName": project_name,
+                "phase": "Unknown",
+            }
+        return None
+
+    summary: dict[str, Any] = {
+        "projectName": project_name,
+        "buildId": build.get("id"),
+        "arn": build.get("arn"),
+        "buildNumber": build.get("buildNumber"),
+        "phase": build.get("buildStatus"),
+        "sourceVersion": build.get("sourceVersion"),
+        "resolvedSourceVersion": build.get("resolvedSourceVersion"),
+        "startedAt": isoformat_value(build.get("startTime")),
+        "completedAt": isoformat_value(build.get("endTime")),
+    }
+    logs = build.get("logs")
+    if isinstance(logs, dict):
+        summary["logs"] = {
+            "groupName": logs.get("groupName"),
+            "streamName": logs.get("streamName"),
+            "deepLink": logs.get("deepLink"),
+        }
+    return {
+        key: value
+        for key, value in summary.items()
+        if value not in (None, {}, [])
+    }
+
+
+def isoformat_value(value: Any) -> str | None:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value if isinstance(value, str) else None
 
 
 def codebuild_start_build_args(

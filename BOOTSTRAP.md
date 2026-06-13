@@ -357,12 +357,42 @@ DEMO_REGISTRY_AWS_REGION=<aws-region>
 DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 ```
 
+For a temporary live test, patch the operator Deployment and let the restarted
+watch loop signal every `DemoProject` again:
+
+```sh
+kubectl -n demo-registry-system set env deploy/demo-registry-operator \
+  DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws \
+  DEMO_REGISTRY_BUILD_MODE=aws-codebuild \
+  DEMO_REGISTRY_CODEBUILD_PROJECT=<codebuild-project-name> \
+  DEMO_REGISTRY_AWS_REGION=<aws-region> \
+  DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
+
+kubectl -n demo-registry-system rollout status deploy/demo-registry-operator
+```
+
+For the GitOps-managed path, make the same environment change in
+`clusters/sa-demo/bootstrap/registry-operator/deployment.yaml`, commit it, and
+let Flux reconcile the Deployment. In `aws-codebuild` mode, do not add
+`registry.tmprl-demo.cloud/image-overrides`; the workflow starts CodeBuild,
+records `DemoProject.status.buildStatus.codebuild` with the build ID/logs, and
+uses `DemoProject.status.buildStatus.images` for the candidate rollout. To pin
+an exact source revision instead of building branch HEAD, annotate only the
+source commit:
+
+```sh
+kubectl annotate demoproject dejavu-tacos \
+  registry.tmprl-demo.cloud/source-commit-sha=<git-sha> \
+  --overwrite
+```
+
 For trusted local testing only, set `DEMO_REGISTRY_BUILD_MODE=local-docker`
 instead and run the worker where `git`, `docker`, Docker daemon access, and
 project-scoped ECR push credentials are intentionally available.
 
-If you keep `DEMO_REGISTRY_BUILD_MODE=plan`, build images manually from the
-reviewed source repo using narrow credentials:
+If you keep `DEMO_REGISTRY_BUILD_MODE=plan`, the build activity will not
+produce image refs. In that manual fallback only, build images from the reviewed
+source repo using narrow credentials:
 
 ```sh
 git clone https://github.com/temporal-sa/demo-dejavu-tacos /tmp/demo-dejavu-tacos
@@ -394,7 +424,8 @@ aws secretsmanager create-secret \
   }'
 ```
 
-Annotate the `DemoProject` with the immutable image set:
+For the manual fallback only, annotate the `DemoProject` with the immutable
+image set:
 
 ```sh
 kubectl annotate demoproject dejavu-tacos \
@@ -507,8 +538,15 @@ aws secretsmanager create-secret \
 
 Then use `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` and
 `DEMO_REGISTRY_BUILD_MODE=aws-codebuild` with the configured CodeBuild project,
-or manually build and annotate the immutable app image. The generated smoke
-check is:
+or manually build and annotate the immutable app image. In `aws-codebuild`
+mode, confirm the build reached `Pushed` and find the CodeBuild build/logs in:
+
+```text
+DemoProject.status.buildStatus.codebuild
+DemoProject.status.buildStatus.images.app
+```
+
+The generated smoke check is:
 
 ```yaml
 smokeCheck:

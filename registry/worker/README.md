@@ -47,7 +47,9 @@ provided, builds each configured Dockerfile with `docker build`, pushes
 `git-<source-sha>` tags, and passes the resolved image map into candidate
 rollout status. In opt-in `aws-codebuild` mode the worker starts a configured
 AWS CodeBuild project with source, buildspec, and ECR image overrides, waits
-for completion, and records the immutable images pushed by the build.
+for completion, and records the immutable images pushed by the build. CodeBuild
+execution IDs and CloudWatch log references are recorded under
+`DemoProject.status.buildStatus.codebuild` and mirrored into catalog status.
 
 When a project has a smoke check, the workflow waits for every versioned
 candidate Deployment to report available replicas before running the smoke

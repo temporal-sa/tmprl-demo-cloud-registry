@@ -484,7 +484,9 @@ Requirements:
   tests, and an opt-in `aws-codebuild` activity that starts and polls a
   configured CodeBuild project. The CodeBuild project and service role are
   provisioned outside the operator and should have source-repo read access plus
-  ECR push access scoped to the project/build repositories.
+  ECR push access scoped to the project/build repositories. CodeBuild
+  execution details, including build ID and CloudWatch logs, are recorded under
+  `DemoProject.status.buildStatus.codebuild` and mirrored into catalog status.
 
 Operator rollout direction:
 
