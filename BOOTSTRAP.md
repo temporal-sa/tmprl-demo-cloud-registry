@@ -207,6 +207,16 @@ Missing keys are reported under:
 DemoProject.status.externalResources.secretsManager
 ```
 
+After Kubernetes reconcile, External Secrets Operator sync state is reported
+separately under:
+
+```text
+DemoProject.status.externalSecretStatus
+```
+
+Use it to distinguish a missing AWS Secrets Manager value from an
+ExternalSecret controller sync delay or error.
+
 For Agent Harness, the custom secret path is:
 
 ```text

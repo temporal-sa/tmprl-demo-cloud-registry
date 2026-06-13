@@ -217,6 +217,47 @@ def read_deployment_status(namespace: str, name: str) -> dict[str, Any]:
     }
 
 
+def read_external_secret_status(namespace: str, name: str) -> dict[str, Any]:
+    client = _client_module()
+    load_kubernetes_config()
+    resource = client.CustomObjectsApi().get_namespaced_custom_object(
+        "external-secrets.io",
+        "v1",
+        namespace,
+        "externalsecrets",
+        name,
+    )
+    status = resource.get("status", {}) if isinstance(resource, dict) else {}
+    conditions = status.get("conditions", []) if isinstance(status, dict) else []
+    rendered_conditions = [
+        external_secret_condition(condition)
+        for condition in conditions
+        if isinstance(condition, dict)
+    ]
+    ready_condition = next(
+        (
+            condition
+            for condition in rendered_conditions
+            if condition.get("type") == "Ready"
+        ),
+        {},
+    )
+    ready = ready_condition.get("status") == "True"
+    return {
+        "name": name,
+        "namespace": namespace,
+        "phase": "Ready" if ready else "Waiting",
+        "ready": ready,
+        "reason": ready_condition.get("reason"),
+        "message": ready_condition.get("message"),
+        "refreshTime": status.get("refreshTime") if isinstance(status, dict) else None,
+        "syncedResourceVersion": (
+            status.get("syncedResourceVersion") if isinstance(status, dict) else None
+        ),
+        "conditions": rendered_conditions,
+    }
+
+
 def _create_or_patch(read: Any, create: Any, patch: Any) -> str:
     try:
         read()
@@ -247,6 +288,16 @@ def deployment_conditions(status: Any) -> list[dict[str, Any]]:
         }
         for condition in conditions
     ]
+
+
+def external_secret_condition(condition: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": condition.get("type"),
+        "status": condition.get("status"),
+        "reason": condition.get("reason"),
+        "message": condition.get("message"),
+        "lastTransitionTime": condition.get("lastTransitionTime"),
+    }
 
 
 def load_kubernetes_config() -> None:

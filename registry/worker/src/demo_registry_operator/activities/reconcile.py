@@ -13,6 +13,7 @@ from demo_registry_operator.kube import (
     apply_resources,
     patch_demo_project_status,
     read_deployment_status,
+    read_external_secret_status,
 )
 from demo_registry_operator.resources import (
     SOURCE_COMMIT_ANNOTATION,
@@ -70,6 +71,10 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
 
     try:
         applied = apply_resources(resources, dry_run=dry_run)
+        external_secret_status = external_secret_sync_status(
+            applied,
+            dry_run=dry_run,
+        )
         if config.reconcile_mode == "plan":
             phase = "Planned"
             message = "Reconcile plan rendered without mutating the cluster."
@@ -96,6 +101,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             missing_images=missing_images,
             external_resources=external_resources,
             build_status=build_status,
+            external_secret_status=external_secret_status,
         )
         patch_status(name, status, dry_run=dry_run)
         return status
@@ -314,6 +320,81 @@ def deployment_ready(status: dict[str, Any]) -> bool:
         and int(status.get("readyReplicas") or 0) >= desired
         and int(status.get("updatedReplicas") or 0) >= desired
     )
+
+
+def external_secret_sync_status(
+    applied_resources: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    external_secrets = [
+        resource
+        for resource in applied_resources
+        if resource.get("kind") == "ExternalSecret"
+        and isinstance(resource.get("name"), str)
+        and isinstance(resource.get("namespace"), str)
+    ]
+    if not external_secrets:
+        return None
+
+    checked_at = datetime.now(UTC).isoformat()
+    if dry_run:
+        resources = [
+            {
+                "name": resource["name"],
+                "namespace": resource["namespace"],
+                "phase": "Planned",
+                "action": resource.get("action", "planned"),
+                "ready": False,
+                "message": "ExternalSecret would be created or patched.",
+            }
+            for resource in external_secrets
+        ]
+        return {
+            "phase": "Planned",
+            "checkedAt": checked_at,
+            "resources": resources,
+        }
+
+    resources = []
+    for resource in external_secrets:
+        name = resource["name"]
+        namespace = resource["namespace"]
+        try:
+            resources.append(read_external_secret_status(namespace, name))
+        except Exception as error:
+            resources.append(
+                {
+                    "name": name,
+                    "namespace": namespace,
+                    "phase": (
+                        "Missing"
+                        if getattr(error, "status", None) == 404
+                        else "Error"
+                    ),
+                    "ready": False,
+                    "message": str(error),
+                }
+            )
+
+    return {
+        "phase": aggregate_external_secret_phase(resources),
+        "checkedAt": checked_at,
+        "resources": resources,
+    }
+
+
+def aggregate_external_secret_phase(resources: list[dict[str, Any]]) -> str:
+    phases = {resource.get("phase") for resource in resources}
+    if phases <= {"Ready"}:
+        return "Ready"
+    if phases & {"Error", "Missing"}:
+        return "Error"
+    if "Waiting" in phases:
+        return "Waiting"
+    if phases <= {"Planned"}:
+        return "Planned"
+    return "Unknown"
 
 
 @activity.defn

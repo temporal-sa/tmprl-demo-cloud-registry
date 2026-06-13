@@ -1118,6 +1118,7 @@ def registry_entry(project: Project) -> dict[str, Any]:
                 "message",
                 "kubernetesNamespaceStatus",
                 "externalResources",
+                "externalSecrets",
                 "build",
                 "candidate",
                 "readiness",

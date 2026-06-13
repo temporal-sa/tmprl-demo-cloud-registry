@@ -126,7 +126,8 @@ Next validation target:
     subset for project repositories;
   - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
     mode now verifies required paths and JSON property names for
-    platform-managed Temporal secrets;
+    platform-managed Temporal secrets, and runtime status records
+    ExternalSecret Ready conditions after Kubernetes reconcile;
   - create/verify Temporal Cloud namespace and namespace-scoped API key; status
     now records a verified `tcld` command plan, while mutation and one-time API
     key capture remain manual;

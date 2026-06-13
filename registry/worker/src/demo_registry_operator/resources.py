@@ -773,6 +773,7 @@ def build_reconcile_status(
     missing_images: list[str],
     external_resources: dict[str, Any] | None = None,
     build_status: dict[str, Any] | None = None,
+    external_secret_status: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
@@ -851,6 +852,8 @@ def build_reconcile_status(
         "appliedResources": applied_resources,
         "reconcileMode": mode,
     }
+    if external_secret_status:
+        status["externalSecretStatus"] = external_secret_status
 
     if image_overrides and not missing_images and phase in {"Promoted", "Ready"}:
         version = candidate_version(demo_project, image_overrides)
@@ -1160,6 +1163,7 @@ def catalog_status_entry(
         "externalResources": external_resource_summary(
             status.get("externalResources")
         ),
+        "externalSecrets": status.get("externalSecretStatus"),
         "build": build_summary(status.get("buildStatus")),
         "candidate": candidate_summary(status.get("candidateRolloutStatus")),
         "readiness": status.get("readinessStatus"),
@@ -1389,6 +1393,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "message",
                 "kubernetesNamespaceStatus",
                 "externalResources",
+                "externalSecrets",
                 "build",
                 "candidate",
                 "readiness",

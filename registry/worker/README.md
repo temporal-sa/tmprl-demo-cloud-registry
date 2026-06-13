@@ -55,12 +55,15 @@ When a project has a smoke check, the workflow waits for every versioned
 candidate Deployment to report available replicas before running the smoke
 check. If readiness times out, the active route is not promoted and
 `DemoProject.status.readinessStatus` records the Deployment states.
+Runtime ExternalSecret sync is also recorded under
+`DemoProject.status.externalSecretStatus`, including each ExternalSecret's
+Ready condition and controller message.
 
 Every `record_project_status` activity also writes a compact catalog lifecycle
 entry to the configured status ConfigMap. By default each project is written as
 `demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
-phase, namespace, build, external-resource, candidate, readiness, smoke-check,
-and active version fields for the registry/catalog UI.
+phase, namespace, external-secret sync, build, external-resource, candidate,
+readiness, smoke-check, and active version fields for the registry/catalog UI.
 
 Environment variables:
 

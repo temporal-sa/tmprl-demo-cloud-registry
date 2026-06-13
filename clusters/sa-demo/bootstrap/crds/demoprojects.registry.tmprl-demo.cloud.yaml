@@ -193,6 +193,9 @@ spec:
                 readinessStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                externalSecretStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 candidateRolloutStatus:
                   type: object
                   properties:
