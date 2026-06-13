@@ -28,10 +28,7 @@ spec:
           jsonPath: .status.phase
         - name: Namespace
           type: string
-          jsonPath: .spec.derived.kubernetesNamespace
-        - name: Host
-          type: string
-          jsonPath: .spec.derived.host
+          jsonPath: .status.kubernetesNamespaceStatus.name
         - name: Active
           type: string
           jsonPath: .status.activeImageVersion
@@ -54,11 +51,8 @@ spec:
               type: object
               required:
                 - source
-                - registry
                 - builds
                 - components
-                - ingress
-                - derived
               properties:
                 source:
                   type: object
@@ -115,31 +109,6 @@ spec:
                       type: integer
                       minimum: 1
                       maximum: 60
-                derived:
-                  type: object
-                  required:
-                    - host
-                    - kubernetesNamespace
-                    - temporalNamespace
-                    - secretPrefix
-                    - imageRepositoryPrefix
-                  properties:
-                    host:
-                      type: string
-                      minLength: 1
-                    kubernetesNamespace:
-                      type: string
-                      minLength: 1
-                      maxLength: 63
-                    temporalNamespace:
-                      type: string
-                      minLength: 1
-                    secretPrefix:
-                      type: string
-                      pattern: "^tmprl-dem-cld/[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-                    imageRepositoryPrefix:
-                      type: string
-                      minLength: 1
             status:
               type: object
               properties:

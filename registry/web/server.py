@@ -29,6 +29,11 @@ def load_json_file(path: Path) -> dict[str, Any]:
 
 
 def load_registry(path: Path) -> dict[str, Any]:
+    # The catalog is published at runtime by the operator. Tolerate it being
+    # absent or not-yet-written (e.g. before the first publish) by serving an
+    # empty catalog rather than erroring.
+    if not path.exists():
+        return {"baseDomain": "tmprl-demo.cloud", "projects": []}
     registry = load_json_file(path)
     projects = registry.get("projects")
     if not isinstance(projects, list):

@@ -1,5 +1,16 @@
 # Goal-Mode Prompt: Finish End-to-End Registry Rollouts
 
+> **Status (historical):** This was the original goal-mode prompt. Its iterations
+> are largely complete: the operator now provisions external resources, builds
+> via CodeBuild, creates the Temporal Cloud namespace + scoped API key, deploys,
+> smoke-tests, and promotes. The platform has since moved to an **operator-derives
+> model with no generation step** — projects are authored directly as
+> `DemoProject` CRs under `projects/` and Flux applies them; `generate_projects.py`
+> and `clusters/sa-demo/generated/` were removed. For the current contract, read
+> `README.md`, `projects/README.md`, `schemas/project.schema.json`, and the
+> onboarding skill under `skills/tmprl-demo-cloud-onboarding/`. The text below is
+> kept as a record of intent, not current operating instructions.
+
 Use this file as the prompt for a fresh goal-mode agent working in
 `/Users/mjones/Source/cluster-gitops-config`.
 
@@ -66,9 +77,8 @@ Read these files first:
 Run the existing checks before and after implementation slices:
 
 ```sh
-/tmp/cluster-gitops-config-venv/bin/python scripts/validate_projects.py
-/tmp/cluster-gitops-config-venv/bin/python scripts/generate_projects.py --check
-/tmp/cluster-gitops-config-venv/bin/python -m py_compile scripts/validate_projects.py scripts/generate_projects.py $(find registry/worker/src -name '*.py' | sort)
+python scripts/validate_projects.py
+python -m py_compile scripts/validate_projects.py $(find registry/worker/src -name '*.py' | sort)
 ```
 
 Remove Python cache directories before commits:
@@ -367,8 +377,6 @@ needed.
 - Do not use GitHub runners that require broad cluster/API credentials.
 - Build arbitrary Dockerfiles with narrow credentials.
 - Treat Temporal namespace/API key lifecycle as external destructive state.
-- Keep generated Deployment templates unapplied until image refs are real.
-- Commit generated output when generator behavior changes.
 
 ## Expected Final Deliverables
 

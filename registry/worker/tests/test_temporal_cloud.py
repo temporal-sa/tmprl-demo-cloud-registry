@@ -12,16 +12,16 @@ from demo_registry_operator.activities.temporal_cloud import (
 
 
 PROJECT = {
-    "metadata": {"name": "demo-banking-app-money-transfer"},
+    "metadata": {"name": "banking-money-transfer"},
     "spec": {
         "components": {
-            "worker": {"build": "app", "worker": {"taskQueue": "MoneyTransfer"}},
+            "worker": {"build": "app", "worker": True},
             "backend": {"build": "app", "temporalAccess": True},
             "frontend": {"build": "app"},
         },
     },
 }
-RUNTIME_PATH = "tmprl-dem-cld/demo-banking-app-money-transfer/temporal"
+RUNTIME_PATH = "tmprl-dem-cld/banking-money-transfer/temporal"
 
 
 class FakeReconciler:
@@ -124,15 +124,15 @@ def test_creates_namespace_service_account_and_key_when_absent():
 
     assert status["phase"] == "Ready"
     assert status["mode"] == "cloud-api"
-    assert status["namespace"]["name"] == "demo-banking-app-money-transfer.acct1"
+    assert status["namespace"]["name"] == "tmprl-dem-cld-banking-money-transfer.acct1"
     assert status["namespace"]["action"] == "created"
     assert status["serviceAccount"]["id"] == "sa-123"
     assert status["apiKey"]["keyId"] == "key-abc"
     assert status["apiKey"]["action"] == "created"
 
     secret = secrets.store[RUNTIME_PATH]
-    assert secret["address"] == "demo-banking-app-money-transfer.acct1.tmprl.cloud:7233"
-    assert secret["namespace"] == "demo-banking-app-money-transfer.acct1"
+    assert secret["address"] == "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233"
+    assert secret["namespace"] == "tmprl-dem-cld-banking-money-transfer.acct1"
     assert secret["apiKey"] == "SECRET-TOKEN-VALUE"
     assert secret["tls"] == "true"
     assert secret["keyId"] == "key-abc"
@@ -144,8 +144,8 @@ def test_creates_namespace_service_account_and_key_when_absent():
 def test_idempotent_reuses_existing_runtime_key():
     reconciler = FakeReconciler(
         existing_namespace=NamespaceInfo(
-            qualified_name="demo-banking-app-money-transfer.acct1",
-            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
             web_address="https://cloud.temporal.io/namespaces/x",
             state="active",
             created=False,
@@ -155,8 +155,8 @@ def test_idempotent_reuses_existing_runtime_key():
     secrets = FakeSecretStore(
         {
             RUNTIME_PATH: {
-                "address": "demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
-                "namespace": "demo-banking-app-money-transfer.acct1",
+                "address": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
                 "apiKey": "EXISTING-KEY",
                 "tls": "true",
                 "keyId": "key-old",
@@ -179,8 +179,8 @@ def test_idempotent_reuses_existing_runtime_key():
 def test_existing_namespace_but_missing_key_creates_only_the_key():
     reconciler = FakeReconciler(
         existing_namespace=NamespaceInfo(
-            qualified_name="demo-banking-app-money-transfer.acct1",
-            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
             web_address="https://cloud.temporal.io/namespaces/x",
             state="active",
             created=False,
@@ -202,8 +202,8 @@ def test_existing_namespace_but_missing_key_creates_only_the_key():
 def test_deleted_namespace_is_treated_as_absent_and_recreated():
     reconciler = FakeReconciler(
         existing_namespace=NamespaceInfo(
-            qualified_name="demo-banking-app-money-transfer.acct1",
-            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
             web_address="https://cloud.temporal.io/namespaces/x",
             state="RESOURCE_STATE_DELETED",
             created=False,
@@ -221,8 +221,8 @@ def test_deleted_namespace_is_treated_as_absent_and_recreated():
 def test_unusable_namespace_state_surfaces_error_without_creating():
     reconciler = FakeReconciler(
         existing_namespace=NamespaceInfo(
-            qualified_name="demo-banking-app-money-transfer.acct1",
-            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
             web_address="https://cloud.temporal.io/namespaces/x",
             state="RESOURCE_STATE_ACTIVATION_FAILED",
             created=False,
@@ -284,7 +284,7 @@ def test_finalize_deletes_namespace_service_account_key_and_secret():
     secrets = FakeSecretStore(
         {
             RUNTIME_PATH: {
-                "namespace": "demo-banking-app-money-transfer.acct1",
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
                 "apiKey": "KEY",
                 "keyId": "key-abc",
                 "serviceAccountId": "sa-123",
@@ -300,7 +300,7 @@ def test_finalize_deletes_namespace_service_account_key_and_secret():
         ("delete_service_account", "sa-123")
     ]
     assert reconciler.called("delete_namespace") == [
-        ("delete_namespace", "demo-banking-app-money-transfer.acct1")
+        ("delete_namespace", "tmprl-dem-cld-banking-money-transfer.acct1")
     ]
     assert RUNTIME_PATH not in secrets.store
     assert status["deleted"]["secret"] == "scheduled-deletion"

@@ -10,6 +10,7 @@ from temporalio.client import Client
 
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.kube import (
+    apply_resources,
     demo_project_deletion_timestamp,
     ensure_demo_project_finalizer,
     list_demo_projects,
@@ -18,6 +19,7 @@ from demo_registry_operator.resources import (
     IMAGE_OVERRIDES_ANNOTATION,
     REGISTRY_PROJECT_NAME,
     SOURCE_COMMIT_ANNOTATION,
+    catalog_configmap,
     metadata_annotations,
     project_name,
     spec_of,
@@ -56,7 +58,25 @@ async def run_demo_project_watch(
                     project_name(demo_project),
                 )
 
+        # Republish the catalog the registry web app mounts. Done in the poller
+        # (outside Temporal) so it costs no billable workflow actions.
+        try:
+            await asyncio.to_thread(publish_catalog, demo_projects, config)
+        except Exception:
+            logger.exception("Catalog publish failed")
+
         await asyncio.sleep(config.watch_interval_seconds)
+
+
+def publish_catalog(
+    demo_projects: list[dict[str, Any]],
+    config: WorkerConfig,
+) -> None:
+    configmap = catalog_configmap(
+        demo_projects,
+        namespace=config.catalog_status_mirror_namespace,
+    )
+    apply_resources([configmap], dry_run=config.reconcile_mode != "apply")
 
 
 async def reconcile_one(

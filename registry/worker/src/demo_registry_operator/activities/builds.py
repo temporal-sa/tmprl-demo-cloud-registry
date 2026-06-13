@@ -15,6 +15,7 @@ from typing import Any
 
 from temporalio import activity
 
+from demo_registry_operator import derive
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import (
     builds,
@@ -766,11 +767,7 @@ def repository_name_for_build(
     repository = repository_status_for_build(build_name, external_resources)
     if isinstance(repository, dict) and isinstance(repository.get("name"), str):
         return repository["name"]
-    derived = spec_of(demo_project).get("derived", {})
-    prefix = "tmprl-dem-cld"
-    if isinstance(derived, dict) and isinstance(derived.get("imageRepositoryPrefix"), str):
-        prefix = derived["imageRepositoryPrefix"]
-    return f"{prefix}/{project_name(demo_project)}/{build_name}"
+    return f"{derive.image_repository_prefix()}/{project_name(demo_project)}/{build_name}"
 
 
 def repository_uri_for_build(
@@ -862,9 +859,10 @@ def source_config(demo_project: dict[str, Any]) -> dict[str, str]:
     if not isinstance(source, dict):
         raise ValueError("DemoProject spec.source is required for builds")
     repo = source.get("repo")
-    branch = source.get("branch")
-    if not isinstance(repo, str) or not isinstance(branch, str):
-        raise ValueError("DemoProject spec.source.repo and branch are required")
+    # branch defaults to main so a thin config only needs to declare the repo.
+    branch = source.get("branch") if isinstance(source.get("branch"), str) else "main"
+    if not isinstance(repo, str):
+        raise ValueError("DemoProject spec.source.repo is required")
     return {"repo": repo, "branch": branch}
 
 

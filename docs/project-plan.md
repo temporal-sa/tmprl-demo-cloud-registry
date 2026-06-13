@@ -5,18 +5,29 @@ Last updated: 2026-06-13
 This document is the steering record for the `tmprl-demo.cloud` GitOps platform.
 Keep it current as phases move from design to implementation.
 
+> **Architecture update:** The platform moved to an **operator-derives model with
+> no generation step.** Projects are authored directly as `DemoProject` CRs under
+> `projects/`; Flux applies them and the operator derives namespaces/host/prefixes
+> at reconcile time and publishes the catalog ConfigMap itself.
+> `scripts/generate_projects.py`, the `clusters/sa-demo/generated/` tree, the
+> `--check` CI gate, and the `spec.derived` block were removed; `plan` modes were
+> dropped (the operator provisions for real). Sections below that describe a
+> generator, generated manifests, plan modes, or a baked `registry.json` are
+> retained as design history — for the current contract see `README.md`,
+> `projects/README.md`, and `schemas/project.schema.json`.
+
 ## Current Status
 
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
-| 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
-| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify plus Secrets Manager path/property verification are implemented behind opt-in AWS mode, and generated/runtime status now records the verified `tcld` command contract for Temporal Cloud namespaces, scoped service accounts, and API keys. Secret values and Temporal Cloud mutation remain manual. |
+| 2. Generator | Removed | Replaced by the operator-derives model: projects are authored as `DemoProject` CRs under `projects/` and Flux applies them directly. `scripts/generate_projects.py`, `clusters/sa-demo/generated/`, and the `--check` gate were deleted; the operator computes all derived values at reconcile time. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA were bootstrapped for `sa-demo`; the operator creates/verifies ECR repositories, verifies Secrets Manager paths/properties, and creates/verifies the Temporal Cloud namespace, scoped service account, and 30-day API key via the Cloud Operations API (cloud-api mode). Custom-secret values and the platform bootstrap credential remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
-| 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, opt-in `local-docker` can clone/build/push for trusted tests, and opt-in `aws-codebuild` can start a pre-created CodeBuild project for AWS-side immutable image builds. CodeBuild project/role provisioning remains external setup. |
+| 5. Build Pipeline | In progress | The operator builds via `aws-codebuild` by default: it starts a pre-created CodeBuild project that clones the source repo and pushes immutable `git-<sha>` ECR tags, then writes resolved images into candidate rollout status. `local-docker` remains an opt-in alternative. CodeBuild project/role provisioning remains external setup. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
-| 8. Registry App | Scaffolded | The registry landing page is itself a project in this repo; `registry/web/Dockerfile` now builds a dependency-free catalog service from generated `registry.json`, and the generated registry web Deployment mounts a mirrored catalog status ConfigMap for live lifecycle JSON. |
+| 8. Registry App | Scaffolded | The registry landing page is itself a `DemoProject`; `registry/web/Dockerfile` builds a dependency-free catalog service. The operator publishes the catalog as a `registry-catalog` ConfigMap (built from all CRs) and mounts it into the web Deployment at `/app/data`, alongside the mirrored catalog-status ConfigMap at `/app/status` for live lifecycle JSON. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 | 10. Registry Operator | In progress | Python worker is running in `tmprl-dem-cld-registry-operator`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. Agent Harness is the second rollout target and now has a generated smoke check. |
 | 11. SA Onboarding Skill | Scaffolded | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/` and covers repo assessment, migration lift, config generation, secrets instructions, validation checks, and lifecycle status surfaces. |
@@ -309,8 +320,7 @@ components:
 
   worker-python:
     build: worker-python
-    worker:
-      taskQueue: dejavu-tacos
+    worker: true
     env:
       - name: DEJAVU_BACKEND_URL
         value: http://backend:8000

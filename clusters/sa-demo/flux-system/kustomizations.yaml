@@ -72,7 +72,9 @@ spec:
   dependsOn:
     - name: registry-operator
   interval: 5m
-  path: ./clusters/sa-demo/generated
+  # DemoProject CRs authored directly under projects/. The kustomize-controller
+  # auto-includes every manifest here, so adding a demo is just dropping one file.
+  path: ./projects
   prune: true
   sourceRef:
     kind: GitRepository

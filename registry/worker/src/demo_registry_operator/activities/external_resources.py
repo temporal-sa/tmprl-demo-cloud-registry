@@ -8,6 +8,7 @@ from typing import Any
 
 from temporalio import activity
 
+from demo_registry_operator import derive
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import (
     builds,
@@ -897,11 +898,7 @@ def repository_plan_entry(demo_project: dict[str, Any], build_name: str) -> dict
 
 
 def image_repository_name(demo_project: dict[str, Any], build_name: str) -> str:
-    derived = spec_of(demo_project).get("derived", {})
-    prefix = "tmprl-dem-cld"
-    if isinstance(derived, dict) and isinstance(derived.get("imageRepositoryPrefix"), str):
-        prefix = derived["imageRepositoryPrefix"]
-    return f"{prefix}/{project_name(demo_project)}/{build_name}"
+    return f"{derive.image_repository_prefix()}/{project_name(demo_project)}/{build_name}"
 
 
 def components_for_build(demo_project: dict[str, Any], build_name: str) -> list[str]:
@@ -920,10 +917,7 @@ def spec_components(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def temporal_namespace(demo_project: dict[str, Any]) -> str:
-    derived = spec_of(demo_project).get("derived", {})
-    if isinstance(derived, dict) and isinstance(derived.get("temporalNamespace"), str):
-        return derived["temporalNamespace"]
-    return project_name(demo_project)
+    return derive.temporal_namespace(project_name(demo_project))
 
 
 def aggregate_phase(resources: list[dict[str, Any]]) -> str:

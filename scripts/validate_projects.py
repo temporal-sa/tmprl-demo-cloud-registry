@@ -110,7 +110,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
 
     errors.extend(validate_unique_field(documents, ("metadata", "name"), "project name"))
     errors.extend(validate_unique_derived_namespaces(documents))
-    errors.extend(validate_unique_field(documents, ("ingress", "subdomain"), "ingress subdomain"))
+    errors.extend(validate_unique_field(documents, ("spec", "ingress", "subdomain"), "ingress subdomain"))
 
     for document in documents:
         errors.extend(validate_source_repo(document))
@@ -180,7 +180,7 @@ def validate_unique_derived_namespaces(
 
 
 def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
-    repo = get_nested(document.data, ("source", "repo"))
+    repo = get_nested(document.data, ("spec", "source", "repo"))
     if not isinstance(repo, str):
         return []
 
@@ -208,6 +208,10 @@ def validate_no_full_domain(document: ProjectDocument) -> list[ProjectError]:
     needle = DOMAIN.lower()
 
     for path, value in iter_string_values(document.data):
+        # The CR envelope's apiVersion legitimately carries the platform group
+        # (registry.tmprl-demo.cloud/v1alpha1); the rule targets authored hosts.
+        if path == "apiVersion":
+            continue
         if needle in value.lower():
             errors.append(
                 ProjectError(
@@ -285,7 +289,7 @@ def validate_service_names(document: ProjectDocument) -> list[ProjectError]:
 
 def validate_ingress_routes(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
-    ingress = get_nested(document.data, ("ingress",))
+    ingress = get_nested(document.data, ("spec", "ingress"))
     if not isinstance(ingress, dict):
         return errors
 
@@ -378,7 +382,7 @@ def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
 
 def validate_registry(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
-    registry = get_nested(document.data, ("registry",))
+    registry = get_nested(document.data, ("spec", "registry"))
     if not isinstance(registry, dict):
         return errors
 
@@ -550,21 +554,21 @@ def ingress_routes(ingress: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def builds(document: ProjectDocument) -> dict[str, dict[str, Any]]:
-    value = get_nested(document.data, ("builds",))
+    value = get_nested(document.data, ("spec", "builds"))
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(item, dict)}
 
 
 def components(document: ProjectDocument) -> dict[str, dict[str, Any]]:
-    value = get_nested(document.data, ("components",))
+    value = get_nested(document.data, ("spec", "components"))
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(item, dict)}
 
 
 def project_secret_definitions(document: ProjectDocument) -> dict[str, dict[str, Any]]:
-    value = get_nested(document.data, ("secrets",))
+    value = get_nested(document.data, ("spec", "secrets"))
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(item, dict)}
@@ -574,7 +578,19 @@ def component_ports(component: dict[str, Any]) -> list[dict[str, Any]]:
     ports = component.get("ports")
     if not isinstance(ports, list):
         return []
-    return [port for port in ports if isinstance(port, dict)]
+    raw = [port for port in ports if isinstance(port, dict)]
+    # Mirror the operator defaults: a lone port is named "http", and servicePort
+    # falls back to containerPort.
+    single = len(raw) == 1
+    normalized: list[dict[str, Any]] = []
+    for port in raw:
+        port = dict(port)
+        if "name" not in port and single:
+            port["name"] = "http"
+        if "servicePort" not in port and "containerPort" in port:
+            port["servicePort"] = port["containerPort"]
+        normalized.append(port)
+    return normalized
 
 
 def component_port_names(component: dict[str, Any]) -> set[str]:

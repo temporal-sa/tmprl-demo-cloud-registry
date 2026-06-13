@@ -1,21 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry/schemas/project.schema.json",
-  "title": "ProjectDeploymentConfig",
+  "title": "DemoProject",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "metadata",
-    "registry",
-    "source",
-    "builds",
-    "components",
-    "ingress"
-  ],
+  "required": ["apiVersion", "kind", "metadata", "spec"],
   "properties": {
+    "apiVersion": {
+      "const": "registry.tmprl-demo.cloud/v1alpha1"
+    },
+    "kind": {
+      "const": "DemoProject"
+    },
     "metadata": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["name"],
       "properties": {
         "name": {
@@ -23,61 +21,68 @@
         }
       }
     },
-    "source": {
+    "spec": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repo", "branch"],
+      "required": ["source", "builds", "components"],
       "properties": {
-        "repo": {
-          "type": "string",
-          "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo"],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
-        "branch": {
-          "type": "string",
-          "minLength": 1
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "builds": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/build"
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/userSecret"
+          }
+        },
+        "components": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/component"
+          }
+        },
+        "ingress": {
+          "$ref": "#/$defs/ingress"
+        },
+        "rollout": {
+          "$ref": "#/$defs/rollout"
+        },
+        "smokeCheck": {
+          "$ref": "#/$defs/smokeCheck"
         }
       }
-    },
-    "registry": {
-      "$ref": "#/$defs/registry"
-    },
-    "builds": {
-      "type": "object",
-      "minProperties": 1,
-      "propertyNames": {
-        "$ref": "#/$defs/dnsLabel"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/build"
-      }
-    },
-    "secrets": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/dnsLabel"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/userSecret"
-      }
-    },
-    "components": {
-      "type": "object",
-      "minProperties": 1,
-      "propertyNames": {
-        "$ref": "#/$defs/dnsLabel"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/component"
-      }
-    },
-    "ingress": {
-      "$ref": "#/$defs/ingress"
-    },
-    "rollout": {
-      "$ref": "#/$defs/rollout"
-    },
-    "smokeCheck": {
-      "$ref": "#/$defs/smokeCheck"
     }
   },
   "$defs": {
@@ -145,7 +150,7 @@
     "componentPort": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "containerPort", "servicePort"],
+      "required": ["containerPort"],
       "properties": {
         "name": {
           "$ref": "#/$defs/dnsLabel"
@@ -229,6 +234,21 @@
               },
               {
                 "required": ["port"]
+              }
+            ]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["component"]
+              },
+              {
+                "required": ["port"]
+              },
+              {
+                "required": ["routes"]
               }
             ]
           }
@@ -456,26 +476,33 @@
       }
     },
     "worker": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["taskQueue"],
-      "properties": {
-        "taskQueue": {
-          "type": "string",
-          "minLength": 1
+      "oneOf": [
+        {
+          "type": "boolean"
         },
-        "versioning": {
-          "$ref": "#/$defs/workerVersioning"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["versioning"],
+          "properties": {
+            "versioning": {
+              "$ref": "#/$defs/workerVersioning"
+            }
+          }
         }
-      }
+      ]
     },
     "workerVersioning": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled"],
+      "required": ["enabled", "taskQueue"],
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "taskQueue": {
+          "type": "string",
+          "minLength": 1
         },
         "env": {
           "type": "object",

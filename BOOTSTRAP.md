@@ -1,13 +1,24 @@
 # Bootstrap And First Deployment Test
 
-This repo now has two layers:
+> **Architecture update:** The platform moved to an operator-derives model with
+> no generation step. `DemoProject` CRs are authored directly under `projects/`
+> and Flux's `registry-projects` Kustomization applies them from there;
+> `clusters/sa-demo/generated/` and `scripts/generate_projects.py` were removed,
+> and `plan` modes were dropped (the operator provisions and builds for real).
+> The `dejavu-tacos` first-test walkthrough below (manual image overrides, manual
+> Temporal/secret setup, `BUILD_MODE=plan`) is retained as a historical bootstrap
+> record. For the current authoring contract see `projects/README.md` and
+> `schemas/project.schema.json`; for cluster layout see
+> `clusters/sa-demo/README.md`.
+
+This repo has two layers:
 
 - `clusters/sa-demo/bootstrap/` installs the minimum registry/operator control
   plane: `DemoProject` CRD, registry operator Deployment, RBAC, and platform
   ExternalSecrets.
-- `clusters/sa-demo/generated/` contains reviewed `DemoProject` CRs generated
-  from `projects/*.yaml`. The older per-project Kubernetes manifests remain
-  review artifacts; the applied path is the `DemoProject` CR set.
+- `projects/` holds the `DemoProject` CRs that Flux applies and the operator
+  reconciles. Adding a demo is dropping one CR file there — nothing is generated
+  or otherwise committed.
 
 Use these instructions for the first `sa-demo` test. Replace every placeholder
 before applying to a real cluster.

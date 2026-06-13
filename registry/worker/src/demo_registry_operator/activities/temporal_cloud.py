@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from demo_registry_operator import derive
 from demo_registry_operator.resources import (
     project_name,
-    spec_of,
     temporal_components,
     temporal_secret_remote_path,
 )
@@ -119,10 +119,7 @@ class SecretStore(Protocol):
 
 
 def desired_namespace_name(demo_project: dict[str, Any]) -> str:
-    derived = spec_of(demo_project).get("derived", {})
-    if isinstance(derived, dict) and isinstance(derived.get("temporalNamespace"), str):
-        return derived["temporalNamespace"]
-    return project_name(demo_project)
+    return derive.temporal_namespace(project_name(demo_project))
 
 
 async def reconcile_temporal_cloud(

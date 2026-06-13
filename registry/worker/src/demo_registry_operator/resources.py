@@ -5,6 +5,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from demo_registry_operator import derive
+
 
 AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
 IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
@@ -13,8 +15,25 @@ TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
 CATALOG_AUTH_VERIFY_URL = "https://catalog.tmprl-demo.cloud/_auth/verify"
 CATALOG_STATUS_NAMESPACE = "tmprl-dem-cld-registry-operator"
 CATALOG_STATUS_CONFIGMAP = "registry-catalog-status"
+CATALOG_CONFIGMAP = "registry-catalog"
+CATALOG_STATUS_FIELDS = [
+    "phase",
+    "message",
+    "kubernetesNamespaceStatus",
+    "externalResources",
+    "externalResourceBlock",
+    "externalSecrets",
+    "build",
+    "candidate",
+    "readiness",
+    "smokeCheck",
+    "activeImageVersion",
+    "lastError",
+]
 CATALOG_STATUS_MOUNT_PATH = "/app/status"
 CATALOG_STATUS_VOLUME_NAME = "catalog-status"
+CATALOG_MOUNT_PATH = "/app/data"
+CATALOG_VOLUME_NAME = "catalog"
 REGISTRY_PROJECT_NAME = "registry"
 REGISTRY_WEB_COMPONENT_NAME = "web"
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
@@ -47,32 +66,24 @@ def is_control_plane_project(demo_project: dict[str, Any]) -> bool:
 
 
 def project_namespace(demo_project: dict[str, Any]) -> str:
-    spec = spec_of(demo_project)
-    derived = spec.get("derived", {})
-    if isinstance(derived, dict) and isinstance(derived.get("kubernetesNamespace"), str):
-        return derived["kubernetesNamespace"]
-    return f"tmprl-dem-cld-{project_name(demo_project)}"
+    return derive.kubernetes_namespace(project_name(demo_project))
+
+
+def project_temporal_namespace(demo_project: dict[str, Any]) -> str:
+    return derive.temporal_namespace(project_name(demo_project))
 
 
 def project_host(demo_project: dict[str, Any]) -> str:
-    spec = spec_of(demo_project)
-    derived = spec.get("derived", {})
-    if isinstance(derived, dict) and isinstance(derived.get("host"), str):
-        return derived["host"]
-
-    ingress = spec.get("ingress", {})
-    if isinstance(ingress, dict) and isinstance(ingress.get("subdomain"), str):
-        return f"{ingress['subdomain']}.tmprl-demo.cloud"
-
-    return f"{project_name(demo_project)}.tmprl-demo.cloud"
+    ingress = spec_of(demo_project).get("ingress", {})
+    subdomain = ingress.get("subdomain") if isinstance(ingress, dict) else None
+    return derive.host(
+        subdomain if isinstance(subdomain, str) else None,
+        project_name(demo_project),
+    )
 
 
 def project_secret_prefix(demo_project: dict[str, Any]) -> str:
-    spec = spec_of(demo_project)
-    derived = spec.get("derived", {})
-    if isinstance(derived, dict) and isinstance(derived.get("secretPrefix"), str):
-        return derived["secretPrefix"]
-    return f"tmprl-dem-cld/{project_name(demo_project)}"
+    return derive.secret_prefix(project_name(demo_project))
 
 
 def spec_of(demo_project: dict[str, Any]) -> dict[str, Any]:
@@ -402,7 +413,7 @@ def deployment_resources(
             ],
         }
         if mounts_catalog_status(demo_project, component_name):
-            pod_spec["volumes"] = [catalog_status_volume()]
+            pod_spec["volumes"] = [catalog_status_volume(), catalog_volume()]
 
         resources.append(
             {
@@ -493,7 +504,12 @@ def container(
                 "name": CATALOG_STATUS_VOLUME_NAME,
                 "mountPath": CATALOG_STATUS_MOUNT_PATH,
                 "readOnly": True,
-            }
+            },
+            {
+                "name": CATALOG_VOLUME_NAME,
+                "mountPath": CATALOG_MOUNT_PATH,
+                "readOnly": True,
+            },
         ]
 
     return rendered
@@ -511,6 +527,16 @@ def catalog_status_volume() -> dict[str, Any]:
         "name": CATALOG_STATUS_VOLUME_NAME,
         "configMap": {
             "name": CATALOG_STATUS_CONFIGMAP,
+            "optional": True,
+        },
+    }
+
+
+def catalog_volume() -> dict[str, Any]:
+    return {
+        "name": CATALOG_VOLUME_NAME,
+        "configMap": {
+            "name": CATALOG_CONFIGMAP,
             "optional": True,
         },
     }
@@ -580,7 +606,7 @@ def worker_versioning_env(worker: dict[str, Any]) -> list[dict[str, str]]:
         rendered.append(
             {
                 "name": env["deploymentName"],
-                "value": worker["taskQueue"],
+                "value": versioning["taskQueue"],
             }
         )
     return rendered
@@ -1266,6 +1292,87 @@ def catalog_status_configmap(
     }
 
 
+def humanized_title(name: str) -> str:
+    return name.replace("-", " ").replace("_", " ").title()
+
+
+def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
+    """One catalog card built from a DemoProject CR. The ``registry`` block is
+    optional metadata; when omitted, the title falls back to a humanized name so a
+    thin config still lists in the catalog. Live status is overlaid by the web app
+    from the catalog-status ConfigMap referenced here."""
+    spec = spec_of(demo_project)
+    registry = spec.get("registry") if isinstance(spec.get("registry"), dict) else {}
+    source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+    name = project_name(demo_project)
+    host = project_host(demo_project)
+    return {
+        "name": name,
+        "title": registry.get("title") or humanized_title(name),
+        "summary": registry.get("summary", ""),
+        "host": host,
+        "appUrl": f"https://{host}",
+        "sourceRepo": source.get("repo", ""),
+        "temporalNamespace": project_temporal_namespace(demo_project),
+        "authRequired": auth_required(demo_project),
+        "catalogStatus": {
+            "source": "DemoProject.status",
+            "demoProject": name,
+            "configMap": {
+                "namespace": CATALOG_STATUS_NAMESPACE,
+                "name": CATALOG_STATUS_CONFIGMAP,
+                "key": f"{name}.json",
+            },
+            "fields": list(CATALOG_STATUS_FIELDS),
+        },
+        "tags": registry.get("tags", []),
+        "temporalSdks": registry.get("temporalSdks", []),
+        "links": registry.get("links", {}),
+        "assets": registry.get("assets", {}),
+    }
+
+
+def catalog_payload(demo_projects: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "baseDomain": derive.BASE_DOMAIN,
+        "projects": [
+            catalog_entry(demo_project)
+            for demo_project in sorted(demo_projects, key=project_name)
+        ],
+    }
+
+
+def catalog_configmap(
+    demo_projects: list[dict[str, Any]],
+    *,
+    namespace: str,
+    name: str = CATALOG_CONFIGMAP,
+) -> dict[str, Any]:
+    """ConfigMap the registry web app mounts at /app/data/registry.json. The
+    operator rebuilds it from the full set of DemoProject CRs (see watch loop)."""
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "demo-registry",
+                "app.kubernetes.io/component": "catalog",
+                "platform.temporal.io/managed-by": "registry-operator",
+            },
+            "annotations": {
+                "platform.temporal.io/catalog": "true",
+            },
+        },
+        "data": {
+            "registry.json": json.dumps(
+                catalog_payload(demo_projects), indent=2, sort_keys=True
+            ),
+        },
+    }
+
+
 def catalog_status_entry(
     demo_project: dict[str, Any],
     status: dict[str, Any],
@@ -1594,7 +1701,19 @@ def component_ports(component: dict[str, Any]) -> list[dict[str, Any]]:
     ports = component.get("ports")
     if not isinstance(ports, list):
         return []
-    return [port for port in ports if isinstance(port, dict)]
+    raw = [port for port in ports if isinstance(port, dict)]
+    # Defaults that thin the common case: a lone port needs no name (it becomes
+    # "http"), and servicePort falls back to the container port.
+    single = len(raw) == 1
+    normalized: list[dict[str, Any]] = []
+    for port in raw:
+        port = dict(port)
+        if "name" not in port and single:
+            port["name"] = "http"
+        if "servicePort" not in port and "containerPort" in port:
+            port["servicePort"] = port["containerPort"]
+        normalized.append(port)
+    return normalized
 
 
 def ingress_routes(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1611,6 +1730,19 @@ def ingress_routes(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(component, str) and isinstance(port, str):
         return [{"component": component, "port": port}]
 
+    return default_ingress_routes(demo_project)
+
+
+def default_ingress_routes(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+    """When ``ingress.routes`` is omitted, expose the public web component as a
+    single catch-all. The public component is the one serving servicePort 80 (the
+    HTTP convention); other components (APIs, workers) are reached internally. If
+    no component serves 80, routing is ambiguous and must be declared explicitly.
+    """
+    for name, component in sorted(components(demo_project).items()):
+        for port in component_ports(component):
+            if port.get("servicePort") == 80 and isinstance(port.get("name"), str):
+                return [{"component": name, "port": port["name"]}]
     return []
 
 
@@ -1622,8 +1754,10 @@ def auth_required(demo_project: dict[str, Any]) -> bool:
 
 
 def component_needs_temporal(component: dict[str, Any]) -> bool:
+    worker = component.get("worker")
     return (
-        isinstance(component.get("worker"), dict)
+        worker is True
+        or isinstance(worker, dict)
         or component.get("temporalAccess") is True
     )
 
