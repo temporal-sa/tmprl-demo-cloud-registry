@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: registry-operator
   annotations:
-    platform.temporal.io/aws-role: not-required-yet
+    eks.amazonaws.com/role-arn: arn:aws:iam::429214323166:role/tmprl-dem-cld-registry-operator
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
