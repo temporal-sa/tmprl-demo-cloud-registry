@@ -139,8 +139,10 @@ Next validation target:
     workloads with `WaitingForExternalResources` and records
     `externalResourceBlock`;
   - create/verify Temporal Cloud namespace and namespace-scoped API key; status
-    now records a verified `tcld` command plan, while mutation and one-time API
-    key capture remain manual;
+    now records a verified `tcld` command plan, and opt-in
+    `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=tcld-verify` can verify namespace
+    existence when the worker runtime includes `tcld`; mutation and one-time
+    API key capture remain manual;
   - build immutable images from the source repo; opt-in `aws-codebuild` now
     provides an AWS-side test path using a pre-created CodeBuild project, while
     `local-docker` remains available for trusted isolated tests;

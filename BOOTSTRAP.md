@@ -397,6 +397,7 @@ full rollout test, update that generator with:
 
 ```yaml
 DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
+DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=manual
 DEMO_REGISTRY_BUILD_MODE=aws-codebuild
 DEMO_REGISTRY_CODEBUILD_PROJECT=<codebuild-project-name>
 DEMO_REGISTRY_AWS_REGION=<aws-region>
@@ -406,6 +407,10 @@ DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 Kustomize gives the generated ConfigMap a content hash and rewrites the
 Deployment reference, so a committed config change rolls the operator pod
 through Flux.
+Keep `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=manual` until the operator image
+includes the `tcld` binary. After that, `tcld-verify` can verify namespace
+existence read-only; scoped service-account/API-key creation still remains
+manual.
 
 For a temporary live test, patch the operator Deployment and let the restarted
 watch loop signal every `DemoProject` again:

@@ -37,6 +37,7 @@ class WorkerConfig:
     temporal_cloud_bootstrap_secret_path: str
     temporal_cloud_account_id: str | None
     temporal_cloud_region: str | None
+    temporal_cloud_mode: str
     catalog_status_namespace: str
     catalog_status_configmap: str
     catalog_status_mirror_namespace: str
@@ -112,6 +113,11 @@ class WorkerConfig:
             temporal_cloud_region=env_first_optional(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_REGION",
                 "TEMPORAL_CLOUD_REGION",
+            ),
+            temporal_cloud_mode=env_choice(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_MODE",
+                default="manual",
+                choices={"manual", "tcld-verify"},
             ),
             catalog_status_namespace=env_first(
                 "DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE",

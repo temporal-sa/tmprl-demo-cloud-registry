@@ -30,6 +30,11 @@ lifecycle remain manual until those provider contracts are implemented.
 `DemoProject.status.externalResources.temporalCloud.tcldCommandPlan` records
 the verified `tcld` namespace, scoped service-account, and API-key command
 sequence needed for the manual step.
+Set `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=tcld-verify` only on a worker runtime
+that includes the `tcld` binary and the bootstrap API key environment. That
+mode runs `tcld namespace get` as a read-only activity check and records whether
+the Temporal Cloud namespace exists; service-account/API-key creation remains
+manual.
 
 Candidate resource names use `git-<source-sha>` when the
 `registry.tmprl-demo.cloud/source-commit-sha` annotation is present. Public
@@ -109,6 +114,8 @@ Environment variables:
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
   to `TEMPORAL_CLOUD_REGION`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE`, `manual` or `tcld-verify`, default
+  `manual`
 - `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `demo-registry-system`
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
   `demo-registry-catalog-status`
@@ -132,6 +139,8 @@ On `sa-demo`, non-secret runtime settings for the bootstrapped operator live in
 Kustomize `configMapGenerator`. Keep the committed defaults in `plan` until the
 AWS/CodeBuild setup is ready; changing that generator to `aws-codebuild` rolls
 the operator through Flux because the generated ConfigMap name changes.
+Do not set `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=tcld-verify` there until the
+operator image includes `tcld`.
 
 As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,6 +32,7 @@ TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_ACCOUNT_ID",
     "TEMPORAL_CLOUD_REGION",
 ]
+TCLD_COMMAND_TIMEOUT_SECONDS = 30
 
 
 @activity.defn
@@ -138,6 +141,7 @@ def aws_external_resources(
         demo_project,
         config,
         phase="ManualSetupRequired",
+        checked_at=now,
     )
     phase = aggregate_top_level_phase(
         [
@@ -422,20 +426,28 @@ def temporal_cloud_status(
     config: WorkerConfig,
     *,
     phase: str,
+    checked_at: str | None = None,
 ) -> dict[str, Any]:
     temporal_required = bool(temporal_components(demo_project))
     if not temporal_required:
         return {
             "phase": "NotRequired",
             "provider": "temporal-cloud",
-            "mode": "manual",
+            "mode": config.temporal_cloud_mode,
             "message": "No component currently requires Temporal credentials.",
         }
+
+    if config.temporal_cloud_mode == "tcld-verify":
+        return temporal_cloud_tcld_status(
+            demo_project,
+            config,
+            checked_at=checked_at or datetime.now(UTC).isoformat(),
+        )
 
     return {
         "phase": phase,
         "provider": "temporal-cloud",
-        "mode": "manual",
+        "mode": config.temporal_cloud_mode,
         "accountId": config.temporal_cloud_account_id,
         "region": config.temporal_cloud_region,
         "message": (
@@ -467,6 +479,124 @@ def temporal_cloud_status(
             "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
         },
     }
+
+
+def temporal_cloud_tcld_status(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    checked_at: str,
+) -> dict[str, Any]:
+    namespace_status = verify_temporal_namespace_with_tcld(demo_project)
+    namespace_phase = namespace_status.get("phase")
+    phase = "ManualSetupRequired"
+    if namespace_phase == "Error":
+        phase = "Error"
+    message = (
+        "Temporal Cloud namespace exists; create or verify the namespace-scoped "
+        "service account/API key manually."
+        if namespace_phase == "Ready"
+        else "Temporal Cloud namespace/API key setup still requires manual action."
+    )
+    if namespace_phase == "Error":
+        message = "Temporal Cloud namespace verification failed."
+
+    return {
+        "phase": phase,
+        "provider": "temporal-cloud",
+        "mode": config.temporal_cloud_mode,
+        "checkedAt": checked_at,
+        "accountId": config.temporal_cloud_account_id,
+        "region": config.temporal_cloud_region,
+        "message": message,
+        "namespace": {
+            "name": temporal_namespace(demo_project),
+            "action": "create-or-verify",
+            "deletionPolicy": "retain-until-explicitly-approved",
+            **namespace_status,
+        },
+        "apiKey": {
+            "action": "create-or-verify-or-rotate",
+            "scope": "namespace",
+            "namespace": temporal_namespace(demo_project),
+            "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
+            "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
+            "secretRemotePath": temporal_secret_remote_path(demo_project),
+            "secretProperties": TEMPORAL_SECRET_PROPERTIES,
+            "components": sorted(temporal_components(demo_project)),
+            "phase": "ManualSetupRequired",
+        },
+        "tcldCommandPlan": temporal_cloud_tcld_command_plan(
+            demo_project,
+            region=config.temporal_cloud_region,
+        ),
+        "bootstrapCredential": {
+            "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
+            "kubernetesSecret": "temporal-cloud-bootstrap",
+            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+        },
+    }
+
+
+def verify_temporal_namespace_with_tcld(demo_project: dict[str, Any]) -> dict[str, Any]:
+    command = [
+        "tcld",
+        "namespace",
+        "get",
+        "--namespace",
+        temporal_namespace(demo_project),
+    ]
+    if shutil.which("tcld") is None:
+        return {
+            "phase": "Error",
+            "command": command,
+            "message": "tcld is not installed in the registry operator runtime.",
+        }
+
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=TCLD_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "phase": "Error",
+            "command": command,
+            "message": "Timed out verifying Temporal Cloud namespace with tcld.",
+        }
+    except OSError as error:
+        return {
+            "phase": "Error",
+            "command": command,
+            "message": f"Failed to run tcld: {error}",
+        }
+    if completed.returncode == 0:
+        return {
+            "phase": "Ready",
+            "command": command,
+            "message": "Temporal Cloud namespace verified with tcld.",
+        }
+
+    output = trim_command_output(completed.stdout, completed.stderr)
+    if "not found" in output.lower():
+        return {
+            "phase": "Missing",
+            "command": command,
+            "message": "Temporal Cloud namespace was not found.",
+        }
+    return {
+        "phase": "Error",
+        "command": command,
+        "message": output or f"tcld exited with status {completed.returncode}.",
+    }
+
+
+def trim_command_output(stdout: str, stderr: str, *, limit: int = 1000) -> str:
+    output = "\n".join(part.strip() for part in (stderr, stdout) if part.strip())
+    return output if len(output) <= limit else output[-limit:]
 
 
 def temporal_cloud_tcld_command_plan(
