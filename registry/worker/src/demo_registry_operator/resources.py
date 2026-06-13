@@ -762,6 +762,7 @@ def build_reconcile_status(
     applied_resources: list[dict[str, Any]],
     image_overrides: dict[str, str],
     missing_images: list[str],
+    external_resources: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
@@ -798,7 +799,7 @@ def build_reconcile_status(
         "observedGeneration": generation if isinstance(generation, int) else 0,
         "phase": phase,
         "message": message,
-        "externalResources": external_resource_status(demo_project),
+        "externalResources": external_resources or external_resource_status(demo_project),
         "candidateRolloutStatus": candidate_status,
         "smokeCheckStatus": smoke_check_status(demo_project, phase),
         "conditions": [

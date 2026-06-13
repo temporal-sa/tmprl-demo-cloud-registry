@@ -37,6 +37,8 @@ spec:
               value: "15"
             - name: DEMO_REGISTRY_RECONCILE_MODE
               value: apply
+            - name: DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE
+              value: plan
             - name: DEMO_REGISTRY_ACTIVITY_WORKERS
               value: "20"
           resources:

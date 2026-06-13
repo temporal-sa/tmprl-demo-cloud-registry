@@ -7,6 +7,9 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from demo_registry_operator.activities.external_resources import (
+        reconcile_external_resources,
+    )
     from demo_registry_operator.activities.reconcile import (
         plan_rollout,
         promote_candidate,
@@ -51,9 +54,18 @@ class DemoProjectWorkflow:
                 "project": project_name,
                 "phase": "Reconciling",
             }
+            external_resources = await workflow.execute_activity(
+                reconcile_external_resources,
+                demo_project,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
             reconcile_status = await workflow.execute_activity(
                 reconcile_project,
-                demo_project,
+                {
+                    "demoProject": demo_project,
+                    "externalResources": external_resources,
+                },
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )

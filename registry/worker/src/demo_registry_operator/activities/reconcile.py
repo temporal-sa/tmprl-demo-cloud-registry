@@ -23,13 +23,15 @@ from demo_registry_operator.resources import (
 
 
 @activity.defn
-def reconcile_project(demo_project: dict[str, Any]) -> dict[str, Any]:
+def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
     """Reconcile one DemoProject.
 
     The default mode is non-mutating `plan`. Set
     `DEMO_REGISTRY_RECONCILE_MODE=apply` in the operator deployment to create or
     patch Kubernetes resources.
     """
+    demo_project = demo_project_from_request(request)
+    external_resources = external_resources_from_request(request)
     config = WorkerConfig.from_env()
     name = project_name(demo_project)
     image_overrides = parse_image_overrides(demo_project)
@@ -78,6 +80,7 @@ def reconcile_project(demo_project: dict[str, Any]) -> dict[str, Any]:
             applied_resources=applied,
             image_overrides=image_overrides,
             missing_images=missing_images,
+            external_resources=external_resources,
         )
         patch_status(name, status, dry_run=dry_run)
         return status
@@ -91,6 +94,7 @@ def reconcile_project(demo_project: dict[str, Any]) -> dict[str, Any]:
             applied_resources=[],
             image_overrides=image_overrides,
             missing_images=missing_images,
+            external_resources=external_resources,
             error=str(error),
         )
         patch_status(name, status, dry_run=dry_run)
@@ -223,3 +227,17 @@ def patch_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
         patch_demo_project_status(name, status, dry_run=dry_run)
     except Exception:
         activity.logger.exception("DemoProject status patch failed project=%s", name)
+
+
+def demo_project_from_request(request: dict[str, Any]) -> dict[str, Any]:
+    demo_project = request.get("demoProject")
+    if isinstance(demo_project, dict):
+        return demo_project
+    return request
+
+
+def external_resources_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
+    external_resources = request.get("externalResources")
+    if isinstance(external_resources, dict):
+        return external_resources
+    return None

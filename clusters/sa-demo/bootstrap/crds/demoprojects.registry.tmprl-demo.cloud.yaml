@@ -221,6 +221,15 @@ spec:
                 externalResources:
                   type: object
                   properties:
+                    phase:
+                      type: string
+                    mode:
+                      type: string
+                    checkedAt:
+                      type: string
+                      format: date-time
+                    kubernetesNamespace:
+                      type: string
                     ecr:
                       type: object
                       x-kubernetes-preserve-unknown-fields: true

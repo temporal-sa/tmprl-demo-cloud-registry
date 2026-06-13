@@ -83,15 +83,26 @@ aws secretsmanager create-secret \
 
 ## AWS Bootstrap
 
-Create the ECR repositories needed for the bootstrap worker and first
-`dejavu-tacos` test images:
+Create the ECR repository needed for the bootstrap worker image before the
+operator exists:
 
 ```sh
 aws ecr create-repository --region <aws-region> --repository-name tmprl-cloud-demo/demo-registry/worker
-aws ecr create-repository --region <aws-region> --repository-name tmprl-cloud-demo/dejavu-tacos/frontend
-aws ecr create-repository --region <aws-region> --repository-name tmprl-cloud-demo/dejavu-tacos/backend
-aws ecr create-repository --region <aws-region> --repository-name tmprl-cloud-demo/dejavu-tacos/worker-python
 ```
+
+After the operator is running, project ECR repositories can be created or
+verified by setting:
+
+```yaml
+DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
+DEMO_REGISTRY_AWS_REGION=<aws-region>
+DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
+```
+
+In the default `plan` mode, the operator records the expected ECR repositories
+and secret paths on `DemoProject.status.externalResources` without mutating
+AWS. In `aws` mode it creates or verifies ECR repositories and verifies
+Secrets Manager paths. It does not create placeholder secret values.
 
 Create an IAM role for the registry/operator service account. The bootstrap
 manifests expect this annotation until you replace it:
@@ -113,6 +124,21 @@ access should stay under the project prefix, for example:
 
 ```text
 tmprl-cloud-demo/dejavu-tacos/*
+```
+
+Before deploying a demo that needs Temporal credentials or custom secrets,
+create the required secret values. The operator verifies these paths in
+`DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`:
+
+```text
+tmprl-cloud-demo/<project-name>/temporal
+tmprl-cloud-demo/<project-name>/<custom-secret-name>
+```
+
+For Agent Harness, the custom secret path is:
+
+```text
+tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
 ```
 
 ## Shared Auth Setup

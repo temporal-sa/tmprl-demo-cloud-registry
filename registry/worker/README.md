@@ -15,9 +15,13 @@ Kubernetes slice:
 - Traefik middleware and IngressRoutes after a configured smoke check passes,
   or immediately for projects without a smoke check.
 
-External ECR, AWS Secrets Manager, and Temporal Cloud resources are still
-manual setup or future provider automation. The worker records those expected
-paths in `DemoProject.status.externalResources`.
+External resource reconciliation runs before Kubernetes reconciliation. In the
+default `plan` mode it records expected ECR repositories, Secrets Manager
+paths, and Temporal Cloud resources in `DemoProject.status.externalResources`
+without mutating cloud providers. In `aws` mode it creates or verifies missing
+ECR repositories and verifies required Secrets Manager paths. Secret values and
+Temporal Cloud namespace/API key lifecycle remain manual until those provider
+contracts are implemented.
 
 Candidate resource names use `git-<source-sha>` when the
 `registry.tmprl-demo.cloud/source-commit-sha` annotation is present. Public
@@ -36,6 +40,10 @@ Environment variables:
 - `DEMO_REGISTRY_WATCH_ENABLED`, default `false`
 - `DEMO_REGISTRY_WATCH_INTERVAL_SECONDS`, default `15`
 - `DEMO_REGISTRY_RECONCILE_MODE`, `plan` or `apply`, default `plan`
+- `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE`, `plan` or `aws`, default `plan`
+- `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
+  `AWS_DEFAULT_REGION`, then `us-west-1`
+- `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata
 
 For a temporary deployment test before build automation exists, annotate a
 `DemoProject` with immutable images for every declared build:

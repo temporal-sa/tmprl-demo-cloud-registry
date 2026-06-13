@@ -11,14 +11,14 @@ Keep it current as phases move from design to implementation.
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
-| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; provider automation remains to be implemented. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify is implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
 | 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
-| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, smoke-check-gated promotion, and versioned candidate Services for future rollouts. |
+| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
 
 ## Decisions
@@ -118,7 +118,8 @@ Next validation target:
 
 - Finish a full end-to-end rollout loop without manual substitutes:
   - create a previously absent namespace;
-  - create/verify ECR repositories;
+  - create/verify ECR repositories; opt-in `aws` mode now handles this safe
+    subset for project repositories;
   - create/verify AWS Secrets Manager paths and ExternalSecrets;
   - create/verify Temporal Cloud namespace and namespace-scoped API key;
   - build immutable images from the source repo;
