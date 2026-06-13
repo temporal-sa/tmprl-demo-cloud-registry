@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import shutil
+import shlex
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,6 +81,14 @@ def build_project_images(request: dict[str, Any]) -> dict[str, Any]:
             started_at=started_at,
         )
 
+    if config.build_mode == "aws-codebuild":
+        return build_with_codebuild(
+            demo_project,
+            external_resources,
+            config,
+            started_at=started_at,
+        )
+
     return build_status(
         demo_project,
         phase="Planned",
@@ -96,6 +108,166 @@ def build_project_images(request: dict[str, Any]) -> dict[str, Any]:
                 image=image_overrides.get(build_name),
                 phase="Resolved" if build_name in image_overrides else "Planned",
                 source="image-overrides" if build_name in image_overrides else "build-plan",
+                external_resources=external_resources,
+            )
+            for build_name in sorted(builds(demo_project))
+        ],
+    )
+
+
+def build_with_codebuild(
+    demo_project: dict[str, Any],
+    external_resources: dict[str, Any] | None,
+    config: WorkerConfig,
+    *,
+    started_at: str,
+) -> dict[str, Any]:
+    if not config.codebuild_project:
+        return build_status(
+            demo_project,
+            phase="Error",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=source_commit_sha(demo_project),
+            message="AWS CodeBuild project is not configured.",
+            build_entries=[],
+            error="Set DEMO_REGISTRY_CODEBUILD_PROJECT to use aws-codebuild mode.",
+        )
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as error:
+        return build_status(
+            demo_project,
+            phase="Error",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=source_commit_sha(demo_project),
+            message="AWS CodeBuild image build failed.",
+            build_entries=[],
+            error=f"boto3 is required for aws-codebuild mode: {error}",
+        )
+
+    source = source_config(demo_project)
+    requested_version = source_commit_sha(demo_project) or source["branch"]
+    image_templates: dict[str, str] = {}
+    try:
+        for build_name in sorted(builds(demo_project)):
+            repository_uri = repository_uri_for_build(build_name, external_resources)
+            if not repository_uri:
+                if not config.aws_account_id:
+                    raise ValueError(
+                        "DEMO_REGISTRY_AWS_ACCOUNT_ID is required when ECR "
+                        "repositoryUri is not available from external resource status."
+                    )
+                repository_uri = (
+                    f"{config.aws_account_id}.dkr.ecr.{config.aws_region}.amazonaws.com/"
+                    f"{repository_name_for_build(demo_project, build_name, external_resources)}"
+                )
+            image_templates[build_name] = f"{repository_uri}:git-${{SOURCE_SHA}}"
+
+        codebuild = boto3.session.Session(region_name=config.aws_region).client(
+            "codebuild"
+        )
+        start_args = codebuild_start_build_args(
+            demo_project,
+            config,
+            image_templates=image_templates,
+            source_repo=source["repo"],
+            source_version=requested_version,
+        )
+        activity.heartbeat(
+            {
+                "project": project_name(demo_project),
+                "codebuildProject": config.codebuild_project,
+                "phase": "Starting",
+            }
+        )
+        response = codebuild.start_build(**start_args)
+        build = response.get("build", {})
+        build_id = build.get("id")
+        if not isinstance(build_id, str):
+            raise RuntimeError("CodeBuild start_build response did not include build.id")
+
+        build = wait_for_codebuild_build(
+            codebuild,
+            build_id,
+            config=config,
+            demo_project=demo_project,
+        )
+    except (BotoCoreError, ClientError, Exception) as error:
+        return build_status(
+            demo_project,
+            phase="Error",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=source_commit_sha(demo_project),
+            message="AWS CodeBuild image build failed.",
+            build_entries=[],
+            error=str(error),
+        )
+
+    status = build.get("buildStatus")
+    resolved_commit = resolved_codebuild_source_version(build, requested_version)
+    if status != "SUCCEEDED":
+        return build_status(
+            demo_project,
+            phase="Error",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=resolved_commit,
+            message="AWS CodeBuild image build failed.",
+            build_entries=codebuild_build_entries(
+                demo_project,
+                image_templates,
+                source_commit_sha=resolved_commit,
+                external_resources=external_resources,
+                phase="Failed",
+            ),
+            error=codebuild_error_message(build),
+        )
+
+    if not resolved_commit or not looks_like_commit_sha(resolved_commit):
+        return build_status(
+            demo_project,
+            phase="Error",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=resolved_commit,
+            message="AWS CodeBuild image build did not return an immutable source commit.",
+            build_entries=[],
+            error=(
+                "CodeBuild completed but resolvedSourceVersion was not a git "
+                "commit SHA; annotate registry.tmprl-demo.cloud/source-commit-sha "
+                "or verify the CodeBuild source provider."
+            ),
+        )
+
+    images = {
+        build_name: image_template.replace("${SOURCE_SHA}", resolved_commit[:12])
+        for build_name, image_template in image_templates.items()
+    }
+    return build_status(
+        demo_project,
+        phase="Pushed",
+        mode=config.build_mode,
+        started_at=started_at,
+        images=images,
+        source_commit_sha=resolved_commit,
+        message="AWS CodeBuild built and pushed immutable images for every build.",
+        build_entries=[
+            build_entry(
+                demo_project,
+                build_name,
+                image=images[build_name],
+                phase="Pushed",
+                source="aws-codebuild",
                 external_resources=external_resources,
             )
             for build_name in sorted(builds(demo_project))
@@ -229,6 +401,231 @@ def build_status(
             "lastTransitionTime": completed_at,
         }
     return status
+
+
+def codebuild_start_build_args(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    image_templates: dict[str, str],
+    source_repo: str,
+    source_version: str,
+) -> dict[str, Any]:
+    if not config.codebuild_project:
+        raise ValueError("DEMO_REGISTRY_CODEBUILD_PROJECT is required")
+
+    return {
+        "projectName": config.codebuild_project,
+        "sourceTypeOverride": "GITHUB",
+        "sourceLocationOverride": source_repo,
+        "sourceVersion": source_version,
+        "buildspecOverride": codebuild_buildspec(
+            demo_project,
+            image_templates,
+            aws_region=config.aws_region,
+        ),
+        "environmentVariablesOverride": [
+            {
+                "name": "DEMO_PROJECT_NAME",
+                "value": project_name(demo_project),
+                "type": "PLAINTEXT",
+            },
+            {
+                "name": "DEMO_REGISTRY_BUILD_MODE",
+                "value": "aws-codebuild",
+                "type": "PLAINTEXT",
+            },
+        ],
+        "privilegedModeOverride": True,
+        "timeoutInMinutesOverride": config.codebuild_timeout_minutes,
+        "idempotencyToken": codebuild_idempotency_token(
+            demo_project,
+            source_repo=source_repo,
+            source_version=source_version,
+            image_templates=image_templates,
+        ),
+    }
+
+
+def codebuild_buildspec(
+    demo_project: dict[str, Any],
+    image_templates: dict[str, str],
+    *,
+    aws_region: str,
+) -> str:
+    registries = sorted(
+        {
+            image_template.split("/", 1)[0]
+            for image_template in image_templates.values()
+            if "/" in image_template
+        }
+    )
+    pre_build_commands = [
+        "SOURCE_SHA=${CODEBUILD_RESOLVED_SOURCE_VERSION:-${CODEBUILD_SOURCE_VERSION:-}}",
+        'SOURCE_SHA=$(printf "%.12s" "$SOURCE_SHA")',
+        'test -n "$SOURCE_SHA"',
+    ]
+    pre_build_commands.extend(
+        [
+            (
+                f"aws ecr get-login-password --region {shlex.quote(aws_region)} "
+                f"| docker login --username AWS --password-stdin {shlex.quote(registry)}"
+            )
+            for registry in registries
+        ]
+    )
+
+    build_commands = []
+    for build_name, build in sorted(builds(demo_project).items()):
+        image = image_templates[build_name]
+        shell_image = shell_quote_image_template(image)
+        build_commands.append(
+            " ".join(
+                [
+                    "docker",
+                    "build",
+                    "-f",
+                    shlex.quote(build["dockerfile"]),
+                    "-t",
+                    shell_image,
+                    shlex.quote(build["context"]),
+                ]
+            )
+        )
+        build_commands.append("docker push " + shell_image)
+
+    return "\n".join(
+        [
+            "version: 0.2",
+            "phases:",
+            "  pre_build:",
+            "    commands:",
+            *[f"      - {json.dumps(command)}" for command in pre_build_commands],
+            "  build:",
+            "    commands:",
+            *[f"      - {json.dumps(command)}" for command in build_commands],
+            "",
+        ]
+    )
+
+
+def shell_quote_image_template(image_template: str) -> str:
+    suffix = ":git-${SOURCE_SHA}"
+    if image_template.endswith(suffix):
+        return shlex.quote(image_template[: -len(suffix)]) + suffix
+    return shlex.quote(image_template)
+
+
+def codebuild_idempotency_token(
+    demo_project: dict[str, Any],
+    *,
+    source_repo: str,
+    source_version: str,
+    image_templates: dict[str, str],
+) -> str:
+    encoded = json.dumps(
+        {
+            "project": project_name(demo_project),
+            "sourceRepo": source_repo,
+            "sourceVersion": source_version,
+            "images": image_templates,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def wait_for_codebuild_build(
+    codebuild: Any,
+    build_id: str,
+    *,
+    config: WorkerConfig,
+    demo_project: dict[str, Any],
+) -> dict[str, Any]:
+    deadline = time.monotonic() + (config.codebuild_timeout_minutes * 60)
+    while True:
+        response = codebuild.batch_get_builds(ids=[build_id])
+        builds_response = response.get("builds", [])
+        build = builds_response[0] if builds_response else {}
+        status = build.get("buildStatus")
+        activity.heartbeat(
+            {
+                "project": project_name(demo_project),
+                "codebuildBuildId": build_id,
+                "status": status,
+            }
+        )
+        if status in {"SUCCEEDED", "FAILED", "FAULT", "STOPPED", "TIMED_OUT"}:
+            return build
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for CodeBuild build {build_id}")
+        time.sleep(config.codebuild_poll_seconds)
+
+
+def resolved_codebuild_source_version(
+    build: dict[str, Any],
+    fallback: str | None,
+) -> str | None:
+    resolved = build.get("resolvedSourceVersion")
+    if isinstance(resolved, str) and resolved:
+        return resolved
+    return fallback if fallback and looks_like_commit_sha(fallback) else None
+
+
+def codebuild_error_message(build: dict[str, Any]) -> str:
+    phases = build.get("phases")
+    if isinstance(phases, list):
+        for phase in reversed(phases):
+            if not isinstance(phase, dict):
+                continue
+            contexts = phase.get("contexts")
+            if not isinstance(contexts, list):
+                continue
+            for context in contexts:
+                if isinstance(context, dict) and isinstance(context.get("message"), str):
+                    return context["message"]
+    status = build.get("buildStatus", "UNKNOWN")
+    return f"CodeBuild build finished with status {status}."
+
+
+def codebuild_build_entries(
+    demo_project: dict[str, Any],
+    image_templates: dict[str, str],
+    *,
+    source_commit_sha: str | None,
+    external_resources: dict[str, Any] | None,
+    phase: str,
+) -> list[dict[str, Any]]:
+    images = {}
+    if source_commit_sha and looks_like_commit_sha(source_commit_sha):
+        images = {
+            build_name: image_template.replace(
+                "${SOURCE_SHA}",
+                source_commit_sha[:12],
+            )
+            for build_name, image_template in image_templates.items()
+        }
+
+    return [
+        build_entry(
+            demo_project,
+            build_name,
+            image=images.get(build_name),
+            phase=phase,
+            source="aws-codebuild",
+            external_resources=external_resources,
+        )
+        for build_name in sorted(builds(demo_project))
+    ]
+
+
+def looks_like_commit_sha(value: str | None) -> bool:
+    if not isinstance(value, str):
+        return False
+    return 7 <= len(value) <= 40 and all(
+        character in "0123456789abcdefABCDEF" for character in value
+    )
 
 
 def build_entry(

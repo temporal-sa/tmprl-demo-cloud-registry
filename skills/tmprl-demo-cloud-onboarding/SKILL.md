@@ -102,7 +102,9 @@ If generation is out of date, run:
      an external build system.
    - In opt-in `DEMO_REGISTRY_BUILD_MODE=local-docker`, a trusted isolated
      worker can clone, build, push immutable ECR tags, and write build status.
-   - A hardened AWS-side build runner remains future work.
+   - In opt-in `DEMO_REGISTRY_BUILD_MODE=aws-codebuild`, the operator starts a
+     configured CodeBuild project that performs the clone/build/push work with
+     narrow AWS-side credentials.
    - Project Temporal Cloud Namespace/API key creation and rotation remain
      manual until provider automation is reviewed.
    - AWS Secrets Manager values for custom secrets, project Temporal

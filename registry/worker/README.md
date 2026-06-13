@@ -38,7 +38,9 @@ treated as already resolved images. In opt-in `local-docker` mode the worker
 clones the configured source repo, checks out the requested commit when
 provided, builds each configured Dockerfile with `docker build`, pushes
 `git-<source-sha>` tags, and passes the resolved image map into candidate
-rollout status.
+rollout status. In opt-in `aws-codebuild` mode the worker starts a configured
+AWS CodeBuild project with source, buildspec, and ECR image overrides, waits
+for completion, and records the immutable images pushed by the build.
 
 When a project has a smoke check, the workflow waits for every versioned
 candidate Deployment to report available replicas before running the smoke
@@ -63,8 +65,12 @@ Environment variables:
 - `DEMO_REGISTRY_WATCH_INTERVAL_SECONDS`, default `15`
 - `DEMO_REGISTRY_RECONCILE_MODE`, `plan` or `apply`, default `plan`
 - `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE`, `plan` or `aws`, default `plan`
-- `DEMO_REGISTRY_BUILD_MODE`, `plan` or `local-docker`, default `plan`
+- `DEMO_REGISTRY_BUILD_MODE`, `plan`, `local-docker`, or `aws-codebuild`,
+  default `plan`
 - `DEMO_REGISTRY_BUILD_WORKSPACE`, default `/tmp/demo-registry-builds`
+- `DEMO_REGISTRY_CODEBUILD_PROJECT`, required for `aws-codebuild`
+- `DEMO_REGISTRY_CODEBUILD_POLL_SECONDS`, default `15`
+- `DEMO_REGISTRY_CODEBUILD_TIMEOUT_MINUTES`, default `60`
 - `DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS`, default `300`
 - `DEMO_REGISTRY_READINESS_POLL_SECONDS`, default `5`
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
@@ -84,6 +90,13 @@ Environment variables:
 project source repo, Docker daemon access, and ECR push credentials scoped to
 the project/build repositories. Do not enable it on the long-running registry
 operator pod unless those permissions are intentionally isolated.
+
+`aws-codebuild` mode requires a pre-created CodeBuild project whose service
+role has read access to the `temporal-sa` source repositories and push access
+only to `tmprl-cloud-demo/<project>/<build>` ECR repositories. The registry
+operator role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds`
+for that project plus read/create/verify permissions for the ECR repositories
+it passes to the build.
 
 As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:

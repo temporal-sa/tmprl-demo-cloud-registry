@@ -26,6 +26,9 @@ class WorkerConfig:
     external_resource_mode: str
     build_mode: str
     build_workspace: str
+    codebuild_project: str | None
+    codebuild_poll_seconds: int
+    codebuild_timeout_minutes: int
     readiness_timeout_seconds: int
     readiness_poll_seconds: int
     aws_region: str
@@ -66,11 +69,20 @@ class WorkerConfig:
             build_mode=env_choice(
                 "DEMO_REGISTRY_BUILD_MODE",
                 default="plan",
-                choices={"plan", "local-docker"},
+                choices={"plan", "local-docker", "aws-codebuild"},
             ),
             build_workspace=env_first(
                 "DEMO_REGISTRY_BUILD_WORKSPACE",
                 default="/tmp/demo-registry-builds",
+            ),
+            codebuild_project=env_optional("DEMO_REGISTRY_CODEBUILD_PROJECT"),
+            codebuild_poll_seconds=env_int(
+                "DEMO_REGISTRY_CODEBUILD_POLL_SECONDS",
+                default=15,
+            ),
+            codebuild_timeout_minutes=env_int(
+                "DEMO_REGISTRY_CODEBUILD_TIMEOUT_MINUTES",
+                default=60,
             ),
             readiness_timeout_seconds=env_int(
                 "DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS",

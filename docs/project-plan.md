@@ -13,7 +13,7 @@ Keep it current as phases move from design to implementation.
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
 | 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify plus Secrets Manager path/property verification are implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
-| 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, and opt-in `local-docker` mode can clone/build/push immutable ECR tags from project configs for trusted tests. A hardened AWS-side builder remains to be implemented. |
+| 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, opt-in `local-docker` can clone/build/push for trusted tests, and opt-in `aws-codebuild` can start a pre-created CodeBuild project for AWS-side immutable image builds. CodeBuild project/role provisioning remains external setup. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo; generated `registry.json` now points each entry at the catalog status ConfigMap key written by the operator. |
@@ -128,9 +128,9 @@ Next validation target:
     mode now verifies required paths and JSON property names for
     platform-managed Temporal secrets;
   - create/verify Temporal Cloud namespace and namespace-scoped API key;
-  - build immutable images from the source repo; opt-in `local-docker` mode now
-    provides a trusted test path, while the hardened AWS-side builder remains
-    future work;
+  - build immutable images from the source repo; opt-in `aws-codebuild` now
+    provides an AWS-side test path using a pre-created CodeBuild project, while
+    `local-docker` remains available for trusted isolated tests;
   - deploy a candidate release;
   - run smoke checks against the candidate;
   - promote Traefik routing only after success;
@@ -474,10 +474,11 @@ Requirements:
 - Build credentials must be limited to that project's image repository.
 - Build workers must not have Temporal admin privileges or broad AWS access.
 - Current implementation supports default non-mutating build planning,
-  image-override compatibility, and an opt-in `local-docker` activity for
-  trusted tests. The local mode requires `git`, `docker`, Docker daemon access,
-  source repo read access, and ECR push access scoped to the project/build
-  repositories.
+  image-override compatibility, an opt-in `local-docker` activity for trusted
+  tests, and an opt-in `aws-codebuild` activity that starts and polls a
+  configured CodeBuild project. The CodeBuild project and service role are
+  provisioned outside the operator and should have source-repo read access plus
+  ECR push access scoped to the project/build repositories.
 
 Operator rollout direction:
 
@@ -502,7 +503,8 @@ Operator rollout direction:
 
 Open choice:
 
-- CodeBuild vs GitHub Actions vs in-AWS/cluster build worker.
+- Whether CodeBuild project/role creation should remain bootstrap/IaC or move
+  behind an explicit operator approval workflow.
 - Whether to add distinct preview routes or weighted Traefik services after
   versioned candidate Services are proven.
 

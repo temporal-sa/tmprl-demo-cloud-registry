@@ -249,7 +249,7 @@ Expected early state:
 
 ## First Test Path: `dejavu-tacos`
 
-The operator now has two build paths:
+The operator now has three build paths:
 
 - `DEMO_REGISTRY_BUILD_MODE=plan`: record build intent and wait for immutable
   images from annotations or an external build system.
@@ -258,6 +258,34 @@ The operator now has two build paths:
   ECR, and write the resolved image map into
   `DemoProject.status.buildStatus` and
   `DemoProject.status.candidateRolloutStatus`.
+- `DEMO_REGISTRY_BUILD_MODE=aws-codebuild`: start a pre-created AWS CodeBuild
+  project, override the source repo/commit/buildspec for the `DemoProject`,
+  wait for the build, and write the pushed immutable images into status.
+
+Prefer `aws-codebuild` for full rollout testing because the Docker daemon and
+source checkout run in a short-lived AWS build environment instead of the
+long-running registry operator pod. The operator role needs only:
+
+```text
+codebuild:StartBuild
+codebuild:BatchGetBuilds
+```
+
+on the configured project. The CodeBuild service role needs:
+
+```text
+ecr:GetAuthorizationToken
+ecr:BatchCheckLayerAvailability
+ecr:InitiateLayerUpload
+ecr:UploadLayerPart
+ecr:CompleteLayerUpload
+ecr:PutImage
+ecr:DescribeRepositories
+```
+
+scoped to the project/build repositories under `tmprl-cloud-demo/*`, plus read
+access to the `temporal-sa` source repositories through the configured
+CodeBuild source connection.
 
 Use `local-docker` only from an isolated build worker or trusted test
 environment with:
@@ -281,10 +309,15 @@ Set these environment variables on the build-capable worker:
 
 ```yaml
 DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
-DEMO_REGISTRY_BUILD_MODE=local-docker
+DEMO_REGISTRY_BUILD_MODE=aws-codebuild
+DEMO_REGISTRY_CODEBUILD_PROJECT=<codebuild-project-name>
 DEMO_REGISTRY_AWS_REGION=<aws-region>
 DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 ```
+
+For trusted local testing only, set `DEMO_REGISTRY_BUILD_MODE=local-docker`
+instead and run the worker where `git`, `docker`, Docker daemon access, and
+project-scoped ECR push credentials are intentionally available.
 
 If you keep `DEMO_REGISTRY_BUILD_MODE=plan`, build images manually from the
 reviewed source repo using narrow credentials:
@@ -430,8 +463,8 @@ aws secretsmanager create-secret \
   }'
 ```
 
-Then use `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` and either
-`DEMO_REGISTRY_BUILD_MODE=local-docker` from an isolated trusted build worker,
+Then use `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` and
+`DEMO_REGISTRY_BUILD_MODE=aws-codebuild` with the configured CodeBuild project,
 or manually build and annotate the immutable app image. The generated smoke
 check is:
 
@@ -454,8 +487,11 @@ kubectl -n demo-registry-system get configmap demo-registry-catalog-status \
 
 These are intentional gaps for the first deployment test:
 
-- ECR repositories are created manually.
-- Image builds are run manually or by a narrow AWS-side builder.
+- ECR repositories can be created/verified by opt-in
+  `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, or created manually while testing
+  in `plan` mode.
+- Image builds can be run by opt-in `aws-codebuild`, by trusted
+  `local-docker`, or manually via immutable image annotations.
 - Temporal Cloud Namespace/API key lifecycle is manual. Do not automate delete
   or rotation until the provider contract is reviewed.
 - Project Temporal credentials are written manually to
