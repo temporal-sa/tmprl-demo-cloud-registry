@@ -17,6 +17,7 @@ from demo_registry_operator.resources import (
     temporal_components,
     temporal_secret_remote_path,
     user_secret_names,
+    user_secret_required_properties,
     user_secret_remote_path,
 )
 
@@ -224,6 +225,10 @@ def verify_secrets_manager_paths(
             user_secret_remote_path(demo_project, secret_name),
             required=True,
             managed_by="project-owner",
+            required_properties=user_secret_required_properties(
+                demo_project,
+                secret_name,
+            ),
             components=components_for_user_secret(demo_project, secret_name),
         )
         for secret_name in user_secret_names(demo_project)
@@ -398,6 +403,10 @@ def planned_secrets_manager_status(
                 "path": user_secret_remote_path(demo_project, secret_name),
                 "required": True,
                 "managedBy": "project-owner",
+                "requiredProperties": user_secret_required_properties(
+                    demo_project,
+                    secret_name,
+                ),
                 "components": sorted(
                     components_for_user_secret(demo_project, secret_name)
                 ),

@@ -121,6 +121,10 @@ spec:
     temporalNamespace: temporal-agent-harness
     secretPrefix: tmprl-cloud-demo/temporal-agent-harness
     imageRepositoryPrefix: tmprl-cloud-demo
+  secrets:
+    anthropic-credentials:
+      requiredProperties:
+      - ANTHROPIC_API_KEY
   smokeCheck:
     path: /api/auth/google/configured
     expectedStatus: 200

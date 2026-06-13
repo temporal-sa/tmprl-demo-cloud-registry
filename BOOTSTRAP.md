@@ -144,9 +144,10 @@ DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
 In the default `plan` mode, the operator records the expected ECR repositories
 and secret paths on `DemoProject.status.externalResources` without mutating
 AWS. In `aws` mode it creates or verifies ECR repositories and verifies
-Secrets Manager paths. For platform-managed Temporal secrets it also verifies
-the JSON property names without returning secret values in status. It does not
-create placeholder secret values.
+Secrets Manager paths. For platform-managed Temporal secrets and project-owned
+custom secrets that declare `requiredProperties`, it also verifies JSON
+property names without returning secret values in status. It does not create
+placeholder secret values.
 
 Create an IAM role for the registry/operator service account. The bootstrap
 manifests expect this annotation until you replace it:
@@ -232,6 +233,10 @@ For Agent Harness, the custom secret path is:
 ```text
 tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
 ```
+
+The project config declares `ANTHROPIC_API_KEY` as a required JSON property for
+that secret. In `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, a missing,
+malformed, or blank value keeps Agent Harness in `WaitingForExternalResources`.
 
 ## Shared Auth Setup
 
@@ -561,6 +566,11 @@ aws secretsmanager create-secret \
     "ANTHROPIC_API_KEY": "<anthropic-api-key>"
   }'
 ```
+
+`ANTHROPIC_API_KEY` is declared in
+`projects/temporal-agent-harness.yaml` under
+`secrets.anthropic-credentials.requiredProperties`; AWS external-resource mode
+verifies that key before deploying the API and worker workloads.
 
 Then use `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` and
 `DEMO_REGISTRY_BUILD_MODE=aws-codebuild` with the configured CodeBuild project,

@@ -330,6 +330,8 @@ def validate_ingress_routes(document: ProjectDocument) -> list[ProjectError]:
 
 def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
+    declared = project_secret_definitions(document)
+    referenced: set[str] = set()
 
     for component_name, component in components(document).items():
         references = component.get("secrets")
@@ -350,6 +352,23 @@ def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
                 )
             else:
                 seen[secret_name] = index
+                referenced.add(secret_name)
+
+            if secret_name not in declared:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"components.{component_name}.secrets[{index}] {secret_name!r} must be declared in top-level secrets",
+                    )
+                )
+
+    for secret_name in sorted(set(declared) - referenced):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"secrets.{secret_name} must be referenced by at least one component",
+            )
+        )
 
     return errors
 
@@ -536,6 +555,13 @@ def builds(document: ProjectDocument) -> dict[str, dict[str, Any]]:
 
 def components(document: ProjectDocument) -> dict[str, dict[str, Any]]:
     value = get_nested(document.data, ("components",))
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(item, dict)}
+
+
+def project_secret_definitions(document: ProjectDocument) -> dict[str, dict[str, Any]]:
+    value = get_nested(document.data, ("secrets",))
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(item, dict)}

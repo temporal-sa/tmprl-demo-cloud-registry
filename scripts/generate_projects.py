@@ -268,6 +268,9 @@ def demo_project_resource(project: Project, *, review_artifact: bool) -> dict[st
             "imageRepositoryPrefix": IMAGE_REPOSITORY_PREFIX,
         },
     }
+    secrets = project.data.get("secrets")
+    if isinstance(secrets, dict):
+        spec["secrets"] = secrets
     smoke_check = project.data.get("smokeCheck")
     if isinstance(smoke_check, dict):
         spec["smokeCheck"] = smoke_check
@@ -1252,6 +1255,10 @@ def secrets_manager_resources(project: Project) -> dict[str, Any]:
                 "name": secret_name,
                 "managedBy": "project-owner",
                 "remotePath": user_secret_remote_path(project, secret_name),
+                "requiredProperties": user_secret_required_properties(
+                    project,
+                    secret_name,
+                ),
                 "components": sorted(components_for_user_secret(project, secret_name)),
             }
             for secret_name in user_secret_names(project)
@@ -1352,6 +1359,10 @@ def project_metadata(project: Project) -> dict[str, Any]:
             secret_name: {
                 "remotePath": user_secret_remote_path(project, secret_name),
                 "kubernetesSecret": user_secret_kubernetes_name(secret_name),
+                "requiredProperties": user_secret_required_properties(
+                    project,
+                    secret_name,
+                ),
                 "components": sorted(components_for_user_secret(project, secret_name)),
             }
             for secret_name in user_secret_names(project)
@@ -1373,6 +1384,23 @@ def components_for_user_secret(project: Project, secret_name: str) -> list[str]:
         if isinstance(references, list) and secret_name in references:
             names.append(component_name)
     return names
+
+
+def project_secret_definitions(project: Project) -> dict[str, dict[str, Any]]:
+    value = project.data.get("secrets")
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(item, dict)}
+
+
+def user_secret_required_properties(project: Project, secret_name: str) -> list[str]:
+    secret = project_secret_definitions(project).get(secret_name)
+    if not isinstance(secret, dict):
+        return []
+    required_properties = secret.get("requiredProperties")
+    if not isinstance(required_properties, list):
+        return []
+    return sorted(name for name in required_properties if isinstance(name, str))
 
 
 def user_secret_names(project: Project) -> list[str]:

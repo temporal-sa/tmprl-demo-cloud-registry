@@ -373,7 +373,10 @@
             ],
             "managedBy": "project-owner",
             "name": "anthropic-credentials",
-            "remotePath": "tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials"
+            "remotePath": "tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials",
+            "requiredProperties": [
+              "ANTHROPIC_API_KEY"
+            ]
           }
         ]
       },

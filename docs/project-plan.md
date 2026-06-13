@@ -64,8 +64,10 @@ Keep it current as phases move from design to implementation.
   `temporalAccess: true`.
 - User-managed secrets are constrained to platform-derived AWS Secrets Manager
   paths: `tmprl-cloud-demo/<metadata.name>/<secret-name>`. Components receive
-  them only when they explicitly reference the secret. Every JSON key in the AWS
-  secret is injected as an environment variable for those components.
+  them only when they explicitly reference a top-level `secrets.<name>`
+  declaration. Every JSON key in the AWS secret is injected as an environment
+  variable for those components, and declared `requiredProperties` are verified
+  before runtime workloads are deployed in opt-in AWS external-resource mode.
 - Project IAM roles must be scoped to the project secret prefix only, for
   example `tmprl-cloud-demo/<metadata.name>/*`, so a compromised project cannot
   read or mutate secrets belonging to other demos or non-demo systems.
@@ -115,8 +117,9 @@ As of 2026-06-13:
   for those projects.
 - `temporal-agent-harness` is the chosen second rollout target. It uses one
   `app` build for web, API, and worker components, requires
-  `tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials`, and now
-  declares smoke check path `/api/auth/google/configured`.
+  `tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials` with
+  required JSON property `ANTHROPIC_API_KEY`, and now declares smoke check path
+  `/api/auth/google/configured`.
 
 Next validation target:
 
@@ -126,7 +129,8 @@ Next validation target:
     subset for project repositories;
   - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
     mode now verifies required paths and JSON property names for
-    platform-managed Temporal secrets, and runtime status records
+    platform-managed Temporal secrets and declared project-owned secrets, and
+    runtime status records
     ExternalSecret Ready conditions after Kubernetes reconcile. When required
     secret values are missing or malformed, the operator holds back runtime
     workloads with `WaitingForExternalResources` and records
@@ -340,7 +344,7 @@ real application shape. For example, `projects/temporal-agent-harness.yaml`
 uses one `app` build for `web`, `api`, and `worker`, with each component
 providing its own command as an inline string array. The `api` and `worker`
 components reference the user-managed `anthropic-credentials` secret, which
-maps to:
+declares required JSON property `ANTHROPIC_API_KEY` and maps to:
 
 ```text
 tmprl-cloud-demo/temporal-agent-harness/anthropic-credentials
@@ -428,9 +432,10 @@ review data only until Terraform/OpenTofu automation is added.
 The operator's opt-in `aws` external resource mode currently creates or
 verifies ECR repositories, verifies Secrets Manager path existence, and checks
 required JSON property names for the Temporal Cloud bootstrap secret and each
-platform-managed project Temporal credential. It does not write secret values
-and it leaves Temporal Cloud namespace/API key lifecycle manual until the
-provider contract is reviewed.
+platform-managed project Temporal credential, plus any project-owned secret
+requirements declared in `secrets.<name>.requiredProperties`. It does not write
+secret values and it leaves Temporal Cloud namespace/API key lifecycle manual
+until the provider contract is reviewed.
 
 Temporal API key rotation design:
 

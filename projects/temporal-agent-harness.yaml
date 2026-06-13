@@ -23,6 +23,11 @@ builds:
     context: .
     dockerfile: simple_chat_agent/Dockerfile
 
+secrets:
+  anthropic-credentials:
+    requiredProperties:
+      - ANTHROPIC_API_KEY
+
 components:
   web:
     build: app

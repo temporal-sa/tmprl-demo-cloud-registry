@@ -41,19 +41,28 @@ Rules:
 - The platform injects standard Temporal env vars:
   `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and
   `TEMPORAL_TLS`.
-- User-managed secrets are allowed only through component secret references.
-  The platform derives the AWS Secrets Manager path as
-  `tmprl-cloud-demo/<metadata.name>/<secret-name>`.
+- User-managed secrets must be declared under top-level `secrets` and then
+  referenced by components. The platform derives the AWS Secrets Manager path
+  as `tmprl-cloud-demo/<metadata.name>/<secret-name>`.
 - Components receive user-managed secrets only when they list the secret name in
   `components.<name>.secrets`. Every JSON key in the AWS secret is injected as
   an environment variable, so keep each secret narrow and use env-var-shaped
   JSON keys.
+- `secrets.<name>.requiredProperties` declares required JSON keys that the
+  operator verifies in opt-in AWS external-resource mode before runtime
+  workloads are deployed.
 
 Example user-managed secret:
 
 ```yaml
+secrets:
+  anthropic-credentials:
+    requiredProperties:
+      - ANTHROPIC_API_KEY
+
 components:
   worker:
+    build: app
     secrets:
       - anthropic-credentials
 ```
@@ -71,6 +80,10 @@ with JSON keys that should become environment variables:
   "ANTHROPIC_API_KEY": "..."
 }
 ```
+
+In `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, the operator reports missing or
+malformed required keys under
+`DemoProject.status.externalResources.secretsManager.userManaged`.
 
 The platform IAM role for the project should be scoped to only:
 

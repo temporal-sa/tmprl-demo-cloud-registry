@@ -70,6 +70,8 @@ Use this skill as a wizard for moving an SA-owned demo repo into the
      `tmprl-cloud-demo/<project-name>/<secret-name>`.
    - Every JSON key in the AWS secret becomes an environment variable for
      components that list the secret.
+   - Declare each custom secret under top-level `secrets.<name>` and include
+     `requiredProperties` for keys the operator must verify before deployment.
    - Keep secrets narrow and attach them only to components that need them.
    - Project Temporal credentials are platform-managed and use:
      `tmprl-cloud-demo/<project-name>/temporal`.
@@ -97,7 +99,8 @@ If generation is out of date, run:
      recorded but not mutated.
    - In opt-in `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`, the operator can
      create/verify ECR repositories and verify Secrets Manager paths plus JSON
-     properties for platform-managed Temporal secrets.
+     properties for platform-managed Temporal secrets and declared custom
+     secret requirements.
    - In `DEMO_REGISTRY_BUILD_MODE=plan`, images must come from annotations or
      an external build system.
    - In opt-in `DEMO_REGISTRY_BUILD_MODE=local-docker`, a trusted isolated

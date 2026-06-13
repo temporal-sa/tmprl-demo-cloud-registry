@@ -51,6 +51,15 @@
         "$ref": "#/$defs/build"
       }
     },
+    "secrets": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/dnsLabel"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/userSecret"
+      }
+    },
     "components": {
       "type": "object",
       "minProperties": 1,
@@ -416,6 +425,20 @@
     "httpsUrl": {
       "type": "string",
       "pattern": "^https://[^\\s]+$"
+    },
+    "userSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredProperties": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
     },
     "stringArray": {
       "type": "array",

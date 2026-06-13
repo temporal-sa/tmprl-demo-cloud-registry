@@ -70,6 +70,11 @@ smokeCheck:
 For custom secrets:
 
 ```yaml
+secrets:
+  llm:
+    requiredProperties:
+      - ANTHROPIC_API_KEY
+
 components:
   api:
     build: api

@@ -1115,6 +1115,10 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                     "path": user_secret_remote_path(demo_project, name),
                     "required": True,
                     "managedBy": "project-owner",
+                    "requiredProperties": user_secret_required_properties(
+                        demo_project,
+                        name,
+                    ),
                     "components": sorted(
                         components_for_user_secret(demo_project, name)
                     ),
@@ -1546,6 +1550,10 @@ def project_metadata(demo_project: dict[str, Any]) -> dict[str, Any]:
             secret_name: {
                 "remotePath": user_secret_remote_path(demo_project, secret_name),
                 "kubernetesSecret": user_secret_kubernetes_name(secret_name),
+                "requiredProperties": user_secret_required_properties(
+                    demo_project,
+                    secret_name,
+                ),
                 "components": sorted(
                     components_for_user_secret(demo_project, secret_name)
                 ),
@@ -1632,6 +1640,28 @@ def components_for_user_secret(
         if isinstance(references, list) and secret_name in references:
             names.append(component_name)
     return names
+
+
+def project_secret_definitions(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    value = spec_of(demo_project).get("secrets")
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(item, dict)}
+
+
+def user_secret_required_properties(
+    demo_project: dict[str, Any],
+    secret_name: str,
+) -> list[str]:
+    secret = project_secret_definitions(demo_project).get(secret_name)
+    if not isinstance(secret, dict):
+        return []
+    required_properties = secret.get("requiredProperties")
+    if not isinstance(required_properties, list):
+        return []
+    return sorted(name for name in required_properties if isinstance(name, str))
 
 
 def user_secret_names(demo_project: dict[str, Any]) -> list[str]:
