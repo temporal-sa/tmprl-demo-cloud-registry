@@ -40,6 +40,12 @@ def project_name(demo_project: dict[str, Any]) -> str:
     return "unknown"
 
 
+def is_control_plane_project(demo_project: dict[str, Any]) -> bool:
+    """The registry is the operator's own control plane (bootstrap-managed). It is
+    not auto-built/provisioned or finalized as an ordinary managed demo."""
+    return project_name(demo_project) == REGISTRY_PROJECT_NAME
+
+
 def project_namespace(demo_project: dict[str, Any]) -> str:
     spec = spec_of(demo_project)
     derived = spec.get("derived", {})

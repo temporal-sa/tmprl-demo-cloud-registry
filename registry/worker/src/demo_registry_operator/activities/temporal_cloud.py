@@ -46,6 +46,18 @@ DEFAULT_OPS_TARGET_HOST = "saas-api.tmprl.cloud:443"
 # Region demo namespaces are created in when the bootstrap credential does not
 # specify one. Must be a region the Temporal Cloud account can provision into.
 DEFAULT_TEMPORAL_CLOUD_REGION = "gcp-us-central1"
+# A DELETED namespace frees its name, so it is treated as absent (recreate).
+DELETED_NAMESPACE_STATES = {"RESOURCE_STATE_DELETED"}
+# Reusable as-is.
+REUSABLE_NAMESPACE_STATES = {"RESOURCE_STATE_ACTIVE", "RESOURCE_STATE_ACTIVATING"}
+# Present but not safe to adopt or recreate over — surface an error.
+UNUSABLE_NAMESPACE_STATES = {
+    "RESOURCE_STATE_ACTIVATION_FAILED",
+    "RESOURCE_STATE_DELETE_FAILED",
+    "RESOURCE_STATE_DELETING",
+    "RESOURCE_STATE_SUSPENDED",
+    "RESOURCE_STATE_EXPIRED",
+}
 ASYNC_OPERATION_POLL_SECONDS = 2.0
 ASYNC_OPERATION_TIMEOUT_SECONDS = 300.0
 
@@ -150,6 +162,28 @@ async def reconcile_temporal_cloud(
     short_name = desired_namespace_name(demo_project)
 
     namespace = await reconciler.find_namespace(short_name)
+    # A deleted namespace has freed its name; treat it as absent so we recreate.
+    if namespace is not None and namespace.state in DELETED_NAMESPACE_STATES:
+        namespace = None
+    # An existing namespace in a non-reusable, non-deleted state must not be
+    # silently adopted (nor recreated over) — surface it for attention.
+    if (
+        namespace is not None
+        and namespace.state in UNUSABLE_NAMESPACE_STATES
+    ):
+        return {
+            "phase": "Error",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "reason": "NamespaceUnusable",
+            "message": (
+                f"Temporal Cloud namespace {namespace.qualified_name!r} exists in "
+                f"state {namespace.state}; not reusing or recreating."
+            ),
+            "namespace": {"name": namespace.qualified_name, "state": namespace.state},
+        }
+
     namespace_created = False
     if namespace is None:
         # Fail fast if the requested region cannot be provisioned by this account
@@ -351,8 +385,14 @@ class CloudApiReconciler:
                 GetNamespacesRequest(page_size=100, page_token=page_token)
             )
             for namespace in response.namespaces:
-                if namespace.spec.name == name:
-                    return self._namespace_info(namespace, created=False)
+                if namespace.spec.name != name:
+                    continue
+                info = self._namespace_info(namespace, created=False)
+                # Skip a deleted entry whose name has been freed; keep scanning
+                # in case an active namespace reuses the same name.
+                if info.state in DELETED_NAMESPACE_STATES:
+                    continue
+                return info
             page_token = response.next_page_token
             if not page_token:
                 return None

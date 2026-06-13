@@ -19,6 +19,7 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import (
     builds,
     components,
+    is_control_plane_project,
     missing_image_overrides,
     parse_image_overrides,
     project_name,
@@ -48,6 +49,22 @@ def build_project_images(request: dict[str, Any]) -> dict[str, Any]:
     external_resources = external_resources_from_request(request)
     config = WorkerConfig.from_env()
     started_at = datetime.now(UTC).isoformat()
+
+    if is_control_plane_project(demo_project) and not parse_image_overrides(demo_project):
+        return build_status(
+            demo_project,
+            phase="BootstrapManaged",
+            mode=config.build_mode,
+            started_at=started_at,
+            images={},
+            source_commit_sha=None,
+            message=(
+                "Registry control-plane images are built and rolled out by "
+                "bootstrap; not built as a project."
+            ),
+            build_entries=[],
+        )
+
     image_overrides = parse_image_overrides(demo_project)
     missing_images = missing_image_overrides(demo_project, image_overrides)
 

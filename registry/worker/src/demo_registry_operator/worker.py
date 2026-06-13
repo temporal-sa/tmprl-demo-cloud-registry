@@ -13,6 +13,7 @@ from demo_registry_operator.activities.external_resources import (
     reconcile_external_resources,
 )
 from demo_registry_operator.activities.reconcile import (
+    finalize_project,
     plan_rollout,
     promote_candidate,
     record_project_status,
@@ -57,6 +58,7 @@ async def main() -> None:
                 build_project_images,
                 reconcile_external_resources,
                 reconcile_project,
+                finalize_project,
                 plan_rollout,
                 run_smoke_check,
                 promote_candidate,

@@ -199,6 +199,45 @@ def test_existing_namespace_but_missing_key_creates_only_the_key():
     assert status["serviceAccount"]["action"] == "created"
 
 
+def test_deleted_namespace_is_treated_as_absent_and_recreated():
+    reconciler = FakeReconciler(
+        existing_namespace=NamespaceInfo(
+            qualified_name="demo-banking-app-money-transfer.acct1",
+            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            web_address="https://cloud.temporal.io/namespaces/x",
+            state="RESOURCE_STATE_DELETED",
+            created=False,
+        ),
+    )
+    secrets = FakeSecretStore()
+
+    status = reconcile(reconciler, secrets)
+
+    assert status["phase"] == "Ready"
+    assert len(reconciler.called("create_namespace")) == 1
+    assert status["namespace"]["action"] == "created"
+
+
+def test_unusable_namespace_state_surfaces_error_without_creating():
+    reconciler = FakeReconciler(
+        existing_namespace=NamespaceInfo(
+            qualified_name="demo-banking-app-money-transfer.acct1",
+            grpc_address="demo-banking-app-money-transfer.acct1.tmprl.cloud:7233",
+            web_address="https://cloud.temporal.io/namespaces/x",
+            state="RESOURCE_STATE_ACTIVATION_FAILED",
+            created=False,
+        ),
+    )
+    secrets = FakeSecretStore()
+
+    status = reconcile(reconciler, secrets)
+
+    assert status["phase"] == "Error"
+    assert status["reason"] == "NamespaceUnusable"
+    assert reconciler.called("create_namespace") == []
+    assert secrets.writes == []
+
+
 def test_region_not_available_fails_fast_without_creating():
     reconciler = FakeReconciler(regions=["aws-ca-central-1", "gcp-us-central1"])
     secrets = FakeSecretStore()

@@ -12,6 +12,7 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import (
     builds,
     components_for_user_secret,
+    is_control_plane_project,
     project_name,
     project_namespace,
     project_secret_prefix,
@@ -52,6 +53,17 @@ def reconcile_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]
         project_name(demo_project),
         config.external_resource_mode,
     )
+
+    if is_control_plane_project(demo_project):
+        return {
+            "phase": "BootstrapManaged",
+            "mode": config.external_resource_mode,
+            "checkedAt": datetime.now(UTC).isoformat(),
+            "message": (
+                "Registry control-plane external resources are managed by "
+                "bootstrap; not reconciled as a project."
+            ),
+        }
 
     if config.external_resource_mode == "aws":
         return aws_external_resources(demo_project, config)
@@ -561,6 +573,109 @@ def temporal_cloud_api_status(
         )
     except Exception as error:  # noqa: BLE001 - surface as status, do not crash reconcile
         return temporal_cloud_api_error(checked_at, str(error))
+
+
+def finalize_external_resources(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+) -> dict[str, Any]:
+    """Delete a removed project's external resources: Temporal Cloud namespace,
+    scoped service account, API key, runtime secret (cloud-api mode), and ECR
+    repositories (aws mode). Idempotent — already-gone resources are fine."""
+
+    now = datetime.now(UTC).isoformat()
+    result: dict[str, Any] = {"phase": "Deleted", "checkedAt": now}
+
+    if config.temporal_cloud_mode == "cloud-api":
+        result["temporalCloud"] = finalize_temporal_cloud_via_api(demo_project, config, now)
+    else:
+        result["temporalCloud"] = {"phase": "Skipped", "mode": config.temporal_cloud_mode}
+
+    if config.external_resource_mode == "aws":
+        result["ecr"] = delete_project_ecr_repositories(demo_project, config, now)
+    else:
+        result["ecr"] = {"phase": "Skipped", "mode": config.external_resource_mode}
+
+    return result
+
+
+def finalize_temporal_cloud_via_api(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    checked_at: str,
+) -> dict[str, Any]:
+    import asyncio
+
+    from demo_registry_operator.activities.temporal_cloud import (
+        SecretsManagerStore,
+        run_cloud_api_finalize,
+    )
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as error:
+        return temporal_cloud_api_error(checked_at, f"boto3 is required: {error}")
+
+    session = boto3.session.Session(region_name=config.aws_region)
+    store = SecretsManagerStore(session.client("secretsmanager"))
+    try:
+        bootstrap = store.read_json(config.temporal_cloud_bootstrap_secret_path)
+    except (BotoCoreError, ClientError) as error:
+        return temporal_cloud_api_error(checked_at, f"Could not read bootstrap secret: {error}")
+    if not isinstance(bootstrap, dict) or not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return {
+            "phase": "Skipped",
+            "mode": "cloud-api",
+            "message": "No bootstrap credential; skipping Temporal Cloud teardown.",
+        }
+
+    def heartbeat(detail: Any) -> None:
+        try:
+            activity.heartbeat(detail)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        return asyncio.run(
+            run_cloud_api_finalize(
+                demo_project,
+                bootstrap=bootstrap,
+                secret_store=store,
+                checked_at=checked_at,
+                target_host=config.temporal_cloud_ops_host,
+                api_version=config.temporal_cloud_api_version,
+                heartbeat=heartbeat,
+            )
+        )
+    except Exception as error:  # noqa: BLE001
+        return temporal_cloud_api_error(checked_at, str(error))
+
+
+def delete_project_ecr_repositories(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    checked_at: str,
+) -> dict[str, Any]:
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as error:
+        return {"phase": "Error", "message": f"boto3 is required: {error}"}
+
+    ecr = boto3.session.Session(region_name=config.aws_region).client("ecr")
+    repositories: list[dict[str, Any]] = []
+    for build_name in sorted(builds(demo_project)):
+        name = image_repository_name(demo_project, build_name)
+        try:
+            ecr.delete_repository(repositoryName=name, force=True)
+            repositories.append({"name": name, "action": "deleted"})
+        except (BotoCoreError, ClientError) as error:
+            if error_code(error) == "RepositoryNotFoundException":
+                repositories.append({"name": name, "action": "not-found"})
+            else:
+                repositories.append({"name": name, "action": "error", "message": str(error)})
+    return {"phase": "Deleted", "checkedAt": checked_at, "repositories": repositories}
 
 
 def temporal_cloud_api_error(checked_at: str, message: str) -> dict[str, Any]:

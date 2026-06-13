@@ -7,11 +7,17 @@ import logging
 from typing import Any
 
 from temporalio.client import Client
+from temporalio.common import WorkflowIDConflictPolicy
 
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.kube import list_demo_projects
+from demo_registry_operator.kube import (
+    demo_project_deletion_timestamp,
+    ensure_demo_project_finalizer,
+    list_demo_projects,
+)
 from demo_registry_operator.resources import (
     IMAGE_OVERRIDES_ANNOTATION,
+    REGISTRY_PROJECT_NAME,
     SOURCE_COMMIT_ANNOTATION,
     metadata_annotations,
     project_name,
@@ -42,55 +48,72 @@ async def run_demo_project_watch(
             continue
 
         for demo_project in demo_projects:
-            name = project_name(demo_project)
-            key = reconcile_key(demo_project)
-            if seen.get(name) == key:
-                continue
-
-            await signal_reconcile(temporal_client, config, demo_project)
-            seen[name] = key
+            try:
+                await reconcile_one(temporal_client, config, demo_project, seen)
+            except Exception:
+                # Don't advance `seen` on failure, so the next resync retries.
+                logger.exception(
+                    "Watch step failed for project=%s",
+                    project_name(demo_project),
+                )
 
         await asyncio.sleep(config.watch_interval_seconds)
 
 
-async def signal_reconcile(
+async def reconcile_one(
     temporal_client: Client,
     config: WorkerConfig,
     demo_project: dict[str, Any],
+    seen: dict[str, str],
 ) -> None:
     name = project_name(demo_project)
-    workflow_id = f"demo-project/{name}"
+    # Control-plane guard: never finalize the registry (it would tear down the
+    # operator's own sibling resources). It also gets no finalizer.
+    is_registry = name == REGISTRY_PROJECT_NAME
 
-    handle = temporal_client.get_workflow_handle(workflow_id)
-    try:
-        await handle.signal("reconcile", demo_project)
-        logger.info("Signaled DemoProject workflow project=%s", name)
+    deletion_timestamp = demo_project_deletion_timestamp(demo_project)
+    if deletion_timestamp and not is_registry:
+        finalize_key = f"finalize:{deletion_timestamp}"
+        if seen.get(name) == finalize_key:
+            return
+        await signal_workflow(temporal_client, config, demo_project, "finalize")
+        seen[name] = finalize_key
         return
-    except Exception as signal_error:
-        logger.info(
-            "Signal before start failed for project=%s: %s",
-            name,
-            signal_error,
-        )
 
-    try:
-        handle = await temporal_client.start_workflow(
-            DemoProjectWorkflow.run,
-            name,
-            id=workflow_id,
-            task_queue=config.task_queue,
-        )
-        logger.info("Started DemoProject workflow project=%s", name)
-    except Exception as start_error:
-        logger.info(
-            "Start workflow returned error for project=%s: %s",
-            name,
-            start_error,
-        )
-        handle = temporal_client.get_workflow_handle(workflow_id)
+    # Adopt the project with a finalizer so a later deletion is observable and
+    # held until the entity workflow tears everything down.
+    if not is_registry:
+        await asyncio.to_thread(ensure_demo_project_finalizer, name)
 
-    await handle.signal("reconcile", demo_project)
-    logger.info("Signaled DemoProject workflow project=%s", name)
+    key = reconcile_key(demo_project)
+    if seen.get(name) == key:
+        return
+    await signal_workflow(temporal_client, config, demo_project, "reconcile")
+    seen[name] = key
+
+
+async def signal_workflow(
+    temporal_client: Client,
+    config: WorkerConfig,
+    demo_project: dict[str, Any],
+    signal_name: str,
+) -> None:
+    """Signal the project's entity workflow, starting it if absent (SignalWithStart).
+
+    The signal carries the full DemoProject (desired state), so the workflow is
+    level-triggered: a missed or duplicate signal converges on the next resync.
+    """
+    name = project_name(demo_project)
+    await temporal_client.start_workflow(
+        DemoProjectWorkflow.run,
+        args=[name],
+        id=f"demo-project/{name}",
+        task_queue=config.task_queue,
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        start_signal=signal_name,
+        start_signal_args=[demo_project],
+    )
+    logger.info("Signaled %s for project=%s", signal_name, name)
 
 
 def reconcile_key(demo_project: dict[str, Any]) -> str:
