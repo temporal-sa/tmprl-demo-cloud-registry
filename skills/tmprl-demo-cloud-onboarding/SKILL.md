@@ -120,6 +120,11 @@ If generation is out of date, run:
     - The operator writes compact lifecycle summaries to
       `demo-registry-system/demo-registry-catalog-status` under
       `<project>.json`.
+    - The registry worker mirrors those entries into
+      `tmprl-cloud-demo-demo-registry/demo-registry-catalog-status`, which the
+      self-managed registry web component mounts at `/app/status`.
+    - After the registry web image is rolled out, `/api/catalog` and the
+      registry page show the merged lifecycle status.
 
 ## Existing Kubernetes Or Flux
 

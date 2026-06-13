@@ -19,7 +19,7 @@ Keep it current as phases move from design to implementation.
 | 8. Registry App | Scaffolded | The registry landing page is itself a project in this repo; `registry/web/Dockerfile` now builds a dependency-free catalog service from generated `registry.json`, and the generated registry web Deployment mounts a mirrored catalog status ConfigMap for live lifecycle JSON. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
 | 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. Agent Harness is the second rollout target and now has a generated smoke check. |
-| 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
+| 11. SA Onboarding Skill | Scaffolded | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/` and covers repo assessment, migration lift, config generation, secrets instructions, validation checks, and lifecycle status surfaces. |
 
 ## Decisions
 
