@@ -204,6 +204,27 @@ def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: boo
     )
 
 
+def read_deployment_status(namespace: str, name: str) -> dict[str, Any]:
+    client = _client_module()
+    load_kubernetes_config()
+    deployment = client.AppsV1Api().read_namespaced_deployment(name, namespace)
+    metadata = getattr(deployment, "metadata", None)
+    spec = getattr(deployment, "spec", None)
+    status = getattr(deployment, "status", None)
+    return {
+        "name": name,
+        "namespace": namespace,
+        "generation": getattr(metadata, "generation", None),
+        "replicas": getattr(spec, "replicas", None),
+        "observedGeneration": getattr(status, "observed_generation", None),
+        "replicasStatus": getattr(status, "replicas", None),
+        "readyReplicas": getattr(status, "ready_replicas", None),
+        "availableReplicas": getattr(status, "available_replicas", None),
+        "updatedReplicas": getattr(status, "updated_replicas", None),
+        "conditions": deployment_conditions(status),
+    }
+
+
 def _create_or_patch(read: Any, create: Any, patch: Any) -> None:
     try:
         read()
@@ -218,6 +239,21 @@ def _create_or_patch(read: Any, create: Any, patch: Any) -> None:
 def _api_status(error: Exception) -> int | None:
     status = getattr(error, "status", None)
     return int(status) if isinstance(status, int) else None
+
+
+def deployment_conditions(status: Any) -> list[dict[str, Any]]:
+    conditions = getattr(status, "conditions", None)
+    if not conditions:
+        return []
+    return [
+        {
+            "type": getattr(condition, "type", None),
+            "status": getattr(condition, "status", None),
+            "reason": getattr(condition, "reason", None),
+            "message": getattr(condition, "message", None),
+        }
+        for condition in conditions
+    ]
 
 
 def load_kubernetes_config() -> None:

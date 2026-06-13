@@ -18,7 +18,7 @@ Keep it current as phases move from design to implementation.
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
-| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. |
+| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, readiness and smoke-check-gated promotion, versioned candidate Services, and planned/opt-in AWS external-resource status. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
 
 ## Decisions
@@ -476,8 +476,9 @@ Operator rollout direction:
   source commit annotation is present.
 - The project config should allow a simple owner-defined smoke or health check
   for the published demo path.
-- The workflow waits for Kubernetes readiness and then runs the smoke check
-  against the candidate version.
+- The workflow waits for candidate Deployment readiness, records
+  `DemoProject.status.readinessStatus`, and then runs the smoke check against
+  the candidate version.
 - Traefik routing moves to the candidate's versioned Services only after the
   smoke check succeeds.
 - On failure, the workflow keeps the previous healthy route active, records

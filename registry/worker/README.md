@@ -39,6 +39,11 @@ provided, builds each configured Dockerfile with `docker build`, pushes
 `git-<source-sha>` tags, and passes the resolved image map into candidate
 rollout status.
 
+When a project has a smoke check, the workflow waits for every versioned
+candidate Deployment to report available replicas before running the smoke
+check. If readiness times out, the active route is not promoted and
+`DemoProject.status.readinessStatus` records the Deployment states.
+
 Environment variables:
 
 - `TEMPORAL_ADDRESS`, default `localhost:7233`
@@ -53,6 +58,8 @@ Environment variables:
 - `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE`, `plan` or `aws`, default `plan`
 - `DEMO_REGISTRY_BUILD_MODE`, `plan` or `local-docker`, default `plan`
 - `DEMO_REGISTRY_BUILD_WORKSPACE`, default `/tmp/demo-registry-builds`
+- `DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS`, default `300`
+- `DEMO_REGISTRY_READINESS_POLL_SECONDS`, default `5`
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
   `AWS_DEFAULT_REGION`, then `us-west-1`
 - `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata

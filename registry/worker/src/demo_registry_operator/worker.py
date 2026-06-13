@@ -18,6 +18,7 @@ from demo_registry_operator.activities.reconcile import (
     record_project_status,
     reconcile_project,
     run_smoke_check,
+    wait_for_candidate_readiness,
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.watch import run_demo_project_watch
@@ -60,6 +61,7 @@ async def main() -> None:
                 run_smoke_check,
                 promote_candidate,
                 record_project_status,
+                wait_for_candidate_readiness,
             ],
             activity_executor=activity_executor,
         )

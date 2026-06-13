@@ -41,6 +41,10 @@ spec:
               value: plan
             - name: DEMO_REGISTRY_BUILD_MODE
               value: plan
+            - name: DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS
+              value: "300"
+            - name: DEMO_REGISTRY_READINESS_POLL_SECONDS
+              value: "5"
             - name: DEMO_REGISTRY_ACTIVITY_WORKERS
               value: "20"
           resources:

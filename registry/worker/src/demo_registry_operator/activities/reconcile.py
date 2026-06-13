@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -8,7 +9,11 @@ from urllib.request import Request, urlopen
 from temporalio import activity
 
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.kube import apply_resources, patch_demo_project_status
+from demo_registry_operator.kube import (
+    apply_resources,
+    patch_demo_project_status,
+    read_deployment_status,
+)
 from demo_registry_operator.resources import (
     SOURCE_COMMIT_ANNOTATION,
     base_resources,
@@ -18,6 +23,7 @@ from demo_registry_operator.resources import (
     promotion_resources,
     project_host,
     project_name,
+    project_namespace,
     runtime_resources,
     spec_of,
 )
@@ -180,6 +186,73 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
+    config = WorkerConfig.from_env()
+    demo_project = plan.get("demoProject")
+    candidate = plan.get("candidate")
+    if not isinstance(demo_project, dict) or not isinstance(candidate, dict):
+        raise ValueError("wait_for_candidate_readiness requires demoProject and candidate")
+
+    deployments = candidate.get("deployments")
+    if not isinstance(deployments, dict) or not deployments:
+        return {
+            "phase": "Skipped",
+            "ok": True,
+            "message": "Candidate has no Deployment resources to wait for.",
+            "checkedAt": datetime.now(UTC).isoformat(),
+            "deployments": {},
+        }
+
+    if config.reconcile_mode != "apply":
+        return {
+            "phase": "Planned",
+            "ok": True,
+            "message": "Readiness wait skipped because reconcile mode is plan.",
+            "checkedAt": datetime.now(UTC).isoformat(),
+            "deployments": {
+                component: {
+                    "name": deployment_name,
+                    "phase": "Planned",
+                }
+                for component, deployment_name in sorted(deployments.items())
+                if isinstance(component, str) and isinstance(deployment_name, str)
+            },
+        }
+
+    namespace = project_namespace(demo_project)
+    deadline = time.monotonic() + config.readiness_timeout_seconds
+    last_status: dict[str, Any] = {}
+    while True:
+        last_status = read_candidate_deployments(namespace, deployments)
+        if all(deployment.get("ready") for deployment in last_status.values()):
+            return {
+                "phase": "Ready",
+                "ok": True,
+                "message": "All candidate Deployments are available.",
+                "checkedAt": datetime.now(UTC).isoformat(),
+                "deployments": last_status,
+            }
+
+        if time.monotonic() >= deadline:
+            return {
+                "phase": "TimedOut",
+                "ok": False,
+                "message": "Timed out waiting for candidate Deployments to become available.",
+                "checkedAt": datetime.now(UTC).isoformat(),
+                "deployments": last_status,
+            }
+
+        activity.heartbeat(
+            {
+                "project": project_name(demo_project),
+                "namespace": namespace,
+                "deployments": last_status,
+            }
+        )
+        time.sleep(config.readiness_poll_seconds)
+
+
+@activity.defn
 def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
     project_name = plan.get("project", "unknown")
     config = WorkerConfig.from_env()
@@ -198,6 +271,48 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
         "candidate": plan.get("candidate", {}),
         "appliedResources": applied,
     }
+
+
+def read_candidate_deployments(
+    namespace: str,
+    deployments: dict[str, Any],
+) -> dict[str, Any]:
+    statuses = {}
+    for component, deployment_name in sorted(deployments.items()):
+        if not isinstance(component, str) or not isinstance(deployment_name, str):
+            continue
+        try:
+            status = read_deployment_status(namespace, deployment_name)
+        except Exception as error:
+            statuses[component] = {
+                "name": deployment_name,
+                "phase": "Missing",
+                "ready": False,
+                "message": str(error),
+            }
+            continue
+
+        statuses[component] = {
+            **status,
+            "phase": "Ready" if deployment_ready(status) else "Waiting",
+            "ready": deployment_ready(status),
+        }
+    return statuses
+
+
+def deployment_ready(status: dict[str, Any]) -> bool:
+    replicas = status.get("replicas")
+    desired = int(replicas) if isinstance(replicas, int) else 1
+    observed_generation = status.get("observedGeneration")
+    generation = status.get("generation")
+    if isinstance(generation, int) and isinstance(observed_generation, int):
+        if observed_generation < generation:
+            return False
+    return (
+        int(status.get("availableReplicas") or 0) >= desired
+        and int(status.get("readyReplicas") or 0) >= desired
+        and int(status.get("updatedReplicas") or 0) >= desired
+    )
 
 
 @activity.defn

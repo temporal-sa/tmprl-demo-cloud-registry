@@ -17,6 +17,7 @@ with workflow.unsafe.imports_passed_through():
         record_project_status,
         reconcile_project,
         run_smoke_check,
+        wait_for_candidate_readiness,
     )
 
 
@@ -27,6 +28,7 @@ class DemoProjectWorkflow:
     def __init__(self) -> None:
         self._project_name = "unknown"
         self._pending_spec: dict[str, Any] | None = None
+        self._reconcile_sequence = 0
         self._shutdown = False
         self._status: dict[str, Any] = {
             "phase": "Starting",
@@ -51,36 +53,47 @@ class DemoProjectWorkflow:
 
             demo_project = self._pending_spec
             self._pending_spec = None
+            self._reconcile_sequence += 1
             self._status = {
                 "project": project_name,
                 "phase": "Reconciling",
             }
-            external_resources = await workflow.execute_activity(
-                reconcile_external_resources,
-                demo_project,
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=RetryPolicy(maximum_attempts=3),
-            )
-            build_status = await workflow.execute_activity(
-                build_project_images,
-                {
-                    "demoProject": demo_project,
-                    "externalResources": external_resources,
-                },
-                start_to_close_timeout=timedelta(hours=1),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
-            reconcile_status = await workflow.execute_activity(
-                reconcile_project,
-                {
-                    "demoProject": demo_project,
-                    "externalResources": external_resources,
-                    "buildStatus": build_status,
-                },
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=RetryPolicy(maximum_attempts=3),
-            )
+            if workflow.patched(
+                f"registry-external-build-v1-{self._reconcile_sequence}"
+            ):
+                external_resources = await workflow.execute_activity(
+                    reconcile_external_resources,
+                    demo_project,
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                build_status = await workflow.execute_activity(
+                    build_project_images,
+                    {
+                        "demoProject": demo_project,
+                        "externalResources": external_resources,
+                    },
+                    start_to_close_timeout=timedelta(hours=1),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+                reconcile_status = await workflow.execute_activity(
+                    reconcile_project,
+                    {
+                        "demoProject": demo_project,
+                        "externalResources": external_resources,
+                        "buildStatus": build_status,
+                    },
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            else:
+                reconcile_status = await workflow.execute_activity(
+                    reconcile_project,
+                    demo_project,
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
             self._status = reconcile_status
 
             if reconcile_status.get("phase") == "SmokeCheckPending":
@@ -91,6 +104,59 @@ class DemoProjectWorkflow:
                     "candidate": reconcile_status.get("candidateRolloutStatus", {}),
                     "smokeCheck": demo_project.get("spec", {}).get("smokeCheck"),
                 }
+                if workflow.patched(
+                    f"candidate-readiness-v1-{self._reconcile_sequence}"
+                ):
+                    readiness_result = await workflow.execute_activity(
+                        wait_for_candidate_readiness,
+                        smoke_plan,
+                        start_to_close_timeout=timedelta(minutes=10),
+                        heartbeat_timeout=timedelta(minutes=2),
+                        retry_policy=RetryPolicy(maximum_attempts=1),
+                    )
+                    if not readiness_result.get("ok"):
+                        candidate_status = reconcile_status.get(
+                            "candidateRolloutStatus",
+                            {},
+                        )
+                        self._status = {
+                            **reconcile_status,
+                            "phase": "CandidateNotReady",
+                            "message": "Candidate did not become ready; active route was not promoted.",
+                            "candidateRolloutStatus": {
+                                **candidate_status,
+                                "phase": "CandidateNotReady",
+                                "message": "Candidate did not become ready; active route was not promoted.",
+                            },
+                            "readinessStatus": readiness_result,
+                        }
+                        await workflow.execute_activity(
+                            record_project_status,
+                            {
+                                "demoProject": demo_project,
+                                "status": self._status,
+                            },
+                            start_to_close_timeout=timedelta(minutes=1),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+                        continue
+
+                    self._status = {
+                        **reconcile_status,
+                        "readinessStatus": readiness_result,
+                    }
+                    await workflow.execute_activity(
+                        record_project_status,
+                        {
+                            "demoProject": demo_project,
+                            "status": self._status,
+                        },
+                        start_to_close_timeout=timedelta(minutes=1),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                else:
+                    readiness_result = None
+
                 smoke_result = await workflow.execute_activity(
                     run_smoke_check,
                     smoke_plan,
@@ -106,6 +172,11 @@ class DemoProjectWorkflow:
                         **reconcile_status,
                         "phase": "SmokeCheckFailed",
                         "message": "Candidate smoke check failed; active route was not promoted.",
+                        **(
+                            {"readinessStatus": readiness_result}
+                            if readiness_result
+                            else {}
+                        ),
                         "candidateRolloutStatus": {
                             **candidate_status,
                             "phase": "SmokeCheckFailed",
@@ -137,6 +208,11 @@ class DemoProjectWorkflow:
                         "message": promotion.get("message"),
                         "activeImages": candidate_status.get("images", {}),
                         "activeRouteServices": candidate_status.get("services", {}),
+                        **(
+                            {"readinessStatus": readiness_result}
+                            if readiness_result
+                            else {}
+                        ),
                         "candidateRolloutStatus": {
                             **candidate_status,
                             "phase": "Promoted",

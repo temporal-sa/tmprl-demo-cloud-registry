@@ -21,6 +21,8 @@ class WorkerConfig:
     external_resource_mode: str
     build_mode: str
     build_workspace: str
+    readiness_timeout_seconds: int
+    readiness_poll_seconds: int
     aws_region: str
     aws_account_id: str | None
 
@@ -59,6 +61,14 @@ class WorkerConfig:
             build_workspace=env_first(
                 "DEMO_REGISTRY_BUILD_WORKSPACE",
                 default="/tmp/demo-registry-builds",
+            ),
+            readiness_timeout_seconds=env_int(
+                "DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS",
+                default=300,
+            ),
+            readiness_poll_seconds=env_int(
+                "DEMO_REGISTRY_READINESS_POLL_SECONDS",
+                default=5,
             ),
             aws_region=env_first(
                 "DEMO_REGISTRY_AWS_REGION",

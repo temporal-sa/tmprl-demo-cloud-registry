@@ -308,6 +308,14 @@ kubectl get demoproject dejavu-tacos -o yaml
 kubectl -n tmprl-cloud-demo-dejavu-tacos get deploy,svc,externalsecret,ingressroute
 ```
 
+Before running the smoke check, the workflow waits for all candidate
+Deployments listed in `DemoProject.status.candidateRolloutStatus.deployments`
+to report available replicas. Readiness progress and failures are recorded in:
+
+```text
+DemoProject.status.readinessStatus
+```
+
 The generated config defines this owner smoke check:
 
 ```yaml

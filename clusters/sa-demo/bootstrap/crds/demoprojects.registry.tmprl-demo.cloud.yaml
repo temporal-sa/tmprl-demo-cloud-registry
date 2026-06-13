@@ -143,6 +143,7 @@ spec:
                     - BaseReconciled
                     - WaitingForImages
                     - CandidateApplied
+                    - CandidateNotReady
                     - SmokeCheckPending
                     - SmokeCheckFailed
                     - Promoted
@@ -172,6 +173,9 @@ spec:
                   additionalProperties:
                     type: string
                 buildStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                readinessStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 candidateRolloutStatus:
