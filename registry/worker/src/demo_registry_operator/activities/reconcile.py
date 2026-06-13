@@ -53,8 +53,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
     dry_run = config.reconcile_mode != "apply"
 
     resources = base_resources(demo_project)
-    if not build_failed:
-        resources.extend(runtime_secret_resources(demo_project))
+    resources.extend(runtime_secret_resources(demo_project))
     smoke_check = spec_of(demo_project).get("smokeCheck")
     if not missing_images and not build_failed and external_resource_block is None:
         resources.extend(
@@ -84,10 +83,10 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             message = "Reconcile plan rendered without mutating the cluster."
         elif build_failed:
             phase = "Error"
-            message = "Image build failed; runtime resources were not reconciled."
+            message = "Image build failed; workload resources were not reconciled."
         elif missing_images:
             phase = "WaitingForImages"
-            message = "Base resources reconciled; waiting for immutable images."
+            message = "Base resources and ExternalSecrets reconciled; waiting for immutable images."
         elif external_resource_block:
             phase = "WaitingForExternalResources"
             message = external_resource_block["message"]

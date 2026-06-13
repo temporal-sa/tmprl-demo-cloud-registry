@@ -65,6 +65,8 @@ malformed, the reconcile phase becomes `WaitingForExternalResources`, records
 `DemoProject.status.externalResourceBlock`, and holds back runtime
 Deployments/Services/routes while still creating ExternalSecrets for sync
 visibility.
+ExternalSecrets are reconciled before workload resources, so their sync status
+is visible even while images are missing or a build has failed.
 
 Every `record_project_status` activity also writes a compact catalog lifecycle
 entry to the configured status ConfigMap. By default each project is written as
