@@ -1,4 +1,4 @@
-# Goal-Mode Prompt: Reach Testable Demo Deployments
+# Goal-Mode Prompt: Finish End-to-End Registry Rollouts
 
 Use this file as the prompt for a fresh goal-mode agent working in
 `/Users/mjones/Source/cluster-gitops-config`.
@@ -8,10 +8,12 @@ Use this file as the prompt for a fresh goal-mode agent working in
 Create and pursue this goal:
 
 ```text
-Bring tmprl-demo-cloud-demo-registry to an end state where I can start testing
-real demo deployments from reviewed project configs, with the registry worker
-acting as a Python Temporal-backed operator, clear bootstrap/manual setup
-instructions, and a companion SA onboarding skill for migrating demo repos.
+Bring tmprl-demo-cloud-demo-registry from the current manually bootstrapped
+Deja Vu success to a true end-to-end registry rollout path: the Temporal-backed
+registry operator should create or verify external resources, build immutable
+images, create a previously absent Kubernetes namespace, deploy a candidate,
+run smoke checks, promote Traefik routing only after success, and surface the
+whole lifecycle on DemoProject status and the registry/catalog experience.
 ```
 
 Work over multiple iterations. Continue until the repo contains a coherent,
@@ -26,13 +28,27 @@ messages and no mention of the agent/tool that made them.
 - Branch: `build-platform-generator`
 - Purpose: platform/registry for demos hosted under `tmprl-demo.cloud`
 - Current state:
-  - Validated project configs live under `projects/`.
-  - Generated review artifacts live under `clusters/sa-demo/generated/`.
-  - Registry worker scaffold is Python under `registry/worker/`.
-  - Registry itself is a demo: `projects/demo-registry.yaml`.
-  - Generated `DemoProject` templates are not applied yet because CRD/operator
-    bootstrap does not exist.
-  - Deployment templates are not applied yet because image refs are placeholders.
+  - Flux is installed on the `sa-demo` EKS cluster and reconciles this branch
+    from GitHub over SSH using a read-only deploy key.
+  - External Secrets Operator is installed and
+    `ClusterSecretStore/platform-secrets` is Ready.
+  - The registry operator is running in `demo-registry-system` as a Python
+    Temporal worker on namespace `tmprl-demo-cloud-registry.a2dd6`.
+  - Generated `DemoProject` resources are applied by Flux.
+  - `DemoProject/dejavu-tacos` is `Promoted` and
+    `https://dejavu-tacos.tmprl-demo.cloud/` plus
+    `https://dejavu-tacos.tmprl-demo.cloud/api/health` return HTTP 200.
+  - Deja Vu used manual image overrides and manually prepared Temporal/AWS
+    secrets. The operator reconciled runtime Kubernetes resources and promoted
+    routing after smoke check, but it did not yet build images or create
+    external resources itself.
+  - Deja Vu did not prove namespace creation from zero during the Flux/operator
+    run because `tmprl-cloud-demo-dejavu-tacos` already existed from an earlier
+    manual registry test. The old manual namespace `temporal-dejavu-tacos` has
+    been deleted.
+  - `DemoProject/demo-registry` and `DemoProject/temporal-agent-harness` are
+    `WaitingForImages`; only base namespace/RBAC/metadata resources exist for
+    those projects.
 
 Read these files first:
 
@@ -81,27 +97,43 @@ overlays should not be part of the first testable deployment path.
 
 ## Desired End State
 
-The user should be able to start testing deployments when all of this exists:
+The next loop should leave the user able to test full registry-owned rollouts,
+not just a manual-image substitute. Required end state:
 
-- A documented bootstrap path for the registry/operator.
-- A `DemoProject` CRD and generated/applied `DemoProject` resources.
-- A Python registry worker that can reconcile at least one demo end to end
-  enough for testing.
-- A first deployment flow for `dejavu-tacos` or `demo-registry`:
-  - create/update namespace;
-  - ensure ECR repo/build destination exists or document manual substitute;
-  - build/push an immutable image or use a clearly documented temporary image
-    path;
-  - create required Kubernetes resources;
-  - create/read project secrets from the expected AWS Secrets Manager prefix;
-  - create/use Temporal Cloud namespace/API key where applicable;
-  - expose route through Traefik;
-  - run an owner-defined health/smoke check;
-  - promote route only after health/smoke check succeeds.
-- A clear `BOOTSTRAP.md` or equivalent with exact user setup steps and secrets
-  to create.
-- A companion SA onboarding skill scaffold that helps other SAs adapt their
-  demos to this platform.
+- Keep the existing bootstrap path working:
+  - Flux, External Secrets, the `DemoProject` CRD, generated CRs, and the
+    registry operator should remain healthy on `sa-demo`.
+- Prove namespace creation from zero:
+  - pick a demo or test project whose derived namespace does not already exist;
+  - let the workflow create/update that namespace and record it in status.
+- Replace manual image overrides with a real build/publish step:
+  - create or verify ECR repositories;
+  - build from the configured source repo/context/Dockerfile;
+  - push immutable tags;
+  - write resolved images into candidate rollout status.
+- Move external-resource setup into the operator where safe:
+  - create or verify AWS Secrets Manager paths;
+  - create or verify Temporal Cloud namespace and namespace-scoped API key;
+  - sync runtime Kubernetes secrets through External Secrets;
+  - do not implement destructive deletion until explicit approval workflow
+    exists.
+- Implement a real candidate/promotion lifecycle:
+  - deploy candidate resources without breaking the previous healthy route;
+  - wait for readiness;
+  - run owner-defined smoke checks;
+  - promote Traefik routing only after success;
+  - record failure without deleting the active healthy deployment.
+- Make status useful:
+  - `DemoProject.status` should show external resource state, build state,
+    candidate image tags, smoke-check result, active version, and last error.
+- Update the registry/catalog path:
+  - choose whether to finish Agent Harness or the registry/catalog UI as the
+    second end-to-end project;
+  - if Agent Harness is chosen, provision its `app` image and required
+    `anthropic-credentials` secret path.
+- Keep docs current:
+  - `docs/project-plan.md` and `BOOTSTRAP.md` must reflect which steps are
+    automated and which remain manual.
 
 ## Manual Setup Instructions To Produce
 

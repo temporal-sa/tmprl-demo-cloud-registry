@@ -1,6 +1,6 @@
 # Project Plan
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 This document is the steering record for the `tmprl-demo.cloud` GitOps platform.
 Keep it current as phases move from design to implementation.
@@ -11,14 +11,14 @@ Keep it current as phases move from design to implementation.
 | --- | --- | --- |
 | 1. Validation | In progress | Validator, CI workflow, simplified config schema, and taco example are scaffolded on `build-platform-generator`; needs final review before this phase is complete. |
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
-| 3. Platform Infra | Design | Bootstrap/manual setup is documented in `BOOTSTRAP.md`; Temporal Cloud provider automation remains blocked on destructive lifecycle review. |
-| 4. Flux Bootstrap | In progress | `clusters/sa-demo/bootstrap/` installs CRD, operator RBAC/Deployment, platform ExternalSecrets, and generated `DemoProject` CRs. |
+| 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; provider automation remains to be implemented. |
+| 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
 | 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
 | 9. Ephemeral Demo Environments | Deferred | Registry-owned temporary environments for demos that need an inspectable Temporal UI without exposing Temporal Cloud credentials. |
-| 10. Registry Operator | In progress | Python worker has a `DemoProject` watch loop, entity workflows, status updates, plan/apply reconcile modes, namespace/RBAC/metadata reconcile, image override deployment path, and smoke-check-gated promotion status. |
+| 10. Registry Operator | In progress | Python worker is running in `demo-registry-system`; Deja Vu was promoted through the operator with manual image overrides, ExternalSecret sync, Traefik routing, cert-manager certificate creation, and smoke-check-gated promotion. |
 | 11. SA Onboarding Skill | Design | Companion wizard skill scaffold lives under `skills/tmprl-demo-cloud-onboarding/`. |
 
 ## Decisions
@@ -84,6 +84,48 @@ Keep it current as phases move from design to implementation.
 - First deployment testing targets `dejavu-tacos`; image builds are still a
   manual substitute represented by the
   `registry.tmprl-demo.cloud/image-overrides` annotation.
+- The first Deja Vu test reused the registry-prefixed namespace
+  `tmprl-cloud-demo-dejavu-tacos`, which had already been created during the
+  initial manual registry test. The old manual namespace
+  `temporal-dejavu-tacos` was deleted after promotion. A future test must prove
+  namespace creation from zero using a namespace that does not already exist.
+- Leftover manual Deja Vu test routes and TLS artifacts named
+  `dejavu-tacos-registry-test*` were removed from
+  `tmprl-cloud-demo-dejavu-tacos` after the promoted route was verified.
+
+## Live sa-demo Checkpoint
+
+As of 2026-06-13:
+
+- Flux controllers are installed in `flux-system`.
+- `GitRepository/cluster-gitops-config` reconciles
+  `build-platform-generator` over SSH with a read-only GitHub deploy key.
+- External Secrets Operator is installed in `external-secrets`.
+- `ClusterSecretStore/platform-secrets` is Ready and reads AWS Secrets Manager
+  in `us-west-1`.
+- Registry operator runs in `demo-registry-system` using image
+  `429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-cloud-demo/demo-registry/worker:20260612-214200-amd64`.
+- Registry Temporal namespace:
+  `tmprl-demo-cloud-registry.a2dd6`.
+- `DemoProject/dejavu-tacos` is `Promoted`; public checks return HTTP 200 for
+  `https://dejavu-tacos.tmprl-demo.cloud/` and
+  `https://dejavu-tacos.tmprl-demo.cloud/api/health`.
+- `DemoProject/demo-registry` and `DemoProject/temporal-agent-harness` are
+  `WaitingForImages`; only base namespace/RBAC/metadata resources were applied
+  for those projects.
+
+Next validation target:
+
+- Finish a full end-to-end rollout loop without manual substitutes:
+  - create a previously absent namespace;
+  - create/verify ECR repositories;
+  - create/verify AWS Secrets Manager paths and ExternalSecrets;
+  - create/verify Temporal Cloud namespace and namespace-scoped API key;
+  - build immutable images from the source repo;
+  - deploy a candidate release;
+  - run smoke checks against the candidate;
+  - promote Traefik routing only after success;
+  - leave all state visible on the `DemoProject` status and registry UI.
 
 ## Architecture Pivot: Registry Operator
 
