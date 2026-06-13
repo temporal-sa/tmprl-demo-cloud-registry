@@ -1,0 +1,48 @@
+metadata:
+  name: banking-app-money-transfer
+
+source:
+  repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
+  branch: main
+
+builds:
+  frontend:
+    context: .
+    dockerfile: docker/frontend.Dockerfile
+  backend:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  worker:
+    context: .
+    dockerfile: docker/worker-python.Dockerfile
+
+components:
+  frontend:
+    build: frontend
+    ports:
+      - name: http
+        containerPort: 5173
+        servicePort: 80
+  backend:
+    build: backend
+    ports:
+      - name: http
+        containerPort: 8000
+        servicePort: 8000
+  worker:
+    build: worker
+    worker:
+      taskQueue: money-transfer
+    env:
+      - name: BANKING_BACKEND_URL
+        value: http://backend:8000
+
+ingress:
+  subdomain: banking-app
+  routes:
+    - component: frontend
+      port: http
+
+smokeCheck:
+  path: /api/health
+  expectedStatus: 200
