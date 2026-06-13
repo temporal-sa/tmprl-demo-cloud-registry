@@ -5,6 +5,11 @@
 .venv/
 node_modules/
 
+# local secrets / environment (never commit)
+.env
+.env.*
+!.env.example
+
 # generated build output
 dist/
 build/

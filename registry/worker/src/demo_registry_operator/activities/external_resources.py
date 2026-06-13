@@ -24,8 +24,8 @@ from demo_registry_operator.resources import (
 )
 
 
-TEMPORAL_API_KEY_TTL_DAYS = 365
-TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 60
+TEMPORAL_API_KEY_TTL_DAYS = 30
+TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 10
 TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -130,6 +130,15 @@ def aws_external_resources(
                 }
             )
 
+    # Run the Temporal Cloud reconcile first: in cloud-api mode it creates the
+    # namespace/service-account/API key and writes the runtime secret, which the
+    # secret verification below then sees as present.
+    temporal_status = temporal_cloud_status(
+        demo_project,
+        config,
+        phase="ManualSetupRequired",
+        checked_at=now,
+    )
     secrets_status = verify_secrets_manager_paths(
         secretsmanager,
         demo_project,
@@ -137,12 +146,6 @@ def aws_external_resources(
         checked_at=now,
     )
     ecr_phase = aggregate_phase(repositories)
-    temporal_status = temporal_cloud_status(
-        demo_project,
-        config,
-        phase="ManualSetupRequired",
-        checked_at=now,
-    )
     phase = aggregate_top_level_phase(
         [
             ecr_phase,
@@ -437,6 +440,13 @@ def temporal_cloud_status(
             "message": "No component currently requires Temporal credentials.",
         }
 
+    if config.temporal_cloud_mode == "cloud-api" and config.external_resource_mode == "aws":
+        return temporal_cloud_api_status(
+            demo_project,
+            config,
+            checked_at=checked_at or datetime.now(UTC).isoformat(),
+        )
+
     if config.temporal_cloud_mode == "tcld-verify":
         return temporal_cloud_tcld_status(
             demo_project,
@@ -477,6 +487,93 @@ def temporal_cloud_status(
             "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
             "kubernetesSecret": "temporal-cloud-bootstrap",
             "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+        },
+    }
+
+
+def temporal_cloud_api_status(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    checked_at: str,
+) -> dict[str, Any]:
+    """Create or verify the Temporal Cloud namespace, scoped service account, and
+    runtime API key via the Cloud Operations API, writing the runtime credential
+    to AWS Secrets Manager."""
+
+    import asyncio
+
+    from demo_registry_operator.activities.temporal_cloud import (
+        SecretsManagerStore,
+        run_cloud_api_reconcile,
+    )
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as error:
+        return temporal_cloud_api_error(
+            checked_at, f"boto3 is required for cloud-api Temporal Cloud mode: {error}"
+        )
+
+    session = boto3.session.Session(region_name=config.aws_region)
+    store = SecretsManagerStore(session.client("secretsmanager"))
+    try:
+        bootstrap = store.read_json(config.temporal_cloud_bootstrap_secret_path)
+    except (BotoCoreError, ClientError) as error:
+        return temporal_cloud_api_error(
+            checked_at, f"Could not read Temporal Cloud bootstrap secret: {error}"
+        )
+
+    if not isinstance(bootstrap, dict) or not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return {
+            "phase": "ManualSetupRequired",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "message": (
+                "Temporal Cloud bootstrap secret is missing or lacks "
+                "TEMPORAL_CLOUD_API_KEY; create it before enabling cloud-api mode."
+            ),
+            "bootstrapCredential": {
+                "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
+                "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+            },
+        }
+
+    def heartbeat(detail: Any) -> None:
+        try:
+            activity.heartbeat(detail)
+        except Exception:  # noqa: BLE001 - heartbeat is best-effort
+            pass
+
+    try:
+        return asyncio.run(
+            run_cloud_api_reconcile(
+                demo_project,
+                bootstrap=bootstrap,
+                secret_store=store,
+                checked_at=checked_at,
+                target_host=config.temporal_cloud_ops_host,
+                api_version=config.temporal_cloud_api_version,
+                heartbeat=heartbeat,
+            )
+        )
+    except Exception as error:  # noqa: BLE001 - surface as status, do not crash reconcile
+        return temporal_cloud_api_error(checked_at, str(error))
+
+
+def temporal_cloud_api_error(checked_at: str, message: str) -> dict[str, Any]:
+    return {
+        "phase": "Error",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "message": "Temporal Cloud cloud-api reconcile failed.",
+        "lastError": {
+            "reason": "TemporalCloudReconcileFailed",
+            "message": message,
+            "lastTransitionTime": checked_at,
         },
     }
 

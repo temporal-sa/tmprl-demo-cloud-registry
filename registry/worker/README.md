@@ -114,8 +114,11 @@ Environment variables:
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
   to `TEMPORAL_CLOUD_REGION`
-- `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE`, `manual` or `tcld-verify`, default
-  `manual`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE`, `manual`, `tcld-verify`, or `cloud-api`,
+  default `manual`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION`, default `v0.17.0` (sent as the
+  `temporal-cloud-api-version` header to the Cloud Operations API)
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_OPS_HOST`, default `saas-api.tmprl.cloud:443`
 - `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `demo-registry-system`
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
   `demo-registry-catalog-status`
@@ -141,6 +144,30 @@ AWS/CodeBuild setup is ready; changing that generator to `aws-codebuild` rolls
 the operator through Flux because the generated ConfigMap name changes.
 Do not set `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=tcld-verify` there until the
 operator image includes `tcld`.
+
+`cloud-api` mode (preferred over `tcld-verify`) uses the Temporal Cloud
+Operations API through the bundled `temporalio` SDK — no extra binary required.
+It runs only when `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws` (it needs Secrets
+Manager to read the bootstrap credential and write the runtime key). It will
+create-or-verify the project namespace (with delete protection), a
+namespace-scoped service account, and a runtime API key, then write
+`address`/`namespace`/`apiKey`/`tls` to the project's Temporal secret path so
+External Secrets can sync it. Notes:
+
+- The namespace is created in the region from the bootstrap secret's
+  `TEMPORAL_CLOUD_REGION` (default `gcp-us-central1`); the operator queries
+  `GetRegions` and fails fast if that region is not available to the account
+  instead of leaving a namespace stuck in `ACTIVATION_FAILED`.
+- The runtime address is the per-namespace endpoint
+  `<namespace>.tmprl.cloud:7233`.
+- A newly minted API key takes a few seconds to propagate to the data plane.
+  Because namespace/key creation runs before the image build and workload
+  deploy, the key is live by the time the worker pod connects; workers also log
+  one benign `describe_namespace` `PermissionDenied` WARN at startup (a
+  capability probe — namespace-scoped service-account keys are worker-scoped by
+  design).
+- Keys are minted with a 30-day TTL; the entity workflow is responsible for
+  rotation (~every 20 days) on a durable timer.
 
 As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:

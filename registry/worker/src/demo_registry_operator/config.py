@@ -8,6 +8,8 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
     "tmprl-cloud-demo/platform/temporal-cloud-bootstrap"
 )
+DEFAULT_TEMPORAL_CLOUD_API_VERSION = "v0.17.0"
+DEFAULT_TEMPORAL_CLOUD_OPS_HOST = "saas-api.tmprl.cloud:443"
 DEFAULT_CATALOG_STATUS_NAMESPACE = "demo-registry-system"
 DEFAULT_CATALOG_STATUS_CONFIGMAP = "demo-registry-catalog-status"
 DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-cloud-demo-demo-registry"
@@ -38,6 +40,8 @@ class WorkerConfig:
     temporal_cloud_account_id: str | None
     temporal_cloud_region: str | None
     temporal_cloud_mode: str
+    temporal_cloud_api_version: str
+    temporal_cloud_ops_host: str
     catalog_status_namespace: str
     catalog_status_configmap: str
     catalog_status_mirror_namespace: str
@@ -117,7 +121,15 @@ class WorkerConfig:
             temporal_cloud_mode=env_choice(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_MODE",
                 default="manual",
-                choices={"manual", "tcld-verify"},
+                choices={"manual", "tcld-verify", "cloud-api"},
+            ),
+            temporal_cloud_api_version=env_first(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION",
+                default=DEFAULT_TEMPORAL_CLOUD_API_VERSION,
+            ),
+            temporal_cloud_ops_host=env_first(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_OPS_HOST",
+                default=DEFAULT_TEMPORAL_CLOUD_OPS_HOST,
             ),
             catalog_status_namespace=env_first(
                 "DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE",
