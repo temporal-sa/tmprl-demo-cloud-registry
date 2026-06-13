@@ -60,12 +60,18 @@ check. If readiness times out, the active route is not promoted and
 Runtime ExternalSecret sync is also recorded under
 `DemoProject.status.externalSecretStatus`, including each ExternalSecret's
 Ready condition and controller message.
+If AWS Secrets Manager verification reports required values missing or
+malformed, the reconcile phase becomes `WaitingForExternalResources`, records
+`DemoProject.status.externalResourceBlock`, and holds back runtime
+Deployments/Services/routes while still creating ExternalSecrets for sync
+visibility.
 
 Every `record_project_status` activity also writes a compact catalog lifecycle
 entry to the configured status ConfigMap. By default each project is written as
 `demo-registry-system/demo-registry-catalog-status` key `<project>.json`, with
-phase, namespace, external-secret sync, build, external-resource, candidate,
-readiness, smoke-check, and active version fields for the registry/catalog UI.
+phase, namespace, external-resource blockers, external-secret sync, build,
+external-resource, candidate, readiness, smoke-check, and active version fields
+for the registry/catalog UI.
 
 Environment variables:
 

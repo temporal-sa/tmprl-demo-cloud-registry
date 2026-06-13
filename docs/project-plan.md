@@ -127,7 +127,10 @@ Next validation target:
   - create/verify AWS Secrets Manager paths and ExternalSecrets; opt-in `aws`
     mode now verifies required paths and JSON property names for
     platform-managed Temporal secrets, and runtime status records
-    ExternalSecret Ready conditions after Kubernetes reconcile;
+    ExternalSecret Ready conditions after Kubernetes reconcile. When required
+    secret values are missing or malformed, the operator holds back runtime
+    workloads with `WaitingForExternalResources` and records
+    `externalResourceBlock`;
   - create/verify Temporal Cloud namespace and namespace-scoped API key; status
     now records a verified `tcld` command plan, while mutation and one-time API
     key capture remain manual;

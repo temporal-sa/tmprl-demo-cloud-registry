@@ -21,11 +21,12 @@ data:
     "authRequired": false, "catalogStatus": {"configMap": {"key": "dejavu-tacos.json",
     "name": "demo-registry-catalog-status", "namespace": "demo-registry-system"},
     "demoProject": "dejavu-tacos", "fields": ["phase", "message", "kubernetesNamespaceStatus",
-    "externalResources", "externalSecrets", "build", "candidate", "readiness", "smokeCheck",
-    "activeImageVersion", "lastError"], "source": "DemoProject.status"}, "host": "dejavu-tacos.tmprl-demo.cloud",
-    "links": {}, "name": "dejavu-tacos", "sourceRepo": "https://github.com/temporal-sa/demo-dejavu-tacos",
-    "summary": "Interactive taco shop demo showing Temporal workflows replacing fragile
-    checkout orchestration with durable execution, retries, and recoverable failures.",
-    "tags": ["Durable Execution", "Retries", "Sagas", "Compensation", "Signals", "Queries"],
-    "temporalNamespace": "dejavu-tacos", "temporalSdks": ["Python", "Go", "TypeScript",
-    "Java", ".NET"], "title": "Deja Vu Tacos"}'
+    "externalResources", "externalResourceBlock", "externalSecrets", "build", "candidate",
+    "readiness", "smokeCheck", "activeImageVersion", "lastError"], "source": "DemoProject.status"},
+    "host": "dejavu-tacos.tmprl-demo.cloud", "links": {}, "name": "dejavu-tacos",
+    "sourceRepo": "https://github.com/temporal-sa/demo-dejavu-tacos", "summary": "Interactive
+    taco shop demo showing Temporal workflows replacing fragile checkout orchestration
+    with durable execution, retries, and recoverable failures.", "tags": ["Durable
+    Execution", "Retries", "Sagas", "Compensation", "Signals", "Queries"], "temporalNamespace":
+    "dejavu-tacos", "temporalSdks": ["Python", "Go", "TypeScript", "Java", ".NET"],
+    "title": "Deja Vu Tacos"}'

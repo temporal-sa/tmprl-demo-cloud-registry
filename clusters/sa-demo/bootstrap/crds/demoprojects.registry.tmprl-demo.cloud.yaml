@@ -142,6 +142,7 @@ spec:
                     - Reconciling
                     - BaseReconciled
                     - WaitingForImages
+                    - WaitingForExternalResources
                     - CandidateApplied
                     - CandidateNotReady
                     - SmokeCheckPending
@@ -194,6 +195,9 @@ spec:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 externalSecretStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                externalResourceBlock:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 candidateRolloutStatus:

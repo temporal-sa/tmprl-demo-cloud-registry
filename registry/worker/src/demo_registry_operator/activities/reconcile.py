@@ -26,7 +26,8 @@ from demo_registry_operator.resources import (
     project_host,
     project_name,
     project_namespace,
-    runtime_resources,
+    runtime_secret_resources,
+    runtime_workload_resources,
     spec_of,
 )
 
@@ -48,13 +49,16 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
     image_overrides = images_from_build_status(build_status) or parse_image_overrides(demo_project)
     missing_images = missing_image_overrides(demo_project, image_overrides)
     build_failed = bool(build_status and build_status.get("phase") == "Error")
+    external_resource_block = external_resource_blocker(external_resources)
     dry_run = config.reconcile_mode != "apply"
 
     resources = base_resources(demo_project)
+    if not build_failed:
+        resources.extend(runtime_secret_resources(demo_project))
     smoke_check = spec_of(demo_project).get("smokeCheck")
-    if not missing_images and not build_failed:
+    if not missing_images and not build_failed and external_resource_block is None:
         resources.extend(
-            runtime_resources(
+            runtime_workload_resources(
                 demo_project,
                 image_overrides,
                 include_routes=not bool(smoke_check),
@@ -84,6 +88,9 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         elif missing_images:
             phase = "WaitingForImages"
             message = "Base resources reconciled; waiting for immutable images."
+        elif external_resource_block:
+            phase = "WaitingForExternalResources"
+            message = external_resource_block["message"]
         elif spec_of(demo_project).get("smokeCheck"):
             phase = "SmokeCheckPending"
             message = "Runtime resources reconciled; smoke check is ready to run."
@@ -102,6 +109,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             external_resources=external_resources,
             build_status=build_status,
             external_secret_status=external_secret_status,
+            external_resource_block=external_resource_block,
         )
         patch_status(name, status, dry_run=dry_run)
         return status
@@ -329,6 +337,72 @@ def deployment_ready(status: dict[str, Any]) -> bool:
         and int(status.get("readyReplicas") or 0) >= desired
         and int(status.get("updatedReplicas") or 0) >= desired
     )
+
+
+def external_resource_blocker(
+    external_resources: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(external_resources, dict):
+        return None
+
+    secrets_manager = external_resources.get("secretsManager")
+    if not isinstance(secrets_manager, dict):
+        return None
+
+    phase = secrets_manager.get("phase")
+    if phase not in {"ValuesRequired", "Error"}:
+        return None
+
+    blocking = blocking_secret_statuses(secrets_manager)
+    return {
+        "phase": phase,
+        "reason": (
+            "SecretValuesRequired"
+            if phase == "ValuesRequired"
+            else "SecretVerificationFailed"
+        ),
+        "message": (
+            "Required AWS Secrets Manager values are not ready; runtime "
+            "workloads were not deployed."
+        ),
+        "secretsManager": {
+            "phase": phase,
+            "blocking": blocking,
+        },
+    }
+
+
+def blocking_secret_statuses(secrets_manager: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = [
+        secrets_manager.get("temporalBootstrap"),
+        secrets_manager.get("temporalCredentials"),
+        *(
+            secrets_manager.get("userManaged")
+            if isinstance(secrets_manager.get("userManaged"), list)
+            else []
+        ),
+    ]
+    blocking = []
+    for secret in candidates:
+        if not isinstance(secret, dict) or secret.get("required") is False:
+            continue
+        if secret.get("phase") in {"Ready", "NotRequired"}:
+            continue
+        blocking.append(
+            {
+                key: secret.get(key)
+                for key in (
+                    "path",
+                    "phase",
+                    "message",
+                    "missingProperties",
+                    "managedBy",
+                    "components",
+                )
+                if key in secret
+            }
+        )
+    return blocking
 
 
 def external_secret_sync_status(

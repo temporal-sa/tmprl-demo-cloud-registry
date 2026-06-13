@@ -134,13 +134,32 @@ def runtime_resources(
     *,
     include_routes: bool = True,
 ) -> list[dict[str, Any]]:
-    resources: list[dict[str, Any]] = []
-    resources.extend(service_resources(demo_project, image_overrides))
+    return [
+        *runtime_secret_resources(demo_project),
+        *runtime_workload_resources(
+            demo_project,
+            image_overrides,
+            include_routes=include_routes,
+        ),
+    ]
 
+
+def runtime_secret_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+    resources: list[dict[str, Any]] = []
     if temporal_components(demo_project):
         resources.append(external_secret(demo_project))
-
     resources.extend(user_external_secrets(demo_project))
+    return resources
+
+
+def runtime_workload_resources(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+    *,
+    include_routes: bool = True,
+) -> list[dict[str, Any]]:
+    resources: list[dict[str, Any]] = []
+    resources.extend(service_resources(demo_project, image_overrides))
     resources.extend(deployment_resources(demo_project, image_overrides))
 
     if include_routes:
@@ -787,6 +806,7 @@ def build_reconcile_status(
     external_resources: dict[str, Any] | None = None,
     build_status: dict[str, Any] | None = None,
     external_secret_status: dict[str, Any] | None = None,
+    external_resource_block: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
@@ -796,7 +816,7 @@ def build_reconcile_status(
         "phase": "WaitingForImages" if missing_images else "CandidateApplied",
         "images": image_overrides,
         "message": (
-            f"Missing image override(s): {', '.join(missing_images)}"
+            f"Missing image(s): {', '.join(missing_images)}"
             if missing_images
             else "Candidate resources are versioned and ready for smoke testing."
         ),
@@ -804,6 +824,9 @@ def build_reconcile_status(
     commit_sha = source_commit_sha(demo_project)
     if commit_sha:
         candidate_status["sourceCommitSha"] = commit_sha
+    if external_resource_block and not missing_images:
+        candidate_status["phase"] = "WaitingForExternalResources"
+        candidate_status["message"] = external_resource_block["message"]
     candidate_url = smoke_check_internal_url(
         demo_project,
         image_overrides=image_overrides,
@@ -855,9 +878,25 @@ def build_reconcile_status(
                 "observedGeneration": generation if isinstance(generation, int) else 0,
                 "reason": "MissingImageOverrides" if missing_images else "ImagesResolved",
                 "message": (
-                    f"Missing image override(s): {', '.join(missing_images)}"
+                    f"Missing image(s): {', '.join(missing_images)}"
                     if missing_images
-                    else "Every build has an immutable image override."
+                    else "Every build has an immutable image."
+                ),
+                "lastTransitionTime": now,
+            },
+            {
+                "type": "ExternalResourcesReady",
+                "status": "False" if external_resource_block else "True",
+                "observedGeneration": generation if isinstance(generation, int) else 0,
+                "reason": (
+                    external_resource_block.get("reason")
+                    if external_resource_block
+                    else "ExternalResourcesReady"
+                ),
+                "message": (
+                    external_resource_block.get("message")
+                    if external_resource_block
+                    else "Required external resources are ready or not required."
                 ),
                 "lastTransitionTime": now,
             },
@@ -867,6 +906,8 @@ def build_reconcile_status(
     }
     if external_secret_status:
         status["externalSecretStatus"] = external_secret_status
+    if external_resource_block:
+        status["externalResourceBlock"] = external_resource_block
 
     if image_overrides and not missing_images and phase in {"Promoted", "Ready"}:
         version = candidate_version(demo_project, image_overrides)
@@ -1176,6 +1217,7 @@ def catalog_status_entry(
         "externalResources": external_resource_summary(
             status.get("externalResources")
         ),
+        "externalResourceBlock": status.get("externalResourceBlock"),
         "externalSecrets": status.get("externalSecretStatus"),
         "build": build_summary(status.get("buildStatus")),
         "candidate": candidate_summary(status.get("candidateRolloutStatus")),
@@ -1257,6 +1299,14 @@ def smoke_check_status(demo_project: dict[str, Any], phase: str) -> dict[str, An
         return {
             "phase": "NotConfigured",
             "message": "No smoke check configured.",
+        }
+
+    if phase == "WaitingForExternalResources":
+        return {
+            "phase": phase,
+            "path": smoke_check.get("path"),
+            "expectedStatus": smoke_check.get("expectedStatus"),
+            "message": "Smoke check is blocked until required external resources are ready.",
         }
 
     return {
@@ -1406,6 +1456,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "message",
                 "kubernetesNamespaceStatus",
                 "externalResources",
+                "externalResourceBlock",
                 "externalSecrets",
                 "build",
                 "candidate",

@@ -216,6 +216,16 @@ DemoProject.status.externalSecretStatus
 
 Use it to distinguish a missing AWS Secrets Manager value from an
 ExternalSecret controller sync delay or error.
+When required secret values are missing or malformed, the operator reports:
+
+```text
+DemoProject.status.phase=WaitingForExternalResources
+DemoProject.status.externalResourceBlock
+```
+
+In that state the operator creates/patches the project namespace, RBAC,
+metadata, and ExternalSecrets, but it does not deploy runtime
+Deployments/Services/routes until the required AWS secret values verify.
 
 For Agent Harness, the custom secret path is:
 
