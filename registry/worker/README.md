@@ -15,6 +15,10 @@ Kubernetes slice:
 - Traefik middleware and IngressRoutes after a configured smoke check passes,
   or immediately for projects without a smoke check.
 
+Each `DemoProject` entity workflow continues as new after 50 completed
+reconciles, or sooner when Temporal suggests history rollover. The workflow
+carries its latest status and any queued reconcile signal into the next run.
+
 External resource reconciliation runs before Kubernetes reconciliation. In the
 default `plan` mode it records expected ECR repositories, Secrets Manager
 paths, and Temporal Cloud resources in `DemoProject.status.externalResources`

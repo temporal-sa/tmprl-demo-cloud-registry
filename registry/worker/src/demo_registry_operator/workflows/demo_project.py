@@ -21,6 +21,9 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
+MAX_RECONCILES_PER_WORKFLOW_RUN = 50
+
+
 @workflow.defn
 class DemoProjectWorkflow:
     """Durable entity workflow for one DemoProject."""
@@ -36,13 +39,22 @@ class DemoProjectWorkflow:
         }
 
     @workflow.run
-    async def run(self, project_name: str) -> None:
+    async def run(
+        self,
+        project_name: str,
+        carried_status: dict[str, Any] | None = None,
+        carried_pending_spec: dict[str, Any] | None = None,
+    ) -> None:
         self._project_name = project_name
-        self._status = {
-            "project": project_name,
-            "phase": "Waiting",
-            "message": "Waiting for DemoProject reconcile signal.",
-        }
+        self._pending_spec = carried_pending_spec
+        if carried_status is not None:
+            self._status = carried_status
+        else:
+            self._status = {
+                "project": project_name,
+                "phase": "Waiting",
+                "message": "Waiting for DemoProject reconcile signal.",
+            }
 
         while not self._shutdown:
             await workflow.wait_condition(
@@ -139,6 +151,7 @@ class DemoProjectWorkflow:
                             start_to_close_timeout=timedelta(minutes=1),
                             retry_policy=RetryPolicy(maximum_attempts=3),
                         )
+                        self._continue_as_new_if_needed(project_name)
                         continue
 
                     self._status = {
@@ -259,6 +272,8 @@ class DemoProjectWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
 
+            self._continue_as_new_if_needed(project_name)
+
         self._status = {
             "project": project_name,
             "phase": "Stopped",
@@ -276,6 +291,21 @@ class DemoProjectWorkflow:
     @workflow.query
     def status(self) -> dict[str, Any]:
         return self._status
+
+    def _continue_as_new_if_needed(self, project_name: str) -> None:
+        if self._shutdown:
+            return
+        if (
+            self._reconcile_sequence < MAX_RECONCILES_PER_WORKFLOW_RUN
+            and not workflow.info().is_continue_as_new_suggested()
+        ):
+            return
+        if workflow.patched(
+            f"demo-project-continue-as-new-v1-{self._reconcile_sequence}"
+        ):
+            workflow.continue_as_new(
+                args=[project_name, self._status, self._pending_spec],
+            )
 
 
 @workflow.defn
