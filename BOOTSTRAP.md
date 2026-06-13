@@ -219,25 +219,59 @@ Expected early state:
 
 ## First Test Path: `dejavu-tacos`
 
-Build images from the reviewed source repo using narrow build credentials. The
-build worker needs read access to `temporal-sa/taco-app-temporal-demo` and push
-access only to the three `tmprl-cloud-demo/dejavu-tacos/*` ECR repositories.
-Do not give build workers Temporal admin, Kubernetes admin, or broad AWS
-permissions.
+The operator now has two build paths:
+
+- `DEMO_REGISTRY_BUILD_MODE=plan`: record build intent and wait for immutable
+  images from annotations or an external build system.
+- `DEMO_REGISTRY_BUILD_MODE=local-docker`: clone the configured source repo,
+  build each Dockerfile locally with Docker, push `git-<source-sha>` tags to
+  ECR, and write the resolved image map into
+  `DemoProject.status.buildStatus` and
+  `DemoProject.status.candidateRolloutStatus`.
+
+Use `local-docker` only from an isolated build worker or trusted test
+environment with:
+
+- `git` and `docker` installed;
+- Docker daemon access;
+- read access to the project source repository;
+- ECR push access only to the project/build repositories;
+- no Temporal admin, Kubernetes admin, or broad AWS permissions.
+
+For `dejavu-tacos`, the build worker needs read access to
+`temporal-sa/demo-dejavu-tacos` and push access only to:
+
+```text
+tmprl-cloud-demo/dejavu-tacos/frontend
+tmprl-cloud-demo/dejavu-tacos/backend
+tmprl-cloud-demo/dejavu-tacos/worker-python
+```
+
+Set these environment variables on the build-capable worker:
+
+```yaml
+DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
+DEMO_REGISTRY_BUILD_MODE=local-docker
+DEMO_REGISTRY_AWS_REGION=<aws-region>
+DEMO_REGISTRY_AWS_ACCOUNT_ID=<aws-account-id>
+```
+
+If you keep `DEMO_REGISTRY_BUILD_MODE=plan`, build images manually from the
+reviewed source repo using narrow credentials:
 
 ```sh
-git clone https://github.com/temporal-sa/taco-app-temporal-demo /tmp/taco-app-temporal-demo
-cd /tmp/taco-app-temporal-demo
+git clone https://github.com/temporal-sa/demo-dejavu-tacos /tmp/demo-dejavu-tacos
+cd /tmp/demo-dejavu-tacos
 export SOURCE_SHA=$(git rev-parse --short=12 HEAD)
 export ECR_BASE="<aws-account-id>.dkr.ecr.<aws-region>.amazonaws.com"
 
-docker build -f docker/frontend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:$SOURCE_SHA" .
-docker build -f docker/backend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:$SOURCE_SHA" .
-docker build -f docker/worker-python.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:$SOURCE_SHA" .
+docker build -f docker/frontend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA" .
+docker build -f docker/backend.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA" .
+docker build -f docker/worker-python.Dockerfile -t "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA" .
 
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:$SOURCE_SHA"
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:$SOURCE_SHA"
-docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA"
+docker push "$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA"
 ```
 
 Manually create the project Temporal credential until provider automation is
@@ -263,7 +297,7 @@ kubectl annotate demoproject dejavu-tacos \
   --overwrite
 
 kubectl annotate demoproject dejavu-tacos \
-  "registry.tmprl-demo.cloud/image-overrides={\"frontend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:$SOURCE_SHA\",\"backend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:$SOURCE_SHA\",\"worker-python\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:$SOURCE_SHA\"}" \
+  "registry.tmprl-demo.cloud/image-overrides={\"frontend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/frontend:git-$SOURCE_SHA\",\"backend\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/backend:git-$SOURCE_SHA\",\"worker-python\":\"$ECR_BASE/tmprl-cloud-demo/dejavu-tacos/worker-python:git-$SOURCE_SHA\"}" \
   --overwrite
 ```
 

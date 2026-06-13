@@ -171,6 +171,9 @@ spec:
                   type: object
                   additionalProperties:
                     type: string
+                buildStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 candidateRolloutStatus:
                   type: object
                   properties:

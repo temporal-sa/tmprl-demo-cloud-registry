@@ -7,6 +7,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from demo_registry_operator.activities.builds import build_project_images
     from demo_registry_operator.activities.external_resources import (
         reconcile_external_resources,
     )
@@ -60,11 +61,22 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
+            build_status = await workflow.execute_activity(
+                build_project_images,
+                {
+                    "demoProject": demo_project,
+                    "externalResources": external_resources,
+                },
+                start_to_close_timeout=timedelta(hours=1),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
             reconcile_status = await workflow.execute_activity(
                 reconcile_project,
                 {
                     "demoProject": demo_project,
                     "externalResources": external_resources,
+                    "buildStatus": build_status,
                 },
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(maximum_attempts=3),

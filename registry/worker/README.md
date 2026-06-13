@@ -29,6 +29,16 @@ Traefik routes point at the versioned candidate Services only after the
 configured smoke check succeeds, so a failed candidate does not repoint the
 existing healthy route.
 
+Image build resolution runs after external resources and before Kubernetes
+runtime reconciliation. In the default `plan` mode the worker records build
+intent in `DemoProject.status.buildStatus` and keeps waiting for images. If a
+project still has immutable image override annotations, those overrides are
+treated as already resolved images. In opt-in `local-docker` mode the worker
+clones the configured source repo, checks out the requested commit when
+provided, builds each configured Dockerfile with `docker build`, pushes
+`git-<source-sha>` tags, and passes the resolved image map into candidate
+rollout status.
+
 Environment variables:
 
 - `TEMPORAL_ADDRESS`, default `localhost:7233`
@@ -41,12 +51,19 @@ Environment variables:
 - `DEMO_REGISTRY_WATCH_INTERVAL_SECONDS`, default `15`
 - `DEMO_REGISTRY_RECONCILE_MODE`, `plan` or `apply`, default `plan`
 - `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE`, `plan` or `aws`, default `plan`
+- `DEMO_REGISTRY_BUILD_MODE`, `plan` or `local-docker`, default `plan`
+- `DEMO_REGISTRY_BUILD_WORKSPACE`, default `/tmp/demo-registry-builds`
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
   `AWS_DEFAULT_REGION`, then `us-west-1`
 - `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata
 
-For a temporary deployment test before build automation exists, annotate a
-`DemoProject` with immutable images for every declared build:
+`local-docker` build mode requires `git`, `docker`, network read access to the
+project source repo, Docker daemon access, and ECR push credentials scoped to
+the project/build repositories. Do not enable it on the long-running registry
+operator pod unless those permissions are intentionally isolated.
+
+As a manual fallback, annotate a `DemoProject` with immutable images for every
+declared build:
 
 ```sh
 kubectl annotate demoproject demo-registry \

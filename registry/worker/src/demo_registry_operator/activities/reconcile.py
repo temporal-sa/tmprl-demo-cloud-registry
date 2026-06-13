@@ -10,6 +10,7 @@ from temporalio import activity
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.kube import apply_resources, patch_demo_project_status
 from demo_registry_operator.resources import (
+    SOURCE_COMMIT_ANNOTATION,
     base_resources,
     build_reconcile_status,
     missing_image_overrides,
@@ -32,15 +33,18 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
     """
     demo_project = demo_project_from_request(request)
     external_resources = external_resources_from_request(request)
+    build_status = build_status_from_request(request)
+    demo_project = demo_project_with_build_source(demo_project, build_status)
     config = WorkerConfig.from_env()
     name = project_name(demo_project)
-    image_overrides = parse_image_overrides(demo_project)
+    image_overrides = images_from_build_status(build_status) or parse_image_overrides(demo_project)
     missing_images = missing_image_overrides(demo_project, image_overrides)
+    build_failed = bool(build_status and build_status.get("phase") == "Error")
     dry_run = config.reconcile_mode != "apply"
 
     resources = base_resources(demo_project)
     smoke_check = spec_of(demo_project).get("smokeCheck")
-    if not missing_images:
+    if not missing_images and not build_failed:
         resources.extend(
             runtime_resources(
                 demo_project,
@@ -62,9 +66,12 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         if config.reconcile_mode == "plan":
             phase = "Planned"
             message = "Reconcile plan rendered without mutating the cluster."
+        elif build_failed:
+            phase = "Error"
+            message = "Image build failed; runtime resources were not reconciled."
         elif missing_images:
             phase = "WaitingForImages"
-            message = "Base resources reconciled; waiting for immutable image overrides."
+            message = "Base resources reconciled; waiting for immutable images."
         elif spec_of(demo_project).get("smokeCheck"):
             phase = "SmokeCheckPending"
             message = "Runtime resources reconciled; smoke check is ready to run."
@@ -81,6 +88,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             image_overrides=image_overrides,
             missing_images=missing_images,
             external_resources=external_resources,
+            build_status=build_status,
         )
         patch_status(name, status, dry_run=dry_run)
         return status
@@ -95,6 +103,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             image_overrides=image_overrides,
             missing_images=missing_images,
             external_resources=external_resources,
+            build_status=build_status,
             error=str(error),
         )
         patch_status(name, status, dry_run=dry_run)
@@ -241,3 +250,47 @@ def external_resources_from_request(request: dict[str, Any]) -> dict[str, Any] |
     if isinstance(external_resources, dict):
         return external_resources
     return None
+
+
+def build_status_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
+    build_status = request.get("buildStatus")
+    if isinstance(build_status, dict):
+        return build_status
+    return None
+
+
+def images_from_build_status(build_status: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(build_status, dict):
+        return {}
+    images = build_status.get("images")
+    if not isinstance(images, dict):
+        return {}
+    return {
+        str(build_name): str(image)
+        for build_name, image in images.items()
+        if isinstance(build_name, str) and isinstance(image, str) and image
+    }
+
+
+def demo_project_with_build_source(
+    demo_project: dict[str, Any],
+    build_status: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(build_status, dict):
+        return demo_project
+    source_commit = build_status.get("sourceCommitSha")
+    if not isinstance(source_commit, str) or not source_commit:
+        return demo_project
+
+    metadata = demo_project.get("metadata", {})
+    annotations = metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+    if isinstance(annotations, dict) and annotations.get(SOURCE_COMMIT_ANNOTATION):
+        return demo_project
+
+    rendered = {**demo_project}
+    rendered_metadata = {**metadata} if isinstance(metadata, dict) else {}
+    rendered_annotations = {**annotations} if isinstance(annotations, dict) else {}
+    rendered_annotations[SOURCE_COMMIT_ANNOTATION] = source_commit
+    rendered_metadata["annotations"] = rendered_annotations
+    rendered["metadata"] = rendered_metadata
+    return rendered

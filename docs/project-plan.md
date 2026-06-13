@@ -13,7 +13,7 @@ Keep it current as phases move from design to implementation.
 | 2. Generator | In progress | Generator writes applied `DemoProject` CRs plus review manifests, unapplied Deployment templates, build/external-resource plan data, and registry landing page data under `clusters/sa-demo/generated/`; image refs remain placeholders until image overrides or build automation exist. |
 | 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA, and the registry Temporal Cloud namespace/API key were bootstrapped manually for `sa-demo`; operator ECR create/verify is implemented behind opt-in AWS mode, while secret values and Temporal Cloud provider automation remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
-| 5. Build Pipeline | Not started | Must run untrusted Dockerfile builds with narrow per-project credentials. |
+| 5. Build Pipeline | In progress | Operator build status is wired in; default plan mode records build intent, manual image overrides remain supported, and opt-in `local-docker` mode can clone/build/push immutable ECR tags from project configs for trusted tests. A hardened AWS-side builder remains to be implemented. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Design | The registry landing page is itself a project in this repo and will later include a worker for demo environment management. |
@@ -122,7 +122,9 @@ Next validation target:
     subset for project repositories;
   - create/verify AWS Secrets Manager paths and ExternalSecrets;
   - create/verify Temporal Cloud namespace and namespace-scoped API key;
-  - build immutable images from the source repo;
+  - build immutable images from the source repo; opt-in `local-docker` mode now
+    provides a trusted test path, while the hardened AWS-side builder remains
+    future work;
   - deploy a candidate release;
   - run smoke checks against the candidate;
   - promote Traefik routing only after success;
@@ -451,16 +453,24 @@ Requirements:
   share an image.
 - Push immutable image tags to platform-derived per-project or per-build ECR
   repos.
-- Update generated deploy state with the image tag.
+- Write resolved image tags into `DemoProject.status.buildStatus` and
+  `DemoProject.status.candidateRolloutStatus`; generated deployment templates
+  remain review artifacts until a Git-backed deploy-state update is needed.
 - Let Flux roll out from inside the cluster.
 - Build credentials must be limited to that project's image repository.
 - Build workers must not have Temporal admin privileges or broad AWS access.
+- Current implementation supports default non-mutating build planning,
+  image-override compatibility, and an opt-in `local-docker` activity for
+  trusted tests. The local mode requires `git`, `docker`, Docker daemon access,
+  source repo read access, and ECR push access scoped to the project/build
+  repositories.
 
 Operator rollout direction:
 
 - A source push starts or signals the project entity workflow.
-- The workflow builds new immutable images and deploys candidate pods without
-  immediately moving public traffic.
+- The workflow resolves images first, either from existing immutable overrides
+  or from the build activity, then deploys candidate pods without immediately
+  moving public traffic.
 - Current operator implementation creates candidate Deployments and Services
   with deterministic version suffixes, using `git-<source-sha>` when the
   source commit annotation is present.

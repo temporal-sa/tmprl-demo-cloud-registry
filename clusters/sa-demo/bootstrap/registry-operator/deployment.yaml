@@ -39,6 +39,8 @@ spec:
               value: apply
             - name: DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE
               value: plan
+            - name: DEMO_REGISTRY_BUILD_MODE
+              value: plan
             - name: DEMO_REGISTRY_ACTIVITY_WORKERS
               value: "20"
           resources:

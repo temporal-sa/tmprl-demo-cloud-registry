@@ -763,6 +763,7 @@ def build_reconcile_status(
     image_overrides: dict[str, str],
     missing_images: list[str],
     external_resources: dict[str, Any] | None = None,
+    build_status: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
@@ -800,6 +801,11 @@ def build_reconcile_status(
         "phase": phase,
         "message": message,
         "externalResources": external_resources or external_resource_status(demo_project),
+        "buildStatus": build_status or fallback_build_status(
+            demo_project,
+            image_overrides,
+            missing_images,
+        ),
         "candidateRolloutStatus": candidate_status,
         "smokeCheckStatus": smoke_check_status(demo_project, phase),
         "conditions": [
@@ -844,6 +850,30 @@ def build_reconcile_status(
             "lastTransitionTime": now,
         }
 
+    return status
+
+
+def fallback_build_status(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+    missing_images: list[str],
+) -> dict[str, Any]:
+    commit_sha = source_commit_sha(demo_project)
+    phase = "Resolved" if image_overrides and not missing_images else "WaitingForImages"
+    status: dict[str, Any] = {
+        "phase": phase,
+        "mode": "image-overrides",
+        "images": image_overrides,
+        "missingImages": missing_images,
+        "message": (
+            "Immutable image overrides are present for every build."
+            if phase == "Resolved"
+            else "Waiting for immutable image overrides or build output."
+        ),
+    }
+    if commit_sha:
+        status["sourceCommitSha"] = commit_sha
+        status["imageVersion"] = f"git-{commit_sha[:12]}"
     return status
 
 

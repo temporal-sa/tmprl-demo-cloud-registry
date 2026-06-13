@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from demo_registry_operator.activities.builds import build_project_images
 from demo_registry_operator.activities.external_resources import (
     reconcile_external_resources,
 )
@@ -52,6 +53,7 @@ async def main() -> None:
                 DemoRolloutWorkflow,
             ],
             activities=[
+                build_project_images,
                 reconcile_external_resources,
                 reconcile_project,
                 plan_rollout,

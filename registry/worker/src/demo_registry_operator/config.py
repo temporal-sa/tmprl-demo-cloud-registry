@@ -19,6 +19,8 @@ class WorkerConfig:
     watch_interval_seconds: int
     reconcile_mode: str
     external_resource_mode: str
+    build_mode: str
+    build_workspace: str
     aws_region: str
     aws_account_id: str | None
 
@@ -48,6 +50,15 @@ class WorkerConfig:
                 "DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE",
                 default="plan",
                 choices={"plan", "aws"},
+            ),
+            build_mode=env_choice(
+                "DEMO_REGISTRY_BUILD_MODE",
+                default="plan",
+                choices={"plan", "local-docker"},
+            ),
+            build_workspace=env_first(
+                "DEMO_REGISTRY_BUILD_WORKSPACE",
+                default="/tmp/demo-registry-builds",
             ),
             aws_region=env_first(
                 "DEMO_REGISTRY_AWS_REGION",
