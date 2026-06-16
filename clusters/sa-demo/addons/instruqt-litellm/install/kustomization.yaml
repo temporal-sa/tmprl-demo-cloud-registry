@@ -11,3 +11,14 @@ resources:
   - hpa.yaml
   - certificate.yaml
   - ingressroute.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: instruqt-litellm-tracks
+    namespace: tmprl-dem-cld-instruqt-litellm
+    files:
+      - tracks.yaml=tracks.yaml
+    options:
+      labels:
+        app.kubernetes.io/name: instruqt-litellm
+        app.kubernetes.io/component: broker

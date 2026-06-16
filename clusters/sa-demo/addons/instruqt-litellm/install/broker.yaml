@@ -40,7 +40,7 @@ spec:
       serviceAccountName: instruqt-litellm-broker
       containers:
         - name: broker
-          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker:20260606-183010
+          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker:20260616-123443-tracks-reload
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -61,8 +61,7 @@ spec:
                 name: instruqt-litellm-broker-secrets
           volumeMounts:
             - name: tracks
-              mountPath: /etc/instruqt-litellm/tracks.yaml
-              subPath: tracks.yaml
+              mountPath: /etc/instruqt-litellm
               readOnly: true
           readinessProbe:
             httpGet:
