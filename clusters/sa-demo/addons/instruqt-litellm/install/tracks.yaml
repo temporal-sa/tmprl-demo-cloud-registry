@@ -62,3 +62,20 @@ tracks:
       owner: ai-agents-workshop
       gateway: openai
       testing: true
+  temporal-python-ai-agents-v3:
+    enabled: true
+    description: "Testing track for the Python AI Agents workshop."
+    models:
+      - gpt-4o
+      - gpt-3.5-turbo
+    default_model: openai/gpt-4o
+    duration: 2d
+    max_budget: 20.0
+    rpm_limit: 60
+    tpm_limit: 200000
+    max_parallel_requests: 4
+    key_alias_prefix: instruqt-python-ai-agents-v3
+    metadata:
+      owner: ai-agents-workshop
+      gateway: openai
+      testing: true
