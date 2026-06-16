@@ -22,11 +22,11 @@ from demo_registry_operator.activities.canary import (
     wait_registry_operator_canary_cleanup,
     wait_for_registry_operator_canary_promotion,
 )
-from demo_registry_operator.activities.builds import (
-    plan_project_images,
+from demo_registry_operator.activities.builds.codebuild.execution import (
     start_project_image_build,
     wait_for_project_image_build,
 )
+from demo_registry_operator.activities.builds.planning import plan_project_images
 from demo_registry_operator.activities.external_resources import (
     delete_project_ecr_repositories_resource,
     delete_temporal_cloud_api_key_resource,

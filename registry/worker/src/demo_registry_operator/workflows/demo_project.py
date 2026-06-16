@@ -7,12 +7,12 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.builds import (
-        completed_build_status,
-        plan_project_images,
+    from demo_registry_operator.activities.builds.codebuild.execution import (
         start_project_image_build,
         wait_for_project_image_build,
     )
+    from demo_registry_operator.activities.builds.planning import plan_project_images
+    from demo_registry_operator.activities.builds.status import completed_build_status
     from demo_registry_operator.activities.canary import (
         apply_registry_operator_canary_project,
         delete_registry_operator_canary_project,
