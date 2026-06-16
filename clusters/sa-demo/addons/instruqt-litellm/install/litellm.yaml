@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: instruqt-litellm
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app: instruqt-litellm
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: litellm
+spec:
+  type: ClusterIP
+  selector:
+    app: instruqt-litellm
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: instruqt-litellm
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app: instruqt-litellm
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: litellm
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: instruqt-litellm
+  template:
+    metadata:
+      labels:
+        app: instruqt-litellm
+        app.kubernetes.io/name: instruqt-litellm
+        app.kubernetes.io/component: litellm
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: instruqt-litellm
+      containers:
+        - name: litellm
+          image: docker.litellm.ai/berriai/litellm@sha256:7c311546c25e7bb6e8cafede9fcd3d0d622ac636b5c9418befaa32e85dfb0186
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config
+            - /app/config.yaml
+            - --port
+            - "4000"
+            - --host
+            - 0.0.0.0
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - secretRef:
+                name: instruqt-litellm-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          startupProbe:
+            tcpSocket:
+              port: 4000
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 4000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: config
+          configMap:
+            name: instruqt-litellm-config
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: instruqt-litellm
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app: instruqt-litellm
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: litellm
+spec:
+  minAvailable: 4
+  selector:
+    matchLabels:
+      app: instruqt-litellm

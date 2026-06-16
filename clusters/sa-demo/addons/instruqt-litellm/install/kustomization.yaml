@@ -2,4 +2,10 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
+  - serviceaccount.yaml
   - external-secrets.yaml
+  - configmaps.yaml
+  - redis.yaml
+  - litellm.yaml
+  - broker.yaml
+  - hpa.yaml

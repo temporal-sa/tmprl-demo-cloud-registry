@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: instruqt-litellm-broker
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app: instruqt-litellm-broker
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  type: ClusterIP
+  selector:
+    app: instruqt-litellm-broker
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: instruqt-litellm-broker
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app: instruqt-litellm-broker
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: instruqt-litellm-broker
+  template:
+    metadata:
+      labels:
+        app: instruqt-litellm-broker
+        app.kubernetes.io/name: instruqt-litellm
+        app.kubernetes.io/component: broker
+    spec:
+      serviceAccountName: instruqt-litellm-broker
+      containers:
+        - name: broker
+          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker:20260606-183010
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: us-west-1
+            - name: BROKER_DYNAMODB_TABLE
+              value: temporal-instruqt-litellm-broker
+            - name: BROKER_TRACK_CONFIG
+              value: /etc/instruqt-litellm/tracks.yaml
+            - name: LITELLM_BASE_URL
+              value: http://instruqt-litellm.tmprl-dem-cld-instruqt-litellm.svc.cluster.local:4000
+            - name: LITELLM_PUBLIC_BASE_URL
+              value: https://litellm-instruqt.tmprl-demo.cloud
+          envFrom:
+            - secretRef:
+                name: instruqt-litellm-broker-secrets
+          volumeMounts:
+            - name: tracks
+              mountPath: /etc/instruqt-litellm/tracks.yaml
+              subPath: tracks.yaml
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: tracks
+          configMap:
+            name: instruqt-litellm-tracks
