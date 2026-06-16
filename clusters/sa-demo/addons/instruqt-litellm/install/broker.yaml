@@ -40,7 +40,7 @@ spec:
       serviceAccountName: instruqt-litellm-broker
       containers:
         - name: broker
-          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker:main-20260616123443-a23e6dbcf62e # {"$imagepolicy": "flux-system:instruqt-litellm-broker"}
+          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker:main-20260616171449-cefc90cf2ce0 # {"$imagepolicy": "flux-system:instruqt-litellm-broker"}
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
