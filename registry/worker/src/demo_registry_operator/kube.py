@@ -730,7 +730,7 @@ def _client_module() -> Any:
         from kubernetes import client
     except ImportError as error:
         raise RuntimeError(
-            "The kubernetes package is required for operator reconcile mode."
+            "The kubernetes package is required for the registry operator."
         ) from error
     return client
 
@@ -740,6 +740,6 @@ def _config_module() -> Any:
         from kubernetes import config
     except ImportError as error:
         raise RuntimeError(
-            "The kubernetes package is required for operator reconcile mode."
+            "The kubernetes package is required for the registry operator."
         ) from error
     return config

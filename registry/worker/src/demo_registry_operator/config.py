@@ -36,7 +36,6 @@ class WorkerConfig:
     watch_mode: str
     watch_handoff_deployment: str
     watch_interval_seconds: int
-    reconcile_mode: str
     external_resource_mode: str
     build_mode: str
     codebuild_project: str | None
@@ -90,11 +89,6 @@ class WorkerConfig:
             watch_interval_seconds=env_int(
                 "DEMO_REGISTRY_WATCH_INTERVAL_SECONDS",
                 default=15,
-            ),
-            reconcile_mode=env_choice(
-                "DEMO_REGISTRY_RECONCILE_MODE",
-                default="apply",
-                choices={"apply"},
             ),
             external_resource_mode=env_choice(
                 "DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE",

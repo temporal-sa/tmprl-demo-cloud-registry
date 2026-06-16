@@ -45,7 +45,10 @@ every CR there, so adding a demo is dropping one file.
    so a missed or duplicate signal converges on the next resync.
 2. **Entity workflow.** One `DemoProjectWorkflow` per project, ID
    `demo-project/<name>`. Per reconcile it runs:
-   `reconcile_external_resources` → `build_project_images` → `reconcile_project`
+   `plan_external_resources` → `reconcile_ecr_repositories` →
+   `reconcile_temporal_cloud_resource` → `verify_secrets_manager_resources` →
+   `plan_project_images` → `start_project_image_build` →
+   `wait_for_project_image_build` → `reconcile_project`
    → (if a smoke check) `wait_for_candidate_readiness` → `run_smoke_check` →
    `promote_candidate`, recording status throughout. A `finalize` signal (sent
    when the CR is being deleted) tears resources down and removes the finalizer.

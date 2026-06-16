@@ -64,13 +64,11 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
     external_resources = external_resources_from_request(request)
     build_status = build_status_from_request(request)
     demo_project = demo_project_with_build_source(demo_project, build_status)
-    config = WorkerConfig.from_env()
     name = project_name(demo_project)
     image_overrides = images_from_build_status(build_status) or parse_image_overrides(demo_project)
     missing_images = missing_image_overrides(demo_project, image_overrides)
     build_failed = bool(build_status and build_status.get("phase") == "Error")
     external_resource_block = external_resource_blocker(external_resources)
-    dry_run = config.reconcile_mode != "apply"
 
     resources = base_resources(demo_project)
     resources.extend(runtime_secret_resources(demo_project))
@@ -88,32 +86,22 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         )
 
     activity.logger.info(
-        "Reconciling DemoProject project=%s mode=%s resources=%s missing_images=%s",
+        "Reconciling DemoProject project=%s resources=%s missing_images=%s",
         name,
-        config.reconcile_mode,
         len(resources),
         missing_images,
     )
 
     try:
-        applied = apply_resources(resources, dry_run=dry_run)
-        external_secret_status = external_secret_sync_status(
-            applied,
-            dry_run=dry_run,
-        )
-        worker_deployments_status = worker_deployment_sync_status(
-            applied,
-            dry_run=dry_run,
-        )
+        applied = apply_resources(resources, dry_run=False)
+        external_secret_status = external_secret_sync_status(applied)
+        worker_deployments_status = worker_deployment_sync_status(applied)
     except ValueError as error:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
-    if config.reconcile_mode == "plan":
-        phase = "Planned"
-        message = "Reconcile plan rendered without mutating the cluster."
-    elif build_failed:
+    if build_failed:
         phase = "Error"
         message = "Image build failed; workload resources were not reconciled."
     elif missing_images:
@@ -136,7 +124,7 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         demo_project,
         phase=phase,
         message=message,
-        mode=config.reconcile_mode,
+        mode="apply",
         applied_resources=applied,
         image_overrides=image_overrides,
         missing_images=missing_images,
@@ -152,7 +140,6 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
             prune_status = prune_stale_runtime_candidates(
                 demo_project,
                 active_version=active_version,
-                dry_run=dry_run,
             )
             status["pruneStatus"] = prune_status
             status["prunedResources"] = prune_status.get("resources", [])
@@ -180,7 +167,6 @@ def plan_project_finalization(request: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
-    dry_run = config.reconcile_mode != "apply"
     return {
         "action": "finalize",
         "demoProject": demo_project,
@@ -189,7 +175,6 @@ def plan_project_finalization(request: dict[str, Any]) -> dict[str, Any]:
         "sourceWatchNamespace": config.source_watch_namespace,
         "gitRepository": source_git_repository_name(demo_project),
         "sourceAuthSecret": source_auth_kubernetes_secret_name(demo_project),
-        "dryRun": dry_run,
         "checkedAt": datetime.now(UTC).isoformat(),
     }
 
@@ -199,7 +184,7 @@ def delete_project_namespace_resource(plan: dict[str, Any]) -> str:
     try:
         return delete_namespace(
             string_field(plan, "namespace"),
-            dry_run=bool(plan.get("dryRun")),
+            dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
@@ -211,7 +196,7 @@ def delete_project_source_repository(plan: dict[str, Any]) -> str:
         return delete_git_repository(
             string_field(plan, "sourceWatchNamespace"),
             string_field(plan, "gitRepository"),
-            dry_run=bool(plan.get("dryRun")),
+            dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
@@ -226,30 +211,7 @@ def delete_project_source_auth_secret(plan: dict[str, Any]) -> str:
         return delete_external_secret(
             string_field(plan, "sourceWatchNamespace"),
             name,
-            dry_run=bool(plan.get("dryRun")),
-        )
-    except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-
-
-@activity.defn
-def finalize_project_external_resources(plan: dict[str, Any]) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {"phase": "Planned"}
-
-    from demo_registry_operator.activities.external_resources import (
-        delete_project_ecr_repositories_resource,
-        external_resource_finalization_status,
-        finalize_temporal_cloud_resource,
-    )
-
-    try:
-        temporal_status = finalize_temporal_cloud_resource(plan)
-        ecr_status = delete_project_ecr_repositories_resource(plan)
-        return external_resource_finalization_status(
-            plan,
-            temporal_status=temporal_status,
-            ecr_status=ecr_status,
+            dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
@@ -260,33 +222,11 @@ def remove_project_finalizer(plan: dict[str, Any]) -> str:
     try:
         remove_demo_project_finalizer(
             string_field(plan, "project"),
-            dry_run=bool(plan.get("dryRun")),
+            dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return "removed" if not bool(plan.get("dryRun")) else "planned"
-
-
-def finalize_project(request: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility wrapper; workflows use split finalization activities."""
-
-    plan = plan_project_finalization(request)
-    status = completed_activity_status(plan)
-    if status is not None:
-        return status
-
-    namespace_action = delete_project_namespace_resource(plan)
-    source_action = delete_project_source_repository(plan)
-    source_auth_action = delete_project_source_auth_secret(plan)
-    external = finalize_project_external_resources(plan)
-    remove_project_finalizer(plan)
-    return project_finalization_status(
-        plan,
-        namespace_action=namespace_action,
-        source_action=source_action,
-        source_auth_action=source_auth_action,
-        external=external,
-    )
+    return "removed"
 
 
 def project_finalization_status(
@@ -464,22 +404,6 @@ def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
             "deployments": {},
         }
 
-    if config.reconcile_mode != "apply":
-        return {
-            "phase": "Planned",
-            "ok": True,
-            "message": "Readiness wait skipped because reconcile mode is plan.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-            "deployments": {
-                component: {
-                    "name": deployment_name,
-                    "phase": "Planned",
-                }
-                for component, deployment_name in sorted(deployments.items())
-                if isinstance(component, str) and isinstance(deployment_name, str)
-            },
-        }
-
     namespace = project_namespace(demo_project)
     deadline = time.monotonic() + config.readiness_timeout_seconds
     last_status: dict[str, Any] = {}
@@ -516,7 +440,6 @@ def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
 @activity.defn
 def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
     project_name = plan.get("project", "unknown")
-    config = WorkerConfig.from_env()
     demo_project = plan.get("demoProject")
     candidate = plan.get("candidate")
     candidate_images = (
@@ -539,7 +462,7 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
                 promotion_project,
                 image_overrides=candidate_images,
             ),
-            dry_run=config.reconcile_mode != "apply",
+            dry_run=False,
         )
         active_version = (
             candidate.get("imageVersion") if isinstance(candidate, dict) else None
@@ -548,7 +471,6 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
             prune_status = prune_stale_runtime_candidates(
                 promotion_project,
                 active_version=active_version,
-                dry_run=config.reconcile_mode != "apply",
             )
     activity.logger.info("Promoting candidate for project=%s", project_name)
     return {
@@ -566,18 +488,9 @@ def prune_stale_runtime_candidates(
     demo_project: dict[str, Any],
     *,
     active_version: str,
-    dry_run: bool,
 ) -> dict[str, Any]:
     namespace = project_namespace(demo_project)
     project = project_name(demo_project)
-    if dry_run:
-        return {
-            "phase": "Planned",
-            "message": "Stale runtime candidate pruning would run after promotion.",
-            "activeVersion": active_version,
-            "resources": [],
-        }
-
     non_worker_deployment_components = {
         component_name
         for component_name, component in components(demo_project).items()
@@ -604,14 +517,12 @@ def prune_stale_runtime_candidates(
             active_version=active_version,
             component_names=non_worker_deployment_components,
             label_selector=label_selector,
-            dry_run=dry_run,
         ),
         *prune_stale_services(
             namespace,
             active_version=active_version,
             component_names=non_worker_deployment_components,
             label_selector=label_selector,
-            dry_run=dry_run,
         ),
     ]
     return {
@@ -632,7 +543,6 @@ def prune_stale_deployments(
     active_version: str,
     component_names: set[str],
     label_selector: str,
-    dry_run: bool,
 ) -> list[dict[str, Any]]:
     deleted = []
     for deployment in list_deployments(namespace, label_selector=label_selector):
@@ -646,7 +556,7 @@ def prune_stale_deployments(
             or version == active_version
         ):
             continue
-        action = delete_deployment(namespace, name, dry_run=dry_run)
+        action = delete_deployment(namespace, name, dry_run=False)
         deleted.append(
             {
                 "apiVersion": "apps/v1",
@@ -667,7 +577,6 @@ def prune_stale_services(
     active_version: str,
     component_names: set[str],
     label_selector: str,
-    dry_run: bool,
 ) -> list[dict[str, Any]]:
     deleted = []
     for service in list_services(namespace, label_selector=label_selector):
@@ -683,7 +592,7 @@ def prune_stale_services(
             or "platform.temporal.io/stable-service" not in annotations
         ):
             continue
-        action = delete_service(namespace, name, dry_run=dry_run)
+        action = delete_service(namespace, name, dry_run=False)
         deleted.append(
             {
                 "apiVersion": "v1",
@@ -760,24 +669,6 @@ def wait_for_worker_deployment_rollouts(plan: dict[str, Any]) -> dict[str, Any]:
             "resources": [],
         }
 
-    if config.reconcile_mode != "apply":
-        return {
-            "phase": "Planned",
-            "ok": True,
-            "message": "WorkerDeployment wait skipped because reconcile mode is plan.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-            "resources": [
-                {
-                    "component": component,
-                    "name": name,
-                    "namespace": project_namespace(demo_project),
-                    "phase": "Planned",
-                }
-                for component, name in sorted(worker_deployments.items())
-                if isinstance(component, str) and isinstance(name, str)
-            ],
-        }
-
     wait_seconds = positive_timeout_seconds(
         plan.get("workerDeploymentTimeoutSeconds")
     ) or worker_deployment_rollout_wait_seconds(
@@ -843,8 +734,6 @@ def positive_timeout_seconds(value: Any) -> int:
 
 def worker_deployment_sync_status(
     applied_resources: list[dict[str, Any]],
-    *,
-    dry_run: bool,
 ) -> dict[str, Any] | None:
     worker_deployments = [
         resource
@@ -857,23 +746,6 @@ def worker_deployment_sync_status(
         return None
 
     checked_at = datetime.now(UTC).isoformat()
-    if dry_run:
-        return {
-            "phase": "Planned",
-            "ok": True,
-            "checkedAt": checked_at,
-            "message": "WorkerDeployment resources would be created or patched.",
-            "resources": [
-                {
-                    "name": resource["name"],
-                    "namespace": resource["namespace"],
-                    "phase": "Planned",
-                    "action": resource.get("action", "planned"),
-                }
-                for resource in worker_deployments
-            ],
-        }
-
     statuses = {}
     for resource in worker_deployments:
         name = resource["name"]
@@ -1084,8 +956,6 @@ def blocking_secret_statuses(secrets_manager: dict[str, Any]) -> list[dict[str, 
 
 def external_secret_sync_status(
     applied_resources: list[dict[str, Any]],
-    *,
-    dry_run: bool,
 ) -> dict[str, Any] | None:
     external_secrets = [
         resource
@@ -1098,24 +968,6 @@ def external_secret_sync_status(
         return None
 
     checked_at = datetime.now(UTC).isoformat()
-    if dry_run:
-        resources = [
-            {
-                "name": resource["name"],
-                "namespace": resource["namespace"],
-                "phase": "Planned",
-                "action": resource.get("action", "planned"),
-                "ready": False,
-                "message": "ExternalSecret would be created or patched.",
-            }
-            for resource in external_secrets
-        ]
-        return {
-            "phase": "Planned",
-            "checkedAt": checked_at,
-            "resources": resources,
-        }
-
     resources = []
     for resource in external_secrets:
         name = resource["name"]
@@ -1152,8 +1004,6 @@ def aggregate_external_secret_phase(resources: list[dict[str, Any]]) -> str:
         return "Error"
     if "Waiting" in phases:
         return "Waiting"
-    if phases <= {"Planned"}:
-        return "Planned"
     return "Unknown"
 
 
@@ -1171,12 +1021,7 @@ def record_demo_project_status(request: dict[str, Any]) -> dict[str, Any]:
     name = project_name(demo_project)
     status = status_with_reconcile_key(demo_project, status)
     try:
-        patch_status(
-            name,
-            status,
-            dry_run=config.reconcile_mode != "apply",
-            raise_errors=True,
-        )
+        patch_status(name, status, raise_errors=True)
     except ValueError as error:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
@@ -1215,13 +1060,6 @@ def status_with_reconcile_key(
     }
 
 
-def record_project_status(request: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility wrapper; workflows use split status-recording activities."""
-
-    record_demo_project_status(request)
-    return record_catalog_project_status(request)
-
-
 def smoke_check_url(plan: dict[str, Any], smoke_check: dict[str, Any]) -> str:
     if isinstance(smoke_check.get("url"), str):
         return smoke_check["url"]
@@ -1244,11 +1082,10 @@ def patch_status(
     name: str,
     status: dict[str, Any],
     *,
-    dry_run: bool,
     raise_errors: bool = False,
 ) -> None:
     try:
-        patch_demo_project_status(name, status, dry_run=dry_run)
+        patch_demo_project_status(name, status, dry_run=False)
     except Exception:
         activity.logger.exception("DemoProject status patch failed project=%s", name)
         if raise_errors:
@@ -1269,7 +1106,7 @@ def patch_catalog_status(
         name=config.catalog_status_configmap,
     )
     try:
-        apply_resources([primary], dry_run=config.reconcile_mode != "apply")
+        apply_resources([primary], dry_run=False)
     except Exception:
         activity.logger.exception(
             "Catalog status patch failed project=%s",
@@ -1288,7 +1125,7 @@ def patch_catalog_status(
         name=config.catalog_status_configmap,
     )
     try:
-        apply_resources([mirror], dry_run=config.reconcile_mode != "apply")
+        apply_resources([mirror], dry_run=False)
     except Exception:
         activity.logger.exception(
             "Catalog status mirror patch failed project=%s namespace=%s",

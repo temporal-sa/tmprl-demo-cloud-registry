@@ -137,7 +137,6 @@ spec:
                   type: string
                   enum:
                     - Pending
-                    - Planned
                     - Reconciling
                     - BaseReconciled
                     - WaitingForImages

@@ -101,9 +101,7 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
     config = WorkerConfig.from_env()
     target_deployment_name = os.getenv("TEMPORAL_DEPLOYMENT_NAME")
     target_build_id = os.getenv("TEMPORAL_WORKER_BUILD_ID")
-    if config.reconcile_mode != "plan" and (
-        not target_deployment_name or not target_build_id
-    ):
+    if not target_deployment_name or not target_build_id:
         raise non_retryable_error(
             (
                 "Registry operator canary requires TEMPORAL_DEPLOYMENT_NAME and "
@@ -133,7 +131,6 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         "catalogStatusNamespace": config.catalog_status_namespace,
         "catalogStatusMirrorNamespace": config.catalog_status_mirror_namespace,
         "catalogStatusConfigMap": config.catalog_status_configmap,
-        "dryRun": config.reconcile_mode != "apply",
         "plannedAt": datetime.now(UTC).isoformat(),
     }
 
@@ -144,7 +141,7 @@ def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, An
     try:
         action = apply_demo_project(
             demo_project,
-            dry_run=bool(plan.get("dryRun")),
+            dry_run=False,
         )
     except ValueError as error:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
@@ -155,7 +152,7 @@ def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, An
     return {
         "project": string_field(plan, "project"),
         "namespace": string_field(plan, "namespace"),
-        "phase": "Applied" if action != "planned" else "Planned",
+        "phase": "Applied",
         "action": action,
         "workflow": workflow_signal,
         "checkedAt": datetime.now(UTC).isoformat(),
@@ -164,15 +161,6 @@ def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, An
 
 @activity.defn
 def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {
-            "project": string_field(plan, "project"),
-            "phase": "Planned",
-            "ok": True,
-            "message": "Canary promotion wait skipped because reconcile mode is plan.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        }
-
     deadline = time.monotonic() + int(plan.get("timeoutSeconds", 900))
     poll_seconds = int(plan.get("pollSeconds", 10))
     last_status: dict[str, Any] | None = None
@@ -280,15 +268,6 @@ def delete_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, A
             "checkedAt": datetime.now(UTC).isoformat(),
         }
 
-    if bool(plan.get("dryRun")):
-        return {
-            "project": string_field(plan, "project"),
-            "phase": "Planned",
-            "ok": True,
-            "message": "Canary cleanup skipped because reconcile mode is plan.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        }
-
     action = delete_demo_project(string_field(plan, "project"))
     return {
         "project": string_field(plan, "project"),
@@ -301,29 +280,6 @@ def delete_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, A
 
 
 @activity.defn
-def check_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any]:
-    if plan.get("cleanupPolicy") == "Never":
-        return {
-            "project": string_field(plan, "project"),
-            "phase": "Skipped",
-            "ok": True,
-            "message": "Canary cleanup skipped by cleanupPolicy=Never.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        }
-
-    if bool(plan.get("dryRun")):
-        return {
-            "project": string_field(plan, "project"),
-            "phase": "Planned",
-            "ok": True,
-            "message": "Canary cleanup skipped because reconcile mode is plan.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        }
-
-    return canary_cleanup_snapshot(plan)
-
-
-@activity.defn
 def wait_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any]:
     if plan.get("cleanupPolicy") == "Never":
         return {
@@ -331,15 +287,6 @@ def wait_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any
             "phase": "Skipped",
             "ok": True,
             "message": "Canary cleanup skipped by cleanupPolicy=Never.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        }
-
-    if bool(plan.get("dryRun")):
-        return {
-            "project": string_field(plan, "project"),
-            "phase": "Planned",
-            "ok": True,
-            "message": "Canary cleanup skipped because reconcile mode is plan.",
             "checkedAt": datetime.now(UTC).isoformat(),
         }
 
@@ -362,39 +309,6 @@ def wait_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any
                 **last_status,
                 "phase": "CleanupFailed",
                 "ok": False,
-                "message": "Timed out waiting for canary cleanup to complete.",
-                "checkedAt": datetime.now(UTC).isoformat(),
-            }
-
-        activity.heartbeat(last_status)
-        time.sleep(poll_seconds)
-
-
-@activity.defn
-def cleanup_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, Any]:
-    """Legacy aggregate cleanup activity; new canary workflows use split steps."""
-
-    delete_result = delete_registry_operator_canary_project(plan)
-    if delete_result.get("phase") in {"Skipped", "Planned"}:
-        return delete_result
-
-    deadline = time.monotonic() + int(plan.get("cleanupTimeoutSeconds", 600))
-    poll_seconds = int(plan.get("pollSeconds", 10))
-    last_status: dict[str, Any] | None = None
-    while True:
-        last_status = canary_cleanup_snapshot(plan)
-        if last_status["ok"]:
-            return {
-                **last_status,
-                "deleteAction": delete_result.get("deleteAction"),
-            }
-
-        if time.monotonic() >= deadline:
-            return {
-                **last_status,
-                "phase": "CleanupFailed",
-                "ok": False,
-                "deleteAction": delete_result.get("deleteAction"),
                 "message": "Timed out waiting for canary cleanup to complete.",
                 "checkedAt": datetime.now(UTC).isoformat(),
             }
@@ -489,11 +403,6 @@ def signal_registry_operator_canary_reconcile(
     plan: dict[str, Any],
     demo_project: dict[str, Any],
 ) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {
-            "phase": "Planned",
-            "message": "Canary workflow signal skipped because reconcile mode is plan.",
-        }
     return asyncio.run(signal_registry_operator_canary_reconcile_async(plan, demo_project))
 
 
@@ -679,7 +588,7 @@ def catalog_entry_finalized_or_absent(entry: dict[str, Any] | None) -> bool:
     external = finalize_status.get("externalResources")
     if not isinstance(external, dict):
         return False
-    return external.get("phase") in {"Deleted", "Skipped", "Planned"}
+    return external.get("phase") in {"Deleted", "Skipped"}
 
 
 def canary_project_name(prefix: str, workflow_id: str, run_id: str) -> str:

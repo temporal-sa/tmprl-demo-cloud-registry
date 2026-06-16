@@ -381,8 +381,7 @@ def test_failed_gate_workflow_marks_worker_deployment_rollout_failed(monkeypatch
                 "name": "money-transfer",
                 "action": "patched",
             }
-        ],
-        dry_run=False,
+        ]
     )
 
     assert status["phase"] == "Failed"
@@ -426,7 +425,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         FINALIZATION_POLICY_ANNOTATION: "retain",
     }
     assert demo_project["spec"]["source"]["gitRepository"]["url"] == (
-        "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git"
+        "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-registry.git"
     )
     assert demo_project["spec"]["source"]["gitRepository"]["authSecret"] == (
         "source-auth"
@@ -448,7 +447,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         interval="1m",
     )["spec"] == {
         "interval": "1m",
-        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git",
+        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-registry.git",
         "ref": {"branch": "main"},
         "secretRef": {"name": "registry-operator-source-auth"},
         "ignore": "\n".join(
@@ -466,7 +465,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         ),
     }
     assert demo_project["spec"]["source"]["gitRepository"] == {
-        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git",
+        "url": "ssh://git@github.com/temporal-sa/tmprl-demo-cloud-registry.git",
         "authSecret": "source-auth",
         "ignore": (
             "/*\n"
@@ -598,7 +597,6 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
 
 
 def test_operator_canary_plan_uses_unique_name_and_expected_annotations(monkeypatch):
-    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
     monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
@@ -639,7 +637,6 @@ def test_operator_canary_plan_uses_unique_name_and_expected_annotations(monkeypa
 
 
 def test_operator_canary_plan_rejects_unexpected_source_sha(monkeypatch):
-    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "actual")
     monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
@@ -658,7 +655,6 @@ def test_operator_canary_plan_rejects_unexpected_source_sha(monkeypatch):
 
 
 def test_operator_canary_plan_requires_target_version(monkeypatch):
-    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
     monkeypatch.delenv("TEMPORAL_DEPLOYMENT_NAME", raising=False)
@@ -683,7 +679,6 @@ def test_apply_operator_canary_project_signals_target_workflow(monkeypatch):
         "project": "operator-canary-abc123",
         "namespace": "tmprl-dem-cld-operator-canary-abc123",
         "demoProject": demo_project,
-        "dryRun": False,
         "targetDeploymentName": "registry-operator",
         "targetBuildID": "git-test-1234",
     }
@@ -850,7 +845,7 @@ def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
         },
     )
 
-    result = canary.check_registry_operator_canary_cleanup(cleanup_plan())
+    result = canary.canary_cleanup_snapshot(cleanup_plan())
 
     assert result["phase"] == "CleanupPending"
     assert result["ok"] is False
@@ -879,7 +874,7 @@ def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
         },
     )
 
-    result = canary.check_registry_operator_canary_cleanup(cleanup_plan())
+    result = canary.canary_cleanup_snapshot(cleanup_plan())
 
     assert result["phase"] == "Deleted"
     assert result["ok"] is True

@@ -104,10 +104,16 @@ def previous_build_status(
     return status
 
 
+def build_plan_status(request):
+    status = builds.completed_build_status(builds.plan_project_images(request))
+    assert status is not None
+    return status
+
+
 def test_build_reuses_workflow_bookkept_images_for_same_source_commit(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CODEBUILD_PROJECT", raising=False)
 
-    status = builds.build_project_images(
+    status = build_plan_status(
         {
             "demoProject": demo_project(),
             "previousBuildStatus": previous_build_status(),
@@ -129,7 +135,7 @@ def test_build_reuses_workflow_bookkept_images_for_same_source_commit(monkeypatc
 def test_build_reuses_workflow_cache_for_same_source_artifact_digest(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CODEBUILD_PROJECT", raising=False)
 
-    status = builds.build_project_images(
+    status = build_plan_status(
         {
             "demoProject": demo_project(
                 source_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -161,7 +167,7 @@ def test_image_version_adds_build_hash_for_buildpack_projects():
 def test_build_does_not_reuse_workflow_cache_for_new_source_commit(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CODEBUILD_PROJECT", raising=False)
 
-    status = builds.build_project_images(
+    status = build_plan_status(
         {
             "demoProject": demo_project(
                 source_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -181,7 +187,7 @@ def test_build_does_not_reuse_workflow_cache_for_changed_build_definition(
     project = demo_project()
     project["spec"]["builds"]["frontend"]["dockerfile"] = "Dockerfile"
 
-    status = builds.build_project_images(
+    status = build_plan_status(
         {
             "demoProject": project,
             "previousBuildStatus": previous_build_status(),

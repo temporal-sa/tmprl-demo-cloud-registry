@@ -1999,7 +1999,7 @@ def worker_deployments_condition(
 ) -> dict[str, Any]:
     phase = status.get("phase")
     condition_status = "Unknown"
-    if phase in {"Ready", "NotRequired", "Planned", "Skipped"}:
+    if phase in {"Ready", "NotRequired", "Skipped"}:
         condition_status = "True"
     elif phase in {"Failed", "TimedOut", "Error"}:
         condition_status = "False"
@@ -2050,14 +2050,6 @@ def kubernetes_namespace_status(
             "phase": "Error",
             "message": "Namespace reconcile did not complete.",
             "error": error,
-        }
-
-    if mode == "plan":
-        return {
-            **status,
-            "phase": "Planned",
-            "action": action or "planned",
-            "message": "Namespace would be created or patched.",
         }
 
     if action == "created":

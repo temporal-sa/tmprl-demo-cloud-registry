@@ -21,7 +21,6 @@ with workflow.unsafe.imports_passed_through():
         wait_registry_operator_canary_cleanup,
     )
     from demo_registry_operator.activities.external_resources import (
-        completed_external_resources_status,
         delete_project_ecr_repositories_resource,
         delete_temporal_cloud_api_key_resource,
         delete_temporal_cloud_namespace_resource,
@@ -249,33 +248,31 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=10),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            external_resources = completed_external_resources_status(external_plan)
-            if external_resources is None:
-                ecr_status = await workflow.execute_activity(
-                    reconcile_ecr_repositories,
-                    external_plan,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                temporal_status = await workflow.execute_activity(
-                    reconcile_temporal_cloud_resource,
-                    external_plan,
-                    start_to_close_timeout=timedelta(minutes=15),
-                    heartbeat_timeout=timedelta(minutes=1),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                secrets_status = await workflow.execute_activity(
-                    verify_secrets_manager_resources,
-                    external_plan,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                external_resources = external_resources_status(
-                    external_plan,
-                    ecr_status=ecr_status,
-                    temporal_status=temporal_status,
-                    secrets_status=secrets_status,
-                )
+            ecr_status = await workflow.execute_activity(
+                reconcile_ecr_repositories,
+                external_plan,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            temporal_status = await workflow.execute_activity(
+                reconcile_temporal_cloud_resource,
+                external_plan,
+                start_to_close_timeout=timedelta(minutes=15),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            secrets_status = await workflow.execute_activity(
+                verify_secrets_manager_resources,
+                external_plan,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            external_resources = external_resources_status(
+                external_plan,
+                ecr_status=ecr_status,
+                temporal_status=temporal_status,
+                secrets_status=secrets_status,
+            )
             build_plan = await workflow.execute_activity(
                 plan_project_images,
                 {
@@ -863,7 +860,7 @@ class RegistryOperatorCanaryWorkflow:
                 retry_policy=CHECK_RETRY_POLICY,
             )
             cleanup_result = delete_result
-            if delete_result.get("phase") not in {"Skipped", "Planned"}:
+            if delete_result.get("phase") != "Skipped":
                 cleanup_timeout_seconds = max(
                     1,
                     int(plan.get("cleanupTimeoutSeconds", 600)),

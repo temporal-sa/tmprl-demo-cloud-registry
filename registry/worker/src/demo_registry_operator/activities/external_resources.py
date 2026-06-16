@@ -53,17 +53,13 @@ def plan_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]:
         config.external_resource_mode,
     )
 
-    if config.external_resource_mode == "aws":
-        return {
-            "action": "aws",
-            "demoProject": demo_project,
-            "mode": config.external_resource_mode,
-            "checkedAt": checked_at,
-            "kubernetesNamespace": project_namespace(demo_project),
-        }
-    return completed_external_resources_plan(
-        planned_external_resources(demo_project, config, checked_at=checked_at)
-    )
+    return {
+        "action": "aws",
+        "demoProject": demo_project,
+        "mode": config.external_resource_mode,
+        "checkedAt": checked_at,
+        "kubernetesNamespace": project_namespace(demo_project),
+    }
 
 
 @activity.defn
@@ -146,39 +142,6 @@ def verify_secrets_manager_resources(plan: dict[str, Any]) -> dict[str, Any]:
         ) from error
 
 
-def reconcile_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility wrapper; workflows use split external-resource activities."""
-
-    plan = plan_external_resources(demo_project)
-    if completed_status := completed_external_resources_status(plan):
-        return completed_status
-    ecr_status = reconcile_ecr_repositories(plan)
-    temporal_status = reconcile_temporal_cloud_resource(plan)
-    secrets_status = verify_secrets_manager_resources(plan)
-    return external_resources_status(
-        plan,
-        ecr_status=ecr_status,
-        temporal_status=temporal_status,
-        secrets_status=secrets_status,
-    )
-
-
-@activity.defn
-def finalize_temporal_cloud_resource(plan: dict[str, Any]) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {"phase": "Planned"}
-
-    config = WorkerConfig.from_env()
-    if config.temporal_cloud_mode == "cloud-api":
-        return finalize_temporal_cloud_via_api(
-            demo_project_from_plan(plan),
-            config,
-            string_field(plan, "checkedAt"),
-            fail_activity_on_error=True,
-        )
-    return {"phase": "Skipped", "mode": config.temporal_cloud_mode}
-
-
 @activity.defn
 def delete_temporal_cloud_api_key_resource(plan: dict[str, Any]) -> dict[str, Any]:
     return run_temporal_cloud_finalization_step(
@@ -223,9 +186,6 @@ def delete_temporal_cloud_namespace_resource(plan: dict[str, Any]) -> dict[str, 
 def delete_temporal_cloud_runtime_secret_resource(
     plan: dict[str, Any],
 ) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {"phase": "Planned"}
-
     demo_project = demo_project_from_plan(plan)
     config = WorkerConfig.from_env()
     if not temporal_components(demo_project):
@@ -271,9 +231,6 @@ def delete_temporal_cloud_runtime_secret_resource(
 
 @activity.defn
 def delete_project_ecr_repositories_resource(plan: dict[str, Any]) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {"phase": "Planned"}
-
     config = WorkerConfig.from_env()
     if config.external_resource_mode == "aws":
         return delete_project_ecr_repositories(
@@ -293,11 +250,8 @@ def external_resource_finalization_status(
     phase = "Deleted"
     if temporal_status.get("phase") == "Error" or ecr_status.get("phase") == "Error":
         phase = "Error"
-    elif {temporal_status.get("phase"), ecr_status.get("phase")} <= {
-        "Planned",
-        "Skipped",
-    }:
-        phase = "Planned" if bool(plan.get("dryRun")) else "Skipped"
+    elif {temporal_status.get("phase"), ecr_status.get("phase")} <= {"Skipped"}:
+        phase = "Skipped"
     return {
         "phase": phase,
         "checkedAt": string_field(plan, "checkedAt"),
@@ -326,8 +280,6 @@ def temporal_cloud_finalization_status(
     phase = "Deleted"
     if "Error" in phases:
         phase = "Error"
-    elif phases <= {"Planned"}:
-        phase = "Planned"
     elif phases <= {"Skipped", "NotRequired"}:
         phase = "Skipped"
 
@@ -358,19 +310,6 @@ def temporal_cloud_finalization_status(
     }
 
 
-def completed_external_resources_plan(status: dict[str, Any]) -> dict[str, Any]:
-    return {"action": "complete", "status": status}
-
-
-def completed_external_resources_status(value: dict[str, Any]) -> dict[str, Any] | None:
-    status = value.get("status")
-    return (
-        status
-        if value.get("action") == "complete" and isinstance(status, dict)
-        else None
-    )
-
-
 def external_resources_status(
     plan: dict[str, Any],
     *,
@@ -389,120 +328,6 @@ def external_resources_status(
         "checkedAt": string_field(plan, "checkedAt"),
         "kubernetesNamespace": string_field(plan, "kubernetesNamespace"),
         "ecr": ecr_status,
-        "secretsManager": secrets_status,
-        "temporalCloud": temporal_status,
-    }
-
-
-def planned_external_resources(
-    demo_project: dict[str, Any],
-    config: WorkerConfig,
-    *,
-    checked_at: str | None = None,
-) -> dict[str, Any]:
-    now = checked_at or datetime.now(UTC).isoformat()
-    return {
-        "phase": "Planned",
-        "mode": config.external_resource_mode,
-        "checkedAt": now,
-        "kubernetesNamespace": project_namespace(demo_project),
-        "ecr": {
-            "phase": "Planned",
-            "region": config.aws_region,
-            "accountId": config.aws_account_id,
-            "repositories": [
-                {
-                    **repository_plan_entry(demo_project, build_name),
-                    "phase": "Planned",
-                    "action": "create-or-verify",
-                }
-                for build_name in sorted(builds(demo_project))
-            ],
-        },
-        "secretsManager": planned_secrets_manager_status(demo_project, config),
-        "temporalCloud": temporal_cloud_status(
-            demo_project,
-            config,
-            phase="ManualSetupRequired",
-        ),
-    }
-
-
-def aws_external_resources(
-    demo_project: dict[str, Any],
-    config: WorkerConfig,
-) -> dict[str, Any]:
-    now = datetime.now(UTC).isoformat()
-    try:
-        import boto3
-        from botocore.exceptions import ClientError, BotoCoreError
-    except ImportError as error:
-        return {
-            **planned_external_resources(demo_project, config),
-            "phase": "Error",
-            "mode": config.external_resource_mode,
-            "checkedAt": now,
-            "lastError": {
-                "reason": "MissingDependency",
-                "message": f"boto3 is required for aws external resource mode: {error}",
-                "lastTransitionTime": now,
-            },
-        }
-
-    session = boto3.session.Session(region_name=config.aws_region)
-    ecr = session.client("ecr")
-    secretsmanager = session.client("secretsmanager")
-
-    repositories = []
-    for build_name in sorted(builds(demo_project)):
-        repository = repository_plan_entry(demo_project, build_name)
-        try:
-            repositories.append(ensure_ecr_repository(ecr, repository))
-        except (BotoCoreError, ClientError) as error:
-            repositories.append(
-                {
-                    **repository,
-                    "phase": "Error",
-                    "action": "error",
-                    "message": str(error),
-                }
-            )
-
-    # Run the Temporal Cloud reconcile first: in cloud-api mode it creates the
-    # namespace/service-account/API key and writes the runtime secret, which the
-    # secret verification below then sees as present.
-    temporal_status = temporal_cloud_status(
-        demo_project,
-        config,
-        phase="ManualSetupRequired",
-        checked_at=now,
-    )
-    secrets_status = verify_secrets_manager_paths(
-        secretsmanager,
-        demo_project,
-        config,
-        checked_at=now,
-    )
-    ecr_phase = aggregate_phase(repositories)
-    phase = aggregate_top_level_phase(
-        [
-            ecr_phase,
-            secrets_status["phase"],
-            temporal_status["phase"],
-        ]
-    )
-
-    return {
-        "phase": phase,
-        "mode": config.external_resource_mode,
-        "checkedAt": now,
-        "kubernetesNamespace": project_namespace(demo_project),
-        "ecr": {
-            "phase": ecr_phase,
-            "region": config.aws_region,
-            "accountId": config.aws_account_id,
-            "repositories": repositories,
-        },
         "secretsManager": secrets_status,
         "temporalCloud": temporal_status,
     }
@@ -718,47 +543,6 @@ def secret_property_present(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return True
-
-
-def planned_secrets_manager_status(
-    demo_project: dict[str, Any],
-    config: WorkerConfig,
-) -> dict[str, Any]:
-    temporal_required = bool(temporal_components(demo_project))
-    return {
-        "phase": "Planned",
-        "secretPrefix": project_secret_prefix(demo_project),
-        "temporalBootstrap": {
-            "path": config.temporal_cloud_bootstrap_secret_path,
-            "required": temporal_required,
-            "managedBy": "platform",
-            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
-            "phase": "Planned" if temporal_required else "NotRequired",
-        },
-        "temporalCredentials": {
-            "path": temporal_secret_remote_path(demo_project),
-            "required": temporal_required,
-            "managedBy": "platform",
-            "requiredProperties": TEMPORAL_SECRET_PROPERTIES,
-            "phase": "Planned" if temporal_required else "NotRequired",
-        },
-        "userManaged": [
-            {
-                "path": user_secret_remote_path(demo_project, secret_name),
-                "required": True,
-                "managedBy": "project-owner",
-                "requiredProperties": user_secret_required_properties(
-                    demo_project,
-                    secret_name,
-                ),
-                "components": sorted(
-                    components_for_user_secret(demo_project, secret_name)
-                ),
-                "phase": "Planned",
-            }
-            for secret_name in user_secret_names(demo_project)
-        ],
-    }
 
 
 def temporal_cloud_status(
@@ -1026,9 +810,6 @@ def run_temporal_cloud_finalization_step(
     runner_name: str,
     operation: str,
 ) -> dict[str, Any]:
-    if bool(plan.get("dryRun")):
-        return {"phase": "Planned"}
-
     demo_project = demo_project_from_plan(plan)
     config = WorkerConfig.from_env()
     checked_at = string_field(plan, "checkedAt")
@@ -1219,8 +1000,6 @@ def aggregate_phase(resources: list[dict[str, Any]]) -> str:
         return "ValuesRequired"
     if phases and phases <= {"Ready", "NotRequired"}:
         return "Ready"
-    if "Planned" in phases:
-        return "Planned"
     return "Unknown"
 
 
@@ -1232,8 +1011,6 @@ def aggregate_secret_phase(resources: list[dict[str, Any]]) -> str:
         return "ValuesRequired"
     if phases and phases <= {"Ready", "NotRequired"}:
         return "Ready"
-    if "Planned" in phases:
-        return "Planned"
     return "Unknown"
 
 
@@ -1246,8 +1023,6 @@ def aggregate_top_level_phase(phases: list[str]) -> str:
         return "ValuesRequired"
     if phases and set(phases) <= {"Ready", "NotRequired"}:
         return "Ready"
-    if "Planned" in phases:
-        return "Planned"
     return "Unknown"
 
 

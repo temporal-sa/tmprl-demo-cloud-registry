@@ -24,7 +24,6 @@ from demo_registry_operator.activities.builds.definitions import (
     same_commit_sha,
 )
 from demo_registry_operator.activities.builds.planning import (
-    build_project_images,
     plan_project_images,
 )
 from demo_registry_operator.activities.builds.source import (
@@ -60,7 +59,6 @@ from demo_registry_operator.activities.builds.codebuild.buildspec import (
 )
 from demo_registry_operator.activities.builds.codebuild.execution import (
     CODEBUILD_API_TIMEOUT_SECONDS,
-    build_with_codebuild,
     codebuild_api_error_status,
     codebuild_build_id_from_heartbeat,
     codebuild_error_message,
@@ -84,10 +82,8 @@ __all__ = [
     "build_definition_hash",
     "build_definition_input",
     "build_entry",
-    "build_project_images",
     "build_status",
     "build_strategy",
-    "build_with_codebuild",
     "buildpack_env",
     "buildpack_process_buildpack_command",
     "buildpack_process_buildpack_path",

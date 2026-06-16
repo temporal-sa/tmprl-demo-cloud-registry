@@ -15,8 +15,6 @@ from temporalio.worker import Worker, WorkerDeploymentConfig
 
 from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
-    check_registry_operator_canary_cleanup,
-    cleanup_registry_operator_canary_project,
     delete_registry_operator_canary_project,
     plan_registry_operator_canary,
     wait_registry_operator_canary_cleanup,
@@ -34,7 +32,6 @@ from demo_registry_operator.activities.external_resources import (
     delete_temporal_cloud_runtime_secret_resource,
     delete_temporal_cloud_service_account_resource,
     disable_temporal_cloud_namespace_delete_protection_resource,
-    finalize_temporal_cloud_resource,
     plan_external_resources,
     reconcile_ecr_repositories,
     reconcile_temporal_cloud_resource,
@@ -76,13 +73,12 @@ async def main() -> None:
     config = WorkerConfig.from_env()
     client = await connect(config)
     logger.info(
-        "Starting registry process namespace=%s task_queue=%s worker_enabled=%s watch_enabled=%s watch_mode=%s reconcile_mode=%s",
+        "Starting registry process namespace=%s task_queue=%s worker_enabled=%s watch_enabled=%s watch_mode=%s",
         config.temporal_namespace,
         config.task_queue,
         config.worker_enabled,
         config.watch_enabled,
         config.watch_mode,
-        config.reconcile_mode,
     )
 
     with concurrent.futures.ThreadPoolExecutor(
@@ -104,9 +100,7 @@ async def main() -> None:
                     apply_registry_operator_canary_project,
                     wait_for_registry_operator_canary_promotion,
                     delete_registry_operator_canary_project,
-                    check_registry_operator_canary_cleanup,
                     wait_registry_operator_canary_cleanup,
-                    cleanup_registry_operator_canary_project,
                     plan_project_images,
                     start_project_image_build,
                     wait_for_project_image_build,
@@ -119,7 +113,6 @@ async def main() -> None:
                     disable_temporal_cloud_namespace_delete_protection_resource,
                     delete_temporal_cloud_namespace_resource,
                     delete_temporal_cloud_runtime_secret_resource,
-                    finalize_temporal_cloud_resource,
                     delete_project_ecr_repositories_resource,
                     reconcile_project,
                     plan_project_finalization,

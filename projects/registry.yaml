@@ -68,8 +68,6 @@ spec:
       env:
         - name: DEMO_REGISTRY_TASK_QUEUE
           value: registry-management
-        - name: DEMO_REGISTRY_RECONCILE_MODE
-          value: apply
         - name: DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE
           value: aws
         - name: DEMO_REGISTRY_TEMPORAL_CLOUD_MODE

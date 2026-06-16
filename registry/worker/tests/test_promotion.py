@@ -41,10 +41,31 @@ def banking_project():
     )
 
 
+def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_SOURCE_WATCH_NAMESPACE", "source-watch")
+
+    plan = reconcile.plan_project_finalization(banking_project())
+
+    assert plan["action"] == "finalize"
+    assert plan["project"] == "banking-money-transfer"
+    assert plan["namespace"] == "tmprl-dem-cld-banking-money-transfer"
+    assert plan["sourceWatchNamespace"] == "source-watch"
+    assert plan["gitRepository"] == "banking-money-transfer-source"
+    assert set(plan) == {
+        "action",
+        "demoProject",
+        "project",
+        "namespace",
+        "sourceWatchNamespace",
+        "gitRepository",
+        "sourceAuthSecret",
+        "checkedAt",
+    }
+
+
 def test_promote_candidate_uses_candidate_source_commit_for_route_version(
     monkeypatch,
 ):
-    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
     applied = []
 
     def capture_apply(resources, *, dry_run):
@@ -130,7 +151,6 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
 
 
 def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
-    monkeypatch.setenv("DEMO_REGISTRY_RECONCILE_MODE", "apply")
     deleted = []
 
     monkeypatch.setattr(

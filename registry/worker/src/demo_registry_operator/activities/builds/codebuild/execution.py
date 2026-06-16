@@ -24,19 +24,15 @@ from demo_registry_operator.activities.builds.definitions import (
 from demo_registry_operator.activities.builds.source import (
     demo_project_from_request,
     external_resources_from_request,
-    source_config,
 )
 from demo_registry_operator.activities.builds.status import (
     build_entry,
     build_status,
     codebuild_build_entries,
-    codebuild_image_templates,
     completed_build_plan,
     completed_build_status,
     image_templates_from_plan,
     optional_string_field,
-    repository_name_for_build,
-    repository_uri_for_build,
     string_field,
 )
 from demo_registry_operator.activities.builds.codebuild.buildspec import (
@@ -325,208 +321,6 @@ def codebuild_api_error_status(
             error=error,
             codebuild_status=codebuild_status,
         )
-    )
-
-
-def build_with_codebuild(
-    demo_project: dict[str, Any],
-    external_resources: dict[str, Any] | None,
-    config: WorkerConfig,
-    *,
-    started_at: str,
-) -> dict[str, Any]:
-    if not config.codebuild_project:
-        return build_status(
-            demo_project,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            source_commit_sha=source_commit_sha(demo_project),
-            message="AWS CodeBuild project is not configured.",
-            build_entries=[],
-            error="Set DEMO_REGISTRY_CODEBUILD_PROJECT to use aws-codebuild mode.",
-        )
-
-    try:
-        import boto3
-        from botocore.config import Config
-        from botocore.exceptions import BotoCoreError, ClientError
-    except ImportError as error:
-        return build_status(
-            demo_project,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            source_commit_sha=source_commit_sha(demo_project),
-            message="AWS CodeBuild image build failed.",
-            build_entries=[],
-            error=f"boto3 is required for aws-codebuild mode: {error}",
-        )
-
-    source = source_config(demo_project)
-    requested_version = source_commit_sha(demo_project) or source["branch"]
-    image_templates: dict[str, str] = {}
-    codebuild_build: dict[str, Any] | None = None
-    try:
-        for build_name in sorted(builds(demo_project)):
-            repository_uri = repository_uri_for_build(build_name, external_resources)
-            if not repository_uri:
-                if not config.aws_account_id:
-                    raise ValueError(
-                        "DEMO_REGISTRY_AWS_ACCOUNT_ID is required when ECR "
-                        "repositoryUri is not available from external resource status."
-                    )
-                repository_uri = (
-                    f"{config.aws_account_id}.dkr.ecr.{config.aws_region}.amazonaws.com/"
-                    f"{repository_name_for_build(demo_project, build_name, external_resources)}"
-                )
-            image_templates[build_name] = f"{repository_uri}:${{IMAGE_VERSION}}"
-
-        codebuild = boto3.session.Session(region_name=config.aws_region).client(
-            "codebuild",
-            config=Config(
-                connect_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
-                read_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
-                retries={"max_attempts": 3, "mode": "standard"},
-            ),
-        )
-        build_id = codebuild_build_id_from_heartbeat()
-        if build_id:
-            activity.heartbeat(
-                {
-                    "project": project_name(demo_project),
-                    "codebuildProject": config.codebuild_project,
-                    "codebuildBuildId": build_id,
-                    "phase": "Reattaching",
-                }
-            )
-        else:
-            start_args = codebuild_start_build_args(
-                demo_project,
-                config,
-                image_templates=image_templates,
-                source_repo=source.get("codebuildRepo", source["repo"]),
-                source_version=requested_version,
-                source_auth_secret_path=source.get("sourceAuthSecretPath"),
-                idempotency_token_salt=started_at,
-            )
-            activity.heartbeat(
-                {
-                    "project": project_name(demo_project),
-                    "codebuildProject": config.codebuild_project,
-                    "phase": "Starting",
-                }
-            )
-            response = codebuild.start_build(**start_args)
-            build = response.get("build", {})
-            codebuild_build = build if isinstance(build, dict) else None
-            build_id = build.get("id")
-            if not isinstance(build_id, str):
-                raise RuntimeError(
-                    "CodeBuild start_build response did not include build.id"
-                )
-            activity.heartbeat(
-                {
-                    "project": project_name(demo_project),
-                    "codebuildProject": config.codebuild_project,
-                    "codebuildBuildId": build_id,
-                    "phase": "Started",
-                }
-            )
-
-        codebuild_build = wait_for_codebuild_build(
-            codebuild,
-            build_id,
-            config=config,
-            demo_project=demo_project,
-        )
-    except (BotoCoreError, ClientError, Exception) as error:
-        return build_status(
-            demo_project,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            source_commit_sha=source_commit_sha(demo_project),
-            message="AWS CodeBuild image build failed.",
-            build_entries=[],
-            error=str(error),
-            codebuild_status=codebuild_status_summary(
-                codebuild_build,
-                project_name=config.codebuild_project,
-            ),
-        )
-
-    status = codebuild_build.get("buildStatus")
-    resolved_commit = resolved_codebuild_source_version(
-        codebuild_build,
-        requested_version,
-    )
-    codebuild_status = codebuild_status_summary(
-        codebuild_build,
-        project_name=config.codebuild_project,
-    )
-    if status != "SUCCEEDED":
-        return build_status(
-            demo_project,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            source_commit_sha=resolved_commit,
-            message="AWS CodeBuild image build failed.",
-            build_entries=codebuild_build_entries(
-                demo_project,
-                image_templates,
-                source_commit_sha=resolved_commit,
-                external_resources=external_resources,
-                phase="Failed",
-            ),
-            error=codebuild_error_message(codebuild_build),
-            codebuild_status=codebuild_status,
-        )
-
-    if not resolved_commit or not looks_like_commit_sha(resolved_commit):
-        return build_status(
-            demo_project,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            source_commit_sha=resolved_commit,
-            message="AWS CodeBuild image build did not return an immutable source commit.",
-            build_entries=[],
-            error=(
-                "CodeBuild completed but resolvedSourceVersion was not a git "
-                "commit SHA; annotate registry.tmprl-demo.cloud/source-commit-sha "
-                "or verify the CodeBuild source provider."
-            ),
-            codebuild_status=codebuild_status,
-        )
-
-    images = render_image_templates(demo_project, image_templates, resolved_commit)
-    return build_status(
-        demo_project,
-        phase="Pushed",
-        mode=config.build_mode,
-        started_at=started_at,
-        images=images,
-        source_commit_sha=resolved_commit,
-        message="AWS CodeBuild built and pushed immutable images for every build.",
-        build_entries=[
-            build_entry(
-                demo_project,
-                build_name,
-                image=images[build_name],
-                phase="Pushed",
-                source="aws-codebuild",
-                external_resources=external_resources,
-            )
-            for build_name in sorted(builds(demo_project))
-        ],
-        codebuild_status=codebuild_status,
     )
 
 

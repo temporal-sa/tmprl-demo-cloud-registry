@@ -352,7 +352,7 @@ def publish_catalog(
         demo_projects,
         namespace=config.catalog_status_mirror_namespace,
     )
-    apply_resources([configmap], dry_run=config.reconcile_mode != "apply")
+    apply_resources([configmap], dry_run=False)
 
 
 async def reconcile_one(
@@ -448,7 +448,7 @@ def reconcile_source_watch(
         namespace=config.source_watch_namespace,
         interval=config.source_watch_interval,
     )
-    apply_resources(resources, dry_run=config.reconcile_mode != "apply")
+    apply_resources(resources, dry_run=False)
 
     git_repository_resource = resources[-1]
     metadata = git_repository_resource["metadata"]

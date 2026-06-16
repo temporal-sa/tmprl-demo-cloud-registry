@@ -29,7 +29,7 @@ sections in this file below the status table are an older design history.
 | 2. Generator | Removed | Replaced by the operator-derives model: projects are authored as `DemoProject` CRs under `projects/` and Flux applies them directly. `scripts/generate_projects.py`, `clusters/sa-demo/generated/`, and the `--check` gate were deleted; the operator computes all derived values at reconcile time. |
 | 3. Platform Infra | In progress | AWS Secrets Manager, ECR, External Secrets IRSA were bootstrapped for `sa-demo`; the operator creates/verifies ECR repositories, verifies Secrets Manager paths/properties, and creates/verifies the Temporal Cloud namespace, scoped service account, and 30-day API key via the Cloud Operations API (cloud-api mode). Custom-secret values and the platform bootstrap credential remain manual. |
 | 4. Flux Bootstrap | Deployed | Flux is installed on `sa-demo` with the repo source authenticated by a read-only GitHub deploy key; all platform Kustomizations are Ready. |
-| 5. Build Pipeline | In progress | The operator builds via `aws-codebuild` by default: it starts a pre-created CodeBuild project that clones the source repo and pushes immutable `git-<sha>` ECR tags, then writes resolved images into candidate rollout status. `local-docker` remains an opt-in alternative. CodeBuild project/role provisioning remains external setup. |
+| 5. Build Pipeline | In progress | The operator builds via `aws-codebuild`: it starts a pre-created CodeBuild project that clones the source repo and pushes immutable `git-<sha>` ECR tags, then writes resolved images into candidate rollout status. CodeBuild project/role provisioning remains external setup. |
 | 6. Worker Controller | Not started | Must verify current Temporal Worker Controller CRDs before implementation. |
 | 7. Shared Auth | Design | New platform capability for optionally protecting project routes with Temporal employee Google auth. |
 | 8. Registry App | Partial | The operator publishes the catalog as a `registry-catalog` ConfigMap (built from all CRs) and the web image is built to mount it at `/app/data` + catalog-status at `/app/status`. BUT the registry web is **not actually deployed**: the registry is control-plane-guarded (and its CR still has the circular operator `worker` component), so it sits at `WaitingForImages` with no IngressRoute. Fix = make the registry web a normal project (architecture.md §2). |
@@ -157,9 +157,8 @@ Next validation target:
   - create/verify Temporal Cloud namespace and namespace-scoped API key through
     the Cloud Operations API; one-time API key capture is written directly to
     AWS Secrets Manager and not exposed in status;
-  - build immutable images from the source repo; opt-in `aws-codebuild` now
-    provides an AWS-side test path using a pre-created CodeBuild project, while
-    `local-docker` remains available for trusted isolated tests;
+  - build immutable images from the source repo using a pre-created CodeBuild
+    project;
   - deploy a candidate release;
   - run smoke checks against the candidate;
   - promote Traefik routing only after success;
@@ -509,11 +508,10 @@ Requirements:
 - Let Flux roll out from inside the cluster.
 - Build credentials must be limited to that project's image repository.
 - Build workers must not have Temporal admin privileges or broad AWS access.
-- Current implementation supports default non-mutating build planning,
-  image-override compatibility, an opt-in `local-docker` activity for trusted
-  tests, and an opt-in `aws-codebuild` activity that starts and polls a
-  configured CodeBuild project. The CodeBuild project and service role are
-  provisioned outside the operator using the generated
+- Current implementation supports image-override compatibility and split
+  `aws-codebuild` activities that plan, start, and poll a configured CodeBuild
+  project. The CodeBuild project and service role are provisioned outside the
+  operator using the generated
   `codebuild-setup-plan.json`; the service role should have source-repo read
   access plus ECR push access scoped to the project/build repositories.
   CodeBuild execution details, including build ID and CloudWatch logs, are

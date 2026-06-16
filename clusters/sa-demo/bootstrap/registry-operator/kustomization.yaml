@@ -12,7 +12,6 @@ configMapGenerator:
   - name: registry-operator-common-config
     literals:
       - DEMO_REGISTRY_TASK_QUEUE=registry-management
-      - DEMO_REGISTRY_RECONCILE_MODE=apply
       - DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
       - DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=cloud-api
       - DEMO_REGISTRY_BUILD_MODE=aws-codebuild
