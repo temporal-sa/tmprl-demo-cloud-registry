@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -56,6 +57,9 @@ with workflow.unsafe.imports_passed_through():
     from demo_registry_operator.resources import (
         SOURCE_ARTIFACT_DIGEST_ANNOTATION,
         SOURCE_COMMIT_ANNOTATION,
+        TEMPORAL_API_KEY_EXPIRY_ANNOTATION,
+        TEMPORAL_API_KEY_ID_ANNOTATION,
+        TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION,
         demo_project_reconcile_key,
         metadata_annotations,
         worker_deployment_rollout_wait_seconds,
@@ -134,6 +138,101 @@ def status_reconcile_identity(status: dict[str, Any]) -> dict[str, str] | None:
     return identity
 
 
+def rotation_reconcile_identity(
+    demo_project: dict[str, Any],
+    rotation: dict[str, Any] | None,
+) -> dict[str, str]:
+    identity = reconcile_identity(demo_project)
+    rotate_at = rotation.get("rotateAt") if isinstance(rotation, dict) else None
+    key_id = rotation.get("keyId") if isinstance(rotation, dict) else None
+    if isinstance(rotate_at, str) and rotate_at:
+        identity["temporalApiKeyRotateAt"] = rotate_at
+    if isinstance(key_id, str) and key_id:
+        identity["temporalApiKeyId"] = key_id
+    return identity
+
+
+def demo_project_with_temporal_api_key(
+    demo_project: dict[str, Any],
+    temporal_status: dict[str, Any],
+) -> dict[str, Any]:
+    api_key = temporal_status.get("apiKey")
+    if not isinstance(api_key, dict):
+        return demo_project
+
+    key_id = api_key.get("keyId")
+    if not isinstance(key_id, str) or not key_id:
+        return demo_project
+
+    metadata = demo_project.get("metadata", {})
+    annotations = metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+    rendered = {**demo_project}
+    rendered_metadata = {**metadata} if isinstance(metadata, dict) else {}
+    rendered_annotations = {**annotations} if isinstance(annotations, dict) else {}
+    rendered_annotations[TEMPORAL_API_KEY_ID_ANNOTATION] = key_id
+
+    expiry_time = api_key.get("expiryTime")
+    if isinstance(expiry_time, str) and expiry_time:
+        rendered_annotations[TEMPORAL_API_KEY_EXPIRY_ANNOTATION] = expiry_time
+    created_at = api_key.get("createdAt")
+    if isinstance(created_at, str) and created_at:
+        rendered_annotations[TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION] = created_at
+
+    rendered_metadata["annotations"] = rendered_annotations
+    rendered["metadata"] = rendered_metadata
+    return rendered
+
+
+def temporal_api_key_rotation_state(
+    temporal_status: dict[str, Any],
+) -> dict[str, Any] | None:
+    api_key = temporal_status.get("apiKey")
+    if not isinstance(api_key, dict):
+        return None
+
+    expiry_time = api_key.get("expiryTime")
+    if not isinstance(expiry_time, str) or not expiry_time:
+        return None
+
+    expiry = parse_datetime(expiry_time)
+    if expiry is None:
+        return None
+
+    rotate_before_days = api_key.get("rotateBeforeExpiryDays")
+    if not isinstance(rotate_before_days, int) or rotate_before_days < 0:
+        rotate_before_days = 10
+    rotate_at = expiry - timedelta(days=rotate_before_days)
+
+    state: dict[str, Any] = {
+        "expiryTime": expiry.isoformat(),
+        "rotateAt": rotate_at.isoformat(),
+        "rotateBeforeExpiryDays": rotate_before_days,
+    }
+    key_id = api_key.get("keyId")
+    if isinstance(key_id, str) and key_id:
+        state["keyId"] = key_id
+    return state
+
+
+def rotation_datetime(rotation: dict[str, Any] | None) -> datetime | None:
+    if not isinstance(rotation, dict):
+        return None
+    rotate_at = rotation.get("rotateAt")
+    if not isinstance(rotate_at, str) or not rotate_at:
+        return None
+    return parse_datetime(rotate_at)
+
+
+def parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 @workflow.defn
 class DemoProjectWorkflow:
     """Durable entity workflow for one DemoProject."""
@@ -146,6 +245,8 @@ class DemoProjectWorkflow:
         carried_pending_spec: dict[str, Any] | None = None,
         carried_last_build_status: dict[str, Any] | None = None,
         carried_completed_reconcile_identity: dict[str, str] | None = None,
+        carried_last_demo_project: dict[str, Any] | None = None,
+        carried_temporal_api_key_rotation: dict[str, Any] | None = None,
     ) -> None:
         self._project_name = project_name
         self._pending_spec: dict[str, Any] | None = None
@@ -158,6 +259,8 @@ class DemoProjectWorkflow:
         self._continue_as_new_for_worker_version = False
         self._finalize_spec: dict[str, Any] | None = None
         self._last_build_status: dict[str, Any] | None = None
+        self._last_demo_project: dict[str, Any] | None = None
+        self._temporal_api_key_rotation: dict[str, Any] | None = None
         self._status: dict[str, Any] = {
             "phase": "Starting",
             "message": "Workflow has not received project state.",
@@ -171,6 +274,8 @@ class DemoProjectWorkflow:
         carried_pending_spec: dict[str, Any] | None = None,
         carried_last_build_status: dict[str, Any] | None = None,
         carried_completed_reconcile_identity: dict[str, str] | None = None,
+        carried_last_demo_project: dict[str, Any] | None = None,
+        carried_temporal_api_key_rotation: dict[str, Any] | None = None,
     ) -> None:
         self._project_name = project_name
         # Do NOT clobber a pending spec set by a start signal. With
@@ -184,6 +289,10 @@ class DemoProjectWorkflow:
             self._pending_reconcile_identity = reconcile_identity(carried_pending_spec)
         if carried_last_build_status is not None:
             self._last_build_status = carried_last_build_status
+        if carried_last_demo_project is not None:
+            self._last_demo_project = carried_last_demo_project
+        if carried_temporal_api_key_rotation is not None:
+            self._temporal_api_key_rotation = carried_temporal_api_key_rotation
         if (
             carried_completed_reconcile_identity is not None
             and remember_completed_reconcile_identity(carried_status)
@@ -210,14 +319,7 @@ class DemoProjectWorkflow:
             }
 
         while not self._shutdown:
-            await workflow.wait_condition(
-                lambda: (
-                    self._pending_spec is not None
-                    or self._finalize
-                    or self._shutdown
-                    or self._continue_as_new_for_worker_version
-                )
-            )
+            await self._wait_for_next_action()
             if self._shutdown:
                 break
 
@@ -229,18 +331,37 @@ class DemoProjectWorkflow:
                 self._continue_as_new_if_needed(project_name)
                 continue
 
-            demo_project = self._pending_spec
-            self._pending_spec = None
-            self._current_reconcile_identity = (
-                self._pending_reconcile_identity
-                if self._pending_reconcile_identity is not None
-                else reconcile_identity(demo_project)
+            rotation_due = (
+                self._pending_spec is None
+                and self._temporal_api_key_rotation_due()
+                and self._last_demo_project is not None
             )
-            self._pending_reconcile_identity = None
+            if rotation_due:
+                demo_project = self._last_demo_project
+                self._current_reconcile_identity = rotation_reconcile_identity(
+                    demo_project,
+                    self._temporal_api_key_rotation,
+                )
+            else:
+                demo_project = self._pending_spec
+                self._pending_spec = None
+                self._current_reconcile_identity = (
+                    self._pending_reconcile_identity
+                    if self._pending_reconcile_identity is not None
+                    else reconcile_identity(demo_project)
+                )
+                self._pending_reconcile_identity = None
+
+            if demo_project is None:
+                self._temporal_api_key_rotation = None
+                continue
+
             self._reconcile_sequence += 1
             self._status = {
                 "project": project_name,
-                "phase": "Reconciling",
+                "phase": (
+                    "RotatingTemporalApiKey" if rotation_due else "Reconciling"
+                ),
             }
             external_plan = await workflow.execute_activity(
                 plan_external_resources,
@@ -260,6 +381,11 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=15),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
+            )
+            demo_project = demo_project_with_temporal_api_key(demo_project, temporal_status)
+            self._last_demo_project = demo_project
+            self._temporal_api_key_rotation = temporal_api_key_rotation_state(
+                temporal_status
             )
             secrets_status = await workflow.execute_activity(
                 verify_secrets_manager_resources,
@@ -728,8 +854,50 @@ class DemoProjectWorkflow:
                 self._pending_spec,
                 self._last_build_status,
                 self._completed_reconcile_identity,
+                self._last_demo_project,
+                self._temporal_api_key_rotation,
             ],
         )
+
+    async def _wait_for_next_action(self) -> None:
+        while True:
+            if self._has_pending_action() or self._temporal_api_key_rotation_due():
+                return
+
+            timeout = self._temporal_api_key_rotation_timeout()
+            if timeout is None:
+                await workflow.wait_condition(self._has_pending_action)
+                return
+            try:
+                await workflow.wait_condition(
+                    self._has_pending_action,
+                    timeout=timeout,
+                    timeout_summary="temporal-api-key-rotation",
+                )
+                return
+            except asyncio.TimeoutError:
+                return
+
+    def _has_pending_action(self) -> bool:
+        return (
+            self._pending_spec is not None
+            or self._finalize
+            or self._shutdown
+            or self._continue_as_new_for_worker_version
+        )
+
+    def _temporal_api_key_rotation_due(self) -> bool:
+        rotate_at = rotation_datetime(self._temporal_api_key_rotation)
+        return rotate_at is not None and workflow.now() >= rotate_at
+
+    def _temporal_api_key_rotation_timeout(self) -> timedelta | None:
+        rotate_at = rotation_datetime(self._temporal_api_key_rotation)
+        if rotate_at is None:
+            return None
+        delay = rotate_at - workflow.now()
+        if delay.total_seconds() <= 0:
+            return timedelta(seconds=0)
+        return delay
 
     def _is_duplicate_reconcile_signal(self, identity: dict[str, str]) -> bool:
         return any(

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from demo_registry_operator.activities import builds
 from demo_registry_operator.resources import (
+    PLATFORM_SOURCE_AUTH_SECRET_PATH,
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     SOURCE_COMMIT_ANNOTATION,
 )
@@ -240,6 +241,17 @@ def test_source_config_derives_codebuild_private_source_auth():
     }
 
 
+def test_source_config_uses_shared_pat_for_temporal_sa_https_source():
+    source = builds.source_config(demo_project())
+
+    assert source == {
+        "repo": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        "branch": "main",
+        "codebuildRepo": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        "sourceAuthSecretPath": PLATFORM_SOURCE_AUTH_SECRET_PATH,
+    }
+
+
 def test_codebuild_private_source_uses_no_source_checkout():
     args = builds.codebuild_start_build_args(
         private_source_demo_project(),
@@ -288,6 +300,29 @@ def test_codebuild_private_source_uses_no_source_checkout():
     assert "public.ecr.aws/docker/library" in buildspec
     assert "DEMO_SOURCE_VERSION" in buildspec
     assert "cd /tmp/source && docker build" in buildspec
+
+
+def test_codebuild_manual_checkout_supports_https_pat_json():
+    buildspec = builds.codebuild_buildspec(
+        demo_project(),
+        {
+            "frontend": (
+                "429214323166.dkr.ecr.us-west-1.amazonaws.com/"
+                "tmprl-dem-cld/banking-money-transfer/frontend:git-${SOURCE_SHA}"
+            ),
+            "backend": (
+                "429214323166.dkr.ecr.us-west-1.amazonaws.com/"
+                "tmprl-dem-cld/banking-money-transfer/backend:git-${SOURCE_SHA}"
+            ),
+        },
+        aws_region="us-west-1",
+        manual_source_checkout=True,
+    )
+
+    assert "DEMO_SOURCE_AUTH_JSON" in buildspec
+    assert "username = data.get" in buildspec
+    assert ".git-credentials" in buildspec
+    assert "credential.helper" in buildspec
 
 
 def test_codebuild_public_source_keeps_github_source_override():

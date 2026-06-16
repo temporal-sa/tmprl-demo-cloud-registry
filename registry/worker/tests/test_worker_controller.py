@@ -16,7 +16,9 @@ from demo_registry_operator.resources import (
     IMAGE_OVERRIDES_ANNOTATION,
     REGISTRY_CATALOG_ANNOTATION,
     SOURCE_COMMIT_ANNOTATION,
+    TEMPORAL_API_KEY_ID_ANNOTATION,
     base_resources,
+    candidate_version,
     candidate_service_status,
     deployment_resources,
     runtime_secret_resources,
@@ -123,6 +125,22 @@ def test_plain_worker_still_renders_deployment():
         "api-git-e12b0ed9d450",
         "worker-git-e12b0ed9d450",
     }
+
+
+def test_temporal_api_key_id_participates_in_rollout_version():
+    demo_project = project(worker=True)
+    demo_project["metadata"]["annotations"][TEMPORAL_API_KEY_ID_ANNOTATION] = "key-old"
+    old_version = candidate_version(demo_project, images())
+
+    updated = project(worker=True)
+    updated["metadata"]["annotations"][TEMPORAL_API_KEY_ID_ANNOTATION] = "key-new"
+    new_version = candidate_version(updated, images())
+
+    assert old_version is not None
+    assert new_version is not None
+    assert old_version != new_version
+    assert old_version.startswith("git-e12b0ed9d450-key-")
+    assert new_version.startswith("git-e12b0ed9d450-key-")
 
 
 def test_temporal_proxy_worker_renders_sidecar_and_local_app_env(monkeypatch):
@@ -416,7 +434,9 @@ def test_schema_accepts_controller_versioning_and_rejects_gate_input_conflict():
 def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate():
     schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
     validator = Draft202012Validator(schema)
-    demo_project = yaml.safe_load((ROOT / "projects/registry.yaml").read_text())
+    demo_project = yaml.safe_load(
+        (ROOT / "projects/demo/registry.yaml").read_text()
+    )
 
     assert list(validator.iter_errors(demo_project)) == []
     assert demo_project["metadata"]["name"] == "registry-operator"
@@ -513,9 +533,16 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
 
     secrets = runtime_secret_resources(demo_project)
     assert {item["metadata"]["name"] for item in secrets} == {
+        "instruqt-cli",
         "shared-auth",
         "temporal-worker-runtime",
         "user-secret-temporal-cloud-bootstrap",
+    }
+    instruqt_secret = next(
+        item for item in secrets if item["metadata"]["name"] == "instruqt-cli"
+    )
+    assert instruqt_secret["metadata"]["annotations"] == {
+        "platform.temporal.io/secret-source": "tmprl-dem-cld/platform/instruqt-cli"
     }
 
     resources = runtime_workload_resources(
@@ -543,6 +570,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
     assert container["image"] == "example.com/registry/worker:git-e12b0ed9d450"
     assert container["envFrom"] == [
         {"secretRef": {"name": "temporal-worker-runtime"}},
+        {"secretRef": {"name": "instruqt-cli"}},
         {"secretRef": {"name": "user-secret-temporal-cloud-bootstrap"}},
     ]
     assert {
@@ -730,14 +758,14 @@ def test_registry_operator_rbac_can_manage_canary_and_prune_resources():
         and item["kind"] == "ClusterRole"
         and item["metadata"]["name"] == "registry-operator"
     )
-    demo_project_rule = next(
+    registry_resource_rule = next(
         rule
         for rule in cluster_role["rules"]
         if rule["apiGroups"] == ["registry.tmprl-demo.cloud"]
-        and rule["resources"] == ["demoprojects"]
+        and set(rule["resources"]) == {"demoprojects", "instruqtcourses"}
     )
 
-    assert set(demo_project_rule["verbs"]) >= {
+    assert set(registry_resource_rule["verbs"]) >= {
         "create",
         "delete",
         "get",

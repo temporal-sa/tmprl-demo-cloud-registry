@@ -94,6 +94,33 @@ kubectl -n flux-system annotate kustomization flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
+## Testing a managed Instruqt course
+
+After the operator image with Instruqt support is current, force the project
+Kustomizations if you do not want to wait for the normal interval:
+
+```sh
+kubectl -n flux-system annotate kustomization registry-instruqt-courses \
+  reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+kubectl get instruqtcourse durable-ad-campaign-python-workshop \
+  -o jsonpath='{.status.phase}{" "}{.status.message}{"\n"}'
+```
+
+Useful status paths while the workflow runs:
+
+```sh
+kubectl get instruqtcourse durable-ad-campaign-python-workshop \
+  -o jsonpath='{.status.buildStatus.phase}{"\n"}'
+kubectl get instruqtcourse durable-ad-campaign-python-workshop \
+  -o jsonpath='{.status.deployment.phase}{"\n"}'
+kubectl get instruqtcourse durable-ad-campaign-python-workshop \
+  -o jsonpath='{.status.testing.deployment.phase}{"\n"}'
+```
+
+Push or merge a `live-test` branch in the course source repo to create/update
+the testing track. Delete that branch to have the operator delete the managed
+testing track.
+
 ## Installing Temporal Worker Controller
 
 The Flux Kustomizations are self-managed. After adding or changing Worker
@@ -170,11 +197,31 @@ and `SmokeCheckFailed`; the live route is left untouched. Proof the workflow is
 actually progressing past its `wait_condition` is a
 `Reconciling external resources project=<name>` activity log line.
 
+Temporal runtime API keys are 30-day keys. Each `DemoProject` entity workflow
+stores the key expiry returned by the Cloud Operations API and sleeps durably
+until 10 days before expiry. On wake-up it runs a normal reconcile, mints a
+replacement key, updates AWS Secrets Manager, patches the existing Kubernetes
+runtime Secret when the namespace already exists, and renders a new candidate
+rollout version from the new `keyId`.
+
+Pods consume Temporal credentials as environment variables, so a Kubernetes
+Secret update alone is not enough. Flux does not restart those Pods for us; the
+operator rolls the dependent Deployments/WorkerDeployments by changing the
+candidate version, waits for readiness and smoke checks, then promotes the
+route. The old key remains valid until its original expiry, so failed candidate
+validation leaves the live Pods on the old key.
+
 ## Prerequisites that must exist (external bootstrap)
 
 - CodeBuild project `tmprl-dem-cld-build` (region us-west-1).
 - Secrets Manager: `tmprl-dem-cld/platform/temporal-cloud-bootstrap`
   (`TEMPORAL_CLOUD_API_KEY`, `TEMPORAL_CLOUD_ACCOUNT_ID`, `TEMPORAL_CLOUD_REGION`).
+- Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
+  (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
+  watches and CodeBuild checkouts.
+- Secrets Manager: `tmprl-dem-cld/platform/instruqt-cli`
+  (`INSTRUQT_TOKEN`, optional `organization`) for operator-owned Instruqt CLI
+  operations.
 - IRSA role `tmprl-dem-cld-registry-operator` on the operator ServiceAccount
   (ECR + Secrets Manager + CodeBuild, scoped to `tmprl-dem-cld/*`).
 - Operator RBAC: `demoprojects` needs `get/list/watch/update/patch`
@@ -186,7 +233,7 @@ actually progressing past its `wait_condition` is a
 
 ## Tearing down a demo
 
-Remove `projects/<name>.yaml` from git. Flux prunes the `DemoProject` CR; the
+Remove `projects/demo/<name>.yaml` from git. Flux prunes the `DemoProject` CR; the
 finalizer holds deletion while the entity workflow's `finalize` runs (delete k8s
 namespace + Temporal namespace/SA/key/secret + ECR), then removes the finalizer.
 Flux prune is per-Kustomization inventory — it only ever touches `DemoProject`

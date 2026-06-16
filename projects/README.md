@@ -1,13 +1,15 @@
 # Projects
 
-Add **one file per managed project** — that file is the only thing you drop into
-the repo. Each file is a `DemoProject` custom resource. Flux delivers it to the
-cluster and the registry operator does the rest: it derives the namespaces, host,
-and prefixes; provisions the Temporal Cloud namespace + scoped API key; builds
-images; deploys; smoke-tests; and promotes. There is no generation/render step
-and nothing else to commit.
+Add **one file per managed project or course** — that file is the only thing you
+drop into the repo. Demo apps go under `projects/demo/` as `DemoProject`
+resources. Instruqt courses go under `projects/instruqt/` as `InstruqtCourse`
+resources. Flux delivers the CRs to the cluster and the registry operator does
+the rest. There is no generation/render step and nothing else to commit.
+Do not maintain per-directory `kustomization.yaml` indexes here; the Flux
+Kustomizations point directly at these folders and auto-include the plain YAML
+manifests under each path.
 
-Files are validated in CI against `schemas/project.schema.json`.
+Files are validated in CI against the matching schema for their `kind`.
 
 ## Supported Path Today
 
@@ -24,10 +26,12 @@ proven by `banking-money-transfer`:
   components that start or query workflows.
 - Components that can only be pointed at a local Temporal host can opt into the
   platform Temporal Cloud proxy sidecar with `temporalProxy.enabled: true`.
-- Private/internal repos and monorepo path filters are supported through
-  `source.gitRepository.url`, `source.gitRepository.authSecret`,
-  `source.gitRepository.sparseCheckout`, and `source.gitRepository.ignore`. The
-  referenced source-auth AWS secret value must exist before deployment.
+- Private/internal repos in `temporal-sa` use the shared platform GitHub PAT
+  from AWS Secrets Manager path
+  `tmprl-dem-cld/platform/github-temporal-sa-readonly`. Monorepo path filters
+  are supported through `source.gitRepository.sparseCheckout` and
+  `source.gitRepository.ignore`. Per-project `source.gitRepository.authSecret`
+  is still available for explicit source-auth overrides such as SSH deploy keys.
 - Custom component secrets are supported as AWS Secrets Manager JSON objects
   under `tmprl-dem-cld/<metadata.name>/<secret-name>`. Secret values are still
   created manually before deployment; the operator verifies declared
@@ -38,8 +42,8 @@ proven by `banking-money-transfer`:
 - Project-owned Kubernetes, Helm, Flux overlays, and BYO image rollouts are not
   the current onboarding path. Adapt those demos into container builds and
   `components` first.
-- `projects/registry.yaml` is a control-plane/self-management project and should
-  not be copied as the ordinary demo template.
+- `projects/demo/registry.yaml` is a control-plane/self-management project and
+  should not be copied as the ordinary demo template.
 
 A `DemoProject` is a normal Kubernetes CR — `apiVersion`, `kind`, `metadata.name`,
 and a `spec`:
@@ -73,13 +77,111 @@ spec:
     # routes default to a catch-all at the servicePort-80 component
 ```
 
+An `InstruqtCourse` is also a normal Kubernetes CR. The CR means the operator
+owns reconciliation from Git for that course. Local `instruqt track push` is fine
+while authoring, but committed Git state is authoritative when the operator
+reconciles.
+
+```yaml
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: durable-ad-campaign-python-workshop
+spec:
+  source:
+    repo: https://github.com/temporal-sa/instruqt-example-track
+    branch: main
+    testingBranch: live-test
+    path: instruqt
+  content:
+    repo: https://github.com/temporal-sa/public-workshop-code
+    branch: main
+    # Optional. If omitted, the testing track uses content.branch.
+    testingBranch: live-test
+    path: .
+  images:
+    workstation:
+      container: workstation
+      context:
+        source: content
+        path: .
+      dockerfile:
+        source: source
+        path: Dockerfile
+      platform: linux/amd64
+      buildArgs:
+        PYTHON_VERSION: "3.12"
+  track:
+    organization: temporal
+    slug: durable-ad-campaign-python-workshop
+  testingTrack:
+    slug: testing-durable-ad-campaign-python-workshop
+    titlePrefix: "[testing] "
+```
+
+`source` is the Instruqt track config repo and path. `content` is optional and
+points at a second repo for exercise code or other build inputs. `images` binds
+track containers to operator-built images; the operator will replace matching
+`config.yml` image refs with ECR images instead of trusting user-authored image
+strings. If the matching `containers[].image` key is missing, the operator
+injects it. If it is present, the operator overwrites it. Track configs that use
+VMs or lifecycle scripts without managed containers are left alone. The workflow
+reconciles ECR repositories, builds managed images with AWS CodeBuild, renders a
+local track artifact, runs `instruqt track validate`, then `track push --force`,
+`track test`, and `track deploy`.
+
+Testing tracks are branch-driven. `source.branch` is the production source of
+truth and defaults to `main`. `source.testingBranch` enables a separate managed
+testing track. If that branch exists, the operator resolves it through a
+separate Flux `GitRepository` named `<metadata.name>-testing-source` and records
+testing status under `status.testing`. If GitHub confirms the branch is absent,
+the operator deletes the testing source-watch resources and reports the testing
+channel as `BranchMissing`. `content.testingBranch` is optional; when omitted,
+the testing track uses `content.branch`. Removing `source.testingBranch` from
+the CR disables the testing channel. When GitHub confirms the configured testing
+branch is absent, the workflow deletes the managed testing track.
+
+The operator expects the platform Instruqt CLI token at
+`tmprl-dem-cld/platform/instruqt-cli` with JSON shape
+`{ "INSTRUQT_TOKEN": "...", "organization": "temporal" }`. The worker image
+contains the Instruqt CLI and records CLI/token readiness under
+`status.cli`.
+
 Rules:
 
 - `source.repo` must be in the `temporal-sa` GitHub organization. `source.branch`
   defaults to `main`.
-- For private/internal repositories, set `source.gitRepository.authSecret` to an
-  AWS Secrets Manager secret name under `tmprl-dem-cld/<metadata.name>/`. The
-  operator syncs it into the source-watch namespace and points the generated
+- `track.organization` and `track.slug` define the production Instruqt target.
+  The operator rewrites rendered `track.yml` to that owner/slug before pushing.
+- `source.testingBranch` is the testing-track lifecycle switch. The operator
+  probes GitHub with the shared read-only PAT; auth/API failures report
+  `BranchUnknown` and do not delete testing resources.
+- `testingTrack.slug` defaults to `testing-<track.slug>` when omitted.
+  `testingTrack.titlePrefix` defaults to `[testing] `.
+- `InstruqtCourse.spec.content` is optional. Use it when the track config repo is
+  private/internal but the exercise code should live in a separate public repo.
+  The operator resolves both Git sources before reconciling the course.
+- `content.testingBranch` requires `source.testingBranch`; it only selects
+  alternate exercise code for the testing track.
+- `InstruqtCourse.spec.images.*.context.source` and `.dockerfile.source` may be
+  `source` or `content`. A reference to `content` requires `spec.content`.
+- `InstruqtCourse.spec.images.*.container` must match a `containers[].name` entry
+  in the rendered Instruqt `config.yml`. The operator owns that container's
+  `image` value and will inject or overwrite it with the resolved ECR image.
+  Container images without a matching `spec.images` binding are rejected for
+  managed courses.
+- `InstruqtCourse.spec.images.*.platform`, `.target`, and `.buildArgs` are
+  optional Docker build parameters passed to CodeBuild.
+- HTTPS source watches and CodeBuild checkouts for temporal-sa repos use the
+  shared platform AWS Secrets Manager value
+  `tmprl-dem-cld/platform/github-temporal-sa-readonly`. Its JSON shape is
+  `{ "username": "<github-user>", "password": "github_pat_...", "expiresAt": "YYYY-MM-DD" }`.
+- Instruqt CLI operations use the shared platform AWS Secrets Manager value
+  `tmprl-dem-cld/platform/instruqt-cli`. Its JSON shape is
+  `{ "INSTRUQT_TOKEN": "...", "organization": "temporal" }`.
+- For explicit per-project source auth, set `source.gitRepository.authSecret` to
+  an AWS Secrets Manager secret name under `tmprl-dem-cld/<metadata.name>/`.
+  The operator syncs it into the source-watch namespace and points the generated
   Flux `GitRepository` at it. CodeBuild also uses the same secret to clone the
   repo when building images. For SSH deploy keys, the AWS secret should contain
   the Flux-compatible JSON keys `identity` and `known_hosts`. Use

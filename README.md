@@ -7,10 +7,11 @@ The demo registry landing page and operator worker are also represented as a
 project in this repo, but that project is a control-plane/self-management path,
 not the ordinary template for adding demos.
 
-Project owners add a reviewed `DemoProject` CR under `projects/` — that one file
-is the only thing they commit. The platform owns the registry operator, Flux
-installation, cluster add-ons, and external resource provisioning needed to turn
-that CR into managed infrastructure.
+Project owners add a reviewed `DemoProject` CR under `projects/demo/` or an
+`InstruqtCourse` CR under `projects/instruqt/` — that one file is the only thing
+they commit. The platform owns the registry operator, Flux installation,
+cluster add-ons, and external resource provisioning needed to turn that CR into
+managed infrastructure.
 
 ## Goals
 
@@ -47,7 +48,7 @@ operator from `metadata.name`.
 ## Supported Onboarding Path
 
 The current supported path for new demos is the thin `DemoProject` shape proven
-by `projects/banking-money-transfer.yaml`: a `temporal-sa` source repo,
+by `projects/demo/banking-money-transfer.yaml`: a `temporal-sa` source repo,
 Dockerfile-backed builds by default, optional explicit buildpack-backed builds
 for repos without Dockerfiles, stateless long-running components,
 platform-managed Temporal credentials, and ingress through the platform route.
@@ -66,12 +67,28 @@ and namespace rewriting to the project Temporal Cloud namespace. If the app
 renders a Temporal UI link, set `TEMPORAL_UI_URL` explicitly from the known
 Cloud namespace URL.
 
-Supported additions may use private/internal repo source auth and monorepo path
-filters through `source.gitRepository.*`, but the referenced AWS Secrets Manager
-source-auth value must exist before deployment. Component secrets are also
-supported as project-scoped AWS Secrets Manager JSON values; the values are
-created manually, and the operator verifies declared `requiredProperties` when
-present.
+Supported additions use the shared temporal-sa read-only GitHub PAT at
+`tmprl-dem-cld/platform/github-temporal-sa-readonly` for HTTPS source watches
+and CodeBuild checkouts. Per-project source auth through
+`source.gitRepository.*` remains available for explicit overrides such as SSH
+deploy keys. Component secrets are also supported as project-scoped AWS Secrets
+Manager JSON values; the values are created manually, and the operator verifies
+declared `requiredProperties` when present.
+
+The registry also has an initial `InstruqtCourse` resource type for
+operator-owned courses. `spec.source` is the track config source, optional
+`spec.content` can point at a separate exercise-code repo, and `spec.images`
+declares container image bindings that should resolve to operator-built ECR
+images. `spec.source.testingBranch` optionally enables a separate testing track
+from a non-production branch; deleting that branch tells the operator to tear
+down the testing side while `source.branch` continues to default to `main` for
+production. The workflow reconciles ECR repositories for managed images, builds
+those images with AWS CodeBuild, renders a local track artifact, injects or
+overwrites matching `containers[].image` values, runs `instruqt track validate`,
+then `track push --force`, `track test`, and `track deploy`. VM/lifecycle-only
+configs are left alone. The worker image includes the Instruqt CLI and reports
+CLI/token readiness from `tmprl-dem-cld/platform/instruqt-cli`. If the testing
+branch is absent, the workflow deletes the managed testing track.
 
 Worker Versioning is opt-in and advanced. Use `worker: true` for normal workers
 unless the app already runs with SDK Worker Versioning and can satisfy Worker
@@ -79,10 +96,10 @@ Controller rollout expectations.
 
 Project-owned Kubernetes, Helm, Flux overlays, and BYO image rollouts are not
 the current onboarding path. Adapt those demos into platform-managed builds and
-`components` first. `projects/registry.yaml` is a special control-plane project
-and should not be copied as the ordinary demo template.
+`components` first. `projects/demo/registry.yaml` is a special control-plane
+project and should not be copied as the ordinary demo template.
 
-See [projects/registry.yaml](projects/registry.yaml),
+See [projects/demo/registry.yaml](projects/demo/registry.yaml),
 [projects/README.md](projects/README.md), and
 [schemas/project.schema.json](schemas/project.schema.json).
 
@@ -96,11 +113,10 @@ See [docs/project-plan.md](docs/project-plan.md) for phase status, and
 
 ## Validation
 
-Adding a demo is a single step: drop one `DemoProject` CR under `projects/`.
-There is no generation/render step and nothing else to commit — Flux delivers
-the CR and the registry operator reconciles it (deriving namespaces, host, and
-prefixes; provisioning Temporal Cloud; building, deploying, smoke-testing, and
-promoting).
+Adding a demo or managed Instruqt course is a single step: drop one CR under
+`projects/demo/` or `projects/instruqt/`. There is no generation/render step and
+nothing else to commit — Flux delivers the CR and the registry operator
+reconciles it.
 
 Project config validation runs in GitHub Actions on pull requests and pushes.
 Run it locally with:
@@ -117,11 +133,12 @@ an isolated environment:
 uv run --isolated --with jsonschema --with pyyaml python scripts/validate_projects.py
 ```
 
-The validator checks each `projects/*.yaml` CR against the project schema and
-also enforces cross-file and cross-field rules: unique project names, derived
-namespaces, ingress subdomains, valid build/component references, valid ingress
-routes, stable service DNS, registry display metadata, `temporal-sa` source
-repositories, and subdomain-only ingress configuration.
+The validator checks each `projects/**/*.yaml` CR against the matching
+`DemoProject` or `InstruqtCourse` schema and also enforces cross-file and
+cross-field rules: unique resource names, derived namespaces, ingress
+subdomains, valid build/component references, valid ingress routes, stable
+service DNS, registry display metadata, `temporal-sa` source repositories, and
+subdomain-only ingress configuration.
 
 ## How a project becomes running resources
 
@@ -131,7 +148,8 @@ The operator is the single source of truth — it computes everything from
 - Kubernetes `Namespace` `tmprl-dem-cld-<name>`, service accounts, and RBAC;
 - ECR repositories (prefix `tmprl-dem-cld`) and immutable image tags;
 - Temporal Cloud namespace `tmprl-dem-cld-<name>` (hash-truncated to 39 chars
-  when needed), a namespace-scoped service account, and an API key;
+  when needed), a namespace-scoped service account, and a 30-day API key that is
+  rotated 10 days before expiry;
 - AWS Secrets Manager entries and External Secrets sync for the runtime key;
 - Traefik `IngressRoute` for the requested subdomain;
 - the catalog: the operator lists all `DemoProject` CRs and publishes a
@@ -140,9 +158,10 @@ The operator is the single source of truth — it computes everything from
   rollout phase, build/external-resource state, candidate readiness, smoke
   result, active version, and last error.
 
-Flux's `registry-projects` Kustomization points at `projects/`, so the
-kustomize-controller auto-includes every CR there — adding a demo is just
-dropping one file.
+Flux's `registry-projects` Kustomization points at `projects/demo/`, and
+`registry-instruqt-courses` points at `projects/instruqt/`. The
+kustomize-controller auto-includes every CR in those directories — adding a demo
+or course is just dropping one file.
 
 Deletion of destructive external resources, especially Temporal namespaces, runs
 through the finalizer-held teardown flow rather than accidental deletion from a

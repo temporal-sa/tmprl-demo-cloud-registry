@@ -8,8 +8,9 @@ today, and the design intent for the parts not built yet. Pair this with
 
 ## North star
 
-A Temporal SA drops **one `DemoProject` CR** into `projects/` and the platform
-does everything else, automatically, with nothing else to commit:
+A Temporal SA drops **one `DemoProject` CR** into `projects/demo/` or one
+`InstruqtCourse` CR into `projects/instruqt/`, and the platform does everything
+else automatically, with nothing else to commit:
 
 derive all names → provision the Temporal Cloud namespace + scoped API key →
 create ECR repos → build images (CodeBuild) → deploy a candidate → wait for
@@ -24,16 +25,18 @@ derives and provisions for real at reconcile time.
 | Layer | Path | Managed by | Changes |
 | --- | --- | --- | --- |
 | Platform / infra | `clusters/sa-demo/` | **Flux** (GitOps) | rare |
-| Demos | `projects/` | the **operator** (reconciles the CRs Flux delivers) | every demo |
+| Demos | `projects/demo/` | the **operator** (reconciles the CRs Flux delivers) | every demo |
+| Instruqt courses | `projects/instruqt/` | the **operator** (reconciles the CRs Flux delivers) | every course |
 
 `clusters/sa-demo/` holds: Flux config (`flux-system/`), the `DemoProject` CRD
 (`bootstrap/crds/`), External Secrets (`addons/external-secrets/`), and the
 operator Deployment itself (`bootstrap/registry-operator/`). The operator is
 **bootstrapped** here because it can't reconcile itself into existence.
 
-`projects/` holds thin `DemoProject` CRs. Flux's `registry-projects`
-Kustomization points at `./projects` and the kustomize-controller auto-includes
-every CR there, so adding a demo is dropping one file.
+`projects/demo/` holds thin `DemoProject` CRs. `projects/instruqt/` holds
+`InstruqtCourse` CRs. Flux points separate Kustomizations at each directory and
+the kustomize-controller auto-includes every CR there, so adding a demo or
+course is dropping one file.
 
 ## How a project becomes running resources
 
@@ -69,7 +72,8 @@ every CR there, so adding a demo is dropping one file.
 ## Boundaries
 
 - Flux owns bootstrap/infra desired state; the operator owns project runtime
-  resources derived from `DemoProject` specs.
+  resources derived from `DemoProject` specs and Git-backed course reconciliation
+  state derived from `InstruqtCourse` specs.
 - Flux never needs Temporal Cloud admin credentials. The operator uses a
   high-privilege **bootstrap** Temporal Cloud credential (Secrets Manager:
   `tmprl-dem-cld/platform/temporal-cloud-bootstrap`) only to create per-project
@@ -78,10 +82,30 @@ every CR there, so adding a demo is dropping one file.
   `tmprl-dem-cld/<name>/...` and reach pods via External Secrets. Per-project IAM
   should scope to `tmprl-dem-cld/<name>/*` as a second enforcement layer.
 - Build workers (CodeBuild) push only the project's ECR repos.
+- HTTPS source fetches for `temporal-sa` repos use the shared read-only GitHub
+  PAT from AWS Secrets Manager path
+  `tmprl-dem-cld/platform/github-temporal-sa-readonly`.
+- `InstruqtCourse` may resolve two Git sources: `spec.source` for private track
+  configuration and optional `spec.content` for separate exercise code. Both
+  source revisions participate in the entity workflow reconcile identity.
+- `spec.source.testingBranch` enables a separate testing channel. The watcher
+  explicitly probes GitHub with the shared read-only PAT before treating a
+  branch as deleted; auth or API failures report `BranchUnknown` and retain
+  existing testing resources. A confirmed missing testing branch removes the
+  testing Flux source-watch resources.
+- Managed Instruqt container images are enforced during config rendering:
+  `containers[].image` is injected when absent and overwritten when present for
+  containers bound by `spec.images`; unmanaged container images are rejected.
+- The worker image includes the Instruqt CLI, and the operator syncs
+  `tmprl-dem-cld/platform/instruqt-cli` as `INSTRUQT_TOKEN`. The
+  `InstruqtCourse` workflow builds managed images with CodeBuild, renders the
+  track artifact, validates it, force-pushes it, runs `instruqt track test`, and
+  deploys it. A confirmed missing testing branch removes testing source-watch
+  resources and deletes the managed testing track.
 
 ## What works today (proven end-to-end)
 
-`projects/banking-money-transfer.yaml` (the
+`projects/demo/banking-money-transfer.yaml` (the
 [demo-banking-app-money-transfer](https://github.com/temporal-sa/demo-banking-app-money-transfer)
 repo) was taken fully automatically from a dropped CR to a live, promoted
 deployment: Temporal Cloud namespace + scoped key created, runtime secret synced
@@ -120,7 +144,7 @@ checking ECR for `git-<sha>`, and skipping CodeBuild when immutable images are
 already present.
 
 ### 2. Registry web and operator image builds
-`projects/registry.yaml` deploys the registry web as an ordinary project and
+`projects/demo/registry.yaml` deploys the registry web as an ordinary project and
 declares both `web` and `worker` builds from this repository. The `worker` build
 publishes the next operator image, and the `registry-operator` component renders
 the operator's `WorkerDeployment`.

@@ -26,10 +26,19 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from demo_registry_operator import derive
+from demo_registry_operator.kube import read_namespace, upsert_secret_data
 from demo_registry_operator.resources import (
+    STANDARD_TEMPORAL_ENV,
+    TEMPORAL_SECRET_NAME,
+    TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+    common_labels,
     project_name,
+    project_namespace,
     temporal_components,
+    temporal_proxy_components,
     temporal_secret_remote_path,
+    unversioned_temporal_components,
+    versioned_worker_components,
 )
 
 
@@ -135,6 +144,7 @@ async def reconcile_temporal_cloud(
     rotate_before_days: int = TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
     retention_days: int = DEFAULT_NAMESPACE_RETENTION_DAYS,
     enable_delete_protection: bool = True,
+    mirror_kubernetes_secrets: bool = True,
 ) -> dict[str, Any]:
     """Create-or-verify the namespace, scoped service account, and runtime key.
 
@@ -223,10 +233,17 @@ async def reconcile_temporal_cloud(
 
     runtime_path = temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
-    if isinstance(existing, dict) and existing.get("apiKey"):
+    rotation = temporal_api_key_rotation_decision(
+        existing,
+        checked_at=checked_at,
+        rotate_before_days=rotate_before_days,
+    )
+    if isinstance(existing, dict) and existing.get("apiKey") and not rotation["rotate"]:
         key_id = existing.get("keyId")
         expiry_time = existing.get("expiryTime")
         key_action = "verified"
+        created_at = existing.get("createdAt")
+        previous_key_id = None
     else:
         result = await reconciler.create_api_key(
             service_account_id,
@@ -236,7 +253,16 @@ async def reconcile_temporal_cloud(
         )
         key_id = result.key_id
         expiry_time = result.expiry_time
-        key_action = "created"
+        previous_key_id = existing.get("keyId") if isinstance(existing, dict) else None
+        previous_expiry_time = (
+            existing.get("expiryTime") if isinstance(existing, dict) else None
+        )
+        key_action = (
+            "rotated"
+            if isinstance(existing, dict) and existing.get("apiKey")
+            else "created"
+        )
+        created_at = checked_at
         secret_value: dict[str, Any] = {
             "address": namespace.grpc_address,
             "namespace": namespace.qualified_name,
@@ -245,14 +271,38 @@ async def reconcile_temporal_cloud(
             "keyId": result.key_id,
             "serviceAccountId": service_account_id,
             "createdAt": checked_at,
+            "rotationReason": rotation["reason"],
         }
         if expiry_time:
             secret_value["expiryTime"] = expiry_time
+        if previous_key_id:
+            secret_value["previousKeyId"] = previous_key_id
+        if previous_expiry_time:
+            secret_value["previousExpiryTime"] = previous_expiry_time
         secret_store.write_json(
             runtime_path,
             secret_value,
             f"Temporal Cloud runtime credentials for {project}",
         )
+        if mirror_kubernetes_secrets:
+            mirror_runtime_kubernetes_secrets(demo_project, secret_value)
+
+    api_key_status: dict[str, Any] = {
+        "keyId": key_id,
+        "action": key_action,
+        "scope": "namespace",
+        "namespace": namespace.qualified_name,
+        "ttlDays": api_key_ttl_days,
+        "rotateBeforeExpiryDays": rotate_before_days,
+        "secretRemotePath": runtime_path,
+        "expiryTime": expiry_time,
+        "createdAt": created_at,
+        "components": sorted(temporal_components(demo_project)),
+    }
+    if previous_key_id:
+        api_key_status["previousKeyId"] = previous_key_id
+    if rotation.get("reason"):
+        api_key_status["rotationReason"] = rotation["reason"]
 
     return {
         "phase": "Ready",
@@ -274,18 +324,98 @@ async def reconcile_temporal_cloud(
             "name": service_account_name,
             "action": "created" if service_account_created else "verified",
         },
-        "apiKey": {
-            "keyId": key_id,
-            "action": key_action,
-            "scope": "namespace",
-            "namespace": namespace.qualified_name,
-            "ttlDays": api_key_ttl_days,
-            "rotateBeforeExpiryDays": rotate_before_days,
-            "secretRemotePath": runtime_path,
-            "expiryTime": expiry_time,
-            "components": sorted(temporal_components(demo_project)),
-        },
+        "apiKey": api_key_status,
     }
+
+
+def temporal_api_key_rotation_decision(
+    existing: Any,
+    *,
+    checked_at: str,
+    rotate_before_days: int,
+) -> dict[str, Any]:
+    if not isinstance(existing, dict) or not existing.get("apiKey"):
+        return {"rotate": True, "reason": "MissingRuntimeSecret"}
+    if not existing.get("keyId"):
+        return {"rotate": True, "reason": "MissingKeyId"}
+
+    expiry_time = existing.get("expiryTime")
+    if not isinstance(expiry_time, str) or not expiry_time:
+        return {"rotate": True, "reason": "MissingExpiryTime"}
+
+    expiry = parse_datetime(expiry_time)
+    checked = parse_datetime(checked_at)
+    if expiry is None:
+        return {"rotate": True, "reason": "InvalidExpiryTime"}
+    if checked is None:
+        checked = datetime.now(UTC)
+
+    rotate_at = expiry - timedelta(days=rotate_before_days)
+    if checked >= rotate_at:
+        return {
+            "rotate": True,
+            "reason": "RotateBeforeExpiry",
+            "rotateAt": rotate_at.isoformat(),
+        }
+
+    return {
+        "rotate": False,
+        "reason": "ExistingKeyStillFresh",
+        "rotateAt": rotate_at.isoformat(),
+    }
+
+
+def parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def mirror_runtime_kubernetes_secrets(
+    demo_project: dict[str, Any],
+    secret_value: dict[str, Any],
+) -> dict[str, str]:
+    namespace = project_namespace(demo_project)
+    if read_namespace(namespace) is None:
+        return {"phase": "Skipped", "reason": "NamespaceMissing"}
+
+    labels = common_labels(demo_project)
+    annotations = {
+        "platform.temporal.io/secret-source": temporal_secret_remote_path(demo_project),
+        "platform.temporal.io/temporal-api-key-id": str(secret_value["keyId"]),
+    }
+    actions: dict[str, str] = {}
+    if unversioned_temporal_components(demo_project) or temporal_proxy_components(
+        demo_project
+    ):
+        actions[TEMPORAL_SECRET_NAME] = upsert_secret_data(
+            namespace,
+            TEMPORAL_SECRET_NAME,
+            {
+                STANDARD_TEMPORAL_ENV["endpoint"]: str(secret_value["address"]),
+                STANDARD_TEMPORAL_ENV["namespace"]: str(secret_value["namespace"]),
+                STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
+                STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
+            },
+            labels=labels,
+            annotations=annotations,
+        )
+    if versioned_worker_components(demo_project):
+        actions[TEMPORAL_WORKER_RUNTIME_SECRET_NAME] = upsert_secret_data(
+            namespace,
+            TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+            {
+                STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
+                STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
+            },
+            labels=labels,
+            annotations=annotations,
+        )
+    return actions
 
 
 async def finalize_temporal_cloud(

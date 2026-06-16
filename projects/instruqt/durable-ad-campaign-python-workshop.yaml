@@ -1,0 +1,24 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: durable-ad-campaign-python-workshop
+spec:
+  source:
+    repo: https://github.com/temporal-sa/instruqt-example-track
+    branch: main
+    testingBranch: live-test
+    path: instruqt
+
+  images:
+    workstation:
+      container: workstation
+      context:
+        source: source
+        path: .
+      dockerfile:
+        source: source
+        path: instruqt/Dockerfile
+
+  track:
+    organization: temporal
+    slug: durable-ad-campaign-python-workshop

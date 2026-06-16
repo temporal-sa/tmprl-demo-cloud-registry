@@ -458,16 +458,19 @@ requirements declared in `secrets.<name>.requiredProperties`. It does not write
 secret values and it leaves Temporal Cloud namespace/API key lifecycle manual
 until the provider contract is reviewed.
 
-Temporal API key rotation design:
+Temporal API key rotation:
 
-- Initial TTL: one year.
-- Platform must track key expiration.
-- Reconcile before expiry, for example when less than 30-60 days remain.
-- Write the replacement key to AWS Secrets Manager.
-- Allow External Secrets to sync the new value into Kubernetes.
-- Roll dependent pods after sync.
-- Revoke the old key only after an overlap window.
-- Failed rotation must alert and must not delete the currently working key.
+- Runtime keys are minted with a 30-day TTL.
+- The entity workflow records `expiryTime` and sleeps durably until 10 days
+  before expiry.
+- The timer triggers a normal reconcile; Temporal Cloud reconciliation mints the
+  replacement key, writes it to AWS Secrets Manager, and patches the existing
+  Kubernetes runtime Secret when the namespace already exists.
+- The active `keyId` participates in the candidate rollout version, so dependent
+  Pods are replaced through the same readiness/smoke/promotion path used for
+  source updates.
+- The old key is not deleted during rotation; it expires naturally, leaving an
+  overlap window while the new candidate is validated.
 
 Provider verification needed:
 

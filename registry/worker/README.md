@@ -138,13 +138,17 @@ Environment variables:
 - `DEMO_REGISTRY_OPERATOR_SOURCE_SHA`, optional; when set by the operator
   WorkerDeployment, `RegistryOperatorCanaryWorkflow` verifies it against
   `expectedOperatorSourceSha` gate input.
+- `INSTRUQT_TOKEN`, synced from `tmprl-dem-cld/platform/instruqt-cli`; required
+  for managed `InstruqtCourse` validate/push/test/deploy/delete activities.
+  CLI/token readiness is recorded under `status.cli`.
 
 `aws-codebuild` mode requires a pre-created CodeBuild project whose service
 role has read access to the `temporal-sa` source repositories and push access
-only to `tmprl-dem-cld/<project>/<build>` ECR repositories. The registry
-operator role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds`
-for that project plus read/create/verify permissions for the ECR repositories
-it passes to the build.
+only to `tmprl-dem-cld/<project>/<build>` ECR repositories. Managed
+`InstruqtCourse` images use the same repository shape:
+`tmprl-dem-cld/<course>/<image>`. The registry operator role only needs
+`codebuild:StartBuild` and `codebuild:BatchGetBuilds` for that project plus
+read/create/verify permissions for the ECR repositories it passes to the build.
 
 On `sa-demo`, non-secret runtime settings for the bootstrapped operator live in
 `clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml` as a
@@ -171,8 +175,12 @@ so External Secrets can sync it. Notes:
   one benign `describe_namespace` `PermissionDenied` WARN at startup (a
   capability probe — namespace-scoped service-account keys are worker-scoped by
   design).
-- Keys are minted with a 30-day TTL; the entity workflow is responsible for
-  rotation (~every 20 days) on a durable timer.
+- Keys are minted with a 30-day TTL; the entity workflow stores `expiryTime`
+  and sleeps durably until 10 days before expiry. Rotation mints a replacement,
+  writes AWS Secrets Manager, patches the existing Kubernetes runtime Secret
+  when the namespace already exists, and rolls dependent Pods by rendering a new
+  candidate version from the new `keyId`. The old key is left in place to expire
+  naturally, giving the readiness/smoke path an overlap window.
 
 As a manual fallback, annotate a `DemoProject` with immutable images for every
 declared build:

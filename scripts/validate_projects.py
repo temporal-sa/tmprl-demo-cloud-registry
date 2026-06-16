@@ -25,8 +25,13 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SCHEMA = ROOT / "schemas" / "project.schema.json"
-DEFAULT_PROJECT_GLOB = "projects/*.yaml"
+DEFAULT_DEMO_PROJECT_SCHEMA = ROOT / "schemas" / "project.schema.json"
+DEFAULT_INSTRUQT_COURSE_SCHEMA = ROOT / "schemas" / "instruqt-course.schema.json"
+DEFAULT_SCHEMAS = {
+    "DemoProject": DEFAULT_DEMO_PROJECT_SCHEMA,
+    "InstruqtCourse": DEFAULT_INSTRUQT_COURSE_SCHEMA,
+}
+DEFAULT_PROJECT_GLOB = "projects/**/*.yaml"
 NAMESPACE_PREFIX = "tmprl-dem-cld-"
 TEMPORAL_NAMESPACE_PREFIX = "tmprl-dem-cld-"
 # Temporal Cloud namespace names (before the account suffix) cap at 39 chars.
@@ -83,6 +88,13 @@ def load_schema(path: Path) -> dict[str, Any]:
     return schema
 
 
+def load_default_validators() -> dict[str, Draft202012Validator]:
+    return {
+        kind: Draft202012Validator(load_schema(path.resolve()))
+        for kind, path in DEFAULT_SCHEMAS.items()
+    }
+
+
 def format_error_path(error: ValidationError) -> str:
     path = ".".join(str(part) for part in error.absolute_path)
     return path if path else "<root>"
@@ -104,14 +116,54 @@ def validate_schema(
     ]
 
 
+def validate_document_schema(
+    validators: dict[str, Draft202012Validator],
+    document: ProjectDocument,
+    *,
+    fallback_validator: Draft202012Validator | None = None,
+) -> list[ProjectError]:
+    if fallback_validator is not None:
+        return validate_schema(fallback_validator, document)
+
+    kind = document.data.get("kind")
+    if not isinstance(kind, str):
+        return [ProjectError(document.path, "kind is required")]
+    validator = validators.get(kind)
+    if validator is None:
+        supported = ", ".join(sorted(validators))
+        return [
+            ProjectError(
+                document.path,
+                f"unsupported kind {kind!r}; supported kinds: {supported}",
+            )
+        ]
+    return validate_schema(validator, document)
+
+
 def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
     errors: list[ProjectError] = []
+    demo_projects = [
+        document for document in documents if document.data.get("kind") == "DemoProject"
+    ]
+    instruqt_courses = [
+        document
+        for document in documents
+        if document.data.get("kind") == "InstruqtCourse"
+    ]
 
-    errors.extend(validate_unique_field(documents, ("metadata", "name"), "project name"))
-    errors.extend(validate_unique_derived_namespaces(documents))
-    errors.extend(validate_unique_field(documents, ("spec", "ingress", "subdomain"), "ingress subdomain"))
+    errors.extend(
+        validate_unique_field(documents, ("metadata", "name"), "resource name")
+    )
+    errors.extend(validate_unique_derived_namespaces(demo_projects))
+    errors.extend(
+        validate_unique_field(
+            demo_projects,
+            ("spec", "ingress", "subdomain"),
+            "ingress subdomain",
+        )
+    )
 
-    for document in documents:
+    for document in demo_projects:
         errors.extend(validate_source_repo(document))
         errors.extend(validate_build_references(document))
         errors.extend(validate_component_ports(document))
@@ -120,6 +172,13 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
         errors.extend(validate_registry(document))
+
+    for document in instruqt_courses:
+        errors.extend(validate_source_repo(document))
+        errors.extend(validate_instruqt_course_source_path(document, "source"))
+        errors.extend(validate_instruqt_course_source_path(document, "content"))
+        errors.extend(validate_instruqt_course_testing(document))
+        errors.extend(validate_instruqt_course_images(document))
 
     return errors
 
@@ -199,6 +258,101 @@ def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
             )
         ]
 
+    return []
+
+
+def validate_instruqt_course_source_path(
+    document: ProjectDocument,
+    source_key: str,
+) -> list[ProjectError]:
+    path = get_nested(document.data, ("spec", source_key, "path"))
+    if path is None:
+        return []
+    if not isinstance(path, str):
+        return []
+    parts = [part for part in path.split("/") if part]
+    if path.startswith("/") or ".." in parts:
+        return [
+            ProjectError(
+                document.path,
+                f"{source_key}.path must be a relative path within the source repository",
+            )
+        ]
+    return []
+
+
+def validate_instruqt_course_images(document: ProjectDocument) -> list[ProjectError]:
+    images = get_nested(document.data, ("spec", "images"))
+    if not isinstance(images, dict):
+        return []
+
+    errors: list[ProjectError] = []
+    content = get_nested(document.data, ("spec", "content"))
+    content_configured = isinstance(content, dict)
+    for image_name, image in images.items():
+        if not isinstance(image_name, str) or not isinstance(image, dict):
+            continue
+        for field in ("context", "dockerfile"):
+            ref = image.get(field)
+            if not isinstance(ref, dict):
+                continue
+            source_key = ref.get("source")
+            path = ref.get("path")
+            if source_key == "content" and not content_configured:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"images.{image_name}.{field}.source references content but spec.content is not set",
+                    )
+                )
+            if isinstance(path, str):
+                parts = [part for part in path.split("/") if part]
+                if path.startswith("/") or ".." in parts:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"images.{image_name}.{field}.path must be a relative path within its source repository",
+                        )
+                    )
+        build_args = image.get("buildArgs")
+        if isinstance(build_args, dict):
+            for arg_name, arg_value in build_args.items():
+                if not isinstance(arg_name, str) or not arg_name:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"images.{image_name}.buildArgs keys must be non-empty strings",
+                        )
+                    )
+                if not isinstance(arg_value, (str, int)):
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"images.{image_name}.buildArgs.{arg_name} must be a string or integer",
+                        )
+                    )
+    return errors
+
+
+def validate_instruqt_course_testing(document: ProjectDocument) -> list[ProjectError]:
+    content_testing_branch = get_nested(
+        document.data,
+        ("spec", "content", "testingBranch"),
+    )
+    source_testing_branch = get_nested(
+        document.data,
+        ("spec", "source", "testingBranch"),
+    )
+    if isinstance(content_testing_branch, str) and not isinstance(
+        source_testing_branch,
+        str,
+    ):
+        return [
+            ProjectError(
+                document.path,
+                "content.testingBranch requires source.testingBranch",
+            )
+        ]
     return []
 
 
@@ -658,12 +812,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Project YAML files to validate. Defaults to projects/*.yaml.",
+        help="Project YAML files to validate. Defaults to projects/**/*.yaml.",
     )
     parser.add_argument(
         "--schema",
-        default=str(DEFAULT_SCHEMA),
-        help=f"Project JSON Schema path. Defaults to {relative_path(DEFAULT_SCHEMA)}.",
+        default=None,
+        help="Override JSON Schema path for every config file.",
     )
     return parser.parse_args(argv)
 
@@ -671,13 +825,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
 
+    fallback_validator = None
     try:
-        schema = load_schema(Path(args.schema).resolve())
+        if args.schema:
+            schema = load_schema(Path(args.schema).resolve())
+            fallback_validator = Draft202012Validator(schema)
+            validators = {}
+        else:
+            validators = load_default_validators()
     except (OSError, json.JSONDecodeError, SchemaError) as error:
-        print(f"Cannot load project schema: {error}", file=sys.stderr)
+        print(f"Cannot load config schema: {error}", file=sys.stderr)
         return 2
 
-    validator = Draft202012Validator(schema)
     project_paths = discover_project_paths(args.paths)
     if not project_paths:
         print("No project config files found.", file=sys.stderr)
@@ -693,7 +852,11 @@ def main(argv: list[str]) -> int:
 
     schema_errors_by_path: dict[Path, list[ProjectError]] = {}
     for document in documents:
-        schema_errors = validate_schema(validator, document)
+        schema_errors = validate_document_schema(
+            validators,
+            document,
+            fallback_validator=fallback_validator,
+        )
         if schema_errors:
             schema_errors_by_path[document.path] = schema_errors
 

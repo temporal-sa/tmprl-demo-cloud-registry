@@ -91,7 +91,12 @@ def test_explicit_routes_are_respected():
 
 def test_source_branch_defaults_to_main():
     cfg = source_config(project("x", source={"repo": "https://github.com/temporal-sa/x"}))
-    assert cfg == {"repo": "https://github.com/temporal-sa/x", "branch": "main"}
+    assert cfg == {
+        "repo": "https://github.com/temporal-sa/x",
+        "branch": "main",
+        "codebuildRepo": "https://github.com/temporal-sa/x",
+        "sourceAuthSecretPath": "tmprl-dem-cld/platform/github-temporal-sa-readonly",
+    }
 
 
 def test_source_branch_explicit_is_kept():

@@ -11,9 +11,11 @@ from demo_registry_operator.resources import (
 )
 from demo_registry_operator.workflows.demo_project import (
     DemoProjectWorkflow,
+    demo_project_with_temporal_api_key,
     remember_completed_reconcile_identity,
     reconcile_identity,
     status_reconcile_identity,
+    temporal_api_key_rotation_state,
 )
 
 
@@ -142,6 +144,31 @@ def test_status_reconcile_identity_recovers_completed_source_identity():
     )
 
     assert recovered == identity
+
+
+def test_temporal_api_key_status_sets_rotation_state_and_annotations():
+    demo_project = project()
+    temporal_status = {
+        "apiKey": {
+            "keyId": "key-abc",
+            "expiryTime": "2026-07-13T00:00:00+00:00",
+            "createdAt": "2026-06-13T00:00:00+00:00",
+            "rotateBeforeExpiryDays": 10,
+        }
+    }
+
+    annotated = demo_project_with_temporal_api_key(demo_project, temporal_status)
+    state = temporal_api_key_rotation_state(temporal_status)
+
+    assert annotated["metadata"]["annotations"][
+        "registry.tmprl-demo.cloud/temporal-api-key-id"
+    ] == "key-abc"
+    assert state == {
+        "keyId": "key-abc",
+        "expiryTime": "2026-07-13T00:00:00+00:00",
+        "rotateAt": "2026-07-03T00:00:00+00:00",
+        "rotateBeforeExpiryDays": 10,
+    }
 
 
 def test_check_worker_version_signal_requests_continue_as_new_when_target_changed(

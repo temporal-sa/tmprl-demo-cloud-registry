@@ -37,6 +37,25 @@ from demo_registry_operator.activities.external_resources import (
     reconcile_temporal_cloud_resource,
     verify_secrets_manager_resources,
 )
+from demo_registry_operator.activities.instruqt import (
+    delete_instruqt_course_ecr_repositories,
+    delete_instruqt_course_content_auth_secret,
+    delete_instruqt_course_content_repository,
+    delete_instruqt_course_source_auth_secret,
+    delete_instruqt_course_source_repository,
+    delete_instruqt_course_track,
+    deploy_instruqt_course_track,
+    plan_instruqt_course_finalization,
+    plan_instruqt_course_images,
+    prepare_instruqt_course_artifact,
+    reconcile_instruqt_course,
+    reconcile_instruqt_course_ecr_repositories,
+    record_instruqt_course_status,
+    remove_instruqt_course_finalizer_resource,
+    render_instruqt_course_config,
+    start_instruqt_course_image_build,
+    wait_for_instruqt_course_image_build,
+)
 from demo_registry_operator.activities.reconcile import (
     delete_project_namespace_resource,
     delete_project_source_auth_secret,
@@ -60,12 +79,13 @@ from demo_registry_operator.workflows.demo_project import (
     DemoRolloutWorkflow,
     RegistryOperatorCanaryWorkflow,
 )
+from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ENTITY_WORKFLOW_TYPES = ("DemoProjectWorkflow",)
+ENTITY_WORKFLOW_TYPES = ("DemoProjectWorkflow", "InstruqtCourseWorkflow")
 CHECK_WORKER_VERSION_SIGNAL = "check_worker_version"
 
 
@@ -92,6 +112,7 @@ async def main() -> None:
                 task_queue=config.task_queue,
                 workflows=[
                     DemoProjectWorkflow,
+                    InstruqtCourseWorkflow,
                     DemoRolloutWorkflow,
                     RegistryOperatorCanaryWorkflow,
                 ],
@@ -104,6 +125,23 @@ async def main() -> None:
                     plan_project_images,
                     start_project_image_build,
                     wait_for_project_image_build,
+                    reconcile_instruqt_course,
+                    render_instruqt_course_config,
+                    prepare_instruqt_course_artifact,
+                    reconcile_instruqt_course_ecr_repositories,
+                    delete_instruqt_course_ecr_repositories,
+                    plan_instruqt_course_images,
+                    start_instruqt_course_image_build,
+                    wait_for_instruqt_course_image_build,
+                    deploy_instruqt_course_track,
+                    delete_instruqt_course_track,
+                    record_instruqt_course_status,
+                    plan_instruqt_course_finalization,
+                    delete_instruqt_course_source_repository,
+                    delete_instruqt_course_source_auth_secret,
+                    delete_instruqt_course_content_repository,
+                    delete_instruqt_course_content_auth_secret,
+                    remove_instruqt_course_finalizer_resource,
                     plan_external_resources,
                     reconcile_ecr_repositories,
                     reconcile_temporal_cloud_resource,

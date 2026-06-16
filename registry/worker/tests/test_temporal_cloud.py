@@ -116,9 +116,10 @@ def reconcile(reconciler, secret_store, demo_project=PROJECT):
             reconciler=reconciler,
             secret_store=secret_store,
             account_id="acct1",
-            region="aws-us-west-2",
-            checked_at="2026-06-13T00:00:00+00:00",
-        )
+        region="aws-us-west-2",
+        checked_at="2026-06-13T00:00:00+00:00",
+        mirror_kubernetes_secrets=False,
+    )
     )
 
 
@@ -166,6 +167,7 @@ def test_idempotent_reuses_existing_runtime_key():
                 "apiKey": "EXISTING-KEY",
                 "tls": "true",
                 "keyId": "key-old",
+                "expiryTime": "2026-07-13T00:00:00+00:00",
             }
         }
     )
@@ -180,6 +182,71 @@ def test_idempotent_reuses_existing_runtime_key():
     assert status["namespace"]["action"] == "verified"
     assert status["apiKey"]["action"] == "verified"
     assert status["apiKey"]["keyId"] == "key-old"
+
+
+def test_existing_runtime_key_without_expiry_is_rotated():
+    reconciler = FakeReconciler(
+        existing_namespace=NamespaceInfo(
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            web_address="https://cloud.temporal.io/namespaces/x",
+            state="active",
+            created=False,
+        ),
+        existing_sa="sa-existing",
+    )
+    secrets = FakeSecretStore(
+        {
+            RUNTIME_PATH: {
+                "address": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
+                "apiKey": "EXISTING-KEY",
+                "tls": "true",
+                "keyId": "key-old",
+            }
+        }
+    )
+
+    status = reconcile(reconciler, secrets)
+
+    assert len(reconciler.called("create_api_key")) == 1
+    assert status["apiKey"]["action"] == "rotated"
+    assert status["apiKey"]["previousKeyId"] == "key-old"
+    assert status["apiKey"]["rotationReason"] == "MissingExpiryTime"
+    assert secrets.store[RUNTIME_PATH]["apiKey"] == "SECRET-TOKEN-VALUE"
+    assert secrets.store[RUNTIME_PATH]["previousKeyId"] == "key-old"
+
+
+def test_existing_runtime_key_inside_rotation_window_is_rotated():
+    reconciler = FakeReconciler(
+        existing_namespace=NamespaceInfo(
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            web_address="https://cloud.temporal.io/namespaces/x",
+            state="active",
+            created=False,
+        ),
+        existing_sa="sa-existing",
+    )
+    secrets = FakeSecretStore(
+        {
+            RUNTIME_PATH: {
+                "address": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
+                "apiKey": "EXISTING-KEY",
+                "tls": "true",
+                "keyId": "key-old",
+                "expiryTime": "2026-06-20T00:00:00+00:00",
+            }
+        }
+    )
+
+    status = reconcile(reconciler, secrets)
+
+    assert len(reconciler.called("create_api_key")) == 1
+    assert status["apiKey"]["action"] == "rotated"
+    assert status["apiKey"]["previousKeyId"] == "key-old"
+    assert status["apiKey"]["rotationReason"] == "RotateBeforeExpiry"
 
 
 def test_existing_namespace_but_missing_key_creates_only_the_key():

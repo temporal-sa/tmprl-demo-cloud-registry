@@ -181,9 +181,28 @@ spec:
     - name: registry-operator
     - name: temporal-worker-controller
   interval: 5m
-  # DemoProject CRs authored directly under projects/. The kustomize-controller
-  # auto-includes every manifest here, so adding a demo is just dropping one file.
-  path: ./projects
+  # DemoProject CRs authored directly under projects/demo/. Keep this
+  # Kustomization name stable so existing DemoProject inventory is not handed to
+  # a deleted Kustomization during the folder split.
+  path: ./projects/demo
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-instruqt-courses
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: registry-operator
+  interval: 5m
+  # InstruqtCourse CRs authored directly under projects/instruqt/.
+  path: ./projects/instruqt
   prune: true
   sourceRef:
     kind: GitRepository

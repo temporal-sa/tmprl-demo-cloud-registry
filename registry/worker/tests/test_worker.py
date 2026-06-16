@@ -42,9 +42,10 @@ def test_worker_deployment_info_current_rejects_other_build():
     assert worker.worker_deployment_info_current_matches(info, version) is False
 
 
-def test_running_entity_workflows_query_selects_running_demo_project_workflows():
+def test_running_entity_workflows_query_selects_running_entity_workflows():
     assert worker.running_entity_workflows_query() == (
-        '(WorkflowType = "DemoProjectWorkflow") AND ExecutionStatus = "Running"'
+        '(WorkflowType = "DemoProjectWorkflow" OR WorkflowType = "InstruqtCourseWorkflow") '
+        'AND ExecutionStatus = "Running"'
     )
 
 

@@ -32,6 +32,8 @@ spec:
                 name: registry-worker-temporal
             - secretRef:
                 name: temporal-cloud-bootstrap
+            - secretRef:
+                name: instruqt-cli
           resources:
             requests:
               cpu: 100m

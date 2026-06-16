@@ -1,12 +1,12 @@
 # sa-demo
 
 Flux bootstrap configuration for the `sa-demo` EKS cluster — the platform/infra
-layer Flux applies directly. (Demo `DemoProject` CRs live in the top-level
-`projects/` directory, not here.)
+layer Flux applies directly. Demo `DemoProject` CRs live under
+`projects/demo/`; managed `InstruqtCourse` CRs live under `projects/instruqt/`.
 
 - `flux-system/` — the Flux `GitRepository` and `Kustomization`s. The
-  `registry-projects` Kustomization points at `./projects`, so the operator
-  reconciles every CR dropped there.
+  `registry-projects` Kustomization points at `./projects/demo`, and
+  `registry-instruqt-courses` points at `./projects/instruqt`.
 - `bootstrap/crds/` — the `DemoProject` CRD.
 - `bootstrap/registry-operator/` — the operator WorkerDeployment, singleton
   watch Deployment, RBAC, namespace, ExternalSecrets, and non-secret runtime

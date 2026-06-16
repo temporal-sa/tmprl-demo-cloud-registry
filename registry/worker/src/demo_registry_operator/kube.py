@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 
 DEMO_PROJECT_GROUP = "registry.tmprl-demo.cloud"
 DEMO_PROJECT_VERSION = "v1alpha1"
 DEMO_PROJECT_PLURAL = "demoprojects"
+INSTRUQT_COURSE_PLURAL = "instruqtcourses"
 FLUX_SOURCE_GROUP = "source.toolkit.fluxcd.io"
 FLUX_SOURCE_VERSION = "v1"
 FLUX_GIT_REPOSITORY_PLURAL = "gitrepositories"
@@ -51,6 +53,19 @@ def list_demo_projects() -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def list_instruqt_courses() -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    response = api.list_cluster_custom_object(
+        group=DEMO_PROJECT_GROUP,
+        version=DEMO_PROJECT_VERSION,
+        plural=INSTRUQT_COURSE_PLURAL,
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def read_demo_project(name: str) -> dict[str, Any] | None:
     client = _client_module()
     load_kubernetes_config()
@@ -59,6 +74,23 @@ def read_demo_project(name: str) -> dict[str, Any] | None:
             DEMO_PROJECT_GROUP,
             DEMO_PROJECT_VERSION,
             DEMO_PROJECT_PLURAL,
+            name,
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return resource if isinstance(resource, dict) else None
+
+
+def read_instruqt_course(name: str) -> dict[str, Any] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        resource = client.CustomObjectsApi().get_cluster_custom_object(
+            DEMO_PROJECT_GROUP,
+            DEMO_PROJECT_VERSION,
+            INSTRUQT_COURSE_PLURAL,
             name,
         )
     except Exception as error:
@@ -155,6 +187,67 @@ def read_config_map(namespace: str, name: str) -> dict[str, Any] | None:
         "resourceVersion": getattr(metadata, "resource_version", None),
         "data": getattr(configmap, "data", None) or {},
     }
+
+
+def read_secret_data(namespace: str, name: str) -> dict[str, str] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        secret = client.CoreV1Api().read_namespaced_secret(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+
+    data = getattr(secret, "data", None)
+    if not isinstance(data, dict):
+        return {}
+
+    decoded: dict[str, str] = {}
+    for key, value in data.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        try:
+            decoded[key] = base64.b64decode(value).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return decoded
+
+
+def upsert_secret_data(
+    namespace: str,
+    name: str,
+    data: dict[str, str],
+    *,
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    dry_run: bool = False,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    core = client.CoreV1Api()
+    body: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "type": "Opaque",
+        "stringData": data,
+    }
+    if labels:
+        body["metadata"]["labels"] = labels
+    if annotations:
+        body["metadata"]["annotations"] = annotations
+
+    return _create_or_patch(
+        read=lambda: core.read_namespaced_secret(name, namespace),
+        create=lambda: core.create_namespaced_secret(namespace, body),
+        patch=lambda: core.patch_namespaced_secret(name, namespace, body),
+    )
 
 
 def read_service(namespace: str, name: str) -> dict[str, Any] | None:
@@ -342,10 +435,30 @@ def demo_project_deletion_timestamp(demo_project: dict[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def instruqt_course_deletion_timestamp(
+    instruqt_course: dict[str, Any],
+) -> str | None:
+    metadata = instruqt_course.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("deletionTimestamp")
+    return value if isinstance(value, str) and value else None
+
+
 def demo_project_finalizers(demo_project: dict[str, Any]) -> list[str]:
     metadata = demo_project.get("metadata", {})
     finalizers = metadata.get("finalizers") if isinstance(metadata, dict) else None
     return [f for f in finalizers if isinstance(f, str)] if isinstance(finalizers, list) else []
+
+
+def instruqt_course_finalizers(instruqt_course: dict[str, Any]) -> list[str]:
+    metadata = instruqt_course.get("metadata", {})
+    finalizers = metadata.get("finalizers") if isinstance(metadata, dict) else None
+    return (
+        [f for f in finalizers if isinstance(f, str)]
+        if isinstance(finalizers, list)
+        else []
+    )
 
 
 def ensure_demo_project_finalizer(name: str, *, dry_run: bool = False) -> bool:
@@ -365,6 +478,32 @@ def ensure_demo_project_finalizer(name: str, *, dry_run: bool = False) -> bool:
         DEMO_PROJECT_GROUP,
         DEMO_PROJECT_VERSION,
         DEMO_PROJECT_PLURAL,
+        name,
+        {"metadata": {"finalizers": [*finalizers, DEMO_PROJECT_FINALIZER]}},
+    )
+    return True
+
+
+def ensure_instruqt_course_finalizer(name: str, *, dry_run: bool = False) -> bool:
+    """Add the operator finalizer to an InstruqtCourse if absent."""
+    if dry_run:
+        return False
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    obj = api.get_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        INSTRUQT_COURSE_PLURAL,
+        name,
+    )
+    finalizers = instruqt_course_finalizers(obj)
+    if DEMO_PROJECT_FINALIZER in finalizers:
+        return False
+    api.patch_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        INSTRUQT_COURSE_PLURAL,
         name,
         {"metadata": {"finalizers": [*finalizers, DEMO_PROJECT_FINALIZER]}},
     )
@@ -396,6 +535,36 @@ def remove_demo_project_finalizer(name: str, *, dry_run: bool = False) -> None:
     )
 
 
+def remove_instruqt_course_finalizer(name: str, *, dry_run: bool = False) -> None:
+    """Remove the operator finalizer so Kubernetes can complete deletion."""
+    if dry_run:
+        return
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    try:
+        obj = api.get_cluster_custom_object(
+            DEMO_PROJECT_GROUP,
+            DEMO_PROJECT_VERSION,
+            INSTRUQT_COURSE_PLURAL,
+            name,
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return
+        raise
+    finalizers = [
+        f for f in instruqt_course_finalizers(obj) if f != DEMO_PROJECT_FINALIZER
+    ]
+    api.patch_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        INSTRUQT_COURSE_PLURAL,
+        name,
+        {"metadata": {"finalizers": finalizers}},
+    )
+
+
 def delete_namespace(name: str, *, dry_run: bool = False) -> str:
     if dry_run:
         return "planned"
@@ -422,6 +591,27 @@ def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: boo
         group=DEMO_PROJECT_GROUP,
         version=DEMO_PROJECT_VERSION,
         plural=DEMO_PROJECT_PLURAL,
+        name=name,
+        body={"status": status},
+    )
+
+
+def patch_instruqt_course_status(
+    name: str,
+    status: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        return
+
+    client = _client_module()
+    load_kubernetes_config()
+    api = client.CustomObjectsApi()
+    api.patch_cluster_custom_object_status(
+        group=DEMO_PROJECT_GROUP,
+        version=DEMO_PROJECT_VERSION,
+        plural=INSTRUQT_COURSE_PLURAL,
         name=name,
         body={"status": status},
     )

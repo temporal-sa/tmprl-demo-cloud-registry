@@ -6,6 +6,7 @@ import math
 import os
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from demo_registry_operator import derive
 
@@ -16,10 +17,57 @@ HTTPS_REDIRECT_MIDDLEWARE_NAME = "https-redirect"
 IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 SOURCE_ARTIFACT_DIGEST_ANNOTATION = "registry.tmprl-demo.cloud/source-artifact-digest"
+SOURCE_REVISION_ANNOTATION = "registry.tmprl-demo.cloud/source-revision"
+TEMPORAL_API_KEY_ID_ANNOTATION = "registry.tmprl-demo.cloud/temporal-api-key-id"
+TEMPORAL_API_KEY_EXPIRY_ANNOTATION = (
+    "registry.tmprl-demo.cloud/temporal-api-key-expiry-time"
+)
+TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION = (
+    "registry.tmprl-demo.cloud/temporal-api-key-synced-at"
+)
+CONTENT_SOURCE_COMMIT_ANNOTATION = (
+    "registry.tmprl-demo.cloud/content-source-commit-sha"
+)
+CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION = (
+    "registry.tmprl-demo.cloud/content-source-artifact-digest"
+)
+CONTENT_SOURCE_REVISION_ANNOTATION = (
+    "registry.tmprl-demo.cloud/content-source-revision"
+)
+TESTING_BRANCH_STATE_ANNOTATION = "registry.tmprl-demo.cloud/testing-branch-state"
+TESTING_BRANCH_REASON_ANNOTATION = "registry.tmprl-demo.cloud/testing-branch-reason"
+TESTING_BRANCH_MESSAGE_ANNOTATION = "registry.tmprl-demo.cloud/testing-branch-message"
+TESTING_SOURCE_COMMIT_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-source-commit-sha"
+)
+TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-source-artifact-digest"
+)
+TESTING_SOURCE_REVISION_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-source-revision"
+)
+TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-content-source-commit-sha"
+)
+TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-content-source-artifact-digest"
+)
+TESTING_CONTENT_SOURCE_REVISION_ANNOTATION = (
+    "registry.tmprl-demo.cloud/testing-content-source-revision"
+)
 RECONCILE_KEY_STATUS_FIELD = "reconcileKey"
 CANARY_LABEL = "registry.tmprl-demo.cloud/canary"
 CANARY_KIND_LABEL = "registry.tmprl-demo.cloud/canary-kind"
 OPERATOR_ROLLOUT_CANARY_KIND = "operator-rollout"
+PLATFORM_SOURCE_AUTH_SECRET_NAME = "github-temporal-sa-readonly"
+PLATFORM_SOURCE_AUTH_SECRET_PATH = (
+    "tmprl-dem-cld/platform/github-temporal-sa-readonly"
+)
+INSTRUQT_CLI_SECRET_NAME = "instruqt-cli"
+INSTRUQT_CLI_SECRET_PATH = "tmprl-dem-cld/platform/instruqt-cli"
+TEMPORAL_SA_GITHUB_OWNER = "temporal-sa"
+INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY = "testing-source"
+INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
@@ -121,6 +169,12 @@ def is_registry_catalog_project(demo_project: dict[str, Any]) -> bool:
     )
 
 
+def registry_operator_component_enabled(demo_project: dict[str, Any]) -> bool:
+    return is_registry_catalog_project(demo_project) and project_name(
+        demo_project
+    ) in components(demo_project)
+
+
 def project_namespace(demo_project: dict[str, Any]) -> str:
     return derive.kubernetes_namespace(project_name(demo_project))
 
@@ -213,6 +267,100 @@ def source_artifact_digest(demo_project: dict[str, Any]) -> str | None:
     return value if value else None
 
 
+def source_revision(demo_project: dict[str, Any]) -> str | None:
+    value = metadata_annotations(demo_project).get(SOURCE_REVISION_ANNOTATION)
+    return value if value else None
+
+
+def temporal_api_key_id(demo_project: dict[str, Any]) -> str | None:
+    value = metadata_annotations(demo_project).get(TEMPORAL_API_KEY_ID_ANNOTATION)
+    return value if value else None
+
+
+def temporal_api_key_expiry_time(demo_project: dict[str, Any]) -> str | None:
+    value = metadata_annotations(demo_project).get(TEMPORAL_API_KEY_EXPIRY_ANNOTATION)
+    return value if value else None
+
+
+def temporal_api_key_synced_at(demo_project: dict[str, Any]) -> str | None:
+    value = metadata_annotations(demo_project).get(TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION)
+    return value if value else None
+
+
+def content_source_commit_sha(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(CONTENT_SOURCE_COMMIT_ANNOTATION)
+    return value if value else None
+
+
+def content_source_artifact_digest(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(
+        CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+    )
+    return value if value else None
+
+
+def content_source_revision(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(CONTENT_SOURCE_REVISION_ANNOTATION)
+    return value if value else None
+
+
+def testing_branch_state(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(TESTING_BRANCH_STATE_ANNOTATION)
+    return value if value else None
+
+
+def testing_branch_reason(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(TESTING_BRANCH_REASON_ANNOTATION)
+    return value if value else None
+
+
+def testing_branch_message(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(TESTING_BRANCH_MESSAGE_ANNOTATION)
+    return value if value else None
+
+
+def testing_source_commit_sha(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(TESTING_SOURCE_COMMIT_ANNOTATION)
+    return value if value else None
+
+
+def testing_source_artifact_digest(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(
+        TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+    )
+    return value if value else None
+
+
+def testing_source_revision(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(TESTING_SOURCE_REVISION_ANNOTATION)
+    return value if value else None
+
+
+def testing_content_source_commit_sha(
+    instruqt_course: dict[str, Any],
+) -> str | None:
+    value = metadata_annotations(instruqt_course).get(
+        TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION
+    )
+    return value if value else None
+
+
+def testing_content_source_artifact_digest(
+    instruqt_course: dict[str, Any],
+) -> str | None:
+    value = metadata_annotations(instruqt_course).get(
+        TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+    )
+    return value if value else None
+
+
+def testing_content_source_revision(instruqt_course: dict[str, Any]) -> str | None:
+    value = metadata_annotations(instruqt_course).get(
+        TESTING_CONTENT_SOURCE_REVISION_ANNOTATION
+    )
+    return value if value else None
+
+
 def demo_project_reconcile_key(demo_project: dict[str, Any]) -> str:
     annotations = metadata_annotations(demo_project)
     source_artifact = annotations.get(SOURCE_ARTIFACT_DIGEST_ANNOTATION)
@@ -230,50 +378,131 @@ def demo_project_reconcile_key(demo_project: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def source_repo(demo_project: dict[str, Any]) -> str | None:
-    source = spec_of(demo_project).get("source")
+def instruqt_course_reconcile_key(instruqt_course: dict[str, Any]) -> str:
+    annotations = metadata_annotations(instruqt_course)
+    source_artifact = annotations.get(SOURCE_ARTIFACT_DIGEST_ANNOTATION)
+    content_artifact = annotations.get(CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION)
+    testing_artifact = annotations.get(TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION)
+    testing_content_artifact = annotations.get(
+        TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+    )
+    payload = {
+        "generation": instruqt_course.get("metadata", {}).get("generation")
+        if isinstance(instruqt_course.get("metadata"), dict)
+        else None,
+        "spec": spec_of(instruqt_course),
+        "sourceArtifactDigest": source_artifact,
+        "contentSourceArtifactDigest": content_artifact,
+        "testingBranchState": annotations.get(TESTING_BRANCH_STATE_ANNOTATION),
+        "testingBranchReason": annotations.get(TESTING_BRANCH_REASON_ANNOTATION),
+        "testingSourceArtifactDigest": testing_artifact,
+        "testingContentSourceArtifactDigest": testing_content_artifact,
+    }
+    if not source_artifact:
+        payload["sourceCommitSha"] = annotations.get(SOURCE_COMMIT_ANNOTATION)
+    if not content_artifact:
+        payload["contentSourceCommitSha"] = annotations.get(
+            CONTENT_SOURCE_COMMIT_ANNOTATION
+        )
+    if not testing_artifact:
+        payload["testingSourceCommitSha"] = annotations.get(
+            TESTING_SOURCE_COMMIT_ANNOTATION
+        )
+    if not testing_content_artifact:
+        payload["testingContentSourceCommitSha"] = annotations.get(
+            TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION
+        )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def source_config_block(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> dict[str, Any]:
+    source = spec_of(demo_project).get(source_key)
+    return source if isinstance(source, dict) else {}
+
+
+def source_repo(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    source = source_config_block(demo_project, source_key)
     if not isinstance(source, dict):
         return None
     repo = source.get("repo")
     return repo.strip() if isinstance(repo, str) and repo.strip() else None
 
 
-def source_git_repository_config(demo_project: dict[str, Any]) -> dict[str, Any]:
-    source = spec_of(demo_project).get("source")
-    if not isinstance(source, dict):
-        return {}
+def content_source_config(instruqt_course: dict[str, Any]) -> dict[str, Any]:
+    return source_config_block(instruqt_course, "content")
+
+
+def content_source_repo(instruqt_course: dict[str, Any]) -> str | None:
+    return source_repo(instruqt_course, "content")
+
+
+def source_git_repository_config(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> dict[str, Any]:
+    source = source_config_block(demo_project, source_key)
     git_repository = source.get("gitRepository")
     return git_repository if isinstance(git_repository, dict) else {}
 
 
-def source_git_repository_url(demo_project: dict[str, Any]) -> str | None:
-    url = source_git_repository_config(demo_project).get("url")
+def source_git_repository_url(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    url = source_git_repository_config(demo_project, source_key).get("url")
     if isinstance(url, str) and url.strip():
         return url.strip()
-    return source_repo(demo_project)
+    return source_repo(demo_project, source_key)
 
 
-def source_branch(demo_project: dict[str, Any]) -> str:
-    source = spec_of(demo_project).get("source")
-    if not isinstance(source, dict):
-        return "main"
+def source_branch(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+    *,
+    testing: bool = False,
+) -> str:
+    source = source_config_block(demo_project, source_key)
+    if testing:
+        testing_branch = source_testing_branch(demo_project, source_key)
+        if testing_branch:
+            return testing_branch
     branch = source.get("branch")
     return branch.strip() if isinstance(branch, str) and branch.strip() else "main"
 
 
-def source_watch_interval(demo_project: dict[str, Any], default: str) -> str:
-    source = spec_of(demo_project).get("source")
-    if isinstance(source, dict):
-        interval = source.get("interval")
-        if isinstance(interval, str) and interval.strip():
-            return interval.strip()
+def source_testing_branch(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    source = source_config_block(demo_project, source_key)
+    branch = source.get("testingBranch")
+    return branch.strip() if isinstance(branch, str) and branch.strip() else None
+
+
+def source_watch_interval(
+    demo_project: dict[str, Any],
+    default: str,
+    source_key: str = "source",
+) -> str:
+    source = source_config_block(demo_project, source_key)
+    interval = source.get("interval")
+    if isinstance(interval, str) and interval.strip():
+        return interval.strip()
     return default
 
 
-def source_secret_ref(demo_project: dict[str, Any]) -> dict[str, str] | None:
-    source = spec_of(demo_project).get("source")
-    if not isinstance(source, dict):
-        return None
+def source_secret_ref(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> dict[str, str] | None:
+    source = source_config_block(demo_project, source_key)
 
     for key in ("secretRef", "fluxSecretRef"):
         ref = source.get(key)
@@ -289,29 +518,93 @@ def source_secret_ref(demo_project: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
-def source_auth_secret_name(demo_project: dict[str, Any]) -> str | None:
-    name = source_git_repository_config(demo_project).get("authSecret")
+def source_auth_secret_name(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    name = source_git_repository_config(demo_project, source_key).get("authSecret")
     return name.strip() if isinstance(name, str) and name.strip() else None
 
 
-def source_auth_kubernetes_secret_name(demo_project: dict[str, Any]) -> str | None:
-    if not source_auth_secret_name(demo_project):
+def source_auth_kubernetes_secret_name(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+    *,
+    repository_key: str | None = None,
+) -> str | None:
+    if not source_auth_secret_name(demo_project, source_key):
         return None
     return suffixed_dns_name(
-        source_git_repository_name(demo_project),
+        source_git_repository_name(
+            demo_project,
+            source_key,
+            repository_key=repository_key,
+        ),
         SOURCE_AUTH_SECRET_SUFFIX,
     )
 
 
-def source_git_repository_secret_ref(demo_project: dict[str, Any]) -> dict[str, str] | None:
-    auth_secret_name = source_auth_kubernetes_secret_name(demo_project)
+def source_git_repository_secret_ref(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+    *,
+    repository_key: str | None = None,
+) -> dict[str, str] | None:
+    auth_secret_name = source_auth_kubernetes_secret_name(
+        demo_project,
+        source_key,
+        repository_key=repository_key,
+    )
     if auth_secret_name:
         return {"name": auth_secret_name}
-    return source_secret_ref(demo_project)
+    explicit_secret_ref = source_secret_ref(demo_project, source_key)
+    if explicit_secret_ref:
+        return explicit_secret_ref
+    if source_uses_platform_source_auth(demo_project, source_key):
+        return {"name": PLATFORM_SOURCE_AUTH_SECRET_NAME}
+    return None
 
 
-def source_git_repository_sparse_checkout(demo_project: dict[str, Any]) -> list[str]:
-    raw = source_git_repository_config(demo_project).get("sparseCheckout")
+def source_auth_secret_path(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    auth_secret_name = source_auth_secret_name(demo_project, source_key)
+    if auth_secret_name:
+        return user_secret_remote_path(demo_project, auth_secret_name)
+    if source_uses_platform_source_auth(demo_project, source_key):
+        return PLATFORM_SOURCE_AUTH_SECRET_PATH
+    return None
+
+
+def source_uses_platform_source_auth(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> bool:
+    if source_auth_kubernetes_secret_name(
+        demo_project, source_key
+    ) or source_secret_ref(demo_project, source_key):
+        return False
+    return is_temporal_sa_https_repo(
+        source_git_repository_url(demo_project, source_key)
+    )
+
+
+def is_temporal_sa_https_repo(url: str | None) -> bool:
+    if not isinstance(url, str) or not url.strip():
+        return False
+    parsed = urlparse(url.strip())
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        return False
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    return len(parts) >= 2 and parts[0] == TEMPORAL_SA_GITHUB_OWNER
+
+
+def source_git_repository_sparse_checkout(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> list[str]:
+    raw = source_git_repository_config(demo_project, source_key).get("sparseCheckout")
     if not isinstance(raw, list):
         return []
     paths: list[str] = []
@@ -321,11 +614,14 @@ def source_git_repository_sparse_checkout(demo_project: dict[str, Any]) -> list[
     return paths
 
 
-def source_git_repository_ignore(demo_project: dict[str, Any]) -> str | None:
-    raw = source_git_repository_config(demo_project).get("ignore")
+def source_git_repository_ignore(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    raw = source_git_repository_config(demo_project, source_key).get("ignore")
     explicit_ignore = raw.strip() if isinstance(raw, str) else ""
     sparse_ignore = sparse_checkout_as_gitignore(
-        source_git_repository_sparse_checkout(demo_project)
+        source_git_repository_sparse_checkout(demo_project, source_key)
     )
     if explicit_ignore and sparse_ignore:
         return f"{sparse_ignore}\n{explicit_ignore}"
@@ -371,8 +667,63 @@ def source_watch_required(demo_project: dict[str, Any]) -> bool:
     )
 
 
-def source_git_repository_name(demo_project: dict[str, Any]) -> str:
-    return dns_label(f"{project_name(demo_project)}-source")
+def instruqt_course_source_watch_required(instruqt_course: dict[str, Any]) -> bool:
+    source = source_config_block(instruqt_course, "source")
+    if isinstance(source, dict) and source.get("watch") is False:
+        return False
+    if source_commit_sha(instruqt_course):
+        return False
+    return bool(source_repo(instruqt_course))
+
+
+def instruqt_course_content_watch_required(instruqt_course: dict[str, Any]) -> bool:
+    content = content_source_config(instruqt_course)
+    if not content:
+        return False
+    if content.get("watch") is False:
+        return False
+    if content_source_commit_sha(instruqt_course):
+        return False
+    return bool(content_source_repo(instruqt_course))
+
+
+def instruqt_course_testing_enabled(instruqt_course: dict[str, Any]) -> bool:
+    return bool(source_testing_branch(instruqt_course, "source"))
+
+
+def instruqt_course_testing_source_branch(instruqt_course: dict[str, Any]) -> str | None:
+    return source_testing_branch(instruqt_course, "source")
+
+
+def instruqt_course_testing_content_branch(instruqt_course: dict[str, Any]) -> str | None:
+    if not content_source_config(instruqt_course):
+        return None
+    return source_testing_branch(instruqt_course, "content") or source_branch(
+        instruqt_course,
+        "content",
+    )
+
+
+def instruqt_course_testing_content_watch_required(
+    instruqt_course: dict[str, Any],
+) -> bool:
+    content = content_source_config(instruqt_course)
+    if not content or not instruqt_course_testing_enabled(instruqt_course):
+        return False
+    if content.get("watch") is False:
+        return False
+    if testing_content_source_commit_sha(instruqt_course):
+        return False
+    return bool(content_source_repo(instruqt_course))
+
+
+def source_git_repository_name(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+    *,
+    repository_key: str | None = None,
+) -> str:
+    return dns_label(f"{project_name(demo_project)}-{repository_key or source_key}")
 
 
 def source_watch_resources(
@@ -380,16 +731,32 @@ def source_watch_resources(
     *,
     namespace: str,
     interval: str,
+    source_key: str = "source",
+    branch: str | None = None,
+    repository_key: str | None = None,
 ) -> list[dict[str, Any]]:
-    resources = source_auth_external_secret(demo_project, namespace=namespace)
-    return [
-        *([resources] if resources else []),
+    resources = []
+    auth_secret = source_auth_external_secret(
+        demo_project,
+        namespace=namespace,
+        source_key=source_key,
+        repository_key=repository_key,
+    )
+    if auth_secret:
+        resources.append(auth_secret)
+    elif source_uses_platform_source_auth(demo_project, source_key):
+        resources.append(platform_source_auth_external_secret(namespace=namespace))
+    resources.append(
         source_git_repository(
             demo_project,
             namespace=namespace,
             interval=interval,
-        ),
-    ]
+            source_key=source_key,
+            branch=branch,
+            repository_key=repository_key,
+        )
+    )
+    return resources
 
 
 def source_git_repository(
@@ -397,22 +764,32 @@ def source_git_repository(
     *,
     namespace: str,
     interval: str,
+    source_key: str = "source",
+    branch: str | None = None,
+    repository_key: str | None = None,
 ) -> dict[str, Any]:
-    url = source_git_repository_url(demo_project)
+    url = source_git_repository_url(demo_project, source_key)
     if not url:
-        raise ValueError("DemoProject spec.source.repo is required for source watch")
+        raise ValueError(
+            f"{demo_project.get('kind', 'DemoProject')} spec.{source_key}.repo "
+            "is required for source watch"
+        )
 
     spec: dict[str, Any] = {
-        "interval": source_watch_interval(demo_project, interval),
+        "interval": source_watch_interval(demo_project, interval, source_key),
         "url": url,
         "ref": {
-            "branch": source_branch(demo_project),
+            "branch": branch or source_branch(demo_project, source_key),
         },
     }
-    secret_ref = source_git_repository_secret_ref(demo_project)
+    secret_ref = source_git_repository_secret_ref(
+        demo_project,
+        source_key,
+        repository_key=repository_key,
+    )
     if secret_ref:
         spec["secretRef"] = secret_ref
-    ignore = source_git_repository_ignore(demo_project)
+    ignore = source_git_repository_ignore(demo_project, source_key)
     if ignore:
         spec["ignore"] = ignore
 
@@ -420,7 +797,11 @@ def source_git_repository(
         "apiVersion": FLUX_GIT_REPOSITORY_API_VERSION,
         "kind": "GitRepository",
         "metadata": {
-            "name": source_git_repository_name(demo_project),
+            "name": source_git_repository_name(
+                demo_project,
+                source_key,
+                repository_key=repository_key,
+            ),
             "namespace": namespace,
             "labels": {
                 **common_labels(demo_project),
@@ -435,9 +816,15 @@ def source_auth_external_secret(
     demo_project: dict[str, Any],
     *,
     namespace: str,
+    source_key: str = "source",
+    repository_key: str | None = None,
 ) -> dict[str, Any] | None:
-    auth_secret_name = source_auth_secret_name(demo_project)
-    kubernetes_secret_name = source_auth_kubernetes_secret_name(demo_project)
+    auth_secret_name = source_auth_secret_name(demo_project, source_key)
+    kubernetes_secret_name = source_auth_kubernetes_secret_name(
+        demo_project,
+        source_key,
+        repository_key=repository_key,
+    )
     if not auth_secret_name or not kubernetes_secret_name:
         return None
 
@@ -470,6 +857,43 @@ def source_auth_external_secret(
                 {
                     "extract": {
                         "key": remote_path,
+                    }
+                }
+            ],
+        },
+    }
+
+
+def platform_source_auth_external_secret(*, namespace: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "external-secrets.io/v1",
+        "kind": "ExternalSecret",
+        "metadata": {
+            "name": PLATFORM_SOURCE_AUTH_SECRET_NAME,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "registry-operator",
+                "app.kubernetes.io/managed-by": "demo-registry",
+                "app.kubernetes.io/component": "source-watch",
+            },
+            "annotations": {
+                "platform.temporal.io/secret-source": PLATFORM_SOURCE_AUTH_SECRET_PATH,
+            },
+        },
+        "spec": {
+            "refreshInterval": "1h",
+            "secretStoreRef": {
+                "name": "platform-secrets",
+                "kind": "ClusterSecretStore",
+            },
+            "target": {
+                "name": PLATFORM_SOURCE_AUTH_SECRET_NAME,
+                "creationPolicy": "Owner",
+            },
+            "dataFrom": [
+                {
+                    "extract": {
+                        "key": PLATFORM_SOURCE_AUTH_SECRET_PATH,
                     }
                 }
             ],
@@ -524,6 +948,8 @@ def runtime_secret_resources(demo_project: dict[str, Any]) -> list[dict[str, Any
         resources.append(worker_runtime_external_secret(demo_project))
     if is_registry_catalog_project(demo_project):
         resources.append(registry_shared_auth_external_secret(demo_project))
+    if registry_operator_component_enabled(demo_project):
+        resources.append(instruqt_cli_external_secret(demo_project))
     resources.extend(user_external_secrets(demo_project))
     return resources
 
@@ -1351,6 +1777,10 @@ def env_from_refs(
         component_name == REGISTRY_WEB_COMPONENT_NAME
     ):
         refs.append({"secretRef": {"name": REGISTRY_SHARED_AUTH_SECRET_NAME}})
+    if registry_operator_component_enabled(
+        demo_project
+    ) and component_name == project_name(demo_project):
+        refs.append({"secretRef": {"name": INSTRUQT_CLI_SECRET_NAME}})
 
     references = component.get("secrets")
     if isinstance(references, list):
@@ -1654,6 +2084,7 @@ def external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-prefix": project_secret_prefix(demo_project),
+                **temporal_api_key_external_secret_annotations(demo_project),
             },
         },
         "spec": {
@@ -1710,6 +2141,7 @@ def worker_runtime_external_secret(demo_project: dict[str, Any]) -> dict[str, An
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-prefix": project_secret_prefix(demo_project),
+                **temporal_api_key_external_secret_annotations(demo_project),
             },
         },
         "spec": {
@@ -1740,6 +2172,26 @@ def worker_runtime_external_secret(demo_project: dict[str, Any]) -> dict[str, An
             ],
         },
     }
+
+
+def temporal_api_key_external_secret_annotations(
+    demo_project: dict[str, Any],
+) -> dict[str, str]:
+    key_id = temporal_api_key_id(demo_project)
+    if not key_id:
+        return {}
+
+    annotations = {
+        "platform.temporal.io/temporal-api-key-id": key_id,
+        "force-sync": key_id,
+    }
+    expiry_time = temporal_api_key_expiry_time(demo_project)
+    if expiry_time:
+        annotations["platform.temporal.io/temporal-api-key-expiry-time"] = expiry_time
+    synced_at = temporal_api_key_synced_at(demo_project)
+    if synced_at:
+        annotations["platform.temporal.io/temporal-api-key-synced-at"] = synced_at
+    return annotations
 
 
 def registry_shared_auth_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
@@ -1814,6 +2266,39 @@ def user_external_secrets(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return resources
+
+
+def instruqt_cli_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "apiVersion": "external-secrets.io/v1",
+        "kind": "ExternalSecret",
+        "metadata": {
+            "name": INSTRUQT_CLI_SECRET_NAME,
+            "namespace": project_namespace(demo_project),
+            "labels": common_labels(demo_project),
+            "annotations": {
+                "platform.temporal.io/secret-source": INSTRUQT_CLI_SECRET_PATH,
+            },
+        },
+        "spec": {
+            "refreshInterval": "1h",
+            "secretStoreRef": {
+                "name": "platform-secrets",
+                "kind": "ClusterSecretStore",
+            },
+            "target": {
+                "name": INSTRUQT_CLI_SECRET_NAME,
+                "creationPolicy": "Owner",
+            },
+            "dataFrom": [
+                {
+                    "extract": {
+                        "key": INSTRUQT_CLI_SECRET_PATH,
+                    }
+                }
+            ],
+        },
+    }
 
 
 def build_reconcile_status(
@@ -2512,11 +2997,26 @@ def candidate_version(
 
     commit_sha = source_commit_sha(demo_project)
     if commit_sha:
-        return dns_label(f"git-{commit_sha[:12]}")
+        return runtime_rollout_version(demo_project, f"git-{commit_sha[:12]}")
 
     encoded = json.dumps(image_overrides, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
-    return f"images-{digest}"
+    return runtime_rollout_version(demo_project, f"images-{digest}")
+
+
+def runtime_rollout_version(demo_project: dict[str, Any], base: str) -> str:
+    key_id = temporal_api_key_id(demo_project)
+    if key_id and temporal_runtime_credentials_required(demo_project):
+        key_digest = hashlib.sha256(key_id.encode("utf-8")).hexdigest()[:8]
+        return dns_label(f"{base}-key-{key_digest}")
+    return dns_label(base)
+
+
+def temporal_runtime_credentials_required(demo_project: dict[str, Any]) -> bool:
+    return bool(
+        temporal_components(demo_project)
+        or temporal_proxy_components(demo_project)
+    )
 
 
 def candidate_service_status(

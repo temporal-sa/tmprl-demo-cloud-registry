@@ -19,6 +19,7 @@ rules:
       - registry.tmprl-demo.cloud
     resources:
       - demoprojects
+      - instruqtcourses
     verbs:
       - create
       - delete
@@ -31,6 +32,7 @@ rules:
       - registry.tmprl-demo.cloud
     resources:
       - demoprojects/status
+      - instruqtcourses/status
     verbs:
       - get
       - patch
@@ -44,6 +46,7 @@ rules:
       - create
       - patch
       - delete
+      - delete
   - apiGroups:
       - ""
     resources:
@@ -56,6 +59,14 @@ rules:
       - create
       - patch
       - delete
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - patch
   - apiGroups:
       - apps
     resources:

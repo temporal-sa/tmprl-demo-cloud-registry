@@ -286,28 +286,41 @@ def dockerhub_official_base_prefetch_command(
 
 
 def manual_source_checkout_commands() -> list[str]:
+    auth_setup_script = "\n".join(
+        [
+            "import json, os, pathlib, urllib.parse",
+            'data = json.loads(os.environ["DEMO_SOURCE_AUTH_JSON"])',
+            "home = pathlib.Path.home()",
+            'ssh = home / ".ssh"',
+            "ssh.mkdir(mode=0o700, exist_ok=True)",
+            'identity = data.get("identity")',
+            "if identity:",
+            '    known_hosts = data.get("known_hosts", "")',
+            '    identity += "" if identity.endswith("\\n") else "\\n"',
+            '    known_hosts += "" if known_hosts.endswith("\\n") else "\\n"',
+            '    (ssh / "id_source").write_text(identity)',
+            '    (ssh / "known_hosts").write_text(known_hosts)',
+            "    (ssh / \"config\").write_text(",
+            '        "Host *\\n  IdentityFile ~/.ssh/id_source\\n"',
+            '        "  UserKnownHostsFile ~/.ssh/known_hosts\\n"',
+            '        "  StrictHostKeyChecking yes\\n"',
+            "    )",
+            '    os.chmod(ssh / "id_source", 0o600)',
+            'username = data.get("username")',
+            'password = data.get("password")',
+            "if username and password:",
+            '    quoted_user = urllib.parse.quote(username, safe="")',
+            '    quoted_password = urllib.parse.quote(password, safe="")',
+            '    creds = home / ".git-credentials"',
+            '    creds.write_text(f"https://{quoted_user}:{quoted_password}@github.com\\n")',
+            "    os.chmod(creds, 0o600)",
+        ]
+    )
     return [
         'mkdir -p "$HOME/.ssh"',
-        (
-            "python3 -c "
-            + shlex.quote(
-                "import json, os, pathlib; "
-                'data=json.loads(os.environ["DEMO_SOURCE_AUTH_JSON"]); '
-                'ssh=pathlib.Path.home()/".ssh"; '
-                "ssh.mkdir(mode=0o700, exist_ok=True); "
-                'identity=data["identity"]; '
-                'known_hosts=data.get("known_hosts", ""); '
-                'identity += "" if identity.endswith("\\n") else "\\n"; '
-                'known_hosts += "" if known_hosts.endswith("\\n") else "\\n"; '
-                '(ssh/"id_source").write_text(identity); '
-                '(ssh/"known_hosts").write_text(known_hosts); '
-                '(ssh/"config").write_text('
-                '"Host *\\n  IdentityFile ~/.ssh/id_source\\n  '
-                'UserKnownHostsFile ~/.ssh/known_hosts\\n  '
-                'StrictHostKeyChecking yes\\n"); '
-                'os.chmod(ssh/"id_source", 0o600)'
-            )
-        ),
+        "python3 -c " + shlex.quote(auth_setup_script),
+        'git config --global credential.helper "store --file=$HOME/.git-credentials"',
+        "export GIT_TERMINAL_PROMPT=0",
         'git clone --no-checkout "$DEMO_SOURCE_REPO" /tmp/source',
         'cd /tmp/source && git checkout "$DEMO_SOURCE_VERSION"',
         "SOURCE_SHA=$(cd /tmp/source && git rev-parse HEAD)",

@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry/schemas/instruqt-course.schema.json",
+  "title": "InstruqtCourse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.tmprl-demo.cloud/v1alpha1"
+    },
+    "kind": {
+      "const": "InstruqtCourse"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "track"],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "content": {
+          "$ref": "#/$defs/source"
+        },
+        "images": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/imageBinding"
+          }
+        },
+        "track": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["organization", "slug"],
+          "properties": {
+            "organization": {
+              "type": "string",
+              "minLength": 1
+            },
+            "slug": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "minLength": 1,
+              "maxLength": 63
+            }
+          }
+        },
+        "testingTrack": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "slug": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "titlePrefix": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "dnsLabel": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "minLength": 1,
+      "maxLength": 63
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "testingBranch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interval": {
+          "type": "string",
+          "minLength": 1
+        },
+        "watch": {
+          "type": "boolean"
+        },
+        "gitRepository": {
+          "$ref": "#/$defs/sourceGitRepository"
+        }
+      }
+    },
+    "imageBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container", "context", "dockerfile"],
+      "properties": {
+        "container": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "context": {
+          "$ref": "#/$defs/sourcePathRef"
+        },
+        "dockerfile": {
+          "$ref": "#/$defs/sourcePathRef"
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "buildArgs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "integer"]
+          }
+        }
+      }
+    },
+    "sourcePathRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "path"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["source", "content"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sourceGitRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authSecret": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "sparseCheckout": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ignore": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

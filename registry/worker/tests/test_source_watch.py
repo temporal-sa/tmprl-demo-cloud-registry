@@ -13,6 +13,8 @@ from demo_registry_operator.resources import (
     FINALIZATION_POLICY_ANNOTATION,
     IMAGE_OVERRIDES_ANNOTATION,
     OPERATOR_ROLLOUT_CANARY_KIND,
+    PLATFORM_SOURCE_AUTH_SECRET_NAME,
+    PLATFORM_SOURCE_AUTH_SECRET_PATH,
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     SOURCE_COMMIT_ANNOTATION,
     demo_project_reconcile_key,
@@ -87,6 +89,7 @@ def test_source_git_repository_uses_public_repo_defaults():
         "interval": "1m",
         "url": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
         "ref": {"branch": "main"},
+        "secretRef": {"name": PLATFORM_SOURCE_AUTH_SECRET_NAME},
     }
 
 
@@ -136,6 +139,7 @@ def test_source_git_repository_renders_sparse_checkout_as_flux_ignore():
         "interval": "1m",
         "url": "https://github.com/temporal-sa/private-demo",
         "ref": {"branch": "main"},
+        "secretRef": {"name": PLATFORM_SOURCE_AUTH_SECRET_NAME},
         "ignore": "\n".join(
             [
                 "/*",
@@ -148,6 +152,33 @@ def test_source_git_repository_renders_sparse_checkout_as_flux_ignore():
                 "/registry/worker/tests",
             ]
         ),
+    }
+
+
+def test_source_watch_resources_sync_shared_github_pat_for_temporal_sa_https():
+    resources = source_watch_resources(
+        project(),
+        namespace="tmprl-dem-cld-registry-operator",
+        interval="1m",
+    )
+
+    assert len(resources) == 2
+    external_secret, git_repository = resources
+    assert external_secret["kind"] == "ExternalSecret"
+    assert external_secret["metadata"]["name"] == PLATFORM_SOURCE_AUTH_SECRET_NAME
+    assert external_secret["metadata"]["namespace"] == (
+        "tmprl-dem-cld-registry-operator"
+    )
+    assert external_secret["metadata"]["annotations"] == {
+        "platform.temporal.io/secret-source": PLATFORM_SOURCE_AUTH_SECRET_PATH
+    }
+    assert external_secret["spec"]["target"]["name"] == PLATFORM_SOURCE_AUTH_SECRET_NAME
+    assert external_secret["spec"]["dataFrom"] == [
+        {"extract": {"key": PLATFORM_SOURCE_AUTH_SECRET_PATH}}
+    ]
+    assert git_repository["kind"] == "GitRepository"
+    assert git_repository["spec"]["secretRef"] == {
+        "name": PLATFORM_SOURCE_AUTH_SECRET_NAME
     }
 
 
@@ -451,6 +482,11 @@ def test_watch_skips_source_digest_already_observed_in_status(monkeypatch):
 
     monkeypatch.setattr(watch, "signal_workflow", signal_workflow)
 
+    async def workflow_running(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(watch, "entity_workflow_running", workflow_running)
+
     seen = {}
     asyncio.run(
         watch.reconcile_one(
@@ -517,6 +553,11 @@ def test_watch_skips_reconcile_key_already_observed_in_status(monkeypatch):
 
     monkeypatch.setattr(watch, "signal_workflow", signal_workflow)
 
+    async def workflow_running(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(watch, "entity_workflow_running", workflow_running)
+
     seen = {}
     asyncio.run(
         watch.reconcile_one(
@@ -528,6 +569,71 @@ def test_watch_skips_reconcile_key_already_observed_in_status(monkeypatch):
     )
 
     assert calls == [("finalizer", "banking-money-transfer")]
+    assert seen == {"banking-money-transfer": expected_key}
+
+
+def test_watch_resignals_current_status_when_workflow_is_missing(monkeypatch):
+    calls = []
+    source_commit_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    source_artifact_digest = "sha256:newdigest"
+    demo_project = project()
+    expected_key = reconcile_key(
+        workflow_signal_payload(
+            demo_project,
+            source_commit_sha=source_commit_sha,
+            source_artifact_digest=source_artifact_digest,
+        )
+    )
+    demo_project["status"] = {
+        "observedGeneration": 4,
+        "phase": "Promoted",
+        "reconcileKey": expected_key,
+        "conditions": [
+            {
+                "type": "Reconciled",
+                "status": "True",
+                "observedGeneration": 4,
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        watch,
+        "ensure_demo_project_finalizer",
+        lambda name: calls.append(("finalizer", name)),
+    )
+    monkeypatch.setattr(
+        watch,
+        "reconcile_source_watch",
+        lambda resource, config: {
+            "sourceCommitSha": source_commit_sha,
+            "sourceArtifactDigest": source_artifact_digest,
+        },
+    )
+
+    async def workflow_running(*args, **kwargs):
+        return False
+
+    async def signal_workflow(*args, **kwargs):
+        calls.append(("signal", args[2]["metadata"]["name"]))
+
+    monkeypatch.setattr(watch, "entity_workflow_running", workflow_running)
+    monkeypatch.setattr(watch, "signal_workflow", signal_workflow)
+
+    seen = {}
+    asyncio.run(
+        watch.reconcile_one(
+            None,
+            SimpleNamespace(),
+            demo_project,
+            seen,
+        )
+    )
+
+    assert calls == [
+        ("finalizer", "banking-money-transfer"),
+        ("signal", "banking-money-transfer"),
+    ]
     assert seen == {"banking-money-transfer": expected_key}
 
 

@@ -8,11 +8,10 @@ from demo_registry_operator.errors import (
 )
 from demo_registry_operator.resources import (
     components,
-    source_auth_secret_name,
+    source_auth_secret_path,
     source_branch,
     source_git_repository_url,
     spec_of,
-    user_secret_remote_path,
 )
 
 
@@ -25,22 +24,24 @@ def source_config(demo_project: dict[str, Any]) -> dict[str, str]:
         raise ValueError("DemoProject spec.source.repo is required")
 
     config = {"repo": repo, "branch": source_branch(demo_project)}
-    auth_secret_name = source_auth_secret_name(demo_project)
-    if auth_secret_name:
+    auth_secret_path = source_auth_secret_path(demo_project)
+    if auth_secret_path:
         git_repository = source.get("gitRepository")
         git_repository_url = (
             git_repository.get("url") if isinstance(git_repository, dict) else None
         )
-        if not isinstance(git_repository_url, str) or not git_repository_url.strip():
+        codebuild_repo = source_git_repository_url(demo_project) or repo
+        if not isinstance(codebuild_repo, str) or not codebuild_repo.strip():
             raise ValueError(
-                "DemoProject spec.source.gitRepository.url is required when "
-                "gitRepository.authSecret is used for aws-codebuild source auth"
+                "DemoProject source repository URL is required when source auth "
+                "is used for aws-codebuild checkout"
             )
-        config["codebuildRepo"] = source_git_repository_url(demo_project) or repo
-        config["sourceAuthSecretPath"] = user_secret_remote_path(
-            demo_project,
-            auth_secret_name,
-        )
+        if git_repository and not isinstance(git_repository_url, str):
+            raise ValueError(
+                "DemoProject spec.source.gitRepository.url must be a string when set"
+            )
+        config["codebuildRepo"] = codebuild_repo
+        config["sourceAuthSecretPath"] = auth_secret_path
 
     return config
 
