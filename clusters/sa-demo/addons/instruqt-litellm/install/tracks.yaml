@@ -62,3 +62,19 @@ tracks:
       owner: ai-agents-workshop
       gateway: openai
       testing: true
+
+  hot-reload-smoke:
+    enabled: false
+    description: "Temporary broker hot reload smoke test."
+    models:
+      - gpt-4o
+    default_model: openai/gpt-4o
+    duration: 1h
+    max_budget: 0.01
+    rpm_limit: 1
+    tpm_limit: 1000
+    max_parallel_requests: 1
+    key_alias_prefix: instruqt-hot-reload-smoke
+    metadata:
+      owner: platform
+      smoke_test: true
