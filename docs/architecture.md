@@ -140,14 +140,12 @@ separate operator-specific image loop. Chosen layering:
 Note: percentage *ramping* fits poorly here (few long-lived entity workflows, not
 high-volume executions); think blue/green + canary, not statistical ramp.
 
-### 4. Flux Kustomizations are not self-managed
+### 4. Flux Kustomizations are self-managed
 The Flux `Kustomization` CRs in `clusters/sa-demo/flux-system/kustomizations.yaml`
-were applied out-of-band at bootstrap; there is **no self-managing `flux-system`
-Kustomization**. So edits to that file (e.g. repointing a path) do **not** take
-effect until someone `kubectl apply`s it. Add a self-managing Kustomization that
-reconciles `clusters/sa-demo/flux-system/` so the platform's own wiring is
-GitOps-managed like everything else. (See operations.md for the manual apply in
-the meantime.)
+are reconciled by the root `flux-system` Kustomization. Terraform/OpenTofu or a
+human bootstrap still has to install Flux and apply the first root sync object on
+a fresh cluster, but subsequent platform wiring changes are GitOps-managed like
+the rest of the cluster.
 
 ### 5. Internal-repo support (deferred)
 Optional `source.internal: true` → require a read-only deploy key in Secrets

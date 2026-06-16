@@ -78,31 +78,32 @@ kubectl -n flux-system get gitrepository cluster-gitops-config \
   -o jsonpath='{.status.artifact.revision}{"\n"}'
 ```
 
-## GOTCHA: the Flux Kustomizations are not self-managed
+## Flux wiring
 
 The Flux `Kustomization` CRs in `clusters/sa-demo/flux-system/kustomizations.yaml`
-were applied out-of-band at bootstrap — there is no self-managing `flux-system`
-Kustomization. **Editing that file in git does nothing until you apply it:**
+are self-managed by the root `flux-system` Kustomization. After the initial
+bootstrap apply, edits to `clusters/sa-demo/flux-system/` reconcile from git like
+the rest of the platform wiring.
+
+To force Flux to fetch and reconcile the current branch:
 
 ```sh
-kubectl apply -f clusters/sa-demo/flux-system/kustomizations.yaml
+kubectl -n flux-system annotate gitrepository cluster-gitops-config \
+  reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+kubectl -n flux-system annotate kustomization flux-system \
+  reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
-
-This bit us when repointing `registry-projects` from the deleted `generated/`
-path to `projects/`. (Fix on the roadmap: add a self-managing Kustomization —
-architecture.md §4.)
 
 ## Installing Temporal Worker Controller
 
-Because the Flux Kustomizations are not self-managed yet, adding the Worker
-Controller Kustomization to git is not enough by itself. After the change is
-committed and pushed to `main`, apply the Flux wiring once:
+The Flux Kustomizations are self-managed. After adding or changing Worker
+Controller wiring in git, force a source/root reconcile if you do not want to
+wait for the normal interval:
 
 ```sh
-kubectl apply -f clusters/sa-demo/flux-system/kustomizations.yaml
 kubectl -n flux-system annotate gitrepository cluster-gitops-config \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
-kubectl -n flux-system annotate kustomization temporal-worker-controller \
+kubectl -n flux-system annotate kustomization flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
