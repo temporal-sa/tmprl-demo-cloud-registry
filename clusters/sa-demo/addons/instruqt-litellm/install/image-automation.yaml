@@ -1,0 +1,67 @@
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker
+  interval: 1m
+  provider: aws
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  imageRepositoryRef:
+    name: instruqt-litellm-broker
+  filterTags:
+    pattern: '^main-(?P<ts>[0-9]{14})-[a-f0-9]{7,40}$'
+    extract: '$ts'
+  policy:
+    numerical:
+      order: asc
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageUpdateAutomation
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  interval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  policySelector:
+    matchLabels:
+      app.kubernetes.io/name: instruqt-litellm
+      app.kubernetes.io/component: broker
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        name: flux-image-automation
+        email: flux-image-automation@tmprl-demo.cloud
+      messageTemplate: |
+        Update LiteLLM broker image
+
+        {{ range .Updated.Images -}}
+        - {{ . }}
+        {{ end -}}
+    push:
+      branch: main
+  update:
+    path: ./clusters/sa-demo/addons/instruqt-litellm/install
+    strategy: Setters

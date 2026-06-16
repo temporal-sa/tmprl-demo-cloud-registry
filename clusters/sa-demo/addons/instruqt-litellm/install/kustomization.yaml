@@ -11,6 +11,7 @@ resources:
   - hpa.yaml
   - certificate.yaml
   - ingressroute.yaml
+  - image-automation.yaml
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
