@@ -1,0 +1,16 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: instruqt-litellm-tls
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: ingress
+spec:
+  secretName: instruqt-litellm-tls
+  dnsNames:
+    - litellm-instruqt.tmprl-demo.cloud
+    - litellm-broker-instruqt.tmprl-demo.cloud
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt

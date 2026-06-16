@@ -9,3 +9,5 @@ resources:
   - litellm.yaml
   - broker.yaml
   - hpa.yaml
+  - certificate.yaml
+  - ingressroute.yaml
