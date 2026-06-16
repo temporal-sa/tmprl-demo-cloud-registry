@@ -14,6 +14,11 @@ layer Flux applies directly. (Demo `DemoProject` CRs live in the top-level
   `aws-codebuild` mode.
 - `addons/temporal-worker-controller/` — Temporal Worker Controller CRDs and
   controller Helm releases.
+- `addons/metrics-server/` — Kubernetes metrics API used by HPAs.
+- `addons/cluster-autoscaler/` — EKS managed node group autoscaling for tagged
+  Auto Scaling Groups.
+- `addons/instruqt-litellm/` — Shared LiteLLM gateway/broker infrastructure for
+  Instruqt tracks. This currently owns secret sync through External Secrets.
 - `addons/external-secrets/` — External Secrets Operator install and the
   ClusterSecretStore.
 
