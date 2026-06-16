@@ -7,6 +7,6 @@ spec:
   interval: 1m
   secretRef:
     name: cluster-gitops-config-auth
-  url: ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git
+  url: ssh://git@github.com/temporal-sa/tmprl-demo-cloud-registry.git
   ref:
     branch: main

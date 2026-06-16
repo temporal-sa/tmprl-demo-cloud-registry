@@ -19,9 +19,9 @@ spec:
       - Go
 
   source:
-    repo: https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry
+    repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
     gitRepository:
-      url: ssh://git@github.com/temporal-sa/tmprl-demo-cloud-demo-registry.git
+      url: ssh://git@github.com/temporal-sa/tmprl-demo-cloud-registry.git
       authSecret: source-auth
       ignore: |
         /*
