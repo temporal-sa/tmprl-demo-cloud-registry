@@ -114,7 +114,11 @@ def reconcile_ecr_repository(repository: dict[str, Any]) -> dict[str, Any]:
 def ensure_temporal_mtls_ca_resource(plan: dict[str, Any]) -> dict[str, Any]:
     from demo_registry_operator.activities import temporal_cloud
 
-    context = temporal_cloud_secret_context(plan, operation="Stage Temporal mTLS CA")
+    context = temporal_cloud_secret_context(
+        plan,
+        operation="Stage Temporal mTLS CA",
+        require_bootstrap=False,
+    )
     if isinstance(context, dict):
         return context
     demo_project, _config, checked_at, store = context
@@ -219,6 +223,7 @@ def stage_temporal_mtls_client_certificate_resource(
     context = temporal_cloud_secret_context(
         request,
         operation="Stage Temporal mTLS client certificate",
+        require_bootstrap=False,
     )
     if isinstance(context, dict):
         return context
@@ -244,6 +249,7 @@ def run_temporal_runtime_candidate_canary_resource(
     context = temporal_cloud_secret_context(
         request,
         operation="Run Temporal runtime candidate canary",
+        require_bootstrap=False,
     )
     if isinstance(context, dict):
         return context
@@ -273,6 +279,7 @@ def promote_temporal_runtime_secret_resource(
     context = temporal_cloud_secret_context(
         request,
         operation="Promote Temporal runtime credential",
+        require_bootstrap=False,
     )
     if isinstance(context, dict):
         return context
@@ -295,6 +302,7 @@ def promote_temporal_mtls_ca_secret_resource(
     context = temporal_cloud_secret_context(
         request,
         operation="Promote Temporal mTLS CA",
+        require_bootstrap=False,
     )
     if isinstance(context, dict):
         return context
