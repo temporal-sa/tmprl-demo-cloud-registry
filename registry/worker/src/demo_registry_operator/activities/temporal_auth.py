@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+
+from temporalio import activity
 
 from demo_registry_operator.kube import read_namespace, upsert_secret_data
 from demo_registry_operator.resources import (
@@ -32,6 +36,7 @@ MTLS_CA_CERT_VALIDITY_DAYS = 180
 MTLS_CLIENT_CERT_VALIDITY_DAYS = 14
 MTLS_CA_OVERLAP_DAYS = MTLS_CLIENT_CERT_VALIDITY_DAYS
 MANUAL_ROTATION_REASON = "ManualRotation"
+RUNTIME_CANARY_HEARTBEAT_SECONDS = 10
 
 
 @dataclass
@@ -177,6 +182,9 @@ async def reconcile_api_key_auth(
 
         try:
             canary_status = await run_runtime_canary(secret_value, runtime_canary)
+        except asyncio.CancelledError:
+            await cleanup_created_api_key(reconciler, result.key_id)
+            raise
         except Exception:
             await cleanup_created_api_key(reconciler, result.key_id)
             raise
@@ -230,10 +238,42 @@ async def run_runtime_canary(
 
         runtime_canary = run_temporal_runtime_canary
 
-    status = await runtime_canary(credential)
-    if not isinstance(status, dict) or not status.get("ok"):
-        raise RuntimeError(f"Temporal runtime credential canary failed: {status!r}")
+    heartbeat_task = asyncio.create_task(heartbeat_runtime_canary(credential))
+    try:
+        heartbeat_runtime_canary_once(credential, "Started")
+        status = await runtime_canary(credential)
+        if not isinstance(status, dict) or not status.get("ok"):
+            heartbeat_runtime_canary_once(credential, "Failed")
+            raise RuntimeError(f"Temporal runtime credential canary failed: {status!r}")
+        heartbeat_runtime_canary_once(credential, "Passed")
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
     return status
+
+
+async def heartbeat_runtime_canary(credential: dict[str, Any]) -> None:
+    while True:
+        await asyncio.sleep(RUNTIME_CANARY_HEARTBEAT_SECONDS)
+        heartbeat_runtime_canary_once(credential, "Running")
+
+
+def heartbeat_runtime_canary_once(credential: dict[str, Any], phase: str) -> None:
+    auth_mode = "apiKey" if credential.get("apiKey") else "mtls"
+    try:
+        activity.heartbeat(
+            {
+                "operation": "runtime-canary",
+                "phase": phase,
+                "authMode": auth_mode,
+                "namespace": credential.get("namespace"),
+            }
+        )
+    except RuntimeError as error:
+        message = str(error).lower()
+        if "activity" not in message or "context" not in message:
+            raise
 
 
 async def cleanup_created_api_key(
@@ -468,6 +508,15 @@ async def reconcile_mtls_auth(
 
         try:
             canary_status = await run_runtime_canary(secret_value, runtime_canary)
+        except asyncio.CancelledError:
+            await rollback_mtls_namespace_ca(
+                reconciler,
+                namespace.qualified_name,
+                common_name,
+                previous_ca,
+                ca_rotation,
+            )
+            raise
         except Exception:
             await rollback_mtls_namespace_ca(
                 reconciler,
@@ -495,6 +544,15 @@ async def reconcile_mtls_auth(
     if ca_material_changed and not client_changed:
         try:
             canary_status = await run_runtime_canary(existing, runtime_canary)
+        except asyncio.CancelledError:
+            await rollback_mtls_namespace_ca(
+                reconciler,
+                namespace.qualified_name,
+                common_name,
+                previous_ca,
+                ca_rotation,
+            )
+            raise
         except Exception:
             await rollback_mtls_namespace_ca(
                 reconciler,

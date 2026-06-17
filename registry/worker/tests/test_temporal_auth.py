@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from demo_registry_operator.activities.temporal_auth import (
     ApiKeyResult,
     reconcile_api_key_auth,
+    run_runtime_canary,
 )
+from demo_registry_operator.activities import temporal_auth
 
 
 PROJECT = {
@@ -160,3 +162,55 @@ def test_api_key_candidate_is_not_written_when_canary_fails():
 
     assert RUNTIME_PATH not in secrets.store
     assert reconciler.called("delete_api_key") == [("delete_api_key", "key-abc")]
+
+
+def test_api_key_candidate_is_cleaned_up_when_canary_is_cancelled():
+    reconciler = FakeAuthReconciler()
+    secrets = FakeSecretStore()
+
+    async def cancelled_canary(_credential):
+        raise asyncio.CancelledError()
+
+    try:
+        reconcile(reconciler, secrets, runtime_canary=cancelled_canary)
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("expected canary cancellation")
+
+    assert RUNTIME_PATH not in secrets.store
+    assert reconciler.called("delete_api_key") == [("delete_api_key", "key-abc")]
+
+
+def test_runtime_canary_heartbeats_while_candidate_worker_runs(monkeypatch):
+    heartbeats = []
+    credential = {
+        "apiKey": "candidate-key",
+        "namespace": NAMESPACE.qualified_name,
+    }
+
+    monkeypatch.setattr(
+        temporal_auth.activity,
+        "heartbeat",
+        lambda details: heartbeats.append(details),
+    )
+    monkeypatch.setattr(temporal_auth, "RUNTIME_CANARY_HEARTBEAT_SECONDS", 0.001)
+
+    async def canary(_credential):
+        for _ in range(100):
+            if any(heartbeat.get("phase") == "Running" for heartbeat in heartbeats):
+                break
+            await asyncio.sleep(0.001)
+        return {"phase": "Passed", "ok": True}
+
+    status = asyncio.run(run_runtime_canary(credential, canary))
+
+    assert status["ok"] is True
+    phases = [heartbeat["phase"] for heartbeat in heartbeats]
+    assert phases[0] == "Started"
+    assert "Running" in phases
+    assert phases[-1] == "Passed"
+    assert {heartbeat["authMode"] for heartbeat in heartbeats} == {"apiKey"}
+    assert {heartbeat["namespace"] for heartbeat in heartbeats} == {
+        NAMESPACE.qualified_name
+    }
