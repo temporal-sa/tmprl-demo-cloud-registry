@@ -1163,9 +1163,9 @@ def validate_image_bindings(instruqt_course: dict[str, Any]) -> list[str]:
                         errors.append(
                             f"spec.images.{image_name}.buildArgs keys must be non-empty strings"
                         )
-                    if not isinstance(arg_value, (str, int, float, bool)):
+                    if not isinstance(arg_value, str):
                         errors.append(
-                            f"spec.images.{image_name}.buildArgs.{arg_name} must be a scalar"
+                            f"spec.images.{image_name}.buildArgs.{arg_name} must be a string"
                         )
     return errors
 

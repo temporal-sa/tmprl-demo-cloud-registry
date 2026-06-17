@@ -170,8 +170,8 @@ Rules:
   `image` value and will inject or overwrite it with the resolved ECR image.
   Container images without a matching `spec.images` binding are rejected for
   managed courses.
-- `InstruqtCourse.spec.images.*.platform`, `.target`, and `.buildArgs` are
-  optional Docker build parameters passed to CodeBuild.
+- `InstruqtCourse.spec.images.*.platform`, `.target`, and string-valued
+  `.buildArgs` are optional Docker build parameters passed to CodeBuild.
 - HTTPS source watches and CodeBuild checkouts for temporal-sa repos use the
   shared platform AWS Secrets Manager value
   `tmprl-dem-cld/platform/github-temporal-sa-readonly`. Its JSON shape is

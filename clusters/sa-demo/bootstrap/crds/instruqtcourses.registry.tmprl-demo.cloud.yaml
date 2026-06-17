@@ -152,10 +152,7 @@ spec:
                       buildArgs:
                         type: object
                         additionalProperties:
-                          x-kubernetes-int-or-string: true
-                          anyOf:
-                            - type: string
-                            - type: integer
+                          type: string
                 track:
                   type: object
                   required:
