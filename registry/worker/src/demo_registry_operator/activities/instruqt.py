@@ -2505,16 +2505,15 @@ def render_instruqt_image_templates(
     return {
         image_name: image_template.replace("${IMAGE_VERSION}", version).replace(
             "${INSTRUQT_SOURCE_SHA}",
-            source_commit[:12],
+            source_commit,
         )
         for image_name, image_template in image_templates.items()
     }
 
 
 def instruqt_image_version(instruqt_course: dict[str, Any], source_commit: str) -> str:
-    source = source_commit if source_commit != "${INSTRUQT_SOURCE_SHA}" else source_commit
     suffix = f"-b{instruqt_image_definition_hash(instruqt_course)[:12]}"
-    return f"git-{source[:12]}{suffix}" if source != "${INSTRUQT_SOURCE_SHA}" else f"git-{source}{suffix}"
+    return f"git-{source_commit}{suffix}"
 
 
 def instruqt_image_definition_hash(instruqt_course: dict[str, Any]) -> str:

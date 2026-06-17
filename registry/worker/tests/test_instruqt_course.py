@@ -599,6 +599,36 @@ def test_instruqt_codebuild_buildspec_builds_from_source_and_content():
     assert "docker push public.ecr.aws/example/" in buildspec
 
 
+def test_instruqt_rendered_image_version_uses_full_source_commit():
+    images = {
+        "workstation": {
+            "container": "workstation",
+            "context": {"source": "source", "path": "."},
+            "dockerfile": {"source": "source", "path": "Dockerfile"},
+        }
+    }
+    instruqt_course = course(images=images)
+    source_commit = "7ff770274160730eda857b88838b5111f7c69719"
+
+    rendered = instruqt_activities.render_instruqt_image_templates(
+        instruqt_course,
+        {
+            "workstation": (
+                "public.ecr.aws/example/tmprl-dem-cld/"
+                "workflow-fundamentals/workstation:${IMAGE_VERSION}"
+            )
+        },
+        source_commit,
+    )
+
+    expected_suffix = (
+        f"-b{instruqt_activities.instruqt_image_definition_hash(instruqt_course)[:12]}"
+    )
+    assert rendered["workstation"].endswith(
+        f":git-{source_commit}{expected_suffix}"
+    )
+
+
 def test_instruqt_workflow_reconcile_signal_dedupes_completed_identity():
     instruqt_course = course()
     workflow = InstruqtCourseWorkflow("workflow-fundamentals")
