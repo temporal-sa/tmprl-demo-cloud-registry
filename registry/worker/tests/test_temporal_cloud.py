@@ -11,6 +11,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     finalize_temporal_cloud,
     reconcile_temporal_cloud,
 )
+from demo_registry_operator.resources import temporal_mtls_status
 
 
 PROJECT = {
@@ -357,6 +358,7 @@ def test_mtls_auth_mode_is_reported_unsupported_without_creating_resources():
     assert status["phase"] == "Error"
     assert status["reason"] == "UnsupportedTemporalAuthMode"
     assert status["auth"]["mode"] == "mtls"
+    assert status["mtls"] == temporal_mtls_status(project)
     assert reconciler.calls == []
     assert secrets.writes == []
 

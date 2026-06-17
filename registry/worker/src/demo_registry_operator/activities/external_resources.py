@@ -25,8 +25,10 @@ from demo_registry_operator.resources import (
     spec_of,
     TEMPORAL_AUTH_MODE_API_KEY,
     temporal_components,
+    temporal_auth_runtime_status,
     temporal_auth_mode,
     temporal_auth_status,
+    temporal_runtime_secret_properties,
     temporal_secret_remote_path,
     user_secret_names,
     user_secret_required_properties,
@@ -34,9 +36,6 @@ from demo_registry_operator.resources import (
 )
 
 
-TEMPORAL_API_KEY_TTL_DAYS = 30
-TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS = 10
-TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
     "TEMPORAL_CLOUD_ACCOUNT_ID",
@@ -390,7 +389,7 @@ def verify_secrets_manager_paths(
         temporal_secret_remote_path(demo_project),
         required=temporal_required,
         managed_by="platform",
-        required_properties=TEMPORAL_SECRET_PROPERTIES,
+        required_properties=temporal_runtime_secret_properties(demo_project),
     )
     user_managed = [
         secret_status(
@@ -582,6 +581,7 @@ def temporal_cloud_status(
                 "action": "blocked",
                 "deletionPolicy": "retain-until-explicitly-approved",
             },
+            **temporal_auth_runtime_status(demo_project),
         }
 
     if config.temporal_cloud_mode == "cloud-api" and config.external_resource_mode == "aws":
@@ -608,16 +608,7 @@ def temporal_cloud_status(
             "action": "create-or-verify",
             "deletionPolicy": "retain-until-explicitly-approved",
         },
-        "apiKey": {
-            "action": "create-or-verify-or-rotate",
-            "scope": "namespace",
-            "namespace": temporal_namespace(demo_project),
-            "ttlDays": TEMPORAL_API_KEY_TTL_DAYS,
-            "rotateBeforeExpiryDays": TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
-            "secretRemotePath": temporal_secret_remote_path(demo_project),
-            "secretProperties": TEMPORAL_SECRET_PROPERTIES,
-            "components": sorted(temporal_components(demo_project)),
-        },
+        **temporal_auth_runtime_status(demo_project),
         "bootstrapCredential": {
             "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
             "kubernetesSecret": "temporal-cloud-bootstrap",

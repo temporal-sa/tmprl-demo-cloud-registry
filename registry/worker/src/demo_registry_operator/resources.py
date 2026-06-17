@@ -132,6 +132,24 @@ TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_REGION",
 ]
 TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
+TEMPORAL_MTLS_SECRET_PROPERTIES = [
+    "address",
+    "namespace",
+    "tls",
+    "caCert",
+    "clientCert",
+    "clientKey",
+]
+TEMPORAL_MTLS_CA_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-mtls-ca"
+TEMPORAL_MTLS_CA_SECRET_PROPERTIES = [
+    "caCert",
+    "caKey",
+    "serialNumber",
+    "notBefore",
+    "notAfter",
+]
+TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS = 7
+TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS = 90
 TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
 TEMPORAL_AUTH_MODE_MTLS = "mtls"
 TEMPORAL_AUTH_MODES = {TEMPORAL_AUTH_MODE_API_KEY, TEMPORAL_AUTH_MODE_MTLS}
@@ -2768,7 +2786,6 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     prefix = project_secret_prefix(demo_project)
     build_names = sorted(builds(demo_project))
     temporal_required = bool(temporal_components(demo_project))
-    auth_mode = temporal_auth_mode(demo_project)
     return {
         "phase": "ManualSetupRequired",
         "kubernetesNamespace": project_namespace(demo_project),
@@ -2793,7 +2810,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "path": temporal_secret_remote_path(demo_project),
                 "required": temporal_required,
                 "managedBy": "platform",
-                "requiredProperties": TEMPORAL_SECRET_PROPERTIES,
+                "requiredProperties": temporal_runtime_secret_properties(demo_project),
                 "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
             },
             "userManaged": [
@@ -2829,28 +2846,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "action": "create-or-verify",
                 "deletionPolicy": "retain-until-explicitly-approved",
             },
-            **(
-                {
-                    "apiKey": {
-                        "action": "create-or-verify-or-rotate",
-                        "scope": "namespace",
-                        "namespace": project_temporal_namespace(demo_project),
-                        "ttlDays": 30,
-                        "rotateBeforeExpiryDays": 10,
-                        "secretRemotePath": temporal_secret_remote_path(demo_project),
-                        "secretProperties": TEMPORAL_SECRET_PROPERTIES,
-                        "components": sorted(temporal_components(demo_project)),
-                    }
-                }
-                if auth_mode == TEMPORAL_AUTH_MODE_API_KEY
-                else {
-                    "mtls": {
-                        "action": "not-yet-implemented",
-                        "caScope": "platform",
-                        "clientIdentityScope": "namespace",
-                    }
-                }
-            ),
+            **temporal_auth_runtime_status(demo_project),
             "bootstrapCredential": {
                 "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
                 "kubernetesSecret": "temporal-cloud-bootstrap",
@@ -3346,6 +3342,7 @@ def project_metadata(demo_project: dict[str, Any]) -> dict[str, Any]:
             "secretPrefix": project_secret_prefix(demo_project),
             "remotePath": temporal_secret_remote_path(demo_project),
             "auth": temporal_auth_status(demo_project),
+            "runtime": temporal_auth_runtime_status(demo_project),
             "standardEnv": STANDARD_TEMPORAL_ENV,
             "components": sorted(temporal_components(demo_project)),
         },
@@ -3446,6 +3443,61 @@ def temporal_auth_status(demo_project: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "defaulted": configured_mode != mode,
         "modeSwitchPolicy": "destructive-recreate",
+    }
+
+
+def temporal_runtime_secret_properties(demo_project: dict[str, Any]) -> list[str]:
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        return list(TEMPORAL_MTLS_SECRET_PROPERTIES)
+    return list(TEMPORAL_SECRET_PROPERTIES)
+
+
+def temporal_auth_runtime_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        return {"mtls": temporal_mtls_status(demo_project)}
+    return {"apiKey": temporal_api_key_status(demo_project)}
+
+
+def temporal_api_key_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "action": "create-or-verify-or-rotate",
+        "scope": "namespace",
+        "namespace": project_temporal_namespace(demo_project),
+        "ttlDays": 30,
+        "rotateBeforeExpiryDays": 10,
+        "secretRemotePath": temporal_secret_remote_path(demo_project),
+        "secretProperties": TEMPORAL_SECRET_PROPERTIES,
+        "components": sorted(temporal_components(demo_project)),
+    }
+
+
+def temporal_mtls_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    namespace = project_temporal_namespace(demo_project)
+    return {
+        "action": "blocked-until-implemented",
+        "caScope": "platform",
+        "clientIdentityScope": "namespace",
+        "secretRemotePath": temporal_secret_remote_path(demo_project),
+        "secretProperties": TEMPORAL_MTLS_SECRET_PROPERTIES,
+        "components": sorted(temporal_components(demo_project)),
+        "caCertificate": {
+            "scope": "platform",
+            "secretRemotePath": TEMPORAL_MTLS_CA_SECRET_PATH,
+            "requiredProperties": TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
+            "rotation": {
+                "strategy": "staggered",
+                "rotateEveryDays": TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+            },
+        },
+        "clientCertificate": {
+            "identityScope": "namespace",
+            "namespace": namespace,
+            "subject": f"temporal-namespace:{namespace}",
+            "rotation": {
+                "strategy": "staggered",
+                "rotateEveryDays": TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+            },
+        },
     }
 
 

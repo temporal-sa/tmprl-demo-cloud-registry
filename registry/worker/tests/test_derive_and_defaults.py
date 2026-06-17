@@ -11,6 +11,7 @@ from demo_registry_operator.resources import (
     ingress_routes,
     project_metadata,
     project_temporal_namespace,
+    temporal_mtls_status,
     temporal_auth_mode,
 )
 
@@ -157,6 +158,12 @@ def test_temporal_auth_status_is_exposed_in_project_metadata():
         "defaulted": False,
         "modeSwitchPolicy": "destructive-recreate",
     }
+    assert metadata["temporal"]["runtime"]["apiKey"]["secretProperties"] == [
+        "address",
+        "namespace",
+        "apiKey",
+        "tls",
+    ]
 
 
 def test_external_resource_status_exposes_mtls_auth_intent():
@@ -171,11 +178,23 @@ def test_external_resource_status_exposes_mtls_auth_intent():
 
     temporal = status["temporalCloud"]
     assert temporal["auth"]["mode"] == "mtls"
-    assert temporal["mtls"] == {
-        "action": "not-yet-implemented",
-        "caScope": "platform",
-        "clientIdentityScope": "namespace",
-    }
+    assert status["secretsManager"]["temporalCredentials"]["requiredProperties"] == [
+        "address",
+        "namespace",
+        "tls",
+        "caCert",
+        "clientCert",
+        "clientKey",
+    ]
+    assert temporal["mtls"] == temporal_mtls_status(
+        project(
+            "banking",
+            temporal={"auth": {"mode": "mtls"}},
+            components={"worker": {"build": "worker", "worker": True}},
+        )
+    )
+    assert temporal["mtls"]["caCertificate"]["rotation"]["rotateEveryDays"] == 90
+    assert temporal["mtls"]["clientCertificate"]["rotation"]["rotateEveryDays"] == 7
 
 
 # --- catalog -------------------------------------------------------------

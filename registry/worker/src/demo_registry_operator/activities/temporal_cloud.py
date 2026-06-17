@@ -37,6 +37,7 @@ from demo_registry_operator.resources import (
     TEMPORAL_AUTH_MODE_API_KEY,
     project_name,
     temporal_auth_mode,
+    temporal_auth_runtime_status,
     temporal_auth_status,
     temporal_components,
     temporal_secret_remote_path,
@@ -173,6 +174,7 @@ async def reconcile_temporal_cloud(
                 "but is not implemented by this operator version."
             ),
             "auth": temporal_auth_status(demo_project),
+            **temporal_auth_runtime_status(demo_project),
         }
 
     short_name = desired_namespace_name(demo_project)

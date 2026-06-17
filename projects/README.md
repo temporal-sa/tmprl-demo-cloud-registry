@@ -260,6 +260,10 @@ Rules:
   `spec.temporal.auth.mode: apiKey` explicitly, but omitting it is equivalent.
   `spec.temporal.auth.mode: mtls` is reserved for the mTLS rollout path and is
   blocked by the current operator until mTLS credential reconciliation lands.
+  The mTLS contract is a platform-scoped CA with namespace-scoped client
+  certificates. Client certificates rotate weekly, and the platform CA rotates
+  quarterly on a separate schedule. The runtime secret will expose `address`,
+  `namespace`, `tls`, `caCert`, `clientCert`, and `clientKey`.
 - Worker versioning is opt-in via the object form: `components.<name>.worker.versioning`
   with `enabled`, `taskQueue`, and optional `rollout`/`sunset` settings.
   `taskQueue` is consumed only here (as the Worker Deployment Name), so it lives
