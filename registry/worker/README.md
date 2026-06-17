@@ -116,6 +116,8 @@ Environment variables:
 - `DEMO_REGISTRY_READINESS_POLL_SECONDS`, default `5`
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
   `AWS_DEFAULT_REGION`, then `us-west-1`
+- `DEMO_REGISTRY_PUBLIC_ECR_REGION`, default `us-east-1`; ECR Public control
+  plane region for managed Instruqt course images
 - `DEMO_REGISTRY_AWS_ACCOUNT_ID`, optional status metadata
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH`, default
   `tmprl-dem-cld/platform/temporal-cloud-bootstrap`
@@ -145,10 +147,11 @@ Environment variables:
 `aws-codebuild` mode requires a pre-created CodeBuild project whose service
 role has read access to the `temporal-sa` source repositories and push access
 only to `tmprl-dem-cld/<project>/<build>` ECR repositories. Managed
-`InstruqtCourse` images use the same repository shape:
-`tmprl-dem-cld/<course>/<image>`. The registry operator role only needs
-`codebuild:StartBuild` and `codebuild:BatchGetBuilds` for that project plus
-read/create/verify permissions for the ECR repositories it passes to the build.
+`InstruqtCourse` images are published to ECR Public repositories with the same
+repository path shape: `tmprl-dem-cld/<course>/<image>`. The registry operator
+role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds` for that
+project plus read/create/verify permissions for the ECR repositories it passes
+to the build.
 
 On `sa-demo`, non-secret runtime settings for the bootstrapped operator live in
 `clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml` as a

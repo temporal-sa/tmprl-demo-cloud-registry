@@ -172,6 +172,8 @@ Rules:
   managed courses.
 - `InstruqtCourse.spec.images.*.platform`, `.target`, and string-valued
   `.buildArgs` are optional Docker build parameters passed to CodeBuild.
+  Managed Instruqt images are published to ECR Public because Instruqt pulls
+  them from outside the cluster.
 - HTTPS source watches and CodeBuild checkouts for temporal-sa repos use the
   shared platform AWS Secrets Manager value
   `tmprl-dem-cld/platform/github-temporal-sa-readonly`. Its JSON shape is

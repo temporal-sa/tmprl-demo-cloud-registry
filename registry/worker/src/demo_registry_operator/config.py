@@ -21,6 +21,7 @@ DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-dem-cld-registry-operator"
 DEFAULT_SOURCE_WATCH_NAMESPACE = "tmprl-dem-cld-registry-operator"
 DEFAULT_SOURCE_WATCH_INTERVAL = "1m"
 DEFAULT_WATCH_HANDOFF_DEPLOYMENT_NAME = "registry-operator"
+DEFAULT_PUBLIC_ECR_REGION = "us-east-1"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class WorkerConfig:
     readiness_timeout_seconds: int
     readiness_poll_seconds: int
     aws_region: str
+    public_ecr_region: str
     aws_account_id: str | None
     temporal_cloud_bootstrap_secret_path: str
     temporal_cloud_account_id: str | None
@@ -122,6 +124,10 @@ class WorkerConfig:
                 "AWS_REGION",
                 "AWS_DEFAULT_REGION",
                 default="us-west-1",
+            ),
+            public_ecr_region=env_first(
+                "DEMO_REGISTRY_PUBLIC_ECR_REGION",
+                default=DEFAULT_PUBLIC_ECR_REGION,
             ),
             aws_account_id=env_optional("DEMO_REGISTRY_AWS_ACCOUNT_ID"),
             temporal_cloud_bootstrap_secret_path=env_first(

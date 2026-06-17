@@ -96,6 +96,7 @@ course is dropping one file.
 - Managed Instruqt container images are enforced during config rendering:
   `containers[].image` is injected when absent and overwritten when present for
   containers bound by `spec.images`; unmanaged container images are rejected.
+  Managed Instruqt images are published to ECR Public so Instruqt can pull them.
 - The worker image includes the Instruqt CLI, and the operator syncs
   `tmprl-dem-cld/platform/instruqt-cli` as `INSTRUQT_TOKEN`. The
   `InstruqtCourse` workflow builds managed images with CodeBuild, renders the

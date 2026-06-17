@@ -36,7 +36,6 @@ from demo_registry_operator.activities.builds.codebuild.execution import (
 from demo_registry_operator.activities.builds.definitions import looks_like_commit_sha
 from demo_registry_operator.activities.external_resources import (
     aggregate_phase,
-    ensure_ecr_repository,
     error_code,
 )
 from demo_registry_operator.kube import (
@@ -90,6 +89,8 @@ INSTRUQT_PRODUCTION_CHANNEL = "production"
 INSTRUQT_TESTING_CHANNEL = "testing"
 INSTRUQT_CHANNELS = {INSTRUQT_PRODUCTION_CHANNEL, INSTRUQT_TESTING_CHANNEL}
 INSTRUQT_TEST_TIMEOUT_SECONDS = 7200
+INSTRUQT_IMAGE_REGISTRY_MODE = "public-ecr-v1"
+PUBLIC_ECR_REGISTRY = "public.ecr.aws"
 
 
 @activity.defn
@@ -275,8 +276,9 @@ def reconcile_instruqt_course_ecr_repositories(
     if not bindings:
         return {
             "phase": "NotRequired",
-            "region": config.aws_region,
+            "region": config.public_ecr_region,
             "accountId": config.aws_account_id,
+            "registryType": "public",
             "checkedAt": checked_at,
             "repositories": [],
             "message": "No managed Instruqt images are configured.",
@@ -291,22 +293,25 @@ def reconcile_instruqt_course_ecr_repositories(
             error_type=CONFIGURATION_ERROR,
         ) from error
 
-    ecr = boto3.session.Session(region_name=config.aws_region).client("ecr")
+    ecr_public = boto3.session.Session(region_name=config.public_ecr_region).client(
+        "ecr-public"
+    )
     repositories = []
     for image_name in sorted(bindings):
         repository = instruqt_image_repository_plan_entry(instruqt_course, image_name)
         try:
-            repositories.append(ensure_ecr_repository(ecr, repository))
+            repositories.append(ensure_public_ecr_repository(ecr_public, repository))
         except (BotoCoreError, ClientError) as error:
             raise aws_application_error(
                 error,
-                operation=f"Reconcile ECR repository {repository['name']}",
+                operation=f"Reconcile public ECR repository {repository['name']}",
             ) from error
 
     return {
         "phase": aggregate_phase(repositories),
-        "region": config.aws_region,
+        "region": config.public_ecr_region,
         "accountId": config.aws_account_id,
+        "registryType": "public",
         "checkedAt": checked_at,
         "repositories": repositories,
     }
@@ -337,12 +342,14 @@ def delete_instruqt_course_ecr_repositories(plan: dict[str, Any]) -> dict[str, A
     except ImportError as error:
         return {"phase": "Error", "message": f"boto3 is required: {error}"}
 
-    ecr = boto3.session.Session(region_name=config.aws_region).client("ecr")
+    ecr_public = boto3.session.Session(region_name=config.public_ecr_region).client(
+        "ecr-public"
+    )
     repositories: list[dict[str, Any]] = []
     for image_name in sorted(bindings):
         name = instruqt_image_repository_name(instruqt_course, image_name)
         try:
-            ecr.delete_repository(repositoryName=name, force=True)
+            ecr_public.delete_repository(repositoryName=name, force=True)
             repositories.append({"name": name, "image": image_name, "action": "deleted"})
         except (BotoCoreError, ClientError) as error:
             if error_code(error) == "RepositoryNotFoundException":
@@ -364,6 +371,44 @@ def delete_instruqt_course_ecr_repositories(plan: dict[str, Any]) -> dict[str, A
         else "Deleted"
     )
     return {"phase": phase, "checkedAt": checked_at, "repositories": repositories}
+
+
+def ensure_public_ecr_repository(
+    ecr_public: Any,
+    repository: dict[str, Any],
+) -> dict[str, Any]:
+    name = repository["name"]
+    try:
+        response = ecr_public.describe_repositories(repositoryNames=[name])
+        repositories = response.get("repositories", [])
+        existing = repositories[0] if repositories else {}
+        return {
+            **repository,
+            "phase": "Ready",
+            "action": "verified",
+            "registryType": "public",
+            "repositoryUri": existing.get("repositoryUri"),
+        }
+    except Exception as error:
+        if error_code(error) != "RepositoryNotFoundException":
+            raise
+
+    response = ecr_public.create_repository(
+        repositoryName=name,
+        tags=[
+            {"Key": "managed-by", "Value": "demo-registry"},
+            {"Key": "project", "Value": repository["project"]},
+            {"Key": "build", "Value": repository["build"]},
+        ],
+    )
+    created = response.get("repository", {})
+    return {
+        **repository,
+        "phase": "Ready",
+        "action": "created",
+        "registryType": "public",
+        "repositoryUri": created.get("repositoryUri"),
+    }
 
 
 @activity.defn
@@ -2016,6 +2061,7 @@ def instruqt_image_build_status(
         "completedAt": completed_at,
         "message": message,
         "images": images,
+        "registryMode": INSTRUQT_IMAGE_REGISTRY_MODE,
         "missingImages": [
             image_name
             for image_name in sorted(image_bindings(instruqt_course))
@@ -2107,14 +2153,9 @@ def instruqt_codebuild_image_templates(
     for image_name in sorted(image_bindings(instruqt_course)):
         repository_uri = instruqt_repository_uri_for_image(image_name, external_resources)
         if not repository_uri:
-            if not config.aws_account_id:
-                raise ValueError(
-                    "DEMO_REGISTRY_AWS_ACCOUNT_ID is required when ECR repositoryUri "
-                    "is not available from external resource status."
-                )
-            repository_uri = (
-                f"{config.aws_account_id}.dkr.ecr.{config.aws_region}.amazonaws.com/"
-                f"{instruqt_image_repository_name(instruqt_course, image_name)}"
+            raise ValueError(
+                "Public ECR repositoryUri is required from external resource status "
+                f"for Instruqt image {image_name!r}."
             )
         image_templates[image_name] = f"{repository_uri}:${{IMAGE_VERSION}}"
     return image_templates
@@ -2182,6 +2223,7 @@ def instruqt_codebuild_start_build_args(
             image_templates,
             sources=sources,
             aws_region=config.aws_region,
+            public_ecr_region=config.public_ecr_region,
         ),
         "environmentVariablesOverride": environment_variables,
         "privilegedModeOverride": True,
@@ -2202,6 +2244,7 @@ def instruqt_codebuild_buildspec(
     *,
     sources: dict[str, dict[str, str]],
     aws_region: str,
+    public_ecr_region: str = "us-east-1",
 ) -> str:
     registries = sorted(
         {
@@ -2214,9 +2257,10 @@ def instruqt_codebuild_buildspec(
         *instruqt_source_checkout_commands(sources),
         f'IMAGE_VERSION="{instruqt_image_version(instruqt_course, "${INSTRUQT_SOURCE_SHA}")}"',
         *[
-            (
-                f"aws ecr get-login-password --region {shlex.quote(aws_region)} "
-                f"| docker login --username AWS --password-stdin {shlex.quote(registry)}"
+            instruqt_ecr_login_command(
+                registry,
+                aws_region=aws_region,
+                public_ecr_region=public_ecr_region,
             )
             for registry in registries
         ],
@@ -2261,6 +2305,24 @@ def instruqt_codebuild_buildspec(
             *[f"      - {json.dumps(command)}" for command in build_commands],
             "",
         ]
+    )
+
+
+def instruqt_ecr_login_command(
+    registry: str,
+    *,
+    aws_region: str,
+    public_ecr_region: str,
+) -> str:
+    if registry == PUBLIC_ECR_REGISTRY:
+        return (
+            f"aws ecr-public get-login-password --region "
+            f"{shlex.quote(public_ecr_region)} | docker login --username AWS "
+            f"--password-stdin {shlex.quote(registry)}"
+        )
+    return (
+        f"aws ecr get-login-password --region {shlex.quote(aws_region)} "
+        f"| docker login --username AWS --password-stdin {shlex.quote(registry)}"
     )
 
 
@@ -2457,7 +2519,10 @@ def instruqt_image_version(instruqt_course: dict[str, Any], source_commit: str) 
 
 def instruqt_image_definition_hash(instruqt_course: dict[str, Any]) -> str:
     encoded = json.dumps(
-        image_bindings(instruqt_course),
+        {
+            "registryMode": INSTRUQT_IMAGE_REGISTRY_MODE,
+            "images": image_bindings(instruqt_course),
+        },
         sort_keys=True,
         separators=(",", ":"),
     )

@@ -528,7 +528,10 @@ def test_instruqt_image_plan_uses_codebuild_with_source_and_content(monkeypatch)
                             "name": (
                                 "tmprl-dem-cld/workflow-fundamentals/workstation"
                             ),
-                            "repositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/workflow-fundamentals/workstation",
+                            "repositoryUri": (
+                                "public.ecr.aws/example/tmprl-dem-cld/"
+                                "workflow-fundamentals/workstation"
+                            ),
                         }
                     ]
                 }
@@ -546,7 +549,7 @@ def test_instruqt_image_plan_uses_codebuild_with_source_and_content(monkeypatch)
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     )
     assert plan["imageTemplates"]["workstation"].startswith(
-        "123456789012.dkr.ecr.us-west-1.amazonaws.com/"
+        "public.ecr.aws/example/"
     )
 
 
@@ -565,7 +568,7 @@ def test_instruqt_codebuild_buildspec_builds_from_source_and_content():
         course(content=True, images=images),
         {
             "workstation": (
-                "123456789012.dkr.ecr.us-west-1.amazonaws.com/"
+                "public.ecr.aws/example/"
                 "tmprl-dem-cld/workflow-fundamentals/workstation:${IMAGE_VERSION}"
             )
         },
@@ -587,11 +590,13 @@ def test_instruqt_codebuild_buildspec_builds_from_source_and_content():
     assert "/tmp/source" in buildspec
     assert "INSTRUQT_CONTENT_REPO" in buildspec
     assert "/tmp/content" in buildspec
+    assert "aws ecr-public get-login-password --region us-east-1" in buildspec
+    assert "docker login --username AWS --password-stdin public.ecr.aws" in buildspec
     assert "docker build --platform linux/amd64" in buildspec
     assert "--build-arg PYTHON_VERSION=3.12" in buildspec
     assert "-f /tmp/source/Dockerfile" in buildspec
     assert "/tmp/content" in buildspec
-    assert "docker push 123456789012.dkr.ecr.us-west-1.amazonaws.com/" in buildspec
+    assert "docker push public.ecr.aws/example/" in buildspec
 
 
 def test_instruqt_workflow_reconcile_signal_dedupes_completed_identity():

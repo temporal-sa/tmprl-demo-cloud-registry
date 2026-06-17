@@ -17,6 +17,14 @@ def test_codebuild_timer_defaults_match_heartbeat_policy(monkeypatch):
     assert config.codebuild_timeout_minutes == 30
 
 
+def test_public_ecr_region_defaults_to_global_region(monkeypatch):
+    monkeypatch.delenv("DEMO_REGISTRY_PUBLIC_ECR_REGION", raising=False)
+
+    config = WorkerConfig.from_env()
+
+    assert config.public_ecr_region == "us-east-1"
+
+
 def test_local_docker_build_mode_is_no_longer_accepted(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_BUILD_MODE", "local-docker")
 
