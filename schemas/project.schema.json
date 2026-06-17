@@ -251,13 +251,35 @@
     "envVar": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "value"],
+      "required": ["name"],
+      "oneOf": [
+        {
+          "required": ["value"]
+        },
+        {
+          "required": ["valueFrom"]
+        }
+      ],
       "properties": {
         "name": {
           "$ref": "#/$defs/envName"
         },
         "value": {
           "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/envValueFrom"
+        }
+      }
+    },
+    "envValueFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputRef"],
+      "properties": {
+        "inputRef": {
+          "type": "string",
+          "pattern": "^(temporal\\.(address|namespace|apiKey|tls|caCert|clientCert|clientKey)|secrets\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[A-Z_][A-Z0-9_]*)$"
         }
       }
     },

@@ -15,10 +15,9 @@ from demo_registry_operator.resources import (
     project_name,
     project_namespace,
     temporal_components,
-    temporal_proxy_components,
+    temporal_credentials_secret_needed,
     temporal_secret_remote_path,
-    unversioned_temporal_components,
-    versioned_worker_components,
+    temporal_worker_runtime_secret_needed,
 )
 
 
@@ -233,9 +232,7 @@ def mirror_runtime_kubernetes_secrets(
         "platform.temporal.io/temporal-api-key-id": str(secret_value["keyId"]),
     }
     actions: dict[str, str] = {}
-    if unversioned_temporal_components(demo_project) or temporal_proxy_components(
-        demo_project
-    ):
+    if temporal_credentials_secret_needed(demo_project):
         actions[TEMPORAL_SECRET_NAME] = upsert_secret_data(
             namespace,
             TEMPORAL_SECRET_NAME,
@@ -248,7 +245,7 @@ def mirror_runtime_kubernetes_secrets(
             labels=labels,
             annotations=annotations,
         )
-    if versioned_worker_components(demo_project):
+    if temporal_worker_runtime_secret_needed(demo_project):
         actions[TEMPORAL_WORKER_RUNTIME_SECRET_NAME] = upsert_secret_data(
             namespace,
             TEMPORAL_WORKER_RUNTIME_SECRET_NAME,

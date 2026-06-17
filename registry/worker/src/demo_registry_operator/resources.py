@@ -141,6 +141,25 @@ STANDARD_TEMPORAL_ENV = {
     "api_key": "TEMPORAL_API_KEY",
     "tls": "TEMPORAL_TLS",
 }
+TEMPORAL_API_KEY_INPUT_REF_ENV = {
+    "temporal.address": STANDARD_TEMPORAL_ENV["endpoint"],
+    "temporal.namespace": STANDARD_TEMPORAL_ENV["namespace"],
+    "temporal.apiKey": STANDARD_TEMPORAL_ENV["api_key"],
+    "temporal.tls": STANDARD_TEMPORAL_ENV["tls"],
+}
+TEMPORAL_MTLS_INPUT_REF_ENV = {
+    "temporal.caCert": "TEMPORAL_CA_CERT",
+    "temporal.clientCert": "TEMPORAL_CLIENT_CERT",
+    "temporal.clientKey": "TEMPORAL_CLIENT_KEY",
+}
+TEMPORAL_INPUT_REF_ENV = {
+    **TEMPORAL_API_KEY_INPUT_REF_ENV,
+    **TEMPORAL_MTLS_INPUT_REF_ENV,
+}
+TEMPORAL_WORKER_RUNTIME_INPUT_REFS = {
+    "temporal.apiKey",
+    "temporal.tls",
+}
 TEMPORAL_SECRET_NAME = "temporal-credentials"
 TEMPORAL_WORKER_RUNTIME_SECRET_NAME = "temporal-worker-runtime"
 TEMPORAL_CONNECTION_NAME = "temporal"
@@ -1002,11 +1021,9 @@ def runtime_resources(
 
 def runtime_secret_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
-    if unversioned_temporal_components(demo_project) or temporal_proxy_components(
-        demo_project
-    ):
+    if temporal_credentials_secret_needed(demo_project):
         resources.append(external_secret(demo_project))
-    if versioned_worker_components(demo_project):
+    if temporal_worker_runtime_secret_needed(demo_project):
         resources.append(worker_runtime_external_secret(demo_project))
     if is_registry_catalog_project(demo_project):
         resources.append(registry_shared_auth_external_secret(demo_project))
@@ -1666,7 +1683,7 @@ def container(
     if env_from:
         rendered["envFrom"] = env_from
 
-    env = env_vars(component)
+    env = env_vars(component_name, component)
     env.extend(
         platform_env_vars(demo_project, component_name, image, image_overrides or {})
     )
@@ -1788,9 +1805,9 @@ def temporal_proxy_namespace_aliases(demo_project: dict[str, Any]) -> str:
 
 
 def env_with_overrides(
-    existing: list[dict[str, str]],
+    existing: list[dict[str, Any]],
     overrides: list[dict[str, str]],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     override_names = {item["name"] for item in overrides}
     return [
         item for item in existing if item.get("name") not in override_names
@@ -1833,7 +1850,7 @@ def env_from_refs(
         pass
     elif worker_versioning_enabled(component):
         refs.append({"secretRef": {"name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME}})
-    elif component_needs_temporal(component):
+    elif component_receives_default_temporal_env(component):
         refs.append({"secretRef": {"name": TEMPORAL_SECRET_NAME}})
     if is_registry_catalog_project(demo_project) and (
         component_name == REGISTRY_WEB_COMPONENT_NAME
@@ -1858,12 +1875,110 @@ def env_from_refs(
     return refs
 
 
-def env_vars(component: dict[str, Any]) -> list[dict[str, str]]:
-    return [
-        {"name": item["name"], "value": str(item["value"])}
-        for item in component.get("env", [])
-        if isinstance(item, dict)
-    ]
+def env_vars(
+    component_name: str,
+    component: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rendered: list[dict[str, Any]] = []
+    for item in component_env_items(component):
+        name = item.get("name")
+        if not isinstance(name, str):
+            continue
+
+        if "value" in item:
+            rendered.append({"name": name, "value": str(item["value"])})
+            continue
+
+        input_ref = env_input_ref(item)
+        if input_ref:
+            rendered.append(
+                {
+                    "name": name,
+                    "valueFrom": env_value_from_input_ref(
+                        component_name,
+                        component,
+                        input_ref,
+                    ),
+                }
+            )
+
+    return rendered
+
+
+def component_env_items(component: dict[str, Any]) -> list[dict[str, Any]]:
+    env = component.get("env")
+    if not isinstance(env, list):
+        return []
+    return [item for item in env if isinstance(item, dict)]
+
+
+def env_input_ref(item: dict[str, Any]) -> str | None:
+    value_from = item.get("valueFrom")
+    if not isinstance(value_from, dict):
+        return None
+    input_ref = value_from.get("inputRef")
+    if not isinstance(input_ref, str):
+        return None
+    input_ref = input_ref.strip()
+    return input_ref or None
+
+
+def env_value_from_input_ref(
+    component_name: str,
+    component: dict[str, Any],
+    input_ref: str,
+) -> dict[str, Any]:
+    if input_ref in TEMPORAL_MTLS_INPUT_REF_ENV:
+        raise ValueError(
+            "components."
+            f"{component_name}.env cannot use {input_ref!r} until Temporal mTLS "
+            "runtime secrets are implemented"
+        )
+
+    if input_ref in TEMPORAL_INPUT_REF_ENV:
+        if temporal_proxy_enabled(component):
+            raise ValueError(
+                "components."
+                f"{component_name}.env cannot use {input_ref!r} with temporalProxy"
+            )
+        return {
+            "secretKeyRef": {
+                "name": temporal_input_ref_secret_name(component, input_ref),
+                "key": TEMPORAL_INPUT_REF_ENV[input_ref],
+            }
+        }
+
+    user_secret_ref = parse_user_secret_input_ref(input_ref)
+    if user_secret_ref:
+        secret_name, property_name = user_secret_ref
+        return {
+            "secretKeyRef": {
+                "name": user_secret_kubernetes_name(secret_name),
+                "key": property_name,
+            }
+        }
+
+    raise ValueError(f"components.{component_name}.env has unsupported inputRef")
+
+
+def temporal_input_ref_secret_name(component: dict[str, Any], input_ref: str) -> str:
+    if (
+        worker_versioning_enabled(component)
+        and input_ref in TEMPORAL_WORKER_RUNTIME_INPUT_REFS
+    ):
+        return TEMPORAL_WORKER_RUNTIME_SECRET_NAME
+    return TEMPORAL_SECRET_NAME
+
+
+def parse_user_secret_input_ref(input_ref: str) -> tuple[str, str] | None:
+    parts = input_ref.split(".", 2)
+    if len(parts) != 3 or parts[0] != "secrets":
+        return None
+    secret_name = parts[1].strip()
+    property_name = parts[2].strip()
+    if not secret_name or not property_name:
+        return None
+    return secret_name, property_name
 
 
 def ingress_resources(
@@ -3335,6 +3450,12 @@ def temporal_auth_status(demo_project: dict[str, Any]) -> dict[str, Any]:
 
 
 def component_needs_temporal(component: dict[str, Any]) -> bool:
+    return component_receives_default_temporal_env(component) or bool(
+        temporal_input_refs(component)
+    )
+
+
+def component_receives_default_temporal_env(component: dict[str, Any]) -> bool:
     worker = component.get("worker")
     return (
         worker is True
@@ -3409,6 +3530,66 @@ def unversioned_temporal_components(
     }
 
 
+def temporal_credentials_secret_needed(demo_project: dict[str, Any]) -> bool:
+    return bool(
+        unversioned_temporal_components(demo_project)
+        or temporal_proxy_components(demo_project)
+        or temporal_credentials_input_components(demo_project)
+    )
+
+
+def temporal_worker_runtime_secret_needed(demo_project: dict[str, Any]) -> bool:
+    return bool(
+        versioned_worker_components(demo_project)
+        or temporal_worker_runtime_input_components(demo_project)
+    )
+
+
+def temporal_credentials_input_components(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: component
+        for name, component in components(demo_project).items()
+        if temporal_credentials_input_refs(component)
+    }
+
+
+def temporal_worker_runtime_input_components(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: component
+        for name, component in components(demo_project).items()
+        if temporal_worker_runtime_input_refs(component)
+    }
+
+
+def temporal_input_refs(component: dict[str, Any]) -> list[str]:
+    return [
+        input_ref
+        for input_ref in component_input_refs(component)
+        if input_ref in TEMPORAL_INPUT_REF_ENV
+    ]
+
+
+def temporal_credentials_input_refs(component: dict[str, Any]) -> list[str]:
+    return [
+        input_ref
+        for input_ref in temporal_input_refs(component)
+        if temporal_input_ref_secret_name(component, input_ref) == TEMPORAL_SECRET_NAME
+    ]
+
+
+def temporal_worker_runtime_input_refs(component: dict[str, Any]) -> list[str]:
+    return [
+        input_ref
+        for input_ref in temporal_input_refs(component)
+        if temporal_input_ref_secret_name(component, input_ref)
+        == TEMPORAL_WORKER_RUNTIME_SECRET_NAME
+    ]
+
+
 def components_for_user_secret(
     demo_project: dict[str, Any],
     secret_name: str,
@@ -3417,6 +3598,11 @@ def components_for_user_secret(
     for component_name, component in components(demo_project).items():
         references = component.get("secrets")
         if isinstance(references, list) and secret_name in references:
+            names.append(component_name)
+            continue
+        if any(
+            name == secret_name for name, _property in user_secret_input_refs(component)
+        ):
             names.append(component_name)
     return names
 
@@ -3434,23 +3620,49 @@ def user_secret_required_properties(
     demo_project: dict[str, Any],
     secret_name: str,
 ) -> list[str]:
+    required: set[str] = set()
     secret = project_secret_definitions(demo_project).get(secret_name)
-    if not isinstance(secret, dict):
-        return []
-    required_properties = secret.get("requiredProperties")
-    if not isinstance(required_properties, list):
-        return []
-    return sorted(name for name in required_properties if isinstance(name, str))
+    if isinstance(secret, dict):
+        required_properties = secret.get("requiredProperties")
+        if isinstance(required_properties, list):
+            required.update(name for name in required_properties if isinstance(name, str))
+
+    for component in components(demo_project).values():
+        required.update(
+            property_name
+            for name, property_name in user_secret_input_refs(component)
+            if name == secret_name
+        )
+
+    return sorted(required)
 
 
 def user_secret_names(demo_project: dict[str, Any]) -> list[str]:
     names: set[str] = set()
     for component in components(demo_project).values():
         references = component.get("secrets")
-        if not isinstance(references, list):
-            continue
-        names.update(secret for secret in references if isinstance(secret, str))
+        if isinstance(references, list):
+            names.update(secret for secret in references if isinstance(secret, str))
+        names.update(name for name, _property in user_secret_input_refs(component))
     return sorted(names)
+
+
+def component_input_refs(component: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for item in component_env_items(component):
+        input_ref = env_input_ref(item)
+        if input_ref:
+            refs.append(input_ref)
+    return refs
+
+
+def user_secret_input_refs(component: dict[str, Any]) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    for input_ref in component_input_refs(component):
+        parsed = parse_user_secret_input_ref(input_ref)
+        if parsed:
+            refs.append(parsed)
+    return refs
 
 
 def temporal_secret_remote_path(demo_project: dict[str, Any]) -> str:

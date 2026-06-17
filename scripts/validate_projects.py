@@ -37,6 +37,22 @@ TEMPORAL_NAMESPACE_PREFIX = "tmprl-dem-cld-"
 # Temporal Cloud namespace names (before the account suffix) cap at 39 chars.
 TEMPORAL_NAMESPACE_MAX_LENGTH = 39
 TEMPORAL_SA_REPO_PATH = re.compile(r"^/temporal-sa/[A-Za-z0-9_.-]+/?$")
+DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
+TEMPORAL_AUTH_MODE_MTLS = "mtls"
+TEMPORAL_API_KEY_INPUT_REFS = {
+    "temporal.address",
+    "temporal.namespace",
+    "temporal.apiKey",
+    "temporal.tls",
+}
+TEMPORAL_MTLS_INPUT_REFS = {
+    "temporal.caCert",
+    "temporal.clientCert",
+    "temporal.clientKey",
+}
+TEMPORAL_INPUT_REFS = TEMPORAL_API_KEY_INPUT_REFS | TEMPORAL_MTLS_INPUT_REFS
 
 
 @dataclass(frozen=True)
@@ -169,6 +185,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_component_ports(document))
         errors.extend(validate_service_names(document))
         errors.extend(validate_ingress_routes(document))
+        errors.extend(validate_env_input_refs(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
         errors.extend(validate_registry(document))
@@ -468,6 +485,85 @@ def validate_ingress_routes(document: ProjectDocument) -> list[ProjectError]:
     return errors
 
 
+def validate_env_input_refs(document: ProjectDocument) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+    auth_mode = temporal_auth_mode(document)
+
+    for component_name, component in components(document).items():
+        proxy_enabled = temporal_proxy_enabled(component)
+        for index, input_ref in component_input_refs(component):
+            path = f"components.{component_name}.env[{index}].valueFrom.inputRef"
+            if input_ref in TEMPORAL_API_KEY_INPUT_REFS:
+                if proxy_enabled:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"{path} {input_ref!r} cannot be used with temporalProxy",
+                        )
+                    )
+                if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"{path} {input_ref!r} requires temporal auth mode apiKey",
+                        )
+                    )
+                continue
+
+            if input_ref in TEMPORAL_MTLS_INPUT_REFS:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        (
+                            f"{path} {input_ref!r} is reserved until Temporal "
+                            "mTLS runtime secrets are implemented"
+                        ),
+                    )
+                )
+                continue
+
+            if input_ref.startswith("temporal."):
+                supported = ", ".join(sorted(TEMPORAL_INPUT_REFS))
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"{path} {input_ref!r} must be one of: {supported}",
+                    )
+                )
+                continue
+
+            user_secret_ref = parse_user_secret_input_ref(input_ref)
+            if user_secret_ref is None:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        (
+                            f"{path} {input_ref!r} must start with temporal. "
+                            "or secrets.<name>.<property>"
+                        ),
+                    )
+                )
+                continue
+
+            secret_name, property_name = user_secret_ref
+            if DNS_LABEL_PATTERN.fullmatch(secret_name) is None:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"{path} secret name {secret_name!r} must be a DNS label",
+                    )
+                )
+            if ENV_NAME_PATTERN.fullmatch(property_name) is None:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"{path} property {property_name!r} must be an env var name",
+                    )
+                )
+
+    return errors
+
+
 def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
     declared = project_secret_definitions(document)
@@ -475,30 +571,43 @@ def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
 
     for component_name, component in components(document).items():
         references = component.get("secrets")
-        if not isinstance(references, list):
-            continue
+        if isinstance(references, list):
+            seen: dict[str, int] = {}
+            for index, secret_name in enumerate(references):
+                if not isinstance(secret_name, str):
+                    continue
 
-        seen: dict[str, int] = {}
-        for index, secret_name in enumerate(references):
-            if not isinstance(secret_name, str):
-                continue
-
-            if secret_name in seen:
-                errors.append(
-                    ProjectError(
-                        document.path,
-                        f"components.{component_name}.secrets[{index}] {secret_name!r} duplicates secrets[{seen[secret_name]}]",
+                if secret_name in seen:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"components.{component_name}.secrets[{index}] {secret_name!r} duplicates secrets[{seen[secret_name]}]",
+                        )
                     )
-                )
-            else:
-                seen[secret_name] = index
-                referenced.add(secret_name)
+                else:
+                    seen[secret_name] = index
+                    referenced.add(secret_name)
 
+                if secret_name not in declared:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"components.{component_name}.secrets[{index}] {secret_name!r} must be declared in top-level secrets",
+                        )
+                    )
+
+        for index, secret_name, _property_name in component_user_secret_input_refs(
+            component
+        ):
+            referenced.add(secret_name)
             if secret_name not in declared:
                 errors.append(
                     ProjectError(
                         document.path,
-                        f"components.{component_name}.secrets[{index}] {secret_name!r} must be declared in top-level secrets",
+                        (
+                            f"components.{component_name}.env[{index}].valueFrom.inputRef "
+                            f"secret {secret_name!r} must be declared in top-level secrets"
+                        ),
                     )
                 )
 
@@ -766,7 +875,71 @@ def component_needs_temporal(component: dict[str, Any]) -> bool:
         worker is True
         or isinstance(worker, dict)
         or component.get("temporalAccess") is True
+        or bool(component_temporal_input_refs(component))
     )
+
+
+def temporal_proxy_enabled(component: dict[str, Any]) -> bool:
+    temporal_proxy = component.get("temporalProxy")
+    return isinstance(temporal_proxy, dict) and temporal_proxy.get("enabled") is True
+
+
+def temporal_auth_mode(document: ProjectDocument) -> str:
+    mode = get_nested(document.data, ("spec", "temporal", "auth", "mode"))
+    if mode in {TEMPORAL_AUTH_MODE_API_KEY, TEMPORAL_AUTH_MODE_MTLS}:
+        return str(mode)
+    return TEMPORAL_AUTH_MODE_API_KEY
+
+
+def component_input_refs(component: dict[str, Any]) -> list[tuple[int, str]]:
+    env = component.get("env")
+    if not isinstance(env, list):
+        return []
+
+    refs: list[tuple[int, str]] = []
+    for index, item in enumerate(env):
+        if not isinstance(item, dict):
+            continue
+        value_from = item.get("valueFrom")
+        if not isinstance(value_from, dict):
+            continue
+        input_ref = value_from.get("inputRef")
+        if isinstance(input_ref, str):
+            input_ref = input_ref.strip()
+            if input_ref:
+                refs.append((index, input_ref))
+    return refs
+
+
+def component_temporal_input_refs(component: dict[str, Any]) -> list[str]:
+    return [
+        input_ref
+        for _index, input_ref in component_input_refs(component)
+        if input_ref in TEMPORAL_INPUT_REFS
+    ]
+
+
+def component_user_secret_input_refs(
+    component: dict[str, Any],
+) -> list[tuple[int, str, str]]:
+    refs: list[tuple[int, str, str]] = []
+    for index, input_ref in component_input_refs(component):
+        parsed = parse_user_secret_input_ref(input_ref)
+        if parsed:
+            secret_name, property_name = parsed
+            refs.append((index, secret_name, property_name))
+    return refs
+
+
+def parse_user_secret_input_ref(input_ref: str) -> tuple[str, str] | None:
+    parts = input_ref.split(".", 2)
+    if len(parts) != 3 or parts[0] != "secrets":
+        return None
+    secret_name = parts[1].strip()
+    property_name = parts[2].strip()
+    if not secret_name or not property_name:
+        return None
+    return secret_name, property_name
 
 
 def derive_namespace(project_name: str) -> str:

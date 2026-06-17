@@ -189,6 +189,60 @@ def test_temporal_proxy_worker_renders_sidecar_and_local_app_env(monkeypatch):
     } in proxy["env"]
 
 
+def test_component_env_can_map_temporal_and_user_secret_inputs():
+    demo_project = project(worker=False)
+    demo_project["spec"]["secrets"] = {
+        "anthropic-credentials": {
+            "requiredProperties": ["ANTHROPIC_API_KEY"],
+        }
+    }
+    api = demo_project["spec"]["components"]["api"]
+    api.pop("temporalAccess")
+    api["env"] = [
+        {
+            "name": "TEMPORAL_HOST",
+            "valueFrom": {"inputRef": "temporal.address"},
+        },
+        {
+            "name": "MODEL_API_KEY",
+            "valueFrom": {
+                "inputRef": "secrets.anthropic-credentials.ANTHROPIC_API_KEY",
+            },
+        },
+    ]
+
+    secrets = runtime_secret_resources(demo_project)
+    deployments = deployment_resources(demo_project, images())
+    api_deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("api-")
+    )
+    container = api_deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert {item["metadata"]["name"] for item in secrets} == {
+        "temporal-credentials",
+        "user-secret-anthropic-credentials",
+    }
+    assert "envFrom" not in container
+    assert {
+        "name": "TEMPORAL_HOST",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "temporal-credentials",
+                "key": "TEMPORAL_ADDRESS",
+            }
+        },
+    } in container["env"]
+    assert {
+        "name": "MODEL_API_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "user-secret-anthropic-credentials",
+                "key": "ANTHROPIC_API_KEY",
+            }
+        },
+    } in container["env"]
+
+
 def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment():
     demo_project = project(worker=versioned_worker())
 
@@ -253,6 +307,38 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
     assert "TEMPORAL_WORKER_BUILD_ID" not in rendered
     assert "TEMPORAL_ADDRESS" not in rendered
     assert "TEMPORAL_NAMESPACE" not in rendered
+
+
+def test_versioned_worker_maps_auth_input_refs_to_worker_runtime_secret():
+    demo_project = project(worker=versioned_worker())
+    worker = demo_project["spec"]["components"]["worker"]
+    worker["env"].append(
+        {
+            "name": "TEMPORAL_TOKEN",
+            "valueFrom": {"inputRef": "temporal.apiKey"},
+        }
+    )
+
+    resources = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+    worker_deployment = next(
+        item for item in resources if item["kind"] == "WorkerDeployment"
+    )
+    container = worker_deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert {
+        "name": "TEMPORAL_TOKEN",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "temporal-worker-runtime",
+                "key": "TEMPORAL_API_KEY",
+            }
+        },
+    } in container["env"]
 
 
 def test_service_account_token_automount_is_component_opt_in():
@@ -419,6 +505,19 @@ def test_schema_accepts_controller_versioning_and_rejects_gate_input_conflict():
         "enabled": True,
         "addressEnv": ["TEMPORAL_HOST"],
     }
+    valid["spec"]["components"]["worker"]["env"].append(
+        {
+            "name": "MODEL_API_KEY",
+            "valueFrom": {
+                "inputRef": "secrets.anthropic-credentials.ANTHROPIC_API_KEY",
+            },
+        }
+    )
+    valid["spec"]["secrets"] = {
+        "anthropic-credentials": {
+            "requiredProperties": ["ANTHROPIC_API_KEY"],
+        }
+    }
 
     assert list(validator.iter_errors(valid)) == []
 
@@ -437,6 +536,23 @@ def test_schema_rejects_unknown_temporal_auth_mode():
     validator = Draft202012Validator(schema)
     invalid = project(worker=True)
     invalid["spec"]["temporal"] = {"auth": {"mode": "password"}}
+
+    errors = list(validator.iter_errors(invalid))
+
+    assert errors
+
+
+def test_schema_rejects_env_value_and_value_from_conflict():
+    schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    invalid = project(worker=True)
+    invalid["spec"]["components"]["worker"]["env"].append(
+        {
+            "name": "TEMPORAL_HOST",
+            "value": "localhost:7233",
+            "valueFrom": {"inputRef": "temporal.address"},
+        }
+    )
 
     errors = list(validator.iter_errors(invalid))
 

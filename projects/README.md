@@ -272,6 +272,14 @@ Rules:
   Temporal env vars:
   `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and
   `TEMPORAL_TLS`.
+- Components can remap platform inputs with
+  `components.<name>.env[].valueFrom.inputRef`. Supported API-key Temporal refs
+  are `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and
+  `temporal.tls`. These render as targeted `secretKeyRef` env vars, so the app
+  can consume names like `TEMPORAL_HOST` or `TEMPORAL_TOKEN` without changing
+  code. The mTLS cert refs `temporal.caCert`, `temporal.clientCert`, and
+  `temporal.clientKey` are reserved until mTLS runtime secret reconciliation
+  lands.
 - `components.<name>.temporalProxy.enabled: true` replaces direct Temporal
   credential injection for that app container with a local plaintext proxy at
   `127.0.0.1:7233`. The sidecar receives the platform-managed Cloud credential,
@@ -288,14 +296,45 @@ Rules:
   `TEMPORAL_UI_URL` as a literal env var using the derived Cloud namespace URL,
   for example
   `https://cloud.temporal.io/namespaces/tmprl-dem-cld-flourish-and-blotts.a2dd6`.
+  Do not use `temporal.*` input refs in app containers with
+  `temporalProxy.enabled`; use `temporalProxy.addressEnv` for alternate host env
+  names.
 - Components receive user-managed secrets when they list the secret name in
   `components.<name>.secrets`. The platform derives the AWS Secrets Manager path
   as `tmprl-dem-cld/<metadata.name>/<secret-name>` and injects every JSON key in
   that AWS secret as an environment variable. Keep each secret narrow and use
   env-var-shaped JSON keys.
+- Components can also map one user-managed secret property to a custom env var
+  with `valueFrom.inputRef: secrets.<secret-name>.<property>`. The secret must
+  still be declared under `spec.secrets`, and mapped properties are treated as
+  required properties in status and external-resource validation.
 - `spec.secrets.<name>.requiredProperties` is optional validation metadata. Use
   it only when the project should fail early if specific JSON keys are missing
   from the AWS secret.
+
+Example targeted env remapping:
+
+```yaml
+spec:
+  secrets:
+    anthropic-credentials:
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+  components:
+    api:
+      build: app
+      temporalAccess: true
+      env:
+        - name: TEMPORAL_HOST
+          valueFrom:
+            inputRef: temporal.address
+        - name: TEMPORAL_TOKEN
+          valueFrom:
+            inputRef: temporal.apiKey
+        - name: MODEL_API_KEY
+          valueFrom:
+            inputRef: secrets.anthropic-credentials.ANTHROPIC_API_KEY
+```
 
 Example user-managed secret:
 
