@@ -8,10 +8,14 @@ from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     CloudApiReconciler,
     NamespaceInfo,
+    delete_temporal_runtime_candidate_secret,
     finalize_temporal_cloud,
+    promote_temporal_runtime_secret,
     reconcile_temporal_cloud,
+    stage_temporal_api_key_candidate,
+    temporal_runtime_candidate_secret_path,
 )
-from demo_registry_operator.resources import TEMPORAL_MTLS_CA_SECRET_PATH
+from demo_registry_operator.resources import temporal_mtls_ca_secret_remote_path
 
 
 PROJECT = {
@@ -294,6 +298,99 @@ def test_existing_runtime_key_inside_rotation_window_is_rotated():
     assert status["apiKey"]["rotationReason"] == "RotateBeforeExpiry"
 
 
+def test_stage_api_key_candidate_does_not_promote_or_return_token():
+    reconciler = FakeReconciler(existing_sa="sa-existing")
+    secrets = FakeSecretStore()
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+    service_account_status = {
+        "serviceAccount": {
+            "id": "sa-existing",
+            "name": "banking-money-transfer-runtime",
+        }
+    }
+
+    status = asyncio.run(
+        stage_temporal_api_key_candidate(
+            PROJECT,
+            namespace_status_value=namespace_status,
+            service_account_status=service_account_status,
+            reconciler=reconciler,
+            secret_store=secrets,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    candidate_path = temporal_runtime_candidate_secret_path(PROJECT)
+    assert status["promoteRequired"] is True
+    assert status["candidateApiKeyId"] == "key-abc"
+    assert RUNTIME_PATH not in secrets.store
+    assert secrets.store[candidate_path]["apiKey"] == "SECRET-TOKEN-VALUE"
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
+
+
+def test_promote_api_key_candidate_after_canary():
+    candidate_path = temporal_runtime_candidate_secret_path(PROJECT)
+    secrets = FakeSecretStore(
+        {
+            candidate_path: {
+                "address": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
+                "apiKey": "SECRET-TOKEN-VALUE",
+                "tls": "true",
+                "keyId": "key-abc",
+                "serviceAccountId": "sa-existing",
+                "createdAt": "2026-06-13T00:00:00+00:00",
+                "rotationReason": "MissingRuntimeSecret",
+            }
+        }
+    )
+    stage_status = {
+        "phase": "Ready",
+        "promoteRequired": True,
+        "candidateSecretRemotePath": candidate_path,
+        "apiKey": {
+            "keyId": "key-abc",
+            "action": "created",
+        },
+    }
+    canary = {"phase": "Passed", "ok": True, "authMode": "apiKey"}
+
+    status = promote_temporal_runtime_secret(
+        PROJECT,
+        stage_status=stage_status,
+        canary_status=canary,
+        secret_store=secrets,
+        checked_at="2026-06-13T00:01:00+00:00",
+    )
+
+    assert status["promoted"]["runtimeSecret"] is True
+    assert secrets.store[RUNTIME_PATH]["apiKey"] == "SECRET-TOKEN-VALUE"
+    assert secrets.store[RUNTIME_PATH]["canary"] == canary
+    assert status["apiKey"]["canary"] == canary
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
+
+
+def test_candidate_secret_cleanup_is_idempotent():
+    candidate_path = temporal_runtime_candidate_secret_path(PROJECT)
+    secrets = FakeSecretStore({candidate_path: {"apiKey": "SECRET-TOKEN-VALUE"}})
+
+    status = delete_temporal_runtime_candidate_secret(
+        PROJECT,
+        secret_store=secrets,
+        checked_at="2026-06-13T00:02:00+00:00",
+    )
+
+    assert candidate_path not in secrets.store
+    assert status["deleted"]["runtimeCandidateSecret"] == "scheduled-deletion"
+    assert status["deleted"]["mtlsCaCandidateSecret"] == "not-found"
+
+
 def test_existing_namespace_but_missing_key_creates_only_the_key():
     reconciler = FakeReconciler(
         existing_namespace=NamespaceInfo(
@@ -439,7 +536,7 @@ def test_mtls_auth_mode_creates_namespace_ca_client_secret_and_canaries():
     assert reconciler.called("create_namespace")[0][4] == "mtls"
     assert len(reconciler.called("configure_namespace_mtls")) == 1
 
-    ca_secret = secrets.store[TEMPORAL_MTLS_CA_SECRET_PATH]
+    ca_secret = secrets.store[temporal_mtls_ca_secret_remote_path(project)]
     assert ca_secret["caCert"].startswith("-----BEGIN CERTIFICATE-----")
     assert ca_secret["caKey"].startswith("-----BEGIN PRIVATE KEY-----")
     runtime_secret = secrets.store[RUNTIME_PATH]

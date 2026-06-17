@@ -15,7 +15,6 @@ from demo_registry_operator.resources import (
     STANDARD_TEMPORAL_ENV,
     TEMPORAL_AUTH_MODE_MTLS,
     TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
-    TEMPORAL_MTLS_CA_SECRET_PATH,
     TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
     TEMPORAL_MTLS_INPUT_REF_ENV,
     TEMPORAL_SECRET_NAME,
@@ -26,6 +25,7 @@ from demo_registry_operator.resources import (
     project_temporal_namespace,
     temporal_components,
     temporal_credentials_secret_needed,
+    temporal_mtls_ca_secret_remote_path,
     temporal_mtls_status,
     temporal_secret_remote_path,
     temporal_worker_runtime_secret_needed,
@@ -330,10 +330,12 @@ def temporal_api_key_rotation_decision(
 
 def prepare_mtls_ca_material(
     *,
+    demo_project: dict[str, Any],
     secret_store: SecretStore,
     checked_at: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    existing = secret_store.read_json(TEMPORAL_MTLS_CA_SECRET_PATH)
+    ca_secret_path = temporal_mtls_ca_secret_remote_path(demo_project)
+    existing = secret_store.read_json(ca_secret_path)
     rotation = temporal_mtls_ca_rotation_decision(
         existing,
         checked_at=checked_at,
@@ -356,7 +358,7 @@ def prepare_mtls_ca_material(
         return existing, rotation
     generated = generate_mtls_ca_certificate(checked_at=checked_at)
     if not isinstance(existing, dict) or not existing.get("caCert"):
-        claimed = claim_initial_mtls_ca_material(secret_store, generated)
+        claimed = claim_initial_mtls_ca_material(secret_store, ca_secret_path, generated)
         if claimed is not None:
             return claimed
     if isinstance(existing, dict) and existing.get("caCert"):
@@ -375,15 +377,16 @@ def prepare_mtls_ca_material(
 
 def claim_initial_mtls_ca_material(
     secret_store: SecretStore,
+    ca_secret_path: str,
     generated: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     create_if_missing = getattr(secret_store, "create_json_if_missing", None)
     if not callable(create_if_missing):
         return None
     created = create_if_missing(
-        TEMPORAL_MTLS_CA_SECRET_PATH,
+        ca_secret_path,
         generated,
-        "Temporal Cloud mTLS platform client CA",
+        "Temporal Cloud mTLS namespace client CA",
     )
     if created is True:
         return generated, {
@@ -391,7 +394,7 @@ def claim_initial_mtls_ca_material(
             "reason": "MissingCertificateAuthority",
             "persisted": True,
         }
-    existing = secret_store.read_json(TEMPORAL_MTLS_CA_SECRET_PATH)
+    existing = secret_store.read_json(ca_secret_path)
     if isinstance(existing, dict) and existing.get("caCert"):
         return existing, {
             "rotate": False,
@@ -422,9 +425,11 @@ async def reconcile_mtls_auth(
     project = project_name(demo_project)
     runtime_path = temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
-    previous_ca = secret_store.read_json(TEMPORAL_MTLS_CA_SECRET_PATH)
+    ca_secret_path = temporal_mtls_ca_secret_remote_path(demo_project)
+    previous_ca = secret_store.read_json(ca_secret_path)
     if ca_material is None or ca_rotation is None:
         ca_material, ca_rotation = prepare_mtls_ca_material(
+            demo_project=demo_project,
             secret_store=secret_store,
             checked_at=checked_at,
         )
@@ -530,9 +535,9 @@ async def reconcile_mtls_auth(
 
         if ca_material_changed:
             secret_store.write_json(
-                TEMPORAL_MTLS_CA_SECRET_PATH,
+                ca_secret_path,
                 ca_material,
-                "Temporal Cloud mTLS platform client CA",
+                "Temporal Cloud mTLS namespace client CA",
             )
         secret_store.write_json(
             runtime_path,
@@ -563,9 +568,9 @@ async def reconcile_mtls_auth(
             )
             raise
         secret_store.write_json(
-            TEMPORAL_MTLS_CA_SECRET_PATH,
+            ca_secret_path,
             ca_material,
-            "Temporal Cloud mTLS platform client CA",
+            "Temporal Cloud mTLS namespace client CA",
         )
 
     ca_status = {
@@ -579,9 +584,9 @@ async def reconcile_mtls_auth(
             and previous_ca.get("caCert")
             else "created" if ca_rotation["rotate"] else "verified"
         ),
-        "scope": "platform",
+        "scope": "namespace",
         "serialNumber": str(ca_material.get("serialNumber", "")),
-        "secretRemotePath": TEMPORAL_MTLS_CA_SECRET_PATH,
+        "secretRemotePath": ca_secret_path,
         "notBefore": ca_material.get("notBefore"),
         "notAfter": ca_material.get("notAfter"),
         "rotateAt": ca_rotation.get("rotateAt"),

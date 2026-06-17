@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -25,8 +26,8 @@ from demo_registry_operator.resources import (
     spec_of,
     TEMPORAL_AUTH_MODE_API_KEY,
     TEMPORAL_AUTH_MODE_MTLS,
-    TEMPORAL_MTLS_CA_SECRET_PATH,
     TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
+    temporal_mtls_ca_secret_remote_path,
     temporal_components,
     temporal_auth_runtime_status,
     temporal_auth_mode,
@@ -73,14 +74,16 @@ def plan_external_resources(request: dict[str, Any]) -> dict[str, Any]:
         "checkedAt": checked_at,
         "kubernetesNamespace": project_namespace(demo_project),
         "forceTemporalAuthRotation": force_temporal_auth_rotation,
+        "ecrRepositories": [
+            repository_plan_entry(demo_project, build_name)
+            for build_name in sorted(builds(demo_project))
+        ],
     }
 
 
 @activity.defn
-def reconcile_ecr_repositories(plan: dict[str, Any]) -> dict[str, Any]:
-    demo_project = demo_project_from_plan(plan)
+def reconcile_ecr_repository(repository: dict[str, Any]) -> dict[str, Any]:
     config = WorkerConfig.from_env()
-    checked_at = string_field(plan, "checkedAt")
 
     try:
         import boto3
@@ -92,37 +95,356 @@ def reconcile_ecr_repositories(plan: dict[str, Any]) -> dict[str, Any]:
         ) from error
 
     ecr = boto3.session.Session(region_name=config.aws_region).client("ecr")
-    repositories = []
-    for build_name in sorted(builds(demo_project)):
-        repository = repository_plan_entry(demo_project, build_name)
-        try:
-            repositories.append(ensure_ecr_repository(ecr, repository))
-        except (BotoCoreError, ClientError) as error:
-            raise aws_application_error(
-                error,
-                operation=f"Reconcile ECR repository {repository['name']}",
-            ) from error
+    try:
+        status = ensure_ecr_repository(ecr, repository)
+    except (BotoCoreError, ClientError) as error:
+        raise aws_application_error(
+            error,
+            operation=f"Reconcile ECR repository {repository['name']}",
+        ) from error
 
     return {
-        "phase": aggregate_phase(repositories),
+        **status,
         "region": config.aws_region,
         "accountId": config.aws_account_id,
-        "checkedAt": checked_at,
-        "repositories": repositories,
     }
 
 
 @activity.defn
-def reconcile_temporal_cloud_resource(plan: dict[str, Any]) -> dict[str, Any]:
-    demo_project = demo_project_from_plan(plan)
-    config = WorkerConfig.from_env()
-    return temporal_cloud_status(
+def ensure_temporal_mtls_ca_resource(plan: dict[str, Any]) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(plan, operation="Stage Temporal mTLS CA")
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.stage_temporal_mtls_ca(
         demo_project,
-        config,
-        phase="ManualSetupRequired",
-        checked_at=string_field(plan, "checkedAt"),
-        fail_activity_on_error=True,
-        force_auth_rotation=bool(plan.get("forceTemporalAuthRotation")),
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def ensure_temporal_cloud_namespace_resource(plan: dict[str, Any]) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    return run_temporal_cloud_control_plane_activity(
+        plan,
+        operation="Ensure Temporal Cloud namespace",
+        step=lambda demo_project, reconciler, secret_store, bootstrap, checked_at: (
+            temporal_cloud.ensure_temporal_cloud_namespace(
+                demo_project,
+                reconciler=reconciler,
+                secret_store=secret_store,
+                account_id=bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID"),
+                region=bootstrap.get("TEMPORAL_CLOUD_REGION")
+                or temporal_cloud.DEFAULT_TEMPORAL_CLOUD_REGION,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def configure_temporal_cloud_namespace_mtls_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Configure Temporal Cloud namespace mTLS",
+        step=lambda demo_project, reconciler, secret_store, _bootstrap, checked_at: (
+            temporal_cloud.configure_temporal_cloud_namespace_mtls(
+                demo_project,
+                namespace_status_value=dict_field(request, "namespaceStatus"),
+                reconciler=reconciler,
+                secret_store=secret_store,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def ensure_temporal_cloud_service_account_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Ensure Temporal Cloud service account",
+        step=lambda demo_project, reconciler, _secret_store, _bootstrap, checked_at: (
+            temporal_cloud.ensure_temporal_cloud_service_account(
+                demo_project,
+                namespace_status_value=dict_field(request, "namespaceStatus"),
+                reconciler=reconciler,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def stage_temporal_api_key_candidate_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Stage Temporal API key candidate",
+        step=lambda demo_project, reconciler, secret_store, _bootstrap, checked_at: (
+            temporal_cloud.stage_temporal_api_key_candidate(
+                demo_project,
+                namespace_status_value=dict_field(request, "namespaceStatus"),
+                service_account_status=dict_field(request, "serviceAccountStatus"),
+                reconciler=reconciler,
+                secret_store=secret_store,
+                checked_at=checked_at,
+                force_rotation=bool(plan_from_request(request).get("forceTemporalAuthRotation")),
+            )
+        ),
+    )
+
+
+@activity.defn
+def stage_temporal_mtls_client_certificate_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        request,
+        operation="Stage Temporal mTLS client certificate",
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.stage_temporal_mtls_client_certificate(
+        demo_project,
+        namespace_status_value=dict_field(request, "namespaceStatus"),
+        ca_status=dict_field(request, "caStatus"),
+        secret_store=store,
+        checked_at=checked_at,
+        force_client_rotation=bool(
+            plan_from_request(request).get("forceTemporalAuthRotation")
+        ),
+    )
+
+
+@activity.defn
+def run_temporal_runtime_candidate_canary_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        request,
+        operation="Run Temporal runtime candidate canary",
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    try:
+        return asyncio.run(
+            temporal_cloud.run_temporal_runtime_candidate_canary(
+                demo_project,
+                stage_status=dict_field(request, "stageStatus"),
+                secret_store=store,
+                checked_at=checked_at,
+            )
+        )
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Temporal runtime candidate canary",
+        ) from error
+
+
+@activity.defn
+def promote_temporal_runtime_secret_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        request,
+        operation="Promote Temporal runtime credential",
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.promote_temporal_runtime_secret(
+        demo_project,
+        stage_status=dict_field(request, "stageStatus"),
+        canary_status=optional_dict_field(request, "canaryStatus"),
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def promote_temporal_mtls_ca_secret_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        request,
+        operation="Promote Temporal mTLS CA",
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.promote_temporal_mtls_ca_secret(
+        demo_project,
+        stage_status=dict_field(request, "stageStatus"),
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def mirror_temporal_runtime_secret_resource(plan: dict[str, Any]) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        plan,
+        operation="Mirror Temporal runtime credential",
+        require_bootstrap=False,
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.mirror_temporal_runtime_secret(
+        demo_project,
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def delete_temporal_runtime_candidate_secret_resource(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        plan,
+        operation="Delete Temporal runtime candidate secret",
+        require_bootstrap=False,
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.delete_temporal_runtime_candidate_secret(
+        demo_project,
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def delete_temporal_cloud_mtls_ca_secret_resource(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    context = temporal_cloud_secret_context(
+        plan,
+        operation="Delete Temporal mTLS CA secret",
+        require_bootstrap=False,
+    )
+    if isinstance(context, dict):
+        return context
+    demo_project, _config, checked_at, store = context
+    return temporal_cloud.delete_temporal_cloud_mtls_ca_secret(
+        demo_project,
+        secret_store=store,
+        checked_at=checked_at,
+    )
+
+
+@activity.defn
+def delete_temporal_cloud_candidate_api_key_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    key_id = string_field(request, "keyId")
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Delete Temporal Cloud candidate API key",
+        step=lambda _demo_project, reconciler, _secret_store, _bootstrap, checked_at: (
+            temporal_cloud.delete_temporal_cloud_api_key_id(
+                key_id,
+                reconciler=reconciler,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def delete_temporal_cloud_service_account_id_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    service_account_id = string_field(request, "serviceAccountId")
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Delete Temporal Cloud service account",
+        step=lambda _demo_project, reconciler, _secret_store, _bootstrap, checked_at: (
+            temporal_cloud.delete_temporal_cloud_service_account_id(
+                service_account_id,
+                reconciler=reconciler,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def disable_temporal_cloud_namespace_delete_protection_name_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    namespace = string_field(request, "namespace")
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Disable Temporal Cloud namespace delete protection",
+        step=lambda _demo_project, reconciler, _secret_store, _bootstrap, checked_at: (
+            temporal_cloud.disable_temporal_cloud_namespace_delete_protection_name(
+                namespace,
+                reconciler=reconciler,
+                checked_at=checked_at,
+            )
+        ),
+    )
+
+
+@activity.defn
+def delete_temporal_cloud_namespace_name_resource(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from demo_registry_operator.activities import temporal_cloud
+
+    namespace = string_field(request, "namespace")
+    return run_temporal_cloud_control_plane_activity(
+        request,
+        operation="Delete Temporal Cloud namespace",
+        step=lambda _demo_project, reconciler, _secret_store, _bootstrap, checked_at: (
+            temporal_cloud.delete_temporal_cloud_namespace_name(
+                namespace,
+                reconciler=reconciler,
+                checked_at=checked_at,
+            )
+        ),
     )
 
 
@@ -256,6 +578,164 @@ def delete_project_ecr_repositories_resource(plan: dict[str, Any]) -> dict[str, 
     return {"phase": "Skipped", "mode": config.external_resource_mode}
 
 
+def ecr_repositories_status(
+    plan: dict[str, Any],
+    repositories: list[dict[str, Any]],
+) -> dict[str, Any]:
+    first = repositories[0] if repositories else {}
+    return {
+        "phase": aggregate_phase(repositories) if repositories else "NotRequired",
+        "region": first.get("region"),
+        "accountId": first.get("accountId"),
+        "checkedAt": string_field(plan, "checkedAt"),
+        "repositories": repositories,
+    }
+
+
+def run_temporal_cloud_control_plane_activity(
+    request: dict[str, Any],
+    *,
+    operation: str,
+    step: Any,
+) -> dict[str, Any]:
+    from demo_registry_operator.activities.temporal_cloud import (
+        CloudApiReconciler,
+    )
+    from temporalio.client import CloudOperationsClient
+
+    context = temporal_cloud_secret_context(request, operation=operation)
+    if isinstance(context, dict):
+        return context
+    demo_project, config, checked_at, store, bootstrap = context
+
+    def heartbeat(detail: Any) -> None:
+        try:
+            activity.heartbeat(detail)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def run() -> dict[str, Any]:
+        api_key = bootstrap.get("TEMPORAL_CLOUD_API_KEY")
+        connect_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "target_host": config.temporal_cloud_ops_host,
+        }
+        if config.temporal_cloud_api_version:
+            connect_kwargs["version"] = config.temporal_cloud_api_version
+        client = await CloudOperationsClient.connect(**connect_kwargs)
+        reconciler = CloudApiReconciler(
+            client.cloud_service,
+            account_id=bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID"),
+            heartbeat=heartbeat,
+        )
+        return await step(demo_project, reconciler, store, bootstrap, checked_at)
+
+    try:
+        return asyncio.run(run())
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(error, operation=operation) from error
+
+
+def temporal_cloud_secret_context(
+    request: dict[str, Any],
+    *,
+    operation: str,
+    require_bootstrap: bool = True,
+) -> tuple[dict[str, Any], WorkerConfig, str, Any, dict[str, Any]] | tuple[
+    dict[str, Any], WorkerConfig, str, Any
+] | dict[str, Any]:
+    from demo_registry_operator.activities.temporal_cloud import (
+        SecretsManagerStore,
+    )
+
+    plan = plan_from_request(request)
+    demo_project = demo_project_from_plan(plan)
+    config = WorkerConfig.from_env()
+    checked_at = string_field(plan, "checkedAt")
+    if not temporal_components(demo_project):
+        return {
+            "phase": "NotRequired",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "message": "No component currently requires Temporal credentials.",
+        }
+    if config.temporal_cloud_mode != "cloud-api" or config.external_resource_mode != "aws":
+        return temporal_cloud_status(
+            demo_project,
+            config,
+            phase="ManualSetupRequired",
+            checked_at=checked_at,
+            force_auth_rotation=bool(plan.get("forceTemporalAuthRotation")),
+        )
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as error:
+        raise non_retryable_error(
+            f"boto3 is required for cloud-api Temporal Cloud mode: {error}",
+            error_type=CONFIGURATION_ERROR,
+        ) from error
+
+    store = SecretsManagerStore(
+        boto3.session.Session(region_name=config.aws_region).client("secretsmanager")
+    )
+    if not require_bootstrap:
+        return demo_project, config, checked_at, store
+
+    try:
+        bootstrap = store.read_json(config.temporal_cloud_bootstrap_secret_path)
+    except (BotoCoreError, ClientError) as error:
+        raise aws_application_error(
+            error,
+            operation=f"{operation}: read Temporal Cloud bootstrap secret",
+        ) from error
+    if not isinstance(bootstrap, dict) or not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return temporal_cloud_bootstrap_required_status(config, checked_at)
+    return demo_project, config, checked_at, store, bootstrap
+
+
+def temporal_cloud_bootstrap_required_status(
+    config: WorkerConfig,
+    checked_at: str,
+) -> dict[str, Any]:
+    return {
+        "phase": "ManualSetupRequired",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "message": (
+            "Temporal Cloud bootstrap secret is missing or lacks "
+            "TEMPORAL_CLOUD_API_KEY; create it before enabling cloud-api mode."
+        ),
+        "bootstrapCredential": {
+            "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
+            "requiredProperties": TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+        },
+    }
+
+
+def plan_from_request(request: dict[str, Any]) -> dict[str, Any]:
+    plan = request.get("plan")
+    return plan if isinstance(plan, dict) else request
+
+
+def dict_field(value: dict[str, Any], key: str) -> dict[str, Any]:
+    field = value.get(key)
+    if isinstance(field, dict):
+        return field
+    raise non_retryable_error(
+        f"Temporal Cloud activity request is missing {key}",
+        error_type=CONFIGURATION_ERROR,
+    )
+
+
+def optional_dict_field(value: dict[str, Any], key: str) -> dict[str, Any] | None:
+    field = value.get(key)
+    return field if isinstance(field, dict) else None
+
+
 def external_resource_finalization_status(
     plan: dict[str, Any],
     *,
@@ -283,6 +763,7 @@ def temporal_cloud_finalization_status(
     namespace_protection_status: dict[str, Any],
     namespace_status: dict[str, Any],
     runtime_secret_status: dict[str, Any],
+    mtls_ca_secret_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     statuses = [
         api_key_status,
@@ -291,6 +772,8 @@ def temporal_cloud_finalization_status(
         namespace_status,
         runtime_secret_status,
     ]
+    if mtls_ca_secret_status is not None:
+        statuses.append(mtls_ca_secret_status)
     phases = {status.get("phase") for status in statuses}
     phase = "Deleted"
     if "Error" in phases:
@@ -308,7 +791,7 @@ def temporal_cloud_finalization_status(
         if isinstance(status_namespace, dict) and status_namespace.get("name"):
             namespace = status_namespace
 
-    return {
+    rendered = {
         "phase": phase,
         "provider": "temporal-cloud",
         "mode": "cloud-api",
@@ -323,6 +806,9 @@ def temporal_cloud_finalization_status(
             "secret": runtime_secret_status,
         },
     }
+    if mtls_ca_secret_status is not None:
+        rendered["steps"]["mtlsCaSecret"] = mtls_ca_secret_status
+    return rendered
 
 
 def external_resources_status(
@@ -406,7 +892,7 @@ def verify_secrets_manager_paths(
     )
     temporal_mtls_ca = secret_status(
         secretsmanager,
-        TEMPORAL_MTLS_CA_SECRET_PATH,
+        temporal_mtls_ca_secret_remote_path(demo_project),
         required=(
             temporal_required
             and temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS

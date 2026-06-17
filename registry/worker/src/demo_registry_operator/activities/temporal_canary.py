@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +29,7 @@ async def run_temporal_runtime_canary(
     credential: dict[str, Any],
     *,
     timeout_seconds: int = 60,
+    retry_delay_seconds: float = 2.0,
 ) -> dict[str, Any]:
     """Start a one-off worker and workflow using candidate runtime credentials.
 
@@ -38,9 +40,41 @@ async def run_temporal_runtime_canary(
     """
 
     started_at = datetime.now(UTC)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
     address = string_field(credential, "address")
     namespace = string_field(credential, "namespace")
     auth_mode = credential_auth_mode(credential)
+    attempt = 0
+    while True:
+        attempt += 1
+        remaining = max(1, int(deadline - asyncio.get_running_loop().time()))
+        try:
+            status = await run_temporal_runtime_canary_attempt(
+                credential,
+                address=address,
+                namespace=namespace,
+                auth_mode=auth_mode,
+                timeout_seconds=remaining,
+            )
+            status["attempts"] = attempt
+            return status
+        except Exception as error:  # noqa: BLE001 - retry propagation/transient auth lag
+            if asyncio.get_running_loop().time() >= deadline:
+                raise
+            await asyncio.sleep(
+                min(retry_delay_seconds, max(0.1, deadline - asyncio.get_running_loop().time()))
+            )
+
+
+async def run_temporal_runtime_canary_attempt(
+    credential: dict[str, Any],
+    *,
+    address: str,
+    namespace: str,
+    auth_mode: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    started_at = datetime.now(UTC)
     nonce = uuid.uuid4().hex
     task_queue = f"tmprl-auth-canary-{nonce[:16]}"
     workflow_id = f"tmprl-demo-cloud-auth-canary/{auth_mode}/{nonce}"
@@ -51,18 +85,28 @@ async def run_temporal_runtime_canary(
         **client_auth_kwargs(credential, auth_mode),
     )
 
-    async with Worker(
-        client,
-        task_queue=task_queue,
-        workflows=[TemporalRuntimeCredentialCanary],
-    ):
-        result = await client.execute_workflow(
-            TemporalRuntimeCredentialCanary.run,
-            {"nonce": nonce, "authMode": auth_mode},
-            id=workflow_id,
+    original_error: Exception | None = None
+    try:
+        async with Worker(
+            client,
             task_queue=task_queue,
-            execution_timeout=timedelta(seconds=timeout_seconds),
-        )
+            workflows=[TemporalRuntimeCredentialCanary],
+        ):
+            try:
+                result = await client.execute_workflow(
+                    TemporalRuntimeCredentialCanary.run,
+                    {"nonce": nonce, "authMode": auth_mode},
+                    id=workflow_id,
+                    task_queue=task_queue,
+                    execution_timeout=timedelta(seconds=timeout_seconds),
+                )
+            except Exception as error:  # noqa: BLE001 - preserve through worker shutdown
+                original_error = error
+                raise
+    except asyncio.CancelledError:
+        if original_error is not None:
+            raise original_error
+        raise
 
     return {
         "phase": "Passed",

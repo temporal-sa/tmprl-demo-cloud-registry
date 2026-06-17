@@ -140,7 +140,6 @@ TEMPORAL_MTLS_SECRET_PROPERTIES = [
     "clientCert",
     "clientKey",
 ]
-TEMPORAL_MTLS_CA_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-mtls-ca"
 TEMPORAL_MTLS_CA_SECRET_PROPERTIES = [
     "caCert",
     "caKey",
@@ -2819,7 +2818,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
             },
             "temporalMtlsCa": {
-                "path": TEMPORAL_MTLS_CA_SECRET_PATH,
+                "path": temporal_mtls_ca_secret_remote_path(demo_project),
                 "required": (
                     temporal_required
                     and temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS
@@ -3495,14 +3494,14 @@ def temporal_mtls_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     namespace = project_temporal_namespace(demo_project)
     return {
         "action": "create-or-verify-or-rotate",
-        "caScope": "platform",
+        "caScope": "namespace",
         "clientIdentityScope": "namespace",
         "secretRemotePath": temporal_secret_remote_path(demo_project),
         "secretProperties": TEMPORAL_MTLS_SECRET_PROPERTIES,
         "components": sorted(temporal_components(demo_project)),
         "caCertificate": {
-            "scope": "platform",
-            "secretRemotePath": TEMPORAL_MTLS_CA_SECRET_PATH,
+            "scope": "namespace",
+            "secretRemotePath": temporal_mtls_ca_secret_remote_path(demo_project),
             "requiredProperties": TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
             "rotation": {
                 "strategy": "staggered",
@@ -3739,6 +3738,10 @@ def user_secret_input_refs(component: dict[str, Any]) -> list[tuple[str, str]]:
 
 def temporal_secret_remote_path(demo_project: dict[str, Any]) -> str:
     return f"{project_secret_prefix(demo_project)}/temporal"
+
+
+def temporal_mtls_ca_secret_remote_path(demo_project: dict[str, Any]) -> str:
+    return f"{temporal_secret_remote_path(demo_project)}/ca"
 
 
 def user_secret_remote_path(demo_project: dict[str, Any], secret_name: str) -> str:
