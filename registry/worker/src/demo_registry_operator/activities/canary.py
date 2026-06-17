@@ -8,10 +8,14 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 from temporalio import activity
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 
+from demo_registry_operator.activities.builds.definitions import looks_like_commit_sha
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.errors import (
     CONFIGURATION_ERROR,
@@ -27,6 +31,7 @@ from demo_registry_operator.kube import (
     read_deployment_status,
     read_git_repository,
     read_namespace,
+    read_secret_data,
     read_service,
 )
 from demo_registry_operator.resources import (
@@ -35,9 +40,14 @@ from demo_registry_operator.resources import (
     IMAGE_OVERRIDES_ANNOTATION,
     OPERATOR_ROLLOUT_CANARY_KIND,
     SOURCE_COMMIT_ANNOTATION,
+    builds as demo_project_builds,
     dns_label,
+    metadata_annotations,
     project_namespace,
     project_name as demo_project_name,
+    source_branch,
+    source_git_repository_secret_ref,
+    source_git_repository_url,
     source_git_repository_name,
 )
 from demo_registry_operator.temporal_client import connect
@@ -61,10 +71,19 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         if isinstance(requested_name, str) and requested_name
         else canary_project_name(prefix, workflow_id, run_id)
     )
+    config = WorkerConfig.from_env()
+    source_resolution = canary_source_resolution(
+        template,
+        config,
+        expected_source_sha=request.get("expectedSourceCommitSha"),
+        expected_images=request.get("expectedImages"),
+    )
+    expected_source_sha = source_resolution.get("sourceCommitSha")
+
     demo_project = render_canary_demo_project(
         template,
         project_name=project_name,
-        expected_source_sha=request.get("expectedSourceCommitSha"),
+        expected_source_sha=expected_source_sha,
         expected_images=request.get("expectedImages"),
     )
 
@@ -98,7 +117,6 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
             error_type=VALIDATION_ERROR,
         )
 
-    config = WorkerConfig.from_env()
     target_deployment_name = os.getenv("TEMPORAL_DEPLOYMENT_NAME")
     target_build_id = os.getenv("TEMPORAL_WORKER_BUILD_ID")
     if not target_deployment_name or not target_build_id:
@@ -120,7 +138,8 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         "actualOperatorSourceSha": actual_operator_source_sha,
         "targetDeploymentName": target_deployment_name,
         "targetBuildID": target_build_id,
-        "expectedSourceCommitSha": request.get("expectedSourceCommitSha"),
+        "expectedSourceCommitSha": expected_source_sha,
+        "sourceResolution": source_resolution,
         "expectedImages": request.get("expectedImages", {}),
         "timeoutSeconds": int(request.get("timeoutSeconds", 900)),
         "pollSeconds": int(request.get("pollSeconds", 10)),
@@ -157,6 +176,195 @@ def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, An
         "workflow": workflow_signal,
         "checkedAt": datetime.now(UTC).isoformat(),
     }
+
+
+def canary_source_resolution(
+    template: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    expected_source_sha: Any,
+    expected_images: Any,
+) -> dict[str, Any]:
+    explicit_source_sha = commit_sha_or_error(
+        expected_source_sha,
+        "expectedSourceCommitSha",
+    )
+    if explicit_source_sha:
+        return {
+            "phase": "Resolved",
+            "source": "request",
+            "sourceCommitSha": explicit_source_sha,
+        }
+
+    annotated_source_sha = commit_sha_or_error(
+        metadata_annotations(template).get(SOURCE_COMMIT_ANNOTATION),
+        SOURCE_COMMIT_ANNOTATION,
+    )
+    if annotated_source_sha:
+        return {
+            "phase": "Resolved",
+            "source": "annotation",
+            "sourceCommitSha": annotated_source_sha,
+        }
+
+    if not canary_builds_require_source(template, expected_images):
+        return {
+            "phase": "Skipped",
+            "reason": "ImagesAlreadyResolved",
+            "message": "Canary image overrides cover every configured build.",
+        }
+
+    return resolve_canary_github_source_commit(template, config)
+
+
+def commit_sha_or_error(value: Any, field: str) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    commit_sha = value.strip()
+    if not looks_like_commit_sha(commit_sha):
+        raise non_retryable_error(
+            f"Canary {field} must be a git commit SHA.",
+            error_type=VALIDATION_ERROR,
+        )
+    return commit_sha
+
+
+def canary_builds_require_source(
+    template: dict[str, Any],
+    expected_images: Any,
+) -> bool:
+    build_names = set(demo_project_builds(template))
+    if not build_names:
+        return False
+    if not isinstance(expected_images, dict):
+        return True
+    resolved_images = {
+        str(build_name)
+        for build_name, image in expected_images.items()
+        if isinstance(build_name, str) and isinstance(image, str) and image
+    }
+    return not build_names.issubset(resolved_images)
+
+
+def resolve_canary_github_source_commit(
+    template: dict[str, Any],
+    config: WorkerConfig,
+) -> dict[str, Any]:
+    repo_url = source_git_repository_url(template)
+    repo = github_repo_from_url(repo_url)
+    if repo is None:
+        raise non_retryable_error(
+            (
+                "Registry operator canary must use a GitHub HTTPS source repo "
+                "or provide expectedSourceCommitSha."
+            ),
+            error_type=VALIDATION_ERROR,
+        )
+
+    branch = source_branch(template)
+    if looks_like_commit_sha(branch):
+        return {
+            "phase": "Resolved",
+            "source": "source.branch",
+            "repo": repo_url,
+            "branch": branch,
+            "sourceCommitSha": branch,
+        }
+
+    owner, name = repo
+    url = (
+        f"https://api.github.com/repos/{quote(owner, safe='')}/"
+        f"{quote(name, safe='')}/branches/{quote(branch, safe='')}"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "tmprl-demo-cloud-registry-operator",
+    }
+    token = github_token_for_canary_source(template, config)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        with urlopen(Request(url, headers=headers), timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        if error.code == 404:
+            raise non_retryable_error(
+                (
+                    f"Canary source branch {branch!r} was not found or is not "
+                    f"accessible in {owner}/{name}."
+                ),
+                error_type=VALIDATION_ERROR,
+            ) from error
+        if error.code in {401, 403}:
+            raise non_retryable_error(
+                (
+                    f"Canary source branch lookup for {owner}/{name}@{branch} "
+                    f"failed with HTTP {error.code}; verify source GitHub auth."
+                ),
+                error_type=CONFIGURATION_ERROR,
+            ) from error
+        raise RuntimeError(
+            f"Canary source branch lookup failed with HTTP {error.code}."
+        ) from error
+    except (OSError, URLError) as error:
+        raise RuntimeError(
+            f"Canary source branch lookup for {owner}/{name}@{branch} failed: {error}"
+        ) from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise RuntimeError(
+            f"Canary source branch lookup for {owner}/{name}@{branch} returned invalid JSON."
+        ) from error
+
+    commit = payload.get("commit") if isinstance(payload, dict) else None
+    source_sha = commit.get("sha") if isinstance(commit, dict) else None
+    if not isinstance(source_sha, str) or not looks_like_commit_sha(source_sha):
+        raise RuntimeError(
+            f"Canary source branch lookup for {owner}/{name}@{branch} did not return a commit SHA."
+        )
+
+    return {
+        "phase": "Resolved",
+        "source": "github",
+        "repo": repo_url,
+        "branch": branch,
+        "sourceCommitSha": source_sha,
+    }
+
+
+def github_repo_from_url(url: str | None) -> tuple[str, str] | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parsed = urlparse(url.strip())
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return None
+    repo = parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return parts[0], repo
+
+
+def github_token_for_canary_source(
+    template: dict[str, Any],
+    config: WorkerConfig,
+) -> str | None:
+    secret_ref = source_git_repository_secret_ref(template)
+    if not isinstance(secret_ref, dict):
+        return None
+    secret_name = secret_ref.get("name")
+    if not isinstance(secret_name, str) or not secret_name:
+        return None
+    data = read_secret_data(config.source_watch_namespace, secret_name)
+    if not isinstance(data, dict):
+        return None
+    for key in ("password", "token", "githubToken", "GITHUB_TOKEN"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 @activity.defn

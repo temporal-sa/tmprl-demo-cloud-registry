@@ -664,6 +664,63 @@ def test_operator_canary_plan_uses_unique_name_and_expected_annotations(monkeypa
     assert plan["namespace"].startswith("tmprl-dem-cld-operator-canary-")
 
 
+def test_operator_canary_plan_resolves_unannotated_source_branch(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-test-1234")
+    source_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    template = project(worker=True)
+    template["metadata"]["annotations"].pop(SOURCE_COMMIT_ANNOTATION)
+    calls = []
+
+    class FakeHTTPResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"commit": {"sha": source_sha}}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return FakeHTTPResponse()
+
+    monkeypatch.setattr(
+        canary,
+        "read_secret_data",
+        lambda namespace, name: {"password": "github_pat_test"},
+    )
+    monkeypatch.setattr(canary, "urlopen", fake_urlopen)
+
+    plan = plan_registry_operator_canary(
+        {
+            "workflowID": "worker-controller-gate",
+            "runID": "run-1",
+            "projectNamePrefix": "operator-canary",
+            "expectedOperatorImage": "example.com/operator:git-test",
+            "expectedOperatorSourceSha": "e12b0ed9d450",
+            "demoProjectTemplate": template,
+        }
+    )
+
+    annotations = plan["demoProject"]["metadata"]["annotations"]
+    assert annotations[SOURCE_COMMIT_ANNOTATION] == source_sha
+    assert plan["expectedSourceCommitSha"] == source_sha
+    assert plan["sourceResolution"] == {
+        "phase": "Resolved",
+        "source": "github",
+        "repo": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        "branch": "main",
+        "sourceCommitSha": source_sha,
+    }
+    assert calls == [
+        "https://api.github.com/repos/temporal-sa/demo-banking-app-money-transfer/branches/main"
+    ]
+
+
 def test_operator_canary_plan_rejects_unexpected_source_sha(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "actual")

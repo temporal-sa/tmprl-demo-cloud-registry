@@ -411,9 +411,13 @@ def resolved_codebuild_source_version(
     fallback: str | None,
 ) -> str | None:
     resolved = build.get("resolvedSourceVersion")
+    if isinstance(resolved, str) and looks_like_commit_sha(resolved):
+        return resolved
+    if fallback and looks_like_commit_sha(fallback):
+        return fallback
     if isinstance(resolved, str) and resolved:
         return resolved
-    return fallback if fallback and looks_like_commit_sha(fallback) else None
+    return None
 
 
 def codebuild_error_message(build: dict[str, Any]) -> str:

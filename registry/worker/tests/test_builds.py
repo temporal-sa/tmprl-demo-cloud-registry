@@ -227,6 +227,16 @@ def test_codebuild_build_id_is_absent_without_heartbeat_details(monkeypatch):
     assert builds.codebuild_build_id_from_heartbeat() is None
 
 
+def test_codebuild_source_resolution_prefers_commit_fallback_over_branch_marker():
+    assert (
+        builds.resolved_codebuild_source_version(
+            {"resolvedSourceVersion": "main"},
+            SOURCE_SHA,
+        )
+        == SOURCE_SHA
+    )
+
+
 def test_source_config_derives_codebuild_private_source_auth():
     source = builds.source_config(private_source_demo_project())
 

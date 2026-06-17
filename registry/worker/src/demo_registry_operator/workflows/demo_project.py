@@ -6,6 +6,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from demo_registry_operator.activities.builds.codebuild.execution import (
@@ -1057,7 +1058,10 @@ class RegistryOperatorCanaryWorkflow:
             "cleanup": cleanup_result,
         }
         if result["phase"] != "Succeeded":
-            raise RuntimeError(
-                "Registry operator canary failed; promotion or cleanup did not pass"
+            raise ApplicationError(
+                "Registry operator canary failed; promotion or cleanup did not pass",
+                result,
+                type="RegistryOperatorCanaryFailed",
+                non_retryable=True,
             )
         return result
