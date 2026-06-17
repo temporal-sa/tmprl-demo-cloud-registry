@@ -552,7 +552,7 @@ async def signal_registry_operator_canary_force_reconcile_async(
     workflow_id = f"demo-project/{string_field(plan, 'project')}"
     client = await connect(config)
     handle = client.get_workflow_handle(workflow_id)
-    await handle.signal("force_reconcile", token, reason)
+    await handle.signal("force_reconcile", args=[token, reason])
     return {
         "phase": "Signaled",
         "workflowID": workflow_id,

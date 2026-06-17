@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -957,6 +958,39 @@ def test_apply_operator_canary_project_signals_target_workflow(monkeypatch):
     assert result["action"] == "created"
     assert result["workflow"] == {"phase": "Signaled"}
     assert signals == [(plan, demo_project)]
+
+
+def test_operator_canary_force_reconcile_signal_passes_args(monkeypatch):
+    calls = []
+    unset = object()
+
+    class FakeHandle:
+        async def signal(self, signal, arg=unset, *, args=None, **_kwargs):
+            calls.append((signal, arg, args))
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            calls.append(("handle", workflow_id))
+            return FakeHandle()
+
+    async def fake_connect(_config):
+        return FakeClient()
+
+    monkeypatch.setattr(canary, "connect", fake_connect)
+
+    result = asyncio.run(
+        canary.signal_registry_operator_canary_force_reconcile_async(
+            {"project": "operator-canary-abc123"},
+            token="rotation-token",
+            reason="rotate-temporal-auth",
+        )
+    )
+
+    assert result["workflowID"] == "demo-project/operator-canary-abc123"
+    assert calls[0] == ("handle", "demo-project/operator-canary-abc123")
+    assert calls[1][0] == "force_reconcile"
+    assert calls[1][1] is unset
+    assert calls[1][2] == ["rotation-token", "rotate-temporal-auth"]
 
 
 def test_worker_deployment_config_uses_controller_env(monkeypatch):
