@@ -24,6 +24,9 @@ from demo_registry_operator.resources import (
     project_secret_prefix,
     spec_of,
     TEMPORAL_AUTH_MODE_API_KEY,
+    TEMPORAL_AUTH_MODE_MTLS,
+    TEMPORAL_MTLS_CA_SECRET_PATH,
+    TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
     temporal_components,
     temporal_auth_runtime_status,
     temporal_auth_mode,
@@ -44,9 +47,17 @@ TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
 
 
 @activity.defn
-def plan_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]:
+def plan_external_resources(request: dict[str, Any]) -> dict[str, Any]:
     """Return a side-effect-free external-resource reconcile plan."""
 
+    demo_project = request.get("demoProject") if isinstance(request, dict) else None
+    if not isinstance(demo_project, dict):
+        demo_project = request
+    force_temporal_auth_rotation = (
+        bool(request.get("forceTemporalAuthRotation"))
+        if isinstance(request, dict)
+        else False
+    )
     config = WorkerConfig.from_env()
     checked_at = datetime.now(UTC).isoformat()
     activity.logger.info(
@@ -61,6 +72,7 @@ def plan_external_resources(demo_project: dict[str, Any]) -> dict[str, Any]:
         "mode": config.external_resource_mode,
         "checkedAt": checked_at,
         "kubernetesNamespace": project_namespace(demo_project),
+        "forceTemporalAuthRotation": force_temporal_auth_rotation,
     }
 
 
@@ -110,6 +122,7 @@ def reconcile_temporal_cloud_resource(plan: dict[str, Any]) -> dict[str, Any]:
         phase="ManualSetupRequired",
         checked_at=string_field(plan, "checkedAt"),
         fail_activity_on_error=True,
+        force_auth_rotation=bool(plan.get("forceTemporalAuthRotation")),
     )
 
 
@@ -391,6 +404,16 @@ def verify_secrets_manager_paths(
         managed_by="platform",
         required_properties=temporal_runtime_secret_properties(demo_project),
     )
+    temporal_mtls_ca = secret_status(
+        secretsmanager,
+        TEMPORAL_MTLS_CA_SECRET_PATH,
+        required=(
+            temporal_required
+            and temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS
+        ),
+        managed_by="platform",
+        required_properties=TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
+    )
     user_managed = [
         secret_status(
             secretsmanager,
@@ -405,7 +428,12 @@ def verify_secrets_manager_paths(
         )
         for secret_name in user_secret_names(demo_project)
     ]
-    all_secret_statuses = [temporal_bootstrap, temporal_secret, *user_managed]
+    all_secret_statuses = [
+        temporal_bootstrap,
+        temporal_secret,
+        temporal_mtls_ca,
+        *user_managed,
+    ]
     phase = aggregate_secret_phase(all_secret_statuses)
     return {
         "phase": phase,
@@ -413,6 +441,7 @@ def verify_secrets_manager_paths(
         "secretPrefix": project_secret_prefix(demo_project),
         "temporalBootstrap": temporal_bootstrap,
         "temporalCredentials": temporal_secret,
+        "temporalMtlsCa": temporal_mtls_ca,
         "userManaged": user_managed,
     }
 
@@ -554,6 +583,7 @@ def temporal_cloud_status(
     phase: str,
     checked_at: str | None = None,
     fail_activity_on_error: bool = False,
+    force_auth_rotation: bool = False,
 ) -> dict[str, Any]:
     temporal_required = bool(temporal_components(demo_project))
     if not temporal_required:
@@ -564,32 +594,13 @@ def temporal_cloud_status(
             "message": "No component currently requires Temporal credentials.",
         }
 
-    auth_mode = temporal_auth_mode(demo_project)
-    if auth_mode != TEMPORAL_AUTH_MODE_API_KEY:
-        return {
-            "phase": "Error",
-            "provider": "temporal-cloud",
-            "mode": config.temporal_cloud_mode,
-            "reason": "UnsupportedTemporalAuthMode",
-            "message": (
-                "Temporal Cloud mTLS auth is accepted in project configuration "
-                "but is not implemented by this operator version."
-            ),
-            "auth": temporal_auth_status(demo_project),
-            "namespace": {
-                "name": temporal_namespace(demo_project),
-                "action": "blocked",
-                "deletionPolicy": "retain-until-explicitly-approved",
-            },
-            **temporal_auth_runtime_status(demo_project),
-        }
-
     if config.temporal_cloud_mode == "cloud-api" and config.external_resource_mode == "aws":
         return temporal_cloud_api_status(
             demo_project,
             config,
             checked_at=checked_at or datetime.now(UTC).isoformat(),
             fail_activity_on_error=fail_activity_on_error,
+            force_auth_rotation=force_auth_rotation,
         )
 
     return {
@@ -599,6 +610,7 @@ def temporal_cloud_status(
         "accountId": config.temporal_cloud_account_id,
         "region": config.temporal_cloud_region,
         "auth": temporal_auth_status(demo_project),
+        "forceTemporalAuthRotation": force_auth_rotation,
         "message": (
             "Temporal Cloud reconciliation requires cloud-api mode with aws "
             "external resource reconciliation."
@@ -623,6 +635,7 @@ def temporal_cloud_api_status(
     *,
     checked_at: str,
     fail_activity_on_error: bool = False,
+    force_auth_rotation: bool = False,
 ) -> dict[str, Any]:
     """Create or verify the Temporal Cloud namespace, scoped service account, and
     runtime API key via the Cloud Operations API, writing the runtime credential
@@ -694,6 +707,7 @@ def temporal_cloud_api_status(
                 target_host=config.temporal_cloud_ops_host,
                 api_version=config.temporal_cloud_api_version,
                 heartbeat=heartbeat,
+                force_auth_rotation=force_auth_rotation,
             )
         )
     except Exception as error:  # noqa: BLE001 - surface as status, do not crash reconcile

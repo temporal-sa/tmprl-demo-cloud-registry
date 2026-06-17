@@ -895,20 +895,18 @@ def external_resource_blocker(
         return None
 
     temporal_cloud = external_resources.get("temporalCloud")
-    if (
-        isinstance(temporal_cloud, dict)
-        and temporal_cloud.get("reason") == "UnsupportedTemporalAuthMode"
-    ):
+    if isinstance(temporal_cloud, dict) and temporal_cloud.get("phase") == "Error":
+        reason = str(temporal_cloud.get("reason") or "TemporalCloudError")
         return {
             "phase": "Error",
-            "reason": "UnsupportedTemporalAuthMode",
+            "reason": reason,
             "message": temporal_cloud.get(
                 "message",
-                "Temporal Cloud auth mode is not supported by this operator version.",
+                "Temporal Cloud external resource reconciliation failed.",
             ),
             "temporalCloud": {
                 key: temporal_cloud.get(key)
-                for key in ("phase", "reason", "message", "auth")
+                for key in ("phase", "reason", "message", "auth", "namespace")
                 if key in temporal_cloud
             },
         }

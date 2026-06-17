@@ -28,13 +28,18 @@ from typing import Any, Protocol
 from demo_registry_operator import derive
 from demo_registry_operator.activities.temporal_auth import (
     ApiKeyResult,
+    accepted_client_ca_bundle,
     mirror_runtime_kubernetes_secrets,
     parse_datetime,
+    prepare_mtls_ca_material,
     reconcile_api_key_auth,
+    reconcile_mtls_auth,
+    temporal_mtls_client_common_name,
     temporal_api_key_rotation_decision,
 )
 from demo_registry_operator.resources import (
     TEMPORAL_AUTH_MODE_API_KEY,
+    TEMPORAL_AUTH_MODE_MTLS,
     project_name,
     temporal_auth_mode,
     temporal_auth_runtime_status,
@@ -78,6 +83,7 @@ class NamespaceInfo:
     grpc_address: str
     web_address: str | None = None
     state: str | None = None
+    auth_mode: str | None = None
     created: bool = False
 
 
@@ -99,8 +105,18 @@ class TemporalCloudReconciler(Protocol):
         name: str,
         region: str,
         retention_days: int,
+        auth_mode: str = TEMPORAL_AUTH_MODE_API_KEY,
+        accepted_client_ca: str | None = None,
+        certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
     ) -> NamespaceInfo: ...
+
+    async def configure_namespace_mtls(
+        self,
+        qualified_name: str,
+        accepted_client_ca: str,
+        certificate_common_name: str,
+    ) -> str: ...
 
     async def find_service_account(self, name: str) -> str | None: ...
 
@@ -140,6 +156,8 @@ async def reconcile_temporal_cloud(
     retention_days: int = DEFAULT_NAMESPACE_RETENTION_DAYS,
     enable_delete_protection: bool = True,
     mirror_kubernetes_secrets: bool = True,
+    force_auth_rotation: bool = False,
+    runtime_canary: Any = None,
 ) -> dict[str, Any]:
     """Create-or-verify the namespace, scoped service account, and runtime key.
 
@@ -162,22 +180,16 @@ async def reconcile_temporal_cloud(
         }
 
     auth_mode = temporal_auth_mode(demo_project)
-    if auth_mode != TEMPORAL_AUTH_MODE_API_KEY:
-        return {
-            "phase": "Error",
-            "provider": "temporal-cloud",
-            "mode": "cloud-api",
-            "checkedAt": checked_at,
-            "reason": "UnsupportedTemporalAuthMode",
-            "message": (
-                "Temporal Cloud mTLS auth is accepted in project configuration "
-                "but is not implemented by this operator version."
-            ),
-            "auth": temporal_auth_status(demo_project),
-            **temporal_auth_runtime_status(demo_project),
-        }
-
     short_name = desired_namespace_name(demo_project)
+    mtls_ca_material: dict[str, Any] | None = None
+    mtls_ca_rotation: dict[str, Any] | None = None
+    mtls_common_name: str | None = None
+    if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+        mtls_ca_material, mtls_ca_rotation = prepare_mtls_ca_material(
+            secret_store=secret_store,
+            checked_at=checked_at,
+        )
+        mtls_common_name = temporal_mtls_client_common_name(demo_project)
 
     namespace = await reconciler.find_namespace(short_name)
     # A deleted namespace has freed its name; treat it as absent so we recreate.
@@ -200,6 +212,26 @@ async def reconcile_temporal_cloud(
                 f"state {namespace.state}; not reusing or recreating."
             ),
             "namespace": {"name": namespace.qualified_name, "state": namespace.state},
+        }
+    if namespace is not None and namespace.auth_mode and namespace.auth_mode != auth_mode:
+        return {
+            "phase": "Error",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "reason": "TemporalAuthModeSwitchRequiresFinalize",
+            "message": (
+                "Temporal Cloud namespaces cannot support API-key and mTLS auth "
+                "at the same time. Finalize this project to delete the existing "
+                "namespace, then deploy it again with the new auth mode."
+            ),
+            "auth": temporal_auth_status(demo_project),
+            "namespace": {
+                "name": namespace.qualified_name,
+                "state": namespace.state,
+                "authMode": namespace.auth_mode,
+            },
+            **temporal_auth_runtime_status(demo_project),
         }
 
     namespace_created = False
@@ -226,22 +258,45 @@ async def reconcile_temporal_cloud(
             short_name,
             region,
             retention_days,
+            auth_mode=auth_mode,
+            accepted_client_ca=(
+                accepted_client_ca_bundle(mtls_ca_material)
+                if isinstance(mtls_ca_material, dict)
+                else None
+            ),
+            certificate_common_name=mtls_common_name,
             enable_delete_protection=enable_delete_protection,
         )
         namespace_created = True
 
-    auth_status = await reconcile_api_key_auth(
-        demo_project,
-        namespace=namespace,
-        reconciler=reconciler,
-        secret_store=secret_store,
-        checked_at=checked_at,
-        api_key_ttl_days=api_key_ttl_days,
-        rotate_before_days=rotate_before_days,
-        mirror_kubernetes_secrets=mirror_kubernetes_secrets,
-    )
+    if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+        auth_status = await reconcile_mtls_auth(
+            demo_project,
+            namespace=namespace,
+            reconciler=reconciler,
+            secret_store=secret_store,
+            checked_at=checked_at,
+            mirror_kubernetes_secrets=mirror_kubernetes_secrets,
+            force_client_rotation=force_auth_rotation,
+            runtime_canary=runtime_canary,
+            ca_material=mtls_ca_material,
+            ca_rotation=mtls_ca_rotation,
+        )
+    else:
+        auth_status = await reconcile_api_key_auth(
+            demo_project,
+            namespace=namespace,
+            reconciler=reconciler,
+            secret_store=secret_store,
+            checked_at=checked_at,
+            api_key_ttl_days=api_key_ttl_days,
+            rotate_before_days=rotate_before_days,
+            mirror_kubernetes_secrets=mirror_kubernetes_secrets,
+            force_rotation=force_auth_rotation,
+            runtime_canary=runtime_canary,
+        )
 
-    return {
+    status: dict[str, Any] = {
         "phase": "Ready",
         "provider": "temporal-cloud",
         "mode": "cloud-api",
@@ -256,10 +311,11 @@ async def reconcile_temporal_cloud(
             "grpcAddress": namespace.grpc_address,
             "webAddress": namespace.web_address,
             "state": namespace.state,
+            "authMode": auth_mode,
         },
-        "serviceAccount": auth_status["serviceAccount"],
-        "apiKey": auth_status["apiKey"],
     }
+    status.update(auth_status)
+    return status
 
 
 async def finalize_temporal_cloud(
@@ -552,6 +608,9 @@ class CloudApiReconciler:
         name: str,
         region: str,
         retention_days: int,
+        auth_mode: str = TEMPORAL_AUTH_MODE_API_KEY,
+        accepted_client_ca: str | None = None,
+        certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
     ) -> NamespaceInfo:
         from temporalio.api.cloud.cloudservice.v1 import (
@@ -561,15 +620,37 @@ class CloudApiReconciler:
         from temporalio.api.cloud.namespace.v1 import (
             ApiKeyAuthSpec,
             CapacitySpec,
+            CertificateFilterSpec,
             LifecycleSpec,
+            MtlsAuthSpec,
             NamespaceSpec,
         )
+
+        auth_spec: dict[str, Any]
+        if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+            if not accepted_client_ca or not certificate_common_name:
+                raise ValueError(
+                    "mTLS namespace creation requires accepted_client_ca and "
+                    "certificate_common_name."
+                )
+            auth_spec = {
+                "api_key_auth": ApiKeyAuthSpec(enabled=False),
+                "mtls_auth": MtlsAuthSpec(
+                    enabled=True,
+                    accepted_client_ca=accepted_client_ca.encode("utf-8"),
+                    certificate_filters=[
+                        CertificateFilterSpec(common_name=certificate_common_name)
+                    ],
+                ),
+            }
+        else:
+            auth_spec = {"api_key_auth": ApiKeyAuthSpec(enabled=True)}
 
         spec = NamespaceSpec(
             name=name,
             regions=[region],
             retention_days=retention_days,
-            api_key_auth=ApiKeyAuthSpec(enabled=True),
+            **auth_spec,
             lifecycle=LifecycleSpec(enable_delete_protection=enable_delete_protection),
             # On-demand capacity must be specified explicitly; a namespace created
             # without a capacity spec fails activation ("Error loading capacity
@@ -582,6 +663,59 @@ class CloudApiReconciler:
             GetNamespaceRequest(namespace=response.namespace)
         )
         return self._namespace_info(got.namespace, created=True)
+
+    async def configure_namespace_mtls(
+        self,
+        qualified_name: str,
+        accepted_client_ca: str,
+        certificate_common_name: str,
+    ) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            GetNamespaceRequest,
+            UpdateNamespaceRequest,
+        )
+        from temporalio.api.cloud.namespace.v1 import (
+            ApiKeyAuthSpec,
+            CertificateFilterSpec,
+            MtlsAuthSpec,
+        )
+
+        got = await self._cs.get_namespace(GetNamespaceRequest(namespace=qualified_name))
+        namespace = got.namespace
+        spec = namespace.spec
+        desired_ca = accepted_client_ca.encode("utf-8")
+        current_mtls = spec.mtls_auth
+        current_filters = [
+            item.common_name for item in current_mtls.certificate_filters
+        ]
+        if (
+            current_mtls.enabled
+            and current_mtls.accepted_client_ca == desired_ca
+            and current_filters == [certificate_common_name]
+            and not spec.api_key_auth.enabled
+        ):
+            return "verified"
+
+        spec.api_key_auth = ApiKeyAuthSpec(enabled=False)
+        spec.mtls_auth = MtlsAuthSpec(
+            enabled=True,
+            accepted_client_ca=desired_ca,
+            certificate_filters=[
+                CertificateFilterSpec(common_name=certificate_common_name)
+            ],
+        )
+        response = await self._cs.update_namespace(
+            UpdateNamespaceRequest(
+                namespace=qualified_name,
+                spec=spec,
+                resource_version=namespace.resource_version,
+            )
+        )
+        await self._await_operation(
+            response.async_operation,
+            label=f"configure-mtls:{qualified_name}",
+        )
+        return "updated"
 
     async def find_service_account(self, name: str) -> str | None:
         from temporalio.api.cloud.cloudservice.v1 import GetServiceAccountsRequest
@@ -838,6 +972,7 @@ class CloudApiReconciler:
             grpc_address=f"{namespace.namespace}.tmprl.cloud:7233",
             web_address=endpoints.web_address or None,
             state=state,
+            auth_mode=namespace_auth_mode(namespace),
             created=created,
         )
 
@@ -879,6 +1014,24 @@ class SecretsManagerStore:
             kwargs["Tags"] = [{"Key": "managed-by", "Value": "demo-registry"}]
             self._client.create_secret(**kwargs)
 
+    def create_json_if_missing(
+        self,
+        path: str,
+        value: dict[str, Any],
+        description: str | None = None,
+    ) -> bool:
+        kwargs: dict[str, Any] = {"Name": path, "SecretString": json.dumps(value)}
+        if description:
+            kwargs["Description"] = description
+        kwargs["Tags"] = [{"Key": "managed-by", "Value": "demo-registry"}]
+        try:
+            self._client.create_secret(**kwargs)
+        except Exception as error:  # noqa: BLE001 - normalize boto error code
+            if _error_code(error) == "ResourceExistsException":
+                return False
+            raise
+        return True
+
     def delete(self, path: str) -> str:
         # Schedule deletion with a recovery window rather than force-deleting, so
         # a credential torn down by mistake can still be restored.
@@ -901,6 +1054,7 @@ async def run_cloud_api_reconcile(
     api_version: str | None = None,
     heartbeat: Any = None,
     enable_delete_protection: bool = True,
+    force_auth_rotation: bool = False,
 ) -> dict[str, Any]:
     """Connect the Cloud Operations client and run the reconcile orchestration."""
 
@@ -932,6 +1086,7 @@ async def run_cloud_api_reconcile(
         region=region,
         checked_at=checked_at,
         enable_delete_protection=enable_delete_protection,
+        force_auth_rotation=force_auth_rotation,
     )
 
 
@@ -1116,4 +1271,17 @@ def _error_code(error: Exception) -> str | None:
         info = response.get("Error")
         if isinstance(info, dict) and isinstance(info.get("Code"), str):
             return info["Code"]
+    return None
+
+
+def namespace_auth_mode(namespace: Any) -> str | None:
+    spec = getattr(namespace, "spec", None)
+    if spec is None:
+        return None
+    mtls_auth = getattr(spec, "mtls_auth", None)
+    if mtls_auth is not None and getattr(mtls_auth, "enabled", False):
+        return TEMPORAL_AUTH_MODE_MTLS
+    api_key_auth = getattr(spec, "api_key_auth", None)
+    if api_key_auth is not None and getattr(api_key_auth, "enabled", False):
+        return TEMPORAL_AUTH_MODE_API_KEY
     return None

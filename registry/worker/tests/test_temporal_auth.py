@@ -51,6 +51,10 @@ class FakeAuthReconciler:
             expiry_time="2027-06-13T00:00:00+00:00",
         )
 
+    async def delete_api_key(self, key_id):
+        self.calls.append(("delete_api_key", key_id))
+        return "deleted"
+
     def called(self, name):
         return [call for call in self.calls if call[0] == name]
 
@@ -68,7 +72,15 @@ class FakeSecretStore:
         self.store[path] = value
 
 
-def reconcile(reconciler, secret_store):
+async def passing_canary(credential):
+    return {
+        "phase": "Passed",
+        "ok": True,
+        "authMode": "apiKey" if credential.get("apiKey") else "mtls",
+    }
+
+
+def reconcile(reconciler, secret_store, *, runtime_canary=passing_canary):
     return asyncio.run(
         reconcile_api_key_auth(
             PROJECT,
@@ -79,6 +91,7 @@ def reconcile(reconciler, secret_store):
             api_key_ttl_days=30,
             rotate_before_days=10,
             mirror_kubernetes_secrets=False,
+            runtime_canary=runtime_canary,
         )
     )
 
@@ -101,6 +114,8 @@ def test_api_key_auth_creates_service_account_key_and_runtime_secret():
     assert secret["apiKey"] == "SECRET-TOKEN-VALUE"
     assert secret["tls"] == "true"
     assert secret["serviceAccountId"] == "sa-123"
+    assert secret["canary"]["ok"] is True
+    assert status["apiKey"]["canary"]["ok"] is True
 
 
 def test_api_key_auth_reuses_fresh_existing_runtime_secret():
@@ -127,3 +142,21 @@ def test_api_key_auth_reuses_fresh_existing_runtime_secret():
     assert reconciler.called("create_service_account") == []
     assert reconciler.called("create_api_key") == []
     assert secrets.writes == []
+
+
+def test_api_key_candidate_is_not_written_when_canary_fails():
+    reconciler = FakeAuthReconciler()
+    secrets = FakeSecretStore()
+
+    async def failing_canary(_credential):
+        return {"phase": "Failed", "ok": False}
+
+    try:
+        reconcile(reconciler, secrets, runtime_canary=failing_canary)
+    except RuntimeError as error:
+        assert "canary failed" in str(error)
+    else:
+        raise AssertionError("expected canary failure")
+
+    assert RUNTIME_PATH not in secrets.store
+    assert reconciler.called("delete_api_key") == [("delete_api_key", "key-abc")]

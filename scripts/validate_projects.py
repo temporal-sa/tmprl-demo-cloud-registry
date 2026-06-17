@@ -186,6 +186,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_service_names(document))
         errors.extend(validate_ingress_routes(document))
         errors.extend(validate_env_input_refs(document))
+        errors.extend(validate_temporal_auth_compatibility(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
         errors.extend(validate_registry(document))
@@ -511,15 +512,20 @@ def validate_env_input_refs(document: ProjectDocument) -> list[ProjectError]:
                 continue
 
             if input_ref in TEMPORAL_MTLS_INPUT_REFS:
-                errors.append(
-                    ProjectError(
-                        document.path,
-                        (
-                            f"{path} {input_ref!r} is reserved until Temporal "
-                            "mTLS runtime secrets are implemented"
-                        ),
+                if proxy_enabled:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"{path} {input_ref!r} cannot be used with temporalProxy",
+                        )
                     )
-                )
+                if auth_mode != TEMPORAL_AUTH_MODE_MTLS:
+                    errors.append(
+                        ProjectError(
+                            document.path,
+                            f"{path} {input_ref!r} requires temporal auth mode mtls",
+                        )
+                    )
                 continue
 
             if input_ref.startswith("temporal."):
@@ -561,6 +567,37 @@ def validate_env_input_refs(document: ProjectDocument) -> list[ProjectError]:
                     )
                 )
 
+    return errors
+
+
+def validate_temporal_auth_compatibility(
+    document: ProjectDocument,
+) -> list[ProjectError]:
+    if temporal_auth_mode(document) != TEMPORAL_AUTH_MODE_MTLS:
+        return []
+
+    errors: list[ProjectError] = []
+    for component_name, component in components(document).items():
+        if temporal_proxy_enabled(component):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.temporalProxy.enabled cannot "
+                        "be true with temporal auth mode mtls"
+                    ),
+                )
+            )
+        if worker_versioning_enabled(component):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.worker.versioning.enabled "
+                        "cannot be true with temporal auth mode mtls"
+                    ),
+                )
+            )
     return errors
 
 
@@ -882,6 +919,14 @@ def component_needs_temporal(component: dict[str, Any]) -> bool:
 def temporal_proxy_enabled(component: dict[str, Any]) -> bool:
     temporal_proxy = component.get("temporalProxy")
     return isinstance(temporal_proxy, dict) and temporal_proxy.get("enabled") is True
+
+
+def worker_versioning_enabled(component: dict[str, Any]) -> bool:
+    worker = component.get("worker")
+    if not isinstance(worker, dict):
+        return False
+    versioning = worker.get("versioning")
+    return isinstance(versioning, dict) and versioning.get("enabled") is True
 
 
 def temporal_auth_mode(document: ProjectDocument) -> str:

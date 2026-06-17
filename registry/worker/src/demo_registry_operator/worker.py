@@ -17,8 +17,10 @@ from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
     delete_registry_operator_canary_project,
     plan_registry_operator_canary,
+    rotate_registry_operator_canary_credentials,
     wait_registry_operator_canary_cleanup,
     wait_for_registry_operator_canary_promotion,
+    wait_for_registry_operator_canary_rotation,
 )
 from demo_registry_operator.activities.builds.codebuild.execution import (
     start_project_image_build,
@@ -124,6 +126,8 @@ async def main() -> None:
                     plan_registry_operator_canary,
                     apply_registry_operator_canary_project,
                     wait_for_registry_operator_canary_promotion,
+                    rotate_registry_operator_canary_credentials,
+                    wait_for_registry_operator_canary_rotation,
                     delete_registry_operator_canary_project,
                     wait_registry_operator_canary_cleanup,
                     load_current_demo_project_for_reconcile,

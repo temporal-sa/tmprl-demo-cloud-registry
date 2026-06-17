@@ -1413,6 +1413,11 @@ def worker_connection_resource(
     demo_project: dict[str, Any],
     external_resources: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        raise ValueError(
+            "Worker Controller versioning cannot be used with Temporal mTLS auth "
+            "until Connection supports client certificate refs."
+        )
     return {
         "apiVersion": TEMPORAL_WORKER_CONTROLLER_API_VERSION,
         "kind": "Connection",
@@ -1736,6 +1741,11 @@ def temporal_proxy_container(
     demo_project: dict[str, Any],
     image_overrides: dict[str, str],
 ) -> dict[str, Any]:
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        raise ValueError(
+            "temporalProxy cannot be used with Temporal mTLS auth; the proxy "
+            "currently supports API-key upstream authentication only."
+        )
     return {
         "name": TEMPORAL_PROXY_CONTAINER_NAME,
         "image": temporal_proxy_image(demo_project, image_overrides),
@@ -1946,13 +1956,6 @@ def env_value_from_input_ref(
     component: dict[str, Any],
     input_ref: str,
 ) -> dict[str, Any]:
-    if input_ref in TEMPORAL_MTLS_INPUT_REF_ENV:
-        raise ValueError(
-            "components."
-            f"{component_name}.env cannot use {input_ref!r} until Temporal mTLS "
-            "runtime secrets are implemented"
-        )
-
     if input_ref in TEMPORAL_INPUT_REF_ENV:
         if temporal_proxy_enabled(component):
             raise ValueError(
@@ -2292,38 +2295,40 @@ def external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "name": TEMPORAL_SECRET_NAME,
                 "creationPolicy": "Owner",
             },
-            "data": [
-                {
-                    "secretKey": STANDARD_TEMPORAL_ENV["endpoint"],
-                    "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
-                        "property": "address",
-                    },
-                },
-                {
-                    "secretKey": STANDARD_TEMPORAL_ENV["namespace"],
-                    "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
-                        "property": "namespace",
-                    },
-                },
-                {
-                    "secretKey": STANDARD_TEMPORAL_ENV["api_key"],
-                    "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
-                        "property": "apiKey",
-                    },
-                },
-                {
-                    "secretKey": STANDARD_TEMPORAL_ENV["tls"],
-                    "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
-                        "property": "tls",
-                    },
-                },
-            ],
+            "data": temporal_credentials_external_secret_data(demo_project),
         },
     }
+
+
+def temporal_credentials_external_secret_data(
+    demo_project: dict[str, Any],
+) -> list[dict[str, Any]]:
+    fields = [
+        (STANDARD_TEMPORAL_ENV["endpoint"], "address"),
+        (STANDARD_TEMPORAL_ENV["namespace"], "namespace"),
+        (STANDARD_TEMPORAL_ENV["tls"], "tls"),
+    ]
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        fields.extend(
+            [
+                (TEMPORAL_MTLS_INPUT_REF_ENV["temporal.caCert"], "caCert"),
+                (TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientCert"], "clientCert"),
+                (TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientKey"], "clientKey"),
+            ]
+        )
+    else:
+        fields.append((STANDARD_TEMPORAL_ENV["api_key"], "apiKey"))
+
+    return [
+        {
+            "secretKey": secret_key,
+            "remoteRef": {
+                "key": temporal_secret_remote_path(demo_project),
+                "property": property_name,
+            },
+        }
+        for secret_key, property_name in fields
+    ]
 
 
 def worker_runtime_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
@@ -2812,6 +2817,21 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "managedBy": "platform",
                 "requiredProperties": temporal_runtime_secret_properties(demo_project),
                 "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
+            },
+            "temporalMtlsCa": {
+                "path": TEMPORAL_MTLS_CA_SECRET_PATH,
+                "required": (
+                    temporal_required
+                    and temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS
+                ),
+                "managedBy": "platform",
+                "requiredProperties": TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
+                "phase": (
+                    "ManualSetupRequired"
+                    if temporal_required
+                    and temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS
+                    else "NotRequired"
+                ),
             },
             "userManaged": [
                 {
@@ -3474,7 +3494,7 @@ def temporal_api_key_status(demo_project: dict[str, Any]) -> dict[str, Any]:
 def temporal_mtls_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     namespace = project_temporal_namespace(demo_project)
     return {
-        "action": "blocked-until-implemented",
+        "action": "create-or-verify-or-rotate",
         "caScope": "platform",
         "clientIdentityScope": "namespace",
         "secretRemotePath": temporal_secret_remote_path(demo_project),

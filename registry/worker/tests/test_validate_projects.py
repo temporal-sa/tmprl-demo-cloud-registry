@@ -122,7 +122,7 @@ def test_temporal_input_ref_cannot_expose_direct_credentials_with_proxy():
     ]
 
 
-def test_mtls_cert_input_refs_are_reserved_until_mtls_secrets_exist():
+def test_mtls_cert_input_refs_require_mtls_auth_mode():
     spec = base_spec()
     spec["components"]["app"]["env"] = [
         {
@@ -137,6 +137,49 @@ def test_mtls_cert_input_refs_are_reserved_until_mtls_secrets_exist():
     assert [error.message for error in errors] == [
         (
             "components.app.env[0].valueFrom.inputRef 'temporal.caCert' "
-            "is reserved until Temporal mTLS runtime secrets are implemented"
+            "requires temporal auth mode mtls"
         )
+    ]
+
+
+def test_mtls_cert_input_refs_are_allowed_with_mtls_auth_mode():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"]["env"] = [
+        {
+            "name": "TEMPORAL_CA_PEM",
+            "valueFrom": {"inputRef": "temporal.caCert"},
+        }
+    ]
+    document = project_document(spec)
+
+    assert validate_projects.validate_env_input_refs(document) == []
+
+
+def test_mtls_auth_rejects_temporal_proxy_and_worker_versioning():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"]["temporalProxy"] = {"enabled": True}
+    spec["components"]["worker"] = {
+        "build": "app",
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "taskQueue": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_temporal_auth_compatibility(document)
+
+    assert [error.message for error in errors] == [
+        (
+            "components.app.temporalProxy.enabled cannot be true with temporal "
+            "auth mode mtls"
+        ),
+        (
+            "components.worker.worker.versioning.enabled cannot be true with "
+            "temporal auth mode mtls"
+        ),
     ]

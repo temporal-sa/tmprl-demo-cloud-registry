@@ -19,7 +19,9 @@ with workflow.unsafe.imports_passed_through():
         apply_registry_operator_canary_project,
         delete_registry_operator_canary_project,
         plan_registry_operator_canary,
+        rotate_registry_operator_canary_credentials,
         wait_for_registry_operator_canary_promotion,
+        wait_for_registry_operator_canary_rotation,
         wait_registry_operator_canary_cleanup,
     )
     from demo_registry_operator.activities.external_resources import (
@@ -110,6 +112,7 @@ FAILED_RECONCILE_PHASES = {
     "SmokeCheckFailed",
     "WorkerRolloutFailed",
 }
+FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
 def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
@@ -164,11 +167,19 @@ def rotation_reconcile_identity(
 ) -> dict[str, str]:
     identity = reconcile_identity(demo_project)
     rotate_at = rotation.get("rotateAt") if isinstance(rotation, dict) else None
+    auth_mode = rotation.get("authMode") if isinstance(rotation, dict) else None
     key_id = rotation.get("keyId") if isinstance(rotation, dict) else None
+    client_serial = (
+        rotation.get("clientCertSerialNumber") if isinstance(rotation, dict) else None
+    )
+    if isinstance(auth_mode, str) and auth_mode:
+        identity["temporalAuthMode"] = auth_mode
     if isinstance(rotate_at, str) and rotate_at:
-        identity["temporalApiKeyRotateAt"] = rotate_at
+        identity["temporalAuthRotateAt"] = rotate_at
     if isinstance(key_id, str) and key_id:
         identity["temporalApiKeyId"] = key_id
+    if isinstance(client_serial, str) and client_serial:
+        identity["temporalClientCertSerialNumber"] = client_serial
     return identity
 
 
@@ -203,35 +214,63 @@ def demo_project_with_temporal_api_key(
     return rendered
 
 
-def temporal_api_key_rotation_state(
+def temporal_auth_rotation_state(
     temporal_status: dict[str, Any],
 ) -> dict[str, Any] | None:
     api_key = temporal_status.get("apiKey")
-    if not isinstance(api_key, dict):
+    if isinstance(api_key, dict):
+        expiry_time = api_key.get("expiryTime")
+        if not isinstance(expiry_time, str) or not expiry_time:
+            return None
+
+        expiry = parse_datetime(expiry_time)
+        if expiry is None:
+            return None
+
+        rotate_before_days = api_key.get("rotateBeforeExpiryDays")
+        if not isinstance(rotate_before_days, int) or rotate_before_days < 0:
+            rotate_before_days = 10
+        rotate_at = expiry - timedelta(days=rotate_before_days)
+
+        state: dict[str, Any] = {
+            "authMode": "apiKey",
+            "expiryTime": expiry.isoformat(),
+            "rotateAt": rotate_at.isoformat(),
+            "rotateBeforeExpiryDays": rotate_before_days,
+        }
+        key_id = api_key.get("keyId")
+        if isinstance(key_id, str) and key_id:
+            state["keyId"] = key_id
+        return state
+
+    mtls = temporal_status.get("mtls")
+    mtls = mtls if isinstance(mtls, dict) else {}
+    client = mtls.get("clientCertificate")
+    if not isinstance(client, dict):
         return None
-
-    expiry_time = api_key.get("expiryTime")
-    if not isinstance(expiry_time, str) or not expiry_time:
+    rotate_at = client.get("rotateAt")
+    if not isinstance(rotate_at, str) or not rotate_at:
         return None
-
-    expiry = parse_datetime(expiry_time)
-    if expiry is None:
+    parsed_rotate_at = parse_datetime(rotate_at)
+    if parsed_rotate_at is None:
         return None
-
-    rotate_before_days = api_key.get("rotateBeforeExpiryDays")
-    if not isinstance(rotate_before_days, int) or rotate_before_days < 0:
-        rotate_before_days = 10
-    rotate_at = expiry - timedelta(days=rotate_before_days)
-
-    state: dict[str, Any] = {
-        "expiryTime": expiry.isoformat(),
-        "rotateAt": rotate_at.isoformat(),
-        "rotateBeforeExpiryDays": rotate_before_days,
+    state = {
+        "authMode": "mtls",
+        "rotateAt": parsed_rotate_at.isoformat(),
     }
-    key_id = api_key.get("keyId")
-    if isinstance(key_id, str) and key_id:
-        state["keyId"] = key_id
+    serial = client.get("serialNumber")
+    if isinstance(serial, str) and serial:
+        state["clientCertSerialNumber"] = serial
     return state
+
+
+def temporal_api_key_rotation_state(
+    temporal_status: dict[str, Any],
+) -> dict[str, Any] | None:
+    state = temporal_auth_rotation_state(temporal_status)
+    if isinstance(state, dict) and state.get("authMode") == "apiKey":
+        return state
+    return None
 
 
 def rotation_datetime(rotation: dict[str, Any] | None) -> datetime | None:
@@ -412,12 +451,21 @@ class DemoProjectWorkflow:
             self._status = {
                 "project": project_name,
                 "phase": (
-                    "RotatingTemporalApiKey" if rotation_due else "Reconciling"
+                    "RotatingTemporalAuth" if rotation_due else "Reconciling"
                 ),
             }
+            force_temporal_auth_rotation = (
+                force_reconcile_requested
+                and isinstance(force_reconcile, dict)
+                and force_reconcile.get("reason")
+                == FORCE_TEMPORAL_AUTH_ROTATION_REASON
+            )
             external_plan = await workflow.execute_activity(
                 plan_external_resources,
-                demo_project,
+                {
+                    "demoProject": demo_project,
+                    "forceTemporalAuthRotation": force_temporal_auth_rotation,
+                },
                 start_to_close_timeout=timedelta(minutes=10),
                 retry_policy=COMMON_RETRY_POLICY,
             )
@@ -436,7 +484,7 @@ class DemoProjectWorkflow:
             )
             demo_project = demo_project_with_temporal_api_key(demo_project, temporal_status)
             self._last_demo_project = demo_project
-            self._temporal_api_key_rotation = temporal_api_key_rotation_state(
+            self._temporal_api_key_rotation = temporal_auth_rotation_state(
                 temporal_status
             )
             secrets_status = await workflow.execute_activity(
@@ -944,7 +992,7 @@ class DemoProjectWorkflow:
                 await workflow.wait_condition(
                     self._has_pending_action,
                     timeout=timeout,
-                    timeout_summary="temporal-api-key-rotation",
+                    timeout_summary="temporal-auth-rotation",
                 )
                 return
             except asyncio.TimeoutError:
@@ -1087,13 +1135,42 @@ class RegistryOperatorCanaryWorkflow:
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         workflow_info = workflow.info()
+        canary_results = await asyncio.gather(
+            self._run_auth_canary(request, "apiKey", workflow_info),
+            self._run_auth_canary(request, "mtls", workflow_info),
+        )
+        canaries = {
+            str(result.get("authMode")): result for result in canary_results
+        }
+        ok = all(result.get("phase") == "Succeeded" for result in canary_results)
+        result = {
+            "phase": "Succeeded" if ok else "Failed",
+            "canaries": canaries,
+        }
+        if result["phase"] != "Succeeded":
+            raise ApplicationError(
+                "Registry operator canary failed; one or more auth-mode canaries did not pass",
+                result,
+                type="RegistryOperatorCanaryFailed",
+                non_retryable=True,
+            )
+        return result
+
+    async def _run_auth_canary(
+        self,
+        request: dict[str, Any],
+        auth_mode: str,
+        workflow_info: Any,
+    ) -> dict[str, Any]:
+        branch_request = registry_operator_canary_branch_request(
+            request,
+            auth_mode=auth_mode,
+            workflow_id=workflow_info.workflow_id,
+            run_id=workflow_info.run_id,
+        )
         plan = await workflow.execute_activity(
             plan_registry_operator_canary,
-            {
-                **request,
-                "workflowID": workflow_info.workflow_id,
-                "runID": workflow_info.run_id,
-            },
+            branch_request,
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
@@ -1111,16 +1188,44 @@ class RegistryOperatorCanaryWorkflow:
             "phase": "NotStarted",
             "ok": False,
         }
+        rotation_signal_result: dict[str, Any] = {
+            "phase": "NotStarted",
+            "ok": False,
+        }
+        rotation_result: dict[str, Any] = {
+            "phase": "NotStarted",
+            "ok": False,
+        }
         promotion_ok = False
+        rotation_ok = False
         try:
+            timeout_seconds = max(1, int(plan.get("timeoutSeconds", 900)))
             promotion_result = await workflow.execute_activity(
                 wait_for_registry_operator_canary_promotion,
                 plan,
-                start_to_close_timeout=timedelta(minutes=20),
+                start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
                 heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=CHECK_RETRY_POLICY,
             )
             promotion_ok = bool(promotion_result.get("ok"))
+            if promotion_ok:
+                rotation_signal_result = await workflow.execute_activity(
+                    rotate_registry_operator_canary_credentials,
+                    plan,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=COMMON_RETRY_POLICY,
+                )
+                rotation_result = await workflow.execute_activity(
+                    wait_for_registry_operator_canary_rotation,
+                    {
+                        **plan,
+                        "rotationToken": rotation_signal_result.get("token"),
+                    },
+                    start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=CHECK_RETRY_POLICY,
+                )
+                rotation_ok = bool(rotation_result.get("ok"))
         finally:
             delete_result = await workflow.execute_activity(
                 delete_registry_operator_canary_project,
@@ -1148,21 +1253,39 @@ class RegistryOperatorCanaryWorkflow:
                     retry_policy=CHECK_RETRY_POLICY,
                 )
 
+        succeeded = promotion_ok and rotation_ok and bool(cleanup_result.get("ok"))
         result = {
             "project": plan.get("project"),
-            "phase": (
-                "Succeeded" if promotion_ok and cleanup_result.get("ok") else "Failed"
-            ),
+            "authMode": auth_mode,
+            "phase": "Succeeded" if succeeded else "Failed",
             "plan": plan,
             "apply": apply_result,
             "promotion": promotion_result,
+            "rotationSignal": rotation_signal_result,
+            "rotation": rotation_result,
             "cleanup": cleanup_result,
         }
-        if result["phase"] != "Succeeded":
-            raise ApplicationError(
-                "Registry operator canary failed; promotion or cleanup did not pass",
-                result,
-                type="RegistryOperatorCanaryFailed",
-                non_retryable=True,
-            )
         return result
+
+
+def registry_operator_canary_branch_request(
+    request: dict[str, Any],
+    *,
+    auth_mode: str,
+    workflow_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    suffix = "api-key" if auth_mode == "apiKey" else auth_mode
+    prefix = request.get("projectNamePrefix")
+    prefix = prefix if isinstance(prefix, str) and prefix else "operator-canary"
+    rendered = {
+        **request,
+        "authMode": auth_mode,
+        "workflowID": f"{workflow_id}/{auth_mode}",
+        "runID": run_id,
+        "projectNamePrefix": f"{prefix}-{suffix}",
+    }
+    project_name = request.get("projectName")
+    if isinstance(project_name, str) and project_name:
+        rendered["projectName"] = f"{project_name}-{suffix}"
+    return rendered

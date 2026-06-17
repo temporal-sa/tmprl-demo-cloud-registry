@@ -63,14 +63,15 @@ def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
     }
 
 
-def test_external_resource_blocker_blocks_unsupported_temporal_auth_mode():
+def test_external_resource_blocker_blocks_temporal_cloud_errors():
     blocker = reconcile.external_resource_blocker(
         {
             "temporalCloud": {
                 "phase": "Error",
-                "reason": "UnsupportedTemporalAuthMode",
-                "message": "mTLS is not implemented yet.",
+                "reason": "TemporalAuthModeSwitchRequiresFinalize",
+                "message": "Finalize before switching auth mode.",
                 "auth": {"mode": "mtls"},
+                "namespace": {"name": "demo.acct1", "authMode": "apiKey"},
             },
             "secretsManager": {"phase": "Ready"},
         }
@@ -78,13 +79,14 @@ def test_external_resource_blocker_blocks_unsupported_temporal_auth_mode():
 
     assert blocker == {
         "phase": "Error",
-        "reason": "UnsupportedTemporalAuthMode",
-        "message": "mTLS is not implemented yet.",
+        "reason": "TemporalAuthModeSwitchRequiresFinalize",
+        "message": "Finalize before switching auth mode.",
         "temporalCloud": {
             "phase": "Error",
-            "reason": "UnsupportedTemporalAuthMode",
-            "message": "mTLS is not implemented yet.",
+            "reason": "TemporalAuthModeSwitchRequiresFinalize",
+            "message": "Finalize before switching auth mode.",
             "auth": {"mode": "mtls"},
+            "namespace": {"name": "demo.acct1", "authMode": "apiKey"},
         },
     }
 

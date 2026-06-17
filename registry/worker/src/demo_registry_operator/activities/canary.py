@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -49,8 +50,12 @@ from demo_registry_operator.resources import (
     source_git_repository_secret_ref,
     source_git_repository_url,
     source_git_repository_name,
+    temporal_auth_mode,
 )
 from demo_registry_operator.temporal_client import connect
+
+
+FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
 @activity.defn
@@ -85,6 +90,7 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         project_name=project_name,
         expected_source_sha=expected_source_sha,
         expected_images=request.get("expectedImages"),
+        auth_mode=request.get("authMode"),
     )
 
     expected_operator_image = request.get("expectedOperatorImage")
@@ -132,6 +138,7 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         "project": project_name,
         "namespace": project_namespace(demo_project),
         "demoProject": demo_project,
+        "authMode": temporal_auth_mode(demo_project),
         "expectedOperatorImage": expected_operator_image,
         "actualOperatorImage": actual_operator_image,
         "expectedOperatorSourceSha": expected_operator_source_sha,
@@ -443,8 +450,162 @@ def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[st
         time.sleep(poll_seconds)
 
 
+@activity.defn
+def rotate_registry_operator_canary_credentials(plan: dict[str, Any]) -> dict[str, Any]:
+    token = f"operator-canary-credential-rotation:{string_field(plan, 'project')}:{uuid_token()}"
+    workflow_signal = signal_registry_operator_canary_force_reconcile(
+        plan,
+        token=token,
+        reason=FORCE_TEMPORAL_AUTH_ROTATION_REASON,
+    )
+    return {
+        "project": string_field(plan, "project"),
+        "phase": "Signaled",
+        "ok": True,
+        "token": token,
+        "reason": FORCE_TEMPORAL_AUTH_ROTATION_REASON,
+        "workflow": workflow_signal,
+        "checkedAt": datetime.now(UTC).isoformat(),
+    }
+
+
+@activity.defn
+def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str, Any]:
+    deadline = time.monotonic() + int(plan.get("timeoutSeconds", 900))
+    poll_seconds = int(plan.get("pollSeconds", 10))
+    token = string_field(plan, "rotationToken")
+    last_status: dict[str, Any] | None = None
+    while True:
+        resource = read_demo_project(string_field(plan, "project"))
+        last_status = (
+            resource.get("status", {}) if isinstance(resource, dict) else None
+        )
+        if isinstance(last_status, dict) and canary_rotation_complete(
+            token,
+            last_status,
+        ):
+            return {
+                "project": string_field(plan, "project"),
+                "phase": "Rotated",
+                "ok": True,
+                "token": token,
+                "authMode": string_field(plan, "authMode"),
+                "message": "Canary credential rotation completed after worker canary.",
+                "status": last_status,
+                "checkedAt": datetime.now(UTC).isoformat(),
+            }
+
+        if isinstance(last_status, dict) and canary_failed(last_status):
+            return {
+                "project": string_field(plan, "project"),
+                "phase": "Failed",
+                "ok": False,
+                "token": token,
+                "message": canary_failure_message(last_status),
+                "status": last_status,
+                "checkedAt": datetime.now(UTC).isoformat(),
+            }
+
+        if time.monotonic() >= deadline:
+            return {
+                "project": string_field(plan, "project"),
+                "phase": "TimedOut",
+                "ok": False,
+                "token": token,
+                "message": "Timed out waiting for canary credential rotation.",
+                "status": last_status,
+                "checkedAt": datetime.now(UTC).isoformat(),
+            }
+
+        activity.heartbeat(
+            {
+                "project": string_field(plan, "project"),
+                "token": token,
+                "status": last_status,
+            }
+        )
+        time.sleep(poll_seconds)
+
+
+def signal_registry_operator_canary_force_reconcile(
+    plan: dict[str, Any],
+    *,
+    token: str,
+    reason: str,
+) -> dict[str, Any]:
+    return asyncio.run(
+        signal_registry_operator_canary_force_reconcile_async(
+            plan,
+            token=token,
+            reason=reason,
+        )
+    )
+
+
+async def signal_registry_operator_canary_force_reconcile_async(
+    plan: dict[str, Any],
+    *,
+    token: str,
+    reason: str,
+) -> dict[str, Any]:
+    config = WorkerConfig.from_env()
+    workflow_id = f"demo-project/{string_field(plan, 'project')}"
+    client = await connect(config)
+    handle = client.get_workflow_handle(workflow_id)
+    await handle.signal("force_reconcile", token, reason)
+    return {
+        "phase": "Signaled",
+        "workflowID": workflow_id,
+        "token": token,
+        "reason": reason,
+    }
+
+
+def canary_rotation_complete(token: str, status: dict[str, Any]) -> bool:
+    if status.get("phase") not in {"Promoted", "Ready"}:
+        return False
+    force_reconcile = status.get("forceReconcile")
+    if not isinstance(force_reconcile, dict):
+        return False
+    if force_reconcile.get("token") != token:
+        return False
+    if force_reconcile.get("reason") != FORCE_TEMPORAL_AUTH_ROTATION_REASON:
+        return False
+
+    temporal = (
+        status.get("externalResources", {})
+        .get("temporalCloud", {})
+        if isinstance(status.get("externalResources"), dict)
+        else {}
+    )
+    if not isinstance(temporal, dict):
+        return False
+    api_key = temporal.get("apiKey")
+    if isinstance(api_key, dict):
+        canary = api_key.get("canary")
+        return (
+            api_key.get("rotationReason") == "ManualRotation"
+            and isinstance(canary, dict)
+            and canary.get("ok") is True
+        )
+    mtls = temporal.get("mtls")
+    mtls = mtls if isinstance(mtls, dict) else {}
+    client = mtls.get("clientCertificate")
+    if isinstance(client, dict):
+        canary = client.get("canary")
+        return (
+            client.get("rotationReason") == "ManualRotation"
+            and isinstance(canary, dict)
+            and canary.get("ok") is True
+        )
+    return False
+
+
 def canary_failed(status: dict[str, Any]) -> bool:
     if status.get("phase") in {"Error", "FinalizationError"}:
+        return True
+    external = status.get("externalResources")
+    if isinstance(external, dict) and external.get("phase") == "Error":
         return True
     build_status = status.get("buildStatus")
     if isinstance(build_status, dict) and build_status.get("phase") == "Error":
@@ -460,6 +621,13 @@ def canary_failure_message(status: dict[str, Any]) -> str:
     message = status.get("message")
     if isinstance(message, str) and message:
         return "Canary project failed before promotion: " + message
+    external = status.get("externalResources")
+    if isinstance(external, dict):
+        temporal = external.get("temporalCloud")
+        if isinstance(temporal, dict) and temporal.get("message"):
+            return "Canary project failed before promotion: " + str(
+                temporal["message"]
+            )
     build_status = status.get("buildStatus")
     if isinstance(build_status, dict):
         build_message = build_status.get("message")
@@ -580,6 +748,7 @@ def render_canary_demo_project(
     project_name: str,
     expected_source_sha: Any,
     expected_images: Any,
+    auth_mode: Any = None,
 ) -> dict[str, Any]:
     demo_project = copy.deepcopy(template)
     metadata = demo_project.get("metadata")
@@ -604,6 +773,17 @@ def render_canary_demo_project(
     demo_project.setdefault("apiVersion", "registry.tmprl-demo.cloud/v1alpha1")
     demo_project.setdefault("kind", "DemoProject")
     spec = demo_project.get("spec")
+    if isinstance(auth_mode, str) and auth_mode:
+        if not isinstance(spec, dict):
+            spec = {}
+            demo_project["spec"] = spec
+        temporal = spec.get("temporal")
+        temporal = temporal if isinstance(temporal, dict) else {}
+        auth = temporal.get("auth")
+        auth = auth if isinstance(auth, dict) else {}
+        auth["mode"] = auth_mode
+        temporal["auth"] = auth
+        spec["temporal"] = temporal
     ingress = spec.get("ingress") if isinstance(spec, dict) else None
     if isinstance(ingress, dict):
         ingress["subdomain"] = project_name
@@ -834,3 +1014,7 @@ def string_value(value: dict[str, Any], key: str, *, default: str) -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def uuid_token() -> str:
+    return uuid.uuid4().hex

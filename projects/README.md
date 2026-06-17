@@ -258,12 +258,16 @@ Rules:
   that need to start or query workflows.
 - Temporal runtime authentication defaults to API keys. Projects may declare
   `spec.temporal.auth.mode: apiKey` explicitly, but omitting it is equivalent.
-  `spec.temporal.auth.mode: mtls` is reserved for the mTLS rollout path and is
-  blocked by the current operator until mTLS credential reconciliation lands.
-  The mTLS contract is a platform-scoped CA with namespace-scoped client
-  certificates. Client certificates rotate weekly, and the platform CA rotates
-  quarterly on a separate schedule. The runtime secret will expose `address`,
+  `spec.temporal.auth.mode: mtls` creates a Temporal Cloud namespace using mTLS
+  instead. The mTLS contract is a platform-scoped CA with namespace-scoped
+  client certificates filtered by common name. Client certificates rotate
+  weekly, and the platform CA rotates quarterly on a separate schedule. New
+  API keys and client certificates are canaried by running a worker workflow in
+  the namespace before the runtime secret is promoted. The runtime secret exposes `address`,
   `namespace`, `tls`, `caCert`, `clientCert`, and `clientKey`.
+- Switching between `apiKey` and `mtls` is destructive because Temporal Cloud
+  namespaces cannot enable both at once. Finalize the project first so the
+  existing namespace is deleted, then deploy it again with the new auth mode.
 - Worker versioning is opt-in via the object form: `components.<name>.worker.versioning`
   with `enabled`, `taskQueue`, and optional `rollout`/`sunset` settings.
   `taskQueue` is consumed only here (as the Worker Deployment Name), so it lives
@@ -271,19 +275,22 @@ Rules:
   `components.<name>.env`; Worker Controller injects `TEMPORAL_DEPLOYMENT_NAME`
   and `TEMPORAL_WORKER_BUILD_ID`. For versioned workers, Worker Controller also
   owns `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE`; the runtime secret only
-  supplies `TEMPORAL_API_KEY` and `TEMPORAL_TLS`.
+  supplies `TEMPORAL_API_KEY` and `TEMPORAL_TLS`. mTLS is currently blocked with
+  Worker Controller versioning until the Connection CRD supports client
+  certificate refs.
 - For non-versioned workers and API components, the platform injects standard
-  Temporal env vars:
-  `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and
-  `TEMPORAL_TLS`.
+  Temporal env vars. API-key projects receive `TEMPORAL_ADDRESS`,
+  `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and `TEMPORAL_TLS`. mTLS projects
+  receive `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TLS`,
+  `TEMPORAL_CA_CERT`, `TEMPORAL_CLIENT_CERT`, and `TEMPORAL_CLIENT_KEY`.
 - Components can remap platform inputs with
-  `components.<name>.env[].valueFrom.inputRef`. Supported API-key Temporal refs
-  are `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and
-  `temporal.tls`. These render as targeted `secretKeyRef` env vars, so the app
-  can consume names like `TEMPORAL_HOST` or `TEMPORAL_TOKEN` without changing
-  code. The mTLS cert refs `temporal.caCert`, `temporal.clientCert`, and
-  `temporal.clientKey` are reserved until mTLS runtime secret reconciliation
-  lands.
+  `components.<name>.env[].valueFrom.inputRef`. API-key Temporal refs are
+  `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and
+  `temporal.tls`. mTLS cert refs are `temporal.caCert`,
+  `temporal.clientCert`, and `temporal.clientKey`, and require
+  `spec.temporal.auth.mode: mtls`. These render as targeted `secretKeyRef` env
+  vars, so the app can consume names like `TEMPORAL_HOST`,
+  `TEMPORAL_TOKEN`, or `TEMPORAL_CLIENT_CERT_PEM` without changing code.
 - `components.<name>.temporalProxy.enabled: true` replaces direct Temporal
   credential injection for that app container with a local plaintext proxy at
   `127.0.0.1:7233`. The sidecar receives the platform-managed Cloud credential,

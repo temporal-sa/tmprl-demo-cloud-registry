@@ -11,7 +11,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     finalize_temporal_cloud,
     reconcile_temporal_cloud,
 )
-from demo_registry_operator.resources import temporal_mtls_status
+from demo_registry_operator.resources import TEMPORAL_MTLS_CA_SECRET_PATH
 
 
 PROJECT = {
@@ -42,17 +42,52 @@ class FakeReconciler:
         self.calls.append(("find_namespace", name))
         return self.existing_namespace
 
-    async def create_namespace(self, name, region, retention_days, enable_delete_protection=True):
+    async def create_namespace(
+        self,
+        name,
+        region,
+        retention_days,
+        auth_mode="apiKey",
+        accepted_client_ca=None,
+        certificate_common_name=None,
+        enable_delete_protection=True,
+    ):
         self.calls.append(
-            ("create_namespace", name, region, retention_days, enable_delete_protection)
+            (
+                "create_namespace",
+                name,
+                region,
+                retention_days,
+                auth_mode,
+                bool(accepted_client_ca),
+                certificate_common_name,
+                enable_delete_protection,
+            )
         )
         return NamespaceInfo(
             qualified_name=f"{name}.acct1",
             grpc_address=f"{name}.acct1.tmprl.cloud:7233",
             web_address="https://cloud.temporal.io/namespaces/x",
             state="active",
+            auth_mode=auth_mode,
             created=True,
         )
+
+    async def configure_namespace_mtls(
+        self,
+        qualified_name,
+        accepted_client_ca,
+        certificate_common_name,
+    ):
+        self.calls.append(
+            (
+                "configure_namespace_mtls",
+                qualified_name,
+                bool(accepted_client_ca),
+                certificate_common_name,
+            )
+        )
+        return "updated"
 
     async def find_service_account(self, name):
         self.calls.append(("find_service_account", name))
@@ -110,7 +145,15 @@ class FakeSecretStore:
         return "scheduled-deletion" if existed else "not-found"
 
 
-def reconcile(reconciler, secret_store, demo_project=PROJECT):
+async def passing_canary(credential):
+    return {
+        "phase": "Passed",
+        "ok": True,
+        "authMode": "apiKey" if credential.get("apiKey") else "mtls",
+    }
+
+
+def reconcile(reconciler, secret_store, demo_project=PROJECT, *, runtime_canary=passing_canary):
     return asyncio.run(
         reconcile_temporal_cloud(
             demo_project,
@@ -120,6 +163,7 @@ def reconcile(reconciler, secret_store, demo_project=PROJECT):
         region="aws-us-west-2",
         checked_at="2026-06-13T00:00:00+00:00",
         mirror_kubernetes_secrets=False,
+        runtime_canary=runtime_canary,
     )
     )
 
@@ -342,7 +386,37 @@ def test_not_required_when_no_temporal_components():
     assert secrets.writes == []
 
 
-def test_mtls_auth_mode_is_reported_unsupported_without_creating_resources():
+def test_existing_namespace_auth_mode_switch_requires_finalize():
+    project = {
+        **PROJECT,
+        "spec": {
+            **PROJECT["spec"],
+            "temporal": {"auth": {"mode": "mtls"}},
+        },
+    }
+    reconciler = FakeReconciler(
+        existing_namespace=NamespaceInfo(
+            qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+            grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            web_address="https://cloud.temporal.io/namespaces/x",
+            state="active",
+            auth_mode="apiKey",
+            created=False,
+        ),
+    )
+    secrets = FakeSecretStore()
+
+    status = reconcile(reconciler, secrets, demo_project=project)
+
+    assert status["phase"] == "Error"
+    assert status["reason"] == "TemporalAuthModeSwitchRequiresFinalize"
+    assert status["namespace"]["authMode"] == "apiKey"
+    assert reconciler.called("create_namespace") == []
+    assert reconciler.called("configure_namespace_mtls") == []
+    assert secrets.writes == []
+
+
+def test_mtls_auth_mode_creates_namespace_ca_client_secret_and_canaries():
     project = {
         **PROJECT,
         "spec": {
@@ -355,12 +429,32 @@ def test_mtls_auth_mode_is_reported_unsupported_without_creating_resources():
 
     status = reconcile(reconciler, secrets, demo_project=project)
 
-    assert status["phase"] == "Error"
-    assert status["reason"] == "UnsupportedTemporalAuthMode"
+    assert status["phase"] == "Ready"
     assert status["auth"]["mode"] == "mtls"
-    assert status["mtls"] == temporal_mtls_status(project)
-    assert reconciler.calls == []
-    assert secrets.writes == []
+    assert status["namespace"]["authMode"] == "mtls"
+    assert "apiKey" not in status
+    assert "serviceAccount" not in status
+    assert status["mtls"]["action"] == "created"
+    assert status["mtls"]["clientCertificate"]["canary"]["ok"] is True
+    assert reconciler.called("create_namespace")[0][4] == "mtls"
+    assert len(reconciler.called("configure_namespace_mtls")) == 1
+
+    ca_secret = secrets.store[TEMPORAL_MTLS_CA_SECRET_PATH]
+    assert ca_secret["caCert"].startswith("-----BEGIN CERTIFICATE-----")
+    assert ca_secret["caKey"].startswith("-----BEGIN PRIVATE KEY-----")
+    runtime_secret = secrets.store[RUNTIME_PATH]
+    assert runtime_secret["authMode"] == "mtls"
+    assert runtime_secret["address"] == (
+        "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233"
+    )
+    assert runtime_secret["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer.acct1"
+    )
+    assert runtime_secret["caCert"] == ca_secret["caCert"]
+    assert runtime_secret["clientCert"].startswith("-----BEGIN CERTIFICATE-----")
+    assert runtime_secret["clientKey"].startswith("-----BEGIN PRIVATE KEY-----")
+    assert "apiKey" not in runtime_secret
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
 
 
 def finalize(reconciler, secret_store, demo_project=PROJECT):

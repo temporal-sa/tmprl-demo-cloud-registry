@@ -14,6 +14,7 @@ from demo_registry_operator.workflows.demo_project import (
     demo_project_with_temporal_api_key,
     remember_completed_reconcile_identity,
     reconcile_identity,
+    registry_operator_canary_branch_request,
     status_reconcile_identity,
     temporal_api_key_rotation_state,
 )
@@ -197,11 +198,42 @@ def test_temporal_api_key_status_sets_rotation_state_and_annotations():
         "registry.tmprl-demo.cloud/temporal-api-key-id"
     ] == "key-abc"
     assert state == {
+        "authMode": "apiKey",
         "keyId": "key-abc",
         "expiryTime": "2026-07-13T00:00:00+00:00",
         "rotateAt": "2026-07-03T00:00:00+00:00",
         "rotateBeforeExpiryDays": 10,
     }
+
+
+def test_registry_operator_canary_branch_request_splits_auth_modes():
+    request = {
+        "projectNamePrefix": "operator-canary",
+        "projectName": "manual-canary",
+        "demoProjectTemplate": {"metadata": {"name": "template"}, "spec": {}},
+    }
+
+    api_key = registry_operator_canary_branch_request(
+        request,
+        auth_mode="apiKey",
+        workflow_id="gate/run",
+        run_id="run-1",
+    )
+    mtls = registry_operator_canary_branch_request(
+        request,
+        auth_mode="mtls",
+        workflow_id="gate/run",
+        run_id="run-1",
+    )
+
+    assert api_key["authMode"] == "apiKey"
+    assert api_key["workflowID"] == "gate/run/apiKey"
+    assert api_key["projectNamePrefix"] == "operator-canary-api-key"
+    assert api_key["projectName"] == "manual-canary-api-key"
+    assert mtls["authMode"] == "mtls"
+    assert mtls["workflowID"] == "gate/run/mtls"
+    assert mtls["projectNamePrefix"] == "operator-canary-mtls"
+    assert mtls["projectName"] == "manual-canary-mtls"
 
 
 def test_check_worker_version_signal_requests_continue_as_new_when_target_changed(
