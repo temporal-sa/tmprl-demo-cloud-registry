@@ -81,19 +81,52 @@ def test_reconcile_signal_noops_when_same_identity_is_completed():
     assert workflow._pending_reconcile_identity is None
 
 
+def test_force_reconcile_signal_sets_pending_request_and_dedupes():
+    workflow = DemoProjectWorkflow("demo")
+
+    workflow.force_reconcile(" token-1 ", " manual retry ")
+    workflow.force_reconcile("token-1", "ignored duplicate")
+
+    assert workflow._pending_force_reconcile == {
+        "token": "token-1",
+        "reason": "manual retry",
+    }
+
+    workflow._pending_force_reconcile = None
+    workflow._completed_force_reconcile_token = "token-1"
+    workflow.force_reconcile("token-1", "already completed")
+
+    assert workflow._pending_force_reconcile is None
+
+
 def test_failed_reconcile_identity_is_not_remembered_as_completed():
     demo_project = project()
     identity = reconcile_identity(demo_project)
     workflow = DemoProjectWorkflow("demo")
     workflow._current_reconcile_identity = identity
+    workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Error"}
 
     workflow._complete_current_reconcile()
     workflow.reconcile(deepcopy(demo_project))
 
     assert workflow._completed_reconcile_identity is None
+    assert workflow._completed_force_reconcile_token is None
     assert workflow._pending_spec is not None
     assert workflow._pending_reconcile_identity == identity
+
+
+def test_successful_force_reconcile_token_is_remembered_as_completed():
+    demo_project = project()
+    workflow = DemoProjectWorkflow("demo")
+    workflow._current_reconcile_identity = reconcile_identity(demo_project)
+    workflow._current_force_reconcile_token = "manual-1"
+    workflow._status = {"phase": "Promoted"}
+
+    workflow._complete_current_reconcile()
+
+    assert workflow._completed_reconcile_identity == reconcile_identity(demo_project)
+    assert workflow._completed_force_reconcile_token == "manual-1"
 
 
 def test_failed_status_is_not_a_rememberable_completed_identity():

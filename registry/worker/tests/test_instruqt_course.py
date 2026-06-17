@@ -26,6 +26,7 @@ from demo_registry_operator.resources import (
     CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     CONTENT_SOURCE_COMMIT_ANNOTATION,
     CONTENT_SOURCE_REVISION_ANNOTATION,
+    FORCE_RECONCILE_ANNOTATION,
     INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY,
     PLATFORM_SOURCE_AUTH_SECRET_NAME,
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
@@ -629,6 +630,83 @@ def test_instruqt_rendered_image_version_uses_full_source_commit():
     )
 
 
+def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_CODEBUILD_PROJECT", "tmprl-dem-cld-build")
+    images = {
+        "workstation": {
+            "container": "workstation",
+            "context": {"source": "source", "path": "."},
+            "dockerfile": {"source": "source", "path": "Dockerfile"},
+        }
+    }
+    instruqt_course = course(images=images)
+    source_commit = instruqt_course["metadata"]["annotations"][SOURCE_COMMIT_ANNOTATION]
+    build_hash = instruqt_activities.instruqt_image_definition_hash(instruqt_course)
+
+    plan = plan_instruqt_course_images(
+        {
+            "instruqtCourse": instruqt_course,
+            "externalResources": {
+                "ecr": {
+                    "repositories": [
+                        {
+                            "build": "workstation",
+                            "repositoryUri": (
+                                "public.ecr.aws/example/tmprl-dem-cld/"
+                                "workflow-fundamentals/workstation"
+                            ),
+                        }
+                    ]
+                }
+            },
+            "previousBuildStatus": {
+                "phase": "Pushed",
+                "channel": "production",
+                "imageDefinitionHash": build_hash,
+                "sourceCommitSha": source_commit,
+                "sourceArtifactDigest": instruqt_course["metadata"]["annotations"][
+                    SOURCE_ARTIFACT_DIGEST_ANNOTATION
+                ],
+                "images": {
+                    "workstation": (
+                        "public.ecr.aws/example/tmprl-dem-cld/"
+                        "workflow-fundamentals/workstation:"
+                        f"git-{source_commit[:12]}-b{build_hash[:12]}"
+                    )
+                },
+            },
+            "channel": "production",
+        }
+    )
+
+    assert plan["action"] == "codebuild"
+    assert plan["imageTemplates"]["workstation"] == (
+        "public.ecr.aws/example/tmprl-dem-cld/workflow-fundamentals/"
+        "workstation:${IMAGE_VERSION}"
+    )
+
+
+def test_instruqt_reconcile_key_changes_with_force_reconcile_token():
+    base = course()
+    forced = course(
+        annotations={
+            **base["metadata"]["annotations"],
+            FORCE_RECONCILE_ANNOTATION: "manual-1",
+        }
+    )
+    forced_again = course(
+        annotations={
+            **base["metadata"]["annotations"],
+            FORCE_RECONCILE_ANNOTATION: "manual-2",
+        }
+    )
+
+    assert instruqt_course_reconcile_key(base) != instruqt_course_reconcile_key(forced)
+    assert instruqt_course_reconcile_key(forced) != instruqt_course_reconcile_key(
+        forced_again
+    )
+
+
 def test_instruqt_workflow_reconcile_signal_dedupes_completed_identity():
     instruqt_course = course()
     workflow = InstruqtCourseWorkflow("workflow-fundamentals")
@@ -640,19 +718,52 @@ def test_instruqt_workflow_reconcile_signal_dedupes_completed_identity():
     assert workflow._pending_reconcile_identity is None
 
 
+def test_instruqt_workflow_force_reconcile_signal_sets_pending_request_and_dedupes():
+    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+
+    workflow.force_reconcile(" token-1 ", " manual retry ")
+    workflow.force_reconcile("token-1", "ignored duplicate")
+
+    assert workflow._pending_force_reconcile == {
+        "token": "token-1",
+        "reason": "manual retry",
+    }
+
+    workflow._pending_force_reconcile = None
+    workflow._completed_force_reconcile_token = "token-1"
+    workflow.force_reconcile("token-1", "already completed")
+
+    assert workflow._pending_force_reconcile is None
+
+
 def test_instruqt_workflow_failed_identity_is_not_remembered():
     instruqt_course = course()
     identity = reconcile_identity(instruqt_course)
     workflow = InstruqtCourseWorkflow("workflow-fundamentals")
     workflow._current_reconcile_identity = identity
+    workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Error"}
 
     workflow._complete_current_reconcile()
     workflow.reconcile(deepcopy(instruqt_course))
 
     assert workflow._completed_reconcile_identity is None
+    assert workflow._completed_force_reconcile_token is None
     assert workflow._pending_spec is not None
     assert workflow._pending_reconcile_identity == identity
+
+
+def test_instruqt_successful_force_reconcile_token_is_remembered_as_completed():
+    instruqt_course = course()
+    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow._current_reconcile_identity = reconcile_identity(instruqt_course)
+    workflow._current_force_reconcile_token = "manual-1"
+    workflow._status = {"phase": "Ready"}
+
+    workflow._complete_current_reconcile()
+
+    assert workflow._completed_reconcile_identity == reconcile_identity(instruqt_course)
+    assert workflow._completed_force_reconcile_token == "manual-1"
 
 
 def test_instruqt_status_with_deployment_status_promotes_waiting_for_images():

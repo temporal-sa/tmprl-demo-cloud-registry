@@ -38,6 +38,7 @@ from demo_registry_operator.kube import (
     remove_demo_project_finalizer,
 )
 from demo_registry_operator.resources import (
+    BASE_RECONCILE_KEY_STATUS_FIELD,
     CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     CONTENT_SOURCE_COMMIT_ANNOTATION,
     CONTENT_SOURCE_REVISION_ANNOTATION,
@@ -449,33 +450,24 @@ async def reconcile_one(
         logger.info("Skipping gate-owned canary reconcile project=%s", name)
         return
 
-    source_state = None
-    if source_watch_required(demo_project):
-        source_state = await asyncio.to_thread(reconcile_source_watch, demo_project, config)
-        if not source_state.get("sourceCommitSha") or not source_state.get(
-            "sourceArtifactDigest"
-        ):
-            logger.info(
-                "Waiting for source artifact project=%s gitRepository=%s reason=%s",
-                name,
-                source_state.get("gitRepository"),
-                source_state.get("reason", "Unknown"),
-            )
-            return
-
-    payload = workflow_signal_payload(
+    payload_state = await asyncio.to_thread(
+        demo_project_reconcile_payload_state,
         demo_project,
-        source_commit_sha=(
-            source_state.get("sourceCommitSha")
-            if isinstance(source_state, dict)
-            else None
-        ),
-        source_artifact_digest=(
-            source_state.get("sourceArtifactDigest")
-            if isinstance(source_state, dict)
-            else None
-        ),
+        config,
     )
+    if payload_state.get("ready") is not True:
+        source_state = payload_state.get("sourceState")
+        source_state = source_state if isinstance(source_state, dict) else {}
+        logger.info(
+            "Waiting for source artifact project=%s gitRepository=%s reason=%s",
+            name,
+            source_state.get("gitRepository"),
+            source_state.get("reason", payload_state.get("reason", "Unknown")),
+        )
+        return
+    payload = payload_state["payload"]
+    source_state = payload_state.get("sourceState")
+    source_state = source_state if isinstance(source_state, dict) else None
     key = reconcile_key(payload)
     if seen.get(name) == key:
         return
@@ -525,125 +517,26 @@ async def reconcile_instruqt_course_resource(
 
     await asyncio.to_thread(ensure_instruqt_course_finalizer, name)
 
-    source_state = None
-    if instruqt_course_source_watch_required(instruqt_course):
-        source_state = await asyncio.to_thread(
-            reconcile_source_watch,
-            instruqt_course,
-            config,
-        )
-        if not source_state.get("sourceCommitSha") or not source_state.get(
-            "sourceArtifactDigest"
-        ):
-            logger.info(
-                "Waiting for source artifact instruqt_course=%s gitRepository=%s reason=%s",
-                name,
-                source_state.get("gitRepository"),
-                source_state.get("reason", "Unknown"),
-            )
-            return
-
-    content_state = None
-    if instruqt_course_content_watch_required(instruqt_course):
-        content_state = await asyncio.to_thread(
-            reconcile_source_watch,
-            instruqt_course,
-            config,
-            source_key="content",
-        )
-        if not content_state.get("sourceCommitSha") or not content_state.get(
-            "sourceArtifactDigest"
-        ):
-            logger.info(
-                "Waiting for content source artifact instruqt_course=%s gitRepository=%s reason=%s",
-                name,
-                content_state.get("gitRepository"),
-                content_state.get("reason", "Unknown"),
-            )
-            return
-
-    extra_annotations: dict[str, str] = {}
-    testing_branch = instruqt_course_testing_source_branch(instruqt_course)
-    if testing_branch:
-        testing_branch_state = await asyncio.to_thread(
-            probe_github_branch,
-            instruqt_course,
-            config,
-            source_key="source",
-            branch=testing_branch,
-        )
-        extra_annotations.update(testing_branch_state_annotations(testing_branch_state))
-        if testing_branch_state.get("state") == "exists":
-            testing_source_state = await asyncio.to_thread(
-                reconcile_source_watch,
-                instruqt_course,
-                config,
-                source_key="source",
-                branch=testing_branch,
-                repository_key=INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY,
-            )
-            extra_annotations.update(
-                testing_source_state_annotations(testing_source_state)
-            )
-
-            if instruqt_course_testing_content_watch_required(instruqt_course):
-                testing_content_branch = instruqt_course_testing_content_branch(
-                    instruqt_course
-                )
-                testing_content_state = await asyncio.to_thread(
-                    reconcile_source_watch,
-                    instruqt_course,
-                    config,
-                    source_key="content",
-                    branch=testing_content_branch,
-                    repository_key=INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY,
-                )
-                extra_annotations.update(
-                    testing_content_state_annotations(testing_content_state)
-                )
-        elif testing_branch_state.get("state") == "missing":
-            await asyncio.to_thread(
-                cleanup_instruqt_testing_source_watches,
-                instruqt_course,
-                config,
-            )
-    elif testing_cleanup_required(instruqt_course):
-        await asyncio.to_thread(
-            cleanup_instruqt_testing_source_watches,
-            instruqt_course,
-            config,
-        )
-
-    payload = workflow_signal_payload(
+    payload_state = await asyncio.to_thread(
+        instruqt_course_reconcile_payload_state,
         instruqt_course,
-        source_commit_sha=(
-            source_state.get("sourceCommitSha")
-            if isinstance(source_state, dict)
-            else None
-        ),
-        source_artifact_digest=(
-            source_state.get("sourceArtifactDigest")
-            if isinstance(source_state, dict)
-            else None
-        ),
-        source_revision=(
-            source_state.get("revision") if isinstance(source_state, dict) else None
-        ),
-        content_source_commit_sha=(
-            content_state.get("sourceCommitSha")
-            if isinstance(content_state, dict)
-            else None
-        ),
-        content_source_artifact_digest=(
-            content_state.get("sourceArtifactDigest")
-            if isinstance(content_state, dict)
-            else None
-        ),
-        content_source_revision=(
-            content_state.get("revision") if isinstance(content_state, dict) else None
-        ),
-        extra_annotations=extra_annotations,
+        config,
     )
+    if payload_state.get("ready") is not True:
+        source_state = payload_state.get("sourceState") or payload_state.get(
+            "contentState"
+        )
+        source_state = source_state if isinstance(source_state, dict) else {}
+        logger.info(
+            "Waiting for source artifact instruqt_course=%s gitRepository=%s reason=%s",
+            name,
+            source_state.get("gitRepository"),
+            source_state.get("reason", payload_state.get("reason", "Unknown")),
+        )
+        return
+    payload = payload_state["payload"]
+    source_state = payload_state.get("sourceState")
+    source_state = source_state if isinstance(source_state, dict) else None
     key = instruqt_course_reconcile_key(payload)
     if seen.get(seen_name) == key:
         return
@@ -666,6 +559,168 @@ async def reconcile_instruqt_course_resource(
             return
     await signal_instruqt_course_workflow(temporal_client, config, payload, "reconcile")
     seen[seen_name] = key
+
+
+def demo_project_reconcile_payload_state(
+    demo_project: dict[str, Any],
+    config: WorkerConfig,
+) -> dict[str, Any]:
+    source_state = None
+    if source_watch_required(demo_project):
+        source_state = reconcile_source_watch(demo_project, config)
+        if not source_state.get("sourceCommitSha") or not source_state.get(
+            "sourceArtifactDigest"
+        ):
+            return {
+                "ready": False,
+                "reason": source_state.get("reason", "SourceArtifactUnavailable"),
+                "message": source_state.get(
+                    "message",
+                    "Source artifact is not resolved.",
+                ),
+                "sourceState": source_state,
+            }
+
+    return {
+        "ready": True,
+        "payload": workflow_signal_payload(
+            demo_project,
+            source_commit_sha=(
+                source_state.get("sourceCommitSha")
+                if isinstance(source_state, dict)
+                else None
+            ),
+            source_artifact_digest=(
+                source_state.get("sourceArtifactDigest")
+                if isinstance(source_state, dict)
+                else None
+            ),
+            source_revision=(
+                source_state.get("revision") if isinstance(source_state, dict) else None
+            ),
+        ),
+        "sourceState": source_state,
+    }
+
+
+def instruqt_course_reconcile_payload_state(
+    instruqt_course: dict[str, Any],
+    config: WorkerConfig,
+) -> dict[str, Any]:
+    source_state = None
+    if instruqt_course_source_watch_required(instruqt_course):
+        source_state = reconcile_source_watch(instruqt_course, config)
+        if not source_state.get("sourceCommitSha") or not source_state.get(
+            "sourceArtifactDigest"
+        ):
+            return {
+                "ready": False,
+                "reason": source_state.get("reason", "SourceArtifactUnavailable"),
+                "message": source_state.get(
+                    "message",
+                    "Source artifact is not resolved.",
+                ),
+                "sourceState": source_state,
+            }
+
+    content_state = None
+    if instruqt_course_content_watch_required(instruqt_course):
+        content_state = reconcile_source_watch(
+            instruqt_course,
+            config,
+            source_key="content",
+        )
+        if not content_state.get("sourceCommitSha") or not content_state.get(
+            "sourceArtifactDigest"
+        ):
+            return {
+                "ready": False,
+                "reason": content_state.get("reason", "ContentSourceUnavailable"),
+                "message": content_state.get(
+                    "message",
+                    "Content source artifact is not resolved.",
+                ),
+                "contentState": content_state,
+            }
+
+    extra_annotations: dict[str, str] = {}
+    testing_branch = instruqt_course_testing_source_branch(instruqt_course)
+    if testing_branch:
+        testing_branch_state = probe_github_branch(
+            instruqt_course,
+            config,
+            source_key="source",
+            branch=testing_branch,
+        )
+        extra_annotations.update(testing_branch_state_annotations(testing_branch_state))
+        if testing_branch_state.get("state") == "exists":
+            testing_source_state = reconcile_source_watch(
+                instruqt_course,
+                config,
+                source_key="source",
+                branch=testing_branch,
+                repository_key=INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY,
+            )
+            extra_annotations.update(
+                testing_source_state_annotations(testing_source_state)
+            )
+
+            if instruqt_course_testing_content_watch_required(instruqt_course):
+                testing_content_branch = instruqt_course_testing_content_branch(
+                    instruqt_course
+                )
+                testing_content_state = reconcile_source_watch(
+                    instruqt_course,
+                    config,
+                    source_key="content",
+                    branch=testing_content_branch,
+                    repository_key=INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY,
+                )
+                extra_annotations.update(
+                    testing_content_state_annotations(testing_content_state)
+                )
+        elif testing_branch_state.get("state") == "missing":
+            cleanup_instruqt_testing_source_watches(instruqt_course, config)
+    elif testing_cleanup_required(instruqt_course):
+        cleanup_instruqt_testing_source_watches(instruqt_course, config)
+
+    return {
+        "ready": True,
+        "payload": workflow_signal_payload(
+            instruqt_course,
+            source_commit_sha=(
+                source_state.get("sourceCommitSha")
+                if isinstance(source_state, dict)
+                else None
+            ),
+            source_artifact_digest=(
+                source_state.get("sourceArtifactDigest")
+                if isinstance(source_state, dict)
+                else None
+            ),
+            source_revision=(
+                source_state.get("revision") if isinstance(source_state, dict) else None
+            ),
+            content_source_commit_sha=(
+                content_state.get("sourceCommitSha")
+                if isinstance(content_state, dict)
+                else None
+            ),
+            content_source_artifact_digest=(
+                content_state.get("sourceArtifactDigest")
+                if isinstance(content_state, dict)
+                else None
+            ),
+            content_source_revision=(
+                content_state.get("revision")
+                if isinstance(content_state, dict)
+                else None
+            ),
+            extra_annotations=extra_annotations,
+        ),
+        "sourceState": source_state,
+        "contentState": content_state,
+    }
 
 
 def reconcile_source_watch(
@@ -1183,6 +1238,9 @@ def status_observed_reconcile_key(
         return False
 
     if status.get("reconcileKey") == reconcile_key:
+        return reconciled_condition_true(status, generation)
+
+    if status.get(BASE_RECONCILE_KEY_STATUS_FIELD) == reconcile_key:
         return reconciled_condition_true(status, generation)
 
     if isinstance(source_artifact_digest, str) and source_artifact_digest:

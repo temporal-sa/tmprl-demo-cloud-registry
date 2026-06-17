@@ -138,6 +138,7 @@ spec:
                   enum:
                     - Pending
                     - Reconciling
+                    - RotatingTemporalApiKey
                     - BaseReconciled
                     - WaitingForImages
                     - WaitingForExternalResources
@@ -157,6 +158,15 @@ spec:
                   type: string
                 reconcileKey:
                   type: string
+                baseReconcileKey:
+                  type: string
+                forceReconcile:
+                  type: object
+                  properties:
+                    token:
+                      type: string
+                    reason:
+                      type: string
                 lastError:
                   type: object
                   properties:

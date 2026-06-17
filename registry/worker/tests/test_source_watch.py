@@ -8,9 +8,11 @@ from temporalio.common import AutoUpgradeVersioningOverride
 import demo_registry_operator.watch as watch
 from demo_registry_operator.activities.reconcile import status_with_reconcile_key
 from demo_registry_operator.resources import (
+    BASE_RECONCILE_KEY_STATUS_FIELD,
     CANARY_KIND_LABEL,
     CANARY_LABEL,
     FINALIZATION_POLICY_ANNOTATION,
+    FORCE_RECONCILE_ANNOTATION,
     IMAGE_OVERRIDES_ANNOTATION,
     OPERATOR_ROLLOUT_CANARY_KIND,
     PLATFORM_SOURCE_AUTH_SECRET_NAME,
@@ -341,6 +343,19 @@ def test_reconcile_key_uses_artifact_digest_over_flux_source_commit():
     assert reconcile_key(first) != reconcile_key(changed_artifact)
 
 
+def test_reconcile_key_changes_with_force_reconcile_token():
+    base = workflow_signal_payload(project())
+    forced = workflow_signal_payload(
+        project(annotations={FORCE_RECONCILE_ANNOTATION: "manual-1"})
+    )
+    forced_again = workflow_signal_payload(
+        project(annotations={FORCE_RECONCILE_ANNOTATION: "manual-2"})
+    )
+
+    assert reconcile_key(base) != reconcile_key(forced)
+    assert reconcile_key(forced) != reconcile_key(forced_again)
+
+
 def test_signal_workflow_starts_with_auto_upgrade_versioning():
     calls = []
 
@@ -525,6 +540,77 @@ def test_watch_skips_reconcile_key_already_observed_in_status(monkeypatch):
         "phase": "Promoted",
         "reconcileKey": expected_key,
         "buildStatus": {"sourceArtifactDigest": "sha256:olddigest"},
+        "conditions": [
+            {
+                "type": "Reconciled",
+                "status": "True",
+                "observedGeneration": 4,
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        watch,
+        "ensure_demo_project_finalizer",
+        lambda name: calls.append(("finalizer", name)),
+    )
+    monkeypatch.setattr(
+        watch,
+        "reconcile_source_watch",
+        lambda resource, config: {
+            "sourceCommitSha": source_commit_sha,
+            "sourceArtifactDigest": source_artifact_digest,
+        },
+    )
+
+    async def signal_workflow(*args, **kwargs):
+        calls.append(("signal", args[2]["metadata"]["name"]))
+
+    monkeypatch.setattr(watch, "signal_workflow", signal_workflow)
+
+    async def workflow_running(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(watch, "entity_workflow_running", workflow_running)
+
+    seen = {}
+    asyncio.run(
+        watch.reconcile_one(
+            None,
+            SimpleNamespace(),
+            demo_project,
+            seen,
+        )
+    )
+
+    assert calls == [("finalizer", "banking-money-transfer")]
+    assert seen == {"banking-money-transfer": expected_key}
+
+
+def test_watch_skips_base_reconcile_key_observed_after_force_reconcile(monkeypatch):
+    calls = []
+    source_commit_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    source_artifact_digest = "sha256:newdigest"
+    demo_project = project()
+    expected_key = reconcile_key(
+        workflow_signal_payload(
+            demo_project,
+            source_commit_sha=source_commit_sha,
+            source_artifact_digest=source_artifact_digest,
+        )
+    )
+    forced_key = reconcile_key(
+        workflow_signal_payload(
+            project(annotations={FORCE_RECONCILE_ANNOTATION: "manual-1"}),
+            source_commit_sha=source_commit_sha,
+            source_artifact_digest=source_artifact_digest,
+        )
+    )
+    demo_project["status"] = {
+        "observedGeneration": 4,
+        "phase": "Promoted",
+        "reconcileKey": forced_key,
+        BASE_RECONCILE_KEY_STATUS_FIELD: expected_key,
         "conditions": [
             {
                 "type": "Reconciled",

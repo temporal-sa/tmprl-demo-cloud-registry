@@ -1997,6 +1997,25 @@ def reusable_instruqt_image_build_status(
     if previous_build_status.get("channel") != channel:
         return None
 
+    try:
+        image_templates = instruqt_codebuild_image_templates(
+            instruqt_course,
+            external_resources,
+            WorkerConfig.from_env(),
+        )
+    except ValueError:
+        return None
+    source_commit = instruqt_channel_source_commit_sha(instruqt_course, channel)
+    expected_images = (
+        render_instruqt_image_templates(
+            instruqt_course,
+            image_templates,
+            source_commit,
+        )
+        if source_commit
+        else {}
+    )
+
     for key, requested in instruqt_channel_source_identity(
         instruqt_course,
         channel,
@@ -2014,6 +2033,9 @@ def reusable_instruqt_image_build_status(
         image = previous_images.get(image_name)
         if not isinstance(image, str) or not image:
             return None
+        expected_image = expected_images.get(image_name)
+        if isinstance(expected_image, str) and image != expected_image:
+            return None
         images[image_name] = image
 
     return instruqt_image_build_status(
@@ -2026,11 +2048,7 @@ def reusable_instruqt_image_build_status(
         message="Source artifacts were already built by this entity workflow; reusing immutable images.",
         build_entries=instruqt_image_build_entries(
             instruqt_course,
-            instruqt_codebuild_image_templates(
-                instruqt_course,
-                external_resources,
-                WorkerConfig.from_env(),
-            ),
+            image_templates,
             images=images,
             external_resources=external_resources,
             phase="Resolved",

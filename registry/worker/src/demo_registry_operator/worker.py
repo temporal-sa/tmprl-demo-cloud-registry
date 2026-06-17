@@ -37,6 +37,10 @@ from demo_registry_operator.activities.external_resources import (
     reconcile_temporal_cloud_resource,
     verify_secrets_manager_resources,
 )
+from demo_registry_operator.activities.force_reconcile import (
+    load_current_demo_project_for_reconcile,
+    load_current_instruqt_course_for_reconcile,
+)
 from demo_registry_operator.activities.instruqt import (
     delete_instruqt_course_ecr_repositories,
     delete_instruqt_course_content_auth_secret,
@@ -122,6 +126,8 @@ async def main() -> None:
                     wait_for_registry_operator_canary_promotion,
                     delete_registry_operator_canary_project,
                     wait_registry_operator_canary_cleanup,
+                    load_current_demo_project_for_reconcile,
+                    load_current_instruqt_course_for_reconcile,
                     plan_project_images,
                     start_project_image_build,
                     wait_for_project_image_build,

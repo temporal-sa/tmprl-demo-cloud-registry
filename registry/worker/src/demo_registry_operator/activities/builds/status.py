@@ -81,10 +81,31 @@ def reusable_previous_build_status(
     if not isinstance(previous_images, dict):
         return None
 
+    requested_commit = source_commit_sha(demo_project)
+    expected_images = {}
+    if requested_commit:
+        try:
+            image_templates = codebuild_image_templates(
+                demo_project,
+                external_resources,
+                WorkerConfig.from_env(),
+            )
+        except ValueError:
+            image_templates = {}
+        if image_templates:
+            expected_images = render_image_templates(
+                demo_project,
+                image_templates,
+                requested_commit,
+            )
+
     images: dict[str, str] = {}
     for build_name in sorted(builds(demo_project)):
         image = previous_images.get(build_name)
         if not isinstance(image, str) or not image:
+            return None
+        expected_image = expected_images.get(build_name)
+        if isinstance(expected_image, str) and image != expected_image:
             return None
         images[build_name] = image
 

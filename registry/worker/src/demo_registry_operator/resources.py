@@ -15,6 +15,10 @@ AUTH_MIDDLEWARE_NAME = "temporal-auth-required"
 AUTH_HEADER_STRIP_MIDDLEWARE_NAME = "temporal-auth-strip-headers"
 HTTPS_REDIRECT_MIDDLEWARE_NAME = "https-redirect"
 IMAGE_OVERRIDES_ANNOTATION = "registry.tmprl-demo.cloud/image-overrides"
+FORCE_RECONCILE_ANNOTATION = "registry.tmprl-demo.cloud/force-reconcile"
+FORCE_RECONCILE_REASON_ANNOTATION = (
+    "registry.tmprl-demo.cloud/force-reconcile-reason"
+)
 SOURCE_COMMIT_ANNOTATION = "registry.tmprl-demo.cloud/source-commit-sha"
 SOURCE_ARTIFACT_DIGEST_ANNOTATION = "registry.tmprl-demo.cloud/source-artifact-digest"
 SOURCE_REVISION_ANNOTATION = "registry.tmprl-demo.cloud/source-revision"
@@ -56,6 +60,7 @@ TESTING_CONTENT_SOURCE_REVISION_ANNOTATION = (
     "registry.tmprl-demo.cloud/testing-content-source-revision"
 )
 RECONCILE_KEY_STATUS_FIELD = "reconcileKey"
+BASE_RECONCILE_KEY_STATUS_FIELD = "baseReconcileKey"
 CANARY_LABEL = "registry.tmprl-demo.cloud/canary"
 CANARY_KIND_LABEL = "registry.tmprl-demo.cloud/canary-kind"
 OPERATOR_ROLLOUT_CANARY_KIND = "operator-rollout"
@@ -257,6 +262,58 @@ def parse_image_overrides(demo_project: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def force_reconcile_token(resource: dict[str, Any]) -> str | None:
+    value = metadata_annotations(resource).get(FORCE_RECONCILE_ANNOTATION)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def force_reconcile_reason(resource: dict[str, Any]) -> str | None:
+    value = metadata_annotations(resource).get(FORCE_RECONCILE_REASON_ANNOTATION)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def resource_with_force_reconcile(
+    resource: dict[str, Any],
+    token: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    rendered = dict(resource)
+    metadata = rendered.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    annotations = metadata.get("annotations")
+    annotations = dict(annotations) if isinstance(annotations, dict) else {}
+    annotations[FORCE_RECONCILE_ANNOTATION] = token
+    if isinstance(reason, str) and reason.strip():
+        annotations[FORCE_RECONCILE_REASON_ANNOTATION] = reason.strip()
+    metadata["annotations"] = annotations
+    rendered["metadata"] = metadata
+    return rendered
+
+
+def resource_without_force_reconcile(resource: dict[str, Any]) -> dict[str, Any]:
+    rendered = dict(resource)
+    metadata = rendered.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    annotations = metadata.get("annotations")
+    annotations = dict(annotations) if isinstance(annotations, dict) else {}
+    annotations.pop(FORCE_RECONCILE_ANNOTATION, None)
+    annotations.pop(FORCE_RECONCILE_REASON_ANNOTATION, None)
+    metadata["annotations"] = annotations
+    rendered["metadata"] = metadata
+    return rendered
+
+
+def force_reconcile_status(resource: dict[str, Any]) -> dict[str, str] | None:
+    token = force_reconcile_token(resource)
+    if not token:
+        return None
+    status = {"token": token}
+    reason = force_reconcile_reason(resource)
+    if reason:
+        status["reason"] = reason
+    return status
+
+
 def source_commit_sha(demo_project: dict[str, Any]) -> str | None:
     value = metadata_annotations(demo_project).get(SOURCE_COMMIT_ANNOTATION)
     return value if value else None
@@ -370,6 +427,7 @@ def demo_project_reconcile_key(demo_project: dict[str, Any]) -> str:
         else None,
         "spec": spec_of(demo_project),
         "imageOverrides": annotations.get(IMAGE_OVERRIDES_ANNOTATION),
+        "forceReconcile": annotations.get(FORCE_RECONCILE_ANNOTATION),
         "sourceArtifactDigest": source_artifact,
     }
     if not source_artifact:
@@ -391,6 +449,7 @@ def instruqt_course_reconcile_key(instruqt_course: dict[str, Any]) -> str:
         if isinstance(instruqt_course.get("metadata"), dict)
         else None,
         "spec": spec_of(instruqt_course),
+        "forceReconcile": annotations.get(FORCE_RECONCILE_ANNOTATION),
         "sourceArtifactDigest": source_artifact,
         "contentSourceArtifactDigest": content_artifact,
         "testingBranchState": annotations.get(TESTING_BRANCH_STATE_ANNOTATION),

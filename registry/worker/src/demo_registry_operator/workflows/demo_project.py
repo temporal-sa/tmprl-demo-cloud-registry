@@ -37,6 +37,9 @@ with workflow.unsafe.imports_passed_through():
         temporal_cloud_finalization_status,
         verify_secrets_manager_resources,
     )
+    from demo_registry_operator.activities.force_reconcile import (
+        load_current_demo_project_for_reconcile,
+    )
     from demo_registry_operator.activities.reconcile import (
         completed_activity_status,
         delete_project_namespace_resource,
@@ -61,8 +64,12 @@ with workflow.unsafe.imports_passed_through():
         TEMPORAL_API_KEY_EXPIRY_ANNOTATION,
         TEMPORAL_API_KEY_ID_ANNOTATION,
         TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION,
+        BASE_RECONCILE_KEY_STATUS_FIELD,
         demo_project_reconcile_key,
+        force_reconcile_status,
+        force_reconcile_token,
         metadata_annotations,
+        resource_without_force_reconcile,
         worker_deployment_rollout_wait_seconds,
     )
 
@@ -117,6 +124,18 @@ def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
     if source_artifact_digest:
         identity["sourceArtifactDigest"] = source_artifact_digest
     return identity
+
+
+def force_reconcile_request(
+    token: str,
+    reason: str | None = None,
+) -> dict[str, str] | None:
+    if not isinstance(token, str) or not token.strip():
+        return None
+    request = {"token": token.strip()}
+    if isinstance(reason, str) and reason.strip():
+        request["reason"] = reason.strip()
+    return request
 
 
 def status_reconcile_identity(status: dict[str, Any]) -> dict[str, str] | None:
@@ -248,6 +267,8 @@ class DemoProjectWorkflow:
         carried_completed_reconcile_identity: dict[str, str] | None = None,
         carried_last_demo_project: dict[str, Any] | None = None,
         carried_temporal_api_key_rotation: dict[str, Any] | None = None,
+        carried_pending_force_reconcile: dict[str, str] | None = None,
+        carried_completed_force_reconcile_token: str | None = None,
     ) -> None:
         self._project_name = project_name
         self._pending_spec: dict[str, Any] | None = None
@@ -258,6 +279,9 @@ class DemoProjectWorkflow:
         self._shutdown = False
         self._finalize = False
         self._continue_as_new_for_worker_version = False
+        self._pending_force_reconcile: dict[str, str] | None = None
+        self._current_force_reconcile_token: str | None = None
+        self._completed_force_reconcile_token: str | None = None
         self._finalize_spec: dict[str, Any] | None = None
         self._last_build_status: dict[str, Any] | None = None
         self._last_demo_project: dict[str, Any] | None = None
@@ -277,6 +301,8 @@ class DemoProjectWorkflow:
         carried_completed_reconcile_identity: dict[str, str] | None = None,
         carried_last_demo_project: dict[str, Any] | None = None,
         carried_temporal_api_key_rotation: dict[str, Any] | None = None,
+        carried_pending_force_reconcile: dict[str, str] | None = None,
+        carried_completed_force_reconcile_token: str | None = None,
     ) -> None:
         self._project_name = project_name
         # Do NOT clobber a pending spec set by a start signal. With
@@ -294,6 +320,12 @@ class DemoProjectWorkflow:
             self._last_demo_project = carried_last_demo_project
         if carried_temporal_api_key_rotation is not None:
             self._temporal_api_key_rotation = carried_temporal_api_key_rotation
+        if carried_pending_force_reconcile is not None:
+            self._pending_force_reconcile = carried_pending_force_reconcile
+        if carried_completed_force_reconcile_token is not None:
+            self._completed_force_reconcile_token = (
+                carried_completed_force_reconcile_token
+            )
         if (
             carried_completed_reconcile_identity is not None
             and remember_completed_reconcile_identity(carried_status)
@@ -332,12 +364,31 @@ class DemoProjectWorkflow:
                 self._continue_as_new_if_needed(project_name)
                 continue
 
+            force_reconcile = self._pending_force_reconcile
+            force_reconcile_requested = force_reconcile is not None
             rotation_due = (
-                self._pending_spec is None
+                not force_reconcile_requested
+                and self._pending_spec is None
                 and self._temporal_api_key_rotation_due()
                 and self._last_demo_project is not None
             )
-            if rotation_due:
+            if force_reconcile_requested:
+                assert force_reconcile is not None
+                self._pending_force_reconcile = None
+                self._pending_spec = None
+                self._pending_reconcile_identity = None
+                demo_project = await workflow.execute_activity(
+                    load_current_demo_project_for_reconcile,
+                    {
+                        "name": project_name,
+                        **force_reconcile,
+                    },
+                    start_to_close_timeout=timedelta(minutes=3),
+                    retry_policy=COMMON_RETRY_POLICY,
+                )
+                self._current_force_reconcile_token = force_reconcile["token"]
+                self._current_reconcile_identity = reconcile_identity(demo_project)
+            elif rotation_due:
                 demo_project = self._last_demo_project
                 self._current_reconcile_identity = rotation_reconcile_identity(
                     demo_project,
@@ -405,7 +456,11 @@ class DemoProjectWorkflow:
                 {
                     "demoProject": demo_project,
                     "externalResources": external_resources,
-                    "previousBuildStatus": self._last_build_status,
+                    "previousBuildStatus": (
+                        None
+                        if force_reconcile_token(demo_project)
+                        else self._last_build_status
+                    ),
                 },
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
@@ -687,6 +742,20 @@ class DemoProjectWorkflow:
         self._pending_reconcile_identity = identity
 
     @workflow.signal
+    def force_reconcile(self, token: str, reason: str | None = None) -> None:
+        request = force_reconcile_request(token, reason)
+        if request is None:
+            return
+        token = request["token"]
+        if token in {
+            self._pending_force_reconcile_token(),
+            self._current_force_reconcile_token,
+            self._completed_force_reconcile_token,
+        }:
+            return
+        self._pending_force_reconcile = request
+
+    @workflow.signal
     def check_worker_version(self) -> None:
         if workflow.info().is_target_worker_deployment_version_changed():
             self._continue_as_new_for_worker_version = True
@@ -819,7 +888,7 @@ class DemoProjectWorkflow:
     ) -> None:
         request = {
             "demoProject": demo_project,
-            "status": status,
+            "status": status_with_force_reconcile(status, demo_project),
         }
         await workflow.execute_activity(
             record_demo_project_status,
@@ -857,6 +926,8 @@ class DemoProjectWorkflow:
                 self._completed_reconcile_identity,
                 self._last_demo_project,
                 self._temporal_api_key_rotation,
+                self._pending_force_reconcile,
+                self._completed_force_reconcile_token,
             ],
         )
 
@@ -882,6 +953,7 @@ class DemoProjectWorkflow:
     def _has_pending_action(self) -> bool:
         return (
             self._pending_spec is not None
+            or self._pending_force_reconcile is not None
             or self._finalize
             or self._shutdown
             or self._continue_as_new_for_worker_version
@@ -914,9 +986,22 @@ class DemoProjectWorkflow:
     def _complete_current_reconcile(self) -> None:
         if remember_completed_reconcile_identity(self._status):
             self._completed_reconcile_identity = self._current_reconcile_identity
+            if self._current_force_reconcile_token is not None:
+                self._completed_force_reconcile_token = (
+                    self._current_force_reconcile_token
+                )
         elif self._completed_reconcile_identity == self._current_reconcile_identity:
             self._completed_reconcile_identity = None
+            if self._completed_force_reconcile_token == self._current_force_reconcile_token:
+                self._completed_force_reconcile_token = None
         self._current_reconcile_identity = None
+        self._current_force_reconcile_token = None
+
+    def _pending_force_reconcile_token(self) -> str | None:
+        if not isinstance(self._pending_force_reconcile, dict):
+            return None
+        token = self._pending_force_reconcile.get("token")
+        return token if isinstance(token, str) and token else None
 
 
 def remember_completed_reconcile_identity(status: Any) -> bool:
@@ -940,6 +1025,22 @@ def rememberable_build_status(value: Any) -> dict[str, Any] | None:
     if not isinstance(images, dict) or not images:
         return None
     return value
+
+
+def status_with_force_reconcile(
+    status: dict[str, Any],
+    resource: dict[str, Any],
+) -> dict[str, Any]:
+    force_status = force_reconcile_status(resource)
+    if force_status is None:
+        return status
+    return {
+        **status,
+        BASE_RECONCILE_KEY_STATUS_FIELD: demo_project_reconcile_key(
+            resource_without_force_reconcile(resource)
+        ),
+        "forceReconcile": force_status,
+    }
 
 
 @workflow.defn
