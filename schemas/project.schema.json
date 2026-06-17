@@ -66,6 +66,9 @@
             "$ref": "#/$defs/userSecret"
           }
         },
+        "temporal": {
+          "$ref": "#/$defs/temporal"
+        },
         "components": {
           "type": "object",
           "minProperties": 1,
@@ -520,6 +523,26 @@
     "httpsUrl": {
       "type": "string",
       "pattern": "^https://[^\\s]+$"
+    },
+    "temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/temporalAuth"
+        }
+      }
+    },
+    "temporalAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["apiKey", "mtls"],
+          "default": "apiKey"
+        }
+      }
     },
     "temporalProxy": {
       "type": "object",

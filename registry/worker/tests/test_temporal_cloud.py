@@ -341,6 +341,26 @@ def test_not_required_when_no_temporal_components():
     assert secrets.writes == []
 
 
+def test_mtls_auth_mode_is_reported_unsupported_without_creating_resources():
+    project = {
+        **PROJECT,
+        "spec": {
+            **PROJECT["spec"],
+            "temporal": {"auth": {"mode": "mtls"}},
+        },
+    }
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore()
+
+    status = reconcile(reconciler, secrets, demo_project=project)
+
+    assert status["phase"] == "Error"
+    assert status["reason"] == "UnsupportedTemporalAuthMode"
+    assert status["auth"]["mode"] == "mtls"
+    assert reconciler.calls == []
+    assert secrets.writes == []
+
+
 def finalize(reconciler, secret_store, demo_project=PROJECT):
     return asyncio.run(
         finalize_temporal_cloud(

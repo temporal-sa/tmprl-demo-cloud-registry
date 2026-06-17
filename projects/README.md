@@ -256,6 +256,10 @@ Rules:
   receive Temporal connection env vars and a namespace-scoped API key. Set
   `temporalAccess: true` only on non-worker components, such as an API server,
   that need to start or query workflows.
+- Temporal runtime authentication defaults to API keys. Projects may declare
+  `spec.temporal.auth.mode: apiKey` explicitly, but omitting it is equivalent.
+  `spec.temporal.auth.mode: mtls` is reserved for the mTLS rollout path and is
+  blocked by the current operator until mTLS credential reconciliation lands.
 - Worker versioning is opt-in via the object form: `components.<name>.worker.versioning`
   with `enabled`, `taskQueue`, and optional `rollout`/`sunset` settings.
   `taskQueue` is consumed only here (as the Worker Deployment Name), so it lives

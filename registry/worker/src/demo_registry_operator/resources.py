@@ -132,6 +132,9 @@ TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_REGION",
 ]
 TEMPORAL_SECRET_PROPERTIES = ["address", "namespace", "apiKey", "tls"]
+TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
+TEMPORAL_AUTH_MODE_MTLS = "mtls"
+TEMPORAL_AUTH_MODES = {TEMPORAL_AUTH_MODE_API_KEY, TEMPORAL_AUTH_MODE_MTLS}
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -2650,6 +2653,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     prefix = project_secret_prefix(demo_project)
     build_names = sorted(builds(demo_project))
     temporal_required = bool(temporal_components(demo_project))
+    auth_mode = temporal_auth_mode(demo_project)
     return {
         "phase": "ManualSetupRequired",
         "kubernetesNamespace": project_namespace(demo_project),
@@ -2698,6 +2702,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
             "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
             "provider": "temporal-cloud",
             "mode": "cloud-api",
+            "auth": temporal_auth_status(demo_project),
             "message": (
                 "The operator manages Temporal Cloud resources through the "
                 "Cloud Operations API when external resource reconciliation runs."
@@ -2709,16 +2714,28 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "action": "create-or-verify",
                 "deletionPolicy": "retain-until-explicitly-approved",
             },
-            "apiKey": {
-                "action": "create-or-verify-or-rotate",
-                "scope": "namespace",
-                "namespace": project_temporal_namespace(demo_project),
-                "ttlDays": 30,
-                "rotateBeforeExpiryDays": 10,
-                "secretRemotePath": temporal_secret_remote_path(demo_project),
-                "secretProperties": TEMPORAL_SECRET_PROPERTIES,
-                "components": sorted(temporal_components(demo_project)),
-            },
+            **(
+                {
+                    "apiKey": {
+                        "action": "create-or-verify-or-rotate",
+                        "scope": "namespace",
+                        "namespace": project_temporal_namespace(demo_project),
+                        "ttlDays": 30,
+                        "rotateBeforeExpiryDays": 10,
+                        "secretRemotePath": temporal_secret_remote_path(demo_project),
+                        "secretProperties": TEMPORAL_SECRET_PROPERTIES,
+                        "components": sorted(temporal_components(demo_project)),
+                    }
+                }
+                if auth_mode == TEMPORAL_AUTH_MODE_API_KEY
+                else {
+                    "mtls": {
+                        "action": "not-yet-implemented",
+                        "caScope": "platform",
+                        "clientIdentityScope": "namespace",
+                    }
+                }
+            ),
             "bootstrapCredential": {
                 "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
                 "kubernetesSecret": "temporal-cloud-bootstrap",
@@ -3213,6 +3230,7 @@ def project_metadata(demo_project: dict[str, Any]) -> dict[str, Any]:
             "namespace": project_name(demo_project),
             "secretPrefix": project_secret_prefix(demo_project),
             "remotePath": temporal_secret_remote_path(demo_project),
+            "auth": temporal_auth_status(demo_project),
             "standardEnv": STANDARD_TEMPORAL_ENV,
             "components": sorted(temporal_components(demo_project)),
         },
@@ -3287,6 +3305,33 @@ def auth_required(demo_project: dict[str, Any]) -> bool:
     if not isinstance(ingress, dict):
         return True
     return bool(ingress.get("temporalAuthRequired", True))
+
+
+def temporal_config(demo_project: dict[str, Any]) -> dict[str, Any]:
+    temporal = spec_of(demo_project).get("temporal")
+    return temporal if isinstance(temporal, dict) else {}
+
+
+def temporal_auth_config(demo_project: dict[str, Any]) -> dict[str, Any]:
+    auth = temporal_config(demo_project).get("auth")
+    return auth if isinstance(auth, dict) else {}
+
+
+def temporal_auth_mode(demo_project: dict[str, Any]) -> str:
+    mode = temporal_auth_config(demo_project).get("mode")
+    if isinstance(mode, str) and mode in TEMPORAL_AUTH_MODES:
+        return mode
+    return TEMPORAL_AUTH_MODE_API_KEY
+
+
+def temporal_auth_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    configured_mode = temporal_auth_config(demo_project).get("mode")
+    mode = temporal_auth_mode(demo_project)
+    return {
+        "mode": mode,
+        "defaulted": configured_mode != mode,
+        "modeSwitchPolicy": "destructive-recreate",
+    }
 
 
 def component_needs_temporal(component: dict[str, Any]) -> bool:

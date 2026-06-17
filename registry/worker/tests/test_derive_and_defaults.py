@@ -7,8 +7,11 @@ from demo_registry_operator.resources import (
     catalog_payload,
     component_ports,
     container,
+    external_resource_status,
     ingress_routes,
+    project_metadata,
     project_temporal_namespace,
+    temporal_auth_mode,
 )
 
 
@@ -128,6 +131,51 @@ def test_container_keeps_explicit_command_and_empty_args():
 
     assert rendered["command"] == ["web"]
     assert rendered["args"] == []
+
+
+def test_temporal_auth_mode_defaults_to_api_key():
+    assert temporal_auth_mode(project("banking")) == "apiKey"
+
+
+def test_temporal_auth_mode_uses_project_config():
+    proj = project("banking", temporal={"auth": {"mode": "mtls"}})
+
+    assert temporal_auth_mode(proj) == "mtls"
+
+
+def test_temporal_auth_status_is_exposed_in_project_metadata():
+    metadata = project_metadata(
+        project(
+            "banking",
+            temporal={"auth": {"mode": "apiKey"}},
+            components={"worker": {"build": "worker", "worker": True}},
+        )
+    )
+
+    assert metadata["temporal"]["auth"] == {
+        "mode": "apiKey",
+        "defaulted": False,
+        "modeSwitchPolicy": "destructive-recreate",
+    }
+
+
+def test_external_resource_status_exposes_mtls_auth_intent():
+    status = external_resource_status(
+        project(
+            "banking",
+            temporal={"auth": {"mode": "mtls"}},
+            builds={"worker": {"context": ".", "dockerfile": "Dockerfile"}},
+            components={"worker": {"build": "worker", "worker": True}},
+        )
+    )
+
+    temporal = status["temporalCloud"]
+    assert temporal["auth"]["mode"] == "mtls"
+    assert temporal["mtls"] == {
+        "action": "not-yet-implemented",
+        "caScope": "platform",
+        "clientIdentityScope": "namespace",
+    }
 
 
 # --- catalog -------------------------------------------------------------

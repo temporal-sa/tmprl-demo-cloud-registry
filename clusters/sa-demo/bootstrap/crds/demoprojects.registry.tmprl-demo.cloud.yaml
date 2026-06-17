@@ -107,6 +107,18 @@ spec:
                         items:
                           type: string
                           pattern: "^[A-Z_][A-Z0-9_]*$"
+                temporal:
+                  type: object
+                  properties:
+                    auth:
+                      type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum:
+                            - apiKey
+                            - mtls
+                          default: apiKey
                 ingress:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

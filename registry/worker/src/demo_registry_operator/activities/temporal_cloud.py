@@ -34,7 +34,10 @@ from demo_registry_operator.activities.temporal_auth import (
     temporal_api_key_rotation_decision,
 )
 from demo_registry_operator.resources import (
+    TEMPORAL_AUTH_MODE_API_KEY,
     project_name,
+    temporal_auth_mode,
+    temporal_auth_status,
     temporal_components,
     temporal_secret_remote_path,
 )
@@ -157,6 +160,21 @@ async def reconcile_temporal_cloud(
             "message": "No component currently requires Temporal credentials.",
         }
 
+    auth_mode = temporal_auth_mode(demo_project)
+    if auth_mode != TEMPORAL_AUTH_MODE_API_KEY:
+        return {
+            "phase": "Error",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "reason": "UnsupportedTemporalAuthMode",
+            "message": (
+                "Temporal Cloud mTLS auth is accepted in project configuration "
+                "but is not implemented by this operator version."
+            ),
+            "auth": temporal_auth_status(demo_project),
+        }
+
     short_name = desired_namespace_name(demo_project)
 
     namespace = await reconciler.find_namespace(short_name)
@@ -228,6 +246,7 @@ async def reconcile_temporal_cloud(
         "checkedAt": checked_at,
         "accountId": account_id,
         "region": region,
+        "auth": temporal_auth_status(demo_project),
         "namespace": {
             "name": namespace.qualified_name,
             "action": "created" if namespace_created else "verified",

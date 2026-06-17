@@ -894,6 +894,25 @@ def external_resource_blocker(
     if not isinstance(external_resources, dict):
         return None
 
+    temporal_cloud = external_resources.get("temporalCloud")
+    if (
+        isinstance(temporal_cloud, dict)
+        and temporal_cloud.get("reason") == "UnsupportedTemporalAuthMode"
+    ):
+        return {
+            "phase": "Error",
+            "reason": "UnsupportedTemporalAuthMode",
+            "message": temporal_cloud.get(
+                "message",
+                "Temporal Cloud auth mode is not supported by this operator version.",
+            ),
+            "temporalCloud": {
+                key: temporal_cloud.get(key)
+                for key in ("phase", "reason", "message", "auth")
+                if key in temporal_cloud
+            },
+        }
+
     secrets_manager = external_resources.get("secretsManager")
     if not isinstance(secrets_manager, dict):
         return None

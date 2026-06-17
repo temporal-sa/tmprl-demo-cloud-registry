@@ -63,6 +63,32 @@ def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
     }
 
 
+def test_external_resource_blocker_blocks_unsupported_temporal_auth_mode():
+    blocker = reconcile.external_resource_blocker(
+        {
+            "temporalCloud": {
+                "phase": "Error",
+                "reason": "UnsupportedTemporalAuthMode",
+                "message": "mTLS is not implemented yet.",
+                "auth": {"mode": "mtls"},
+            },
+            "secretsManager": {"phase": "Ready"},
+        }
+    )
+
+    assert blocker == {
+        "phase": "Error",
+        "reason": "UnsupportedTemporalAuthMode",
+        "message": "mTLS is not implemented yet.",
+        "temporalCloud": {
+            "phase": "Error",
+            "reason": "UnsupportedTemporalAuthMode",
+            "message": "mTLS is not implemented yet.",
+            "auth": {"mode": "mtls"},
+        },
+    }
+
+
 def test_promote_candidate_uses_candidate_source_commit_for_route_version(
     monkeypatch,
 ):

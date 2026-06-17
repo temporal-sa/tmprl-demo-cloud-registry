@@ -413,6 +413,7 @@ def test_schema_accepts_controller_versioning_and_rejects_gate_input_conflict():
     schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
     validator = Draft202012Validator(schema)
     valid = project(worker=versioned_worker())
+    valid["spec"]["temporal"] = {"auth": {"mode": "mtls"}}
     valid["spec"]["components"]["worker"]["automountServiceAccountToken"] = True
     valid["spec"]["components"]["worker"]["temporalProxy"] = {
         "enabled": True,
@@ -425,6 +426,17 @@ def test_schema_accepts_controller_versioning_and_rejects_gate_input_conflict():
     invalid["spec"]["components"]["worker"]["worker"]["versioning"]["rollout"][
         "gate"
     ]["inputFrom"] = {"configMapKeyRef": {"name": "gate-input", "key": "payload.json"}}
+
+    errors = list(validator.iter_errors(invalid))
+
+    assert errors
+
+
+def test_schema_rejects_unknown_temporal_auth_mode():
+    schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    invalid = project(worker=True)
+    invalid["spec"]["temporal"] = {"auth": {"mode": "password"}}
 
     errors = list(validator.iter_errors(invalid))
 

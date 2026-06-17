@@ -23,7 +23,10 @@ from demo_registry_operator.resources import (
     project_namespace,
     project_secret_prefix,
     spec_of,
+    TEMPORAL_AUTH_MODE_API_KEY,
     temporal_components,
+    temporal_auth_mode,
+    temporal_auth_status,
     temporal_secret_remote_path,
     user_secret_names,
     user_secret_required_properties,
@@ -562,6 +565,25 @@ def temporal_cloud_status(
             "message": "No component currently requires Temporal credentials.",
         }
 
+    auth_mode = temporal_auth_mode(demo_project)
+    if auth_mode != TEMPORAL_AUTH_MODE_API_KEY:
+        return {
+            "phase": "Error",
+            "provider": "temporal-cloud",
+            "mode": config.temporal_cloud_mode,
+            "reason": "UnsupportedTemporalAuthMode",
+            "message": (
+                "Temporal Cloud mTLS auth is accepted in project configuration "
+                "but is not implemented by this operator version."
+            ),
+            "auth": temporal_auth_status(demo_project),
+            "namespace": {
+                "name": temporal_namespace(demo_project),
+                "action": "blocked",
+                "deletionPolicy": "retain-until-explicitly-approved",
+            },
+        }
+
     if config.temporal_cloud_mode == "cloud-api" and config.external_resource_mode == "aws":
         return temporal_cloud_api_status(
             demo_project,
@@ -576,6 +598,7 @@ def temporal_cloud_status(
         "mode": config.temporal_cloud_mode,
         "accountId": config.temporal_cloud_account_id,
         "region": config.temporal_cloud_region,
+        "auth": temporal_auth_status(demo_project),
         "message": (
             "Temporal Cloud reconciliation requires cloud-api mode with aws "
             "external resource reconciliation."
