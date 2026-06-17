@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = (
+    "TEMPORAL_CLOUD_API_KEY",
+    "TEMPORAL_CLOUD_ACCOUNT_ID",
+    "TEMPORAL_CLOUD_REGION",
+)
+
+
+@dataclass(frozen=True)
+class TemporalCloudProject:
+    name: str
+    namespace: str
+    kubernetes_namespace: str
+    auth_mode: str
+    components: dict[str, dict[str, Any]]
+    runtime_secret_path: str
+    mtls_ca_secret_path: str
+
+    @property
+    def component_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self.components))
+
+    @property
+    def temporal_required(self) -> bool:
+        return bool(self.components)
+
+    def as_demo_project(self) -> dict[str, Any]:
+        return {
+            "metadata": {"name": self.name},
+            "spec": {
+                "components": self.components,
+                "temporal": {"auth": {"mode": self.auth_mode}},
+            },
+        }
+
+
+@dataclass(frozen=True)
+class EcrRepositoryRequest:
+    name: str
+    project: str
+    build: str
+    components: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EcrRepositoryResult:
+    name: str
+    project: str
+    build: str
+    components: tuple[str, ...]
+    phase: str
+    action: str
+    region: str
+    account_id: str | None
+    repository_uri: str | None = None
+
+    def as_status(self) -> dict[str, Any]:
+        status: dict[str, Any] = {
+            "name": self.name,
+            "project": self.project,
+            "build": self.build,
+            "components": list(self.components),
+            "phase": self.phase,
+            "action": self.action,
+            "region": self.region,
+            "accountId": self.account_id,
+        }
+        if self.repository_uri:
+            status["repositoryUri"] = self.repository_uri
+        return status
+
+
+@dataclass(frozen=True)
+class DeleteEcrRepositoriesRequest:
+    checked_at: str
+    repositories: tuple[EcrRepositoryRequest, ...]
+
+
+@dataclass(frozen=True)
+class DeleteEcrRepositoriesResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SecretRequirement:
+    path: str
+    required: bool
+    managed_by: str
+    required_properties: tuple[str, ...] = ()
+    components: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VerifySecretsManagerResourcesRequest:
+    checked_at: str
+    secret_prefix: str
+    temporal_bootstrap: SecretRequirement
+    temporal_credentials: SecretRequirement
+    temporal_mtls_ca: SecretRequirement
+    user_managed: tuple[SecretRequirement, ...]
+
+
+@dataclass(frozen=True)
+class SecretsManagerVerificationResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ExternalResourcesPlan:
+    demo_project: dict[str, Any]
+    checked_at: str
+    mode: str
+    kubernetes_namespace: str
+    force_temporal_auth_rotation: bool
+    ecr_repositories: tuple[EcrRepositoryRequest, ...]
+    temporal_project: TemporalCloudProject
+    secrets_manager: VerifySecretsManagerResourcesRequest
+
+
+@dataclass(frozen=True)
+class TemporalCloudStatusResult:
+    status: dict[str, Any]
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
+class TemporalCloudNamespaceResult:
+    status: dict[str, Any]
+    namespace: str | None
+    grpc_address: str | None
+    auth_mode: str | None
+    created: bool
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
+class TemporalCloudServiceAccountResult:
+    status: dict[str, Any]
+    service_account_id: str | None
+    service_account_name: str | None
+    created: bool
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
+class TemporalCloudCredentialStageResult:
+    status: dict[str, Any]
+    promote_required: bool
+    candidate_api_key_id: str | None = None
+    candidate_secret_path: str | None = None
+    candidate_ca_secret_path: str | None = None
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
+class TemporalCloudPromotionResult:
+    status: dict[str, Any]
+    promoted: bool = False
+    ca_promoted: bool = False
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
+class StageTemporalMtlsCaRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class CreateOrVerifyTemporalCloudNamespaceRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    account_id: str | None = None
+    region: str | None = None
+    retention_days: int = 7
+    enable_delete_protection: bool = True
+
+
+@dataclass(frozen=True)
+class ConfigureTemporalCloudNamespaceMtlsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+
+
+@dataclass(frozen=True)
+class CreateOrVerifyTemporalCloudServiceAccountRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+
+
+@dataclass(frozen=True)
+class StageTemporalApiKeyCandidateRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    service_account: TemporalCloudServiceAccountResult
+    force_rotation: bool = False
+
+
+@dataclass(frozen=True)
+class StageTemporalMtlsClientCertificateRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    ca: TemporalCloudCredentialStageResult
+    force_rotation: bool = False
+
+
+@dataclass(frozen=True)
+class RunTemporalRuntimeCandidateCanaryRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    stage: TemporalCloudCredentialStageResult
+
+
+@dataclass(frozen=True)
+class PromoteTemporalRuntimeCredentialRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    stage: TemporalCloudCredentialStageResult
+    canary: TemporalCloudStatusResult | None = None
+
+
+@dataclass(frozen=True)
+class PromoteTemporalMtlsCaRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    stage: TemporalCloudCredentialStageResult
+
+
+@dataclass(frozen=True)
+class DeleteTemporalRuntimeCandidateSecretRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class DeleteTemporalCloudMtlsCaSecretRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class MirrorTemporalRuntimeSecretRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class DeleteTemporalCloudApiKeyRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    key_id: str
+
+
+@dataclass(frozen=True)
+class DeleteTemporalCloudServiceAccountRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    service_account_id: str
+
+
+@dataclass(frozen=True)
+class TemporalCloudNamespaceRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: str

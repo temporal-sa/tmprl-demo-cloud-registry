@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -54,15 +55,112 @@ from demo_registry_operator.resources import (
 )
 
 
+@dataclass(frozen=True)
+class ApplyDemoProjectResourcesRequest:
+    demo_project: dict[str, Any]
+    external_resources: dict[str, Any] | None = None
+    build_status: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class DemoProjectStatusResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProjectFinalizationRequest:
+    demo_project: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProjectFinalizationPlan:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ResourceDeleteRequest:
+    namespace: str
+    name: str
+
+
+@dataclass(frozen=True)
+class OptionalResourceDeleteRequest:
+    namespace: str
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectNamespaceDeleteRequest:
+    namespace: str
+
+
+@dataclass(frozen=True)
+class ProjectFinalizerRemovalRequest:
+    project: str
+
+
+@dataclass(frozen=True)
+class ActivityActionResult:
+    action: str
+
+
+@dataclass(frozen=True)
+class SmokeCheckRequest:
+    project: str
+    demo_project: dict[str, Any] | None = None
+    host: str | None = None
+    candidate: dict[str, Any] | None = None
+    smoke_check: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ActivityStatusResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CandidateReadinessRequest:
+    demo_project: dict[str, Any]
+    candidate: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PromoteCandidateRoutesRequest:
+    project: str
+    demo_project: dict[str, Any]
+    candidate: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PruneStaleRuntimeCandidatesRequest:
+    demo_project: dict[str, Any]
+    active_version: str
+
+
+@dataclass(frozen=True)
+class WorkerDeploymentRolloutRequest:
+    demo_project: dict[str, Any]
+    worker_deployments: dict[str, Any]
+    timeout_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class RecordDemoProjectStatusRequest:
+    demo_project: dict[str, Any]
+    status: dict[str, Any]
+
+
 @activity.defn
-def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
+def apply_demo_project_resources(
+    request: ApplyDemoProjectResourcesRequest,
+) -> DemoProjectStatusResult:
     """Reconcile one DemoProject.
 
     The operator runs in apply mode and creates or patches Kubernetes resources.
     """
-    demo_project = demo_project_from_request(request)
-    external_resources = external_resources_from_request(request)
-    build_status = build_status_from_request(request)
+    demo_project = request.demo_project
+    external_resources = request.external_resources
+    build_status = request.build_status
     demo_project = demo_project_with_build_source(demo_project, build_status)
     name = project_name(demo_project)
     image_overrides = images_from_build_status(build_status) or parse_image_overrides(demo_project)
@@ -134,21 +232,14 @@ def reconcile_project(request: dict[str, Any]) -> dict[str, Any]:
         worker_deployments_status=worker_deployments_status,
         external_resource_block=external_resource_block,
     )
-    if phase == "Ready":
-        active_version = status.get("candidateRolloutStatus", {}).get("imageVersion")
-        if isinstance(active_version, str) and active_version:
-            prune_status = prune_stale_runtime_candidates(
-                demo_project,
-                active_version=active_version,
-            )
-            status["pruneStatus"] = prune_status
-            status["prunedResources"] = prune_status.get("resources", [])
-    return status
+    return DemoProjectStatusResult(status)
 
 
 @activity.defn
-def plan_project_finalization(request: dict[str, Any]) -> dict[str, Any]:
-    demo_project = demo_project_from_request(request)
+def load_project_finalization_plan(
+    request: ProjectFinalizationRequest,
+) -> ProjectFinalizationPlan:
+    demo_project = request.demo_project
     config = WorkerConfig.from_env()
     name = project_name(demo_project)
     namespace = project_namespace(demo_project)
@@ -158,16 +249,16 @@ def plan_project_finalization(request: dict[str, Any]) -> dict[str, Any]:
         activity.logger.warning(
             "Refusing to finalize control-plane project=%s", name
         )
-        return {
+        return ProjectFinalizationPlan({
             "action": "complete",
             "status": {
                 "phase": "Skipped",
                 "project": name,
                 "message": "Control-plane project is not finalized.",
             },
-        }
+        })
 
-    return {
+    return ProjectFinalizationPlan({
         "action": "finalize",
         "demoProject": demo_project,
         "project": name,
@@ -176,57 +267,65 @@ def plan_project_finalization(request: dict[str, Any]) -> dict[str, Any]:
         "gitRepository": source_git_repository_name(demo_project),
         "sourceAuthSecret": source_auth_kubernetes_secret_name(demo_project),
         "checkedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 @activity.defn
-def delete_project_namespace_resource(plan: dict[str, Any]) -> str:
+def delete_project_namespace_resource(
+    request: ProjectNamespaceDeleteRequest,
+) -> ActivityActionResult:
     try:
-        return delete_namespace(
-            string_field(plan, "namespace"),
+        return ActivityActionResult(delete_namespace(
+            required_string(request.namespace, "namespace"),
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def delete_project_source_repository(plan: dict[str, Any]) -> str:
+def delete_project_source_repository(
+    request: ResourceDeleteRequest,
+) -> ActivityActionResult:
     try:
-        return delete_git_repository(
-            string_field(plan, "sourceWatchNamespace"),
-            string_field(plan, "gitRepository"),
+        return ActivityActionResult(delete_git_repository(
+            required_string(request.namespace, "namespace"),
+            required_string(request.name, "name"),
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def delete_project_source_auth_secret(plan: dict[str, Any]) -> str:
-    name = plan.get("sourceAuthSecret")
+def delete_project_source_auth_secret(
+    request: OptionalResourceDeleteRequest,
+) -> ActivityActionResult:
+    name = request.name
     if not isinstance(name, str) or not name:
-        return "not-required"
+        return ActivityActionResult("not-required")
     try:
-        return delete_external_secret(
-            string_field(plan, "sourceWatchNamespace"),
+        return ActivityActionResult(delete_external_secret(
+            required_string(request.namespace, "namespace"),
             name,
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def remove_project_finalizer(plan: dict[str, Any]) -> str:
+def remove_project_finalizer(
+    request: ProjectFinalizerRemovalRequest,
+) -> ActivityActionResult:
     try:
         remove_demo_project_finalizer(
-            string_field(plan, "project"),
+            required_string(request.project, "project"),
             dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return "removed"
+    return ActivityActionResult("removed")
 
 
 def project_finalization_status(
@@ -268,6 +367,10 @@ def completed_activity_status(value: dict[str, Any]) -> dict[str, Any] | None:
 
 def string_field(value: dict[str, Any], key: str) -> str:
     field = value.get(key)
+    return required_string(field, key)
+
+
+def required_string(field: Any, key: str) -> str:
     if isinstance(field, str) and field:
         return field
     raise non_retryable_error(
@@ -276,7 +379,6 @@ def string_field(value: dict[str, Any], key: str) -> str:
     )
 
 
-@activity.defn
 def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
     project_name = request.get("project", "unknown")
     source_commit_sha = request.get("sourceCommitSha")
@@ -302,16 +404,16 @@ def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
-def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
-    smoke_check = plan.get("smokeCheck")
+def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
+    smoke_check = request.smoke_check
     if not smoke_check:
-        return {
+        return ActivityStatusResult({
             "ok": True,
             "skipped": True,
             "message": "No smoke check configured.",
-        }
+        })
 
-    url = smoke_check_url(plan, smoke_check)
+    url = smoke_check_url(request, smoke_check)
     expected_status = int(smoke_check.get("expectedStatus", 200))
     timeout = int(smoke_check.get("timeoutSeconds", 10))
     # Poll with backoff rather than a single shot: a freshly-promoted candidate
@@ -339,7 +441,7 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
             last_error = f"Smoke check request failed: {error}"
 
         if actual_status == expected_status:
-            return {
+            return ActivityStatusResult({
                 "ok": True,
                 "skipped": False,
                 "url": url,
@@ -349,7 +451,7 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
                 "checkedAt": checked_at,
                 "message": "Smoke check passed.",
                 "smokeCheck": smoke_check,
-            }
+            })
 
         if time.monotonic() >= deadline:
             message = (
@@ -357,7 +459,7 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
                 if last_error
                 else "Smoke check status mismatch."
             )
-            return {
+            return ActivityStatusResult({
                 "ok": False,
                 "skipped": False,
                 "url": url,
@@ -367,7 +469,7 @@ def run_smoke_check(plan: dict[str, Any]) -> dict[str, Any]:
                 "checkedAt": checked_at,
                 "message": message,
                 "smokeCheck": smoke_check,
-            }
+            })
 
         activity.heartbeat({"smokeCheck": url, "attempt": attempt, "lastStatus": actual_status})
         time.sleep(smoke_check_poll_seconds(smoke_check))
@@ -384,10 +486,12 @@ def smoke_check_poll_seconds(smoke_check: dict[str, Any]) -> int:
 
 
 @activity.defn
-def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
+def wait_for_candidate_readiness(
+    request: CandidateReadinessRequest,
+) -> ActivityStatusResult:
     config = WorkerConfig.from_env()
-    demo_project = plan.get("demoProject")
-    candidate = plan.get("candidate")
+    demo_project = request.demo_project
+    candidate = request.candidate
     if not isinstance(demo_project, dict) or not isinstance(candidate, dict):
         raise non_retryable_error(
             "wait_for_candidate_readiness requires demoProject and candidate",
@@ -396,13 +500,13 @@ def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
 
     deployments = candidate.get("deployments")
     if not isinstance(deployments, dict) or not deployments:
-        return {
+        return ActivityStatusResult({
             "phase": "Skipped",
             "ok": True,
             "message": "Candidate has no Deployment resources to wait for.",
             "checkedAt": datetime.now(UTC).isoformat(),
             "deployments": {},
-        }
+        })
 
     namespace = project_namespace(demo_project)
     deadline = time.monotonic() + config.readiness_timeout_seconds
@@ -410,22 +514,22 @@ def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
     while True:
         last_status = read_candidate_deployments(namespace, deployments)
         if all(deployment.get("ready") for deployment in last_status.values()):
-            return {
+            return ActivityStatusResult({
                 "phase": "Ready",
                 "ok": True,
                 "message": "All candidate Deployments are available.",
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "deployments": last_status,
-            }
+            })
 
         if time.monotonic() >= deadline:
-            return {
+            return ActivityStatusResult({
                 "phase": "TimedOut",
                 "ok": False,
                 "message": "Timed out waiting for candidate Deployments to become available.",
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "deployments": last_status,
-            }
+            })
 
         activity.heartbeat(
             {
@@ -438,10 +542,12 @@ def wait_for_candidate_readiness(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
-def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
-    project_name = plan.get("project", "unknown")
-    demo_project = plan.get("demoProject")
-    candidate = plan.get("candidate")
+def promote_candidate_routes(
+    request: PromoteCandidateRoutesRequest,
+) -> ActivityStatusResult:
+    project_name = request.project
+    demo_project = request.demo_project
+    candidate = request.candidate
     candidate_images = (
         candidate.get("images")
         if isinstance(candidate, dict) and isinstance(candidate.get("images"), dict)
@@ -451,11 +557,6 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
     if isinstance(demo_project, dict) and isinstance(candidate, dict):
         promotion_project = demo_project_with_build_source(demo_project, candidate)
     applied = []
-    prune_status: dict[str, Any] = {
-        "phase": "Skipped",
-        "message": "No candidate was promoted.",
-        "resources": [],
-    }
     if isinstance(promotion_project, dict):
         applied = apply_resources(
             promotion_resources(
@@ -464,27 +565,29 @@ def promote_candidate(plan: dict[str, Any]) -> dict[str, Any]:
             ),
             dry_run=False,
         )
-        active_version = (
-            candidate.get("imageVersion") if isinstance(candidate, dict) else None
-        )
-        if isinstance(active_version, str) and active_version:
-            prune_status = prune_stale_runtime_candidates(
-                promotion_project,
-                active_version=active_version,
-            )
     activity.logger.info("Promoting candidate for project=%s", project_name)
-    return {
+    return ActivityStatusResult({
         "project": project_name,
         "phase": "Promoted",
         "message": "Candidate passed smoke check; active route resources were promoted.",
         "candidate": candidate or {},
         "appliedResources": applied,
-        "pruneStatus": prune_status,
-        "prunedResources": prune_status.get("resources", []),
-    }
+    })
 
 
+@activity.defn
 def prune_stale_runtime_candidates(
+    request: PruneStaleRuntimeCandidatesRequest,
+) -> ActivityStatusResult:
+    return ActivityStatusResult(
+        prune_stale_runtime_candidates_impl(
+            request.demo_project,
+            active_version=required_string(request.active_version, "active_version"),
+        )
+    )
+
+
+def prune_stale_runtime_candidates_impl(
     demo_project: dict[str, Any],
     *,
     active_version: str,
@@ -650,10 +753,12 @@ def deployment_ready(status: dict[str, Any]) -> bool:
 
 
 @activity.defn
-def wait_for_worker_deployment_rollouts(plan: dict[str, Any]) -> dict[str, Any]:
+def wait_for_worker_deployment_rollouts(
+    request: WorkerDeploymentRolloutRequest,
+) -> ActivityStatusResult:
     config = WorkerConfig.from_env()
-    demo_project = plan.get("demoProject")
-    worker_deployments = plan.get("workerDeployments")
+    demo_project = request.demo_project
+    worker_deployments = request.worker_deployments
     if not isinstance(demo_project, dict) or not isinstance(worker_deployments, dict):
         raise non_retryable_error(
             "wait_for_worker_deployment_rollouts requires demoProject and workerDeployments",
@@ -661,17 +766,15 @@ def wait_for_worker_deployment_rollouts(plan: dict[str, Any]) -> dict[str, Any]:
         )
 
     if not worker_deployments:
-        return {
+        return ActivityStatusResult({
             "phase": "Skipped",
             "ok": True,
             "message": "Candidate has no WorkerDeployment resources to wait for.",
             "checkedAt": datetime.now(UTC).isoformat(),
             "resources": [],
-        }
+        })
 
-    wait_seconds = positive_timeout_seconds(
-        plan.get("workerDeploymentTimeoutSeconds")
-    ) or worker_deployment_rollout_wait_seconds(
+    wait_seconds = positive_timeout_seconds(request.timeout_seconds) or worker_deployment_rollout_wait_seconds(
         demo_project,
         base_timeout_seconds=config.readiness_timeout_seconds,
     )
@@ -684,23 +787,23 @@ def wait_for_worker_deployment_rollouts(plan: dict[str, Any]) -> dict[str, Any]:
         )
         aggregate = aggregate_worker_deployment_status(last_status)
         if aggregate["phase"] == "Ready":
-            return {
+            return ActivityStatusResult({
                 **aggregate,
                 "ok": True,
                 "message": "All WorkerDeployment rollouts are ready.",
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "resources": list(last_status.values()),
-            }
+            })
         if aggregate["phase"] in {"Failed", "Error"}:
-            return {
+            return ActivityStatusResult({
                 **aggregate,
                 "ok": False,
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "resources": list(last_status.values()),
-            }
+            })
 
         if time.monotonic() >= deadline:
-            return {
+            return ActivityStatusResult({
                 "phase": "TimedOut",
                 "ok": False,
                 "message": (
@@ -709,7 +812,7 @@ def wait_for_worker_deployment_rollouts(plan: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "resources": list(last_status.values()),
-            }
+            })
 
         activity.heartbeat(
             {
@@ -1025,9 +1128,11 @@ def aggregate_external_secret_phase(resources: list[dict[str, Any]]) -> str:
 
 
 @activity.defn
-def record_demo_project_status(request: dict[str, Any]) -> dict[str, Any]:
-    demo_project = request.get("demoProject")
-    status = request.get("status")
+def record_demo_project_status(
+    request: RecordDemoProjectStatusRequest,
+) -> DemoProjectStatusResult:
+    demo_project = request.demo_project
+    status = request.status
     if not isinstance(demo_project, dict) or not isinstance(status, dict):
         raise non_retryable_error(
             "record_demo_project_status requires demoProject and status objects",
@@ -1043,13 +1148,15 @@ def record_demo_project_status(request: dict[str, Any]) -> dict[str, Any]:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return status
+    return DemoProjectStatusResult(status)
 
 
 @activity.defn
-def record_catalog_project_status(request: dict[str, Any]) -> dict[str, Any]:
-    demo_project = request.get("demoProject")
-    status = request.get("status")
+def record_catalog_project_status(
+    request: RecordDemoProjectStatusRequest,
+) -> DemoProjectStatusResult:
+    demo_project = request.demo_project
+    status = request.status
     if not isinstance(demo_project, dict) or not isinstance(status, dict):
         raise non_retryable_error(
             "record_catalog_project_status requires demoProject and status objects",
@@ -1064,7 +1171,7 @@ def record_catalog_project_status(request: dict[str, Any]) -> dict[str, Any]:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return status
+    return DemoProjectStatusResult(status)
 
 
 def status_with_reconcile_key(
@@ -1077,19 +1184,19 @@ def status_with_reconcile_key(
     }
 
 
-def smoke_check_url(plan: dict[str, Any], smoke_check: dict[str, Any]) -> str:
+def smoke_check_url(request: SmokeCheckRequest, smoke_check: dict[str, Any]) -> str:
     if isinstance(smoke_check.get("url"), str):
         return smoke_check["url"]
 
-    candidate = plan.get("candidate")
+    candidate = request.candidate
     if isinstance(candidate, dict) and isinstance(candidate.get("url"), str):
         return candidate["url"]
 
-    host = plan.get("host")
-    if not isinstance(host, str) and isinstance(plan.get("demoProject"), dict):
-        host = project_host(plan["demoProject"])
+    host = request.host
+    if not isinstance(host, str) and isinstance(request.demo_project, dict):
+        host = project_host(request.demo_project)
     if not isinstance(host, str):
-        host = f"{plan.get('project', 'unknown')}.tmprl-demo.cloud"
+        host = f"{request.project}.tmprl-demo.cloud"
 
     path = smoke_check.get("path", "/")
     return f"https://{host}{path}"

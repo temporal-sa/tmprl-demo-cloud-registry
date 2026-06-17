@@ -8,6 +8,18 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from demo_registry_operator.activities.instruqt import (
+        InstruqtCourseArtifactRequest,
+        InstruqtCourseFinalizationPlan,
+        InstruqtCourseFinalizationRequest,
+        InstruqtCourseImageBuildPlanRequest,
+        InstruqtCourseImageBuildStartRequest,
+        InstruqtCourseImageBuildWaitRequest,
+        InstruqtCourseRequest,
+        InstruqtCourseStatusRecordRequest,
+        InstruqtFinalizerRemovalRequest,
+        InstruqtKubernetesResourceDeleteRequest,
+        InstruqtTrackDeleteRequest,
+        InstruqtTrackDeployRequest,
         completed_instruqt_image_status,
         delete_instruqt_course_content_auth_secret,
         delete_instruqt_course_content_repository,
@@ -17,16 +29,19 @@ with workflow.unsafe.imports_passed_through():
         delete_instruqt_course_track,
         deploy_instruqt_course_track,
         instruqt_course_finalization_status,
-        plan_instruqt_course_finalization,
-        plan_instruqt_course_images,
+        load_instruqt_course_finalization_plan,
+        push_instruqt_course_track,
         reconcile_instruqt_course,
         reconcile_instruqt_course_ecr_repositories,
         record_instruqt_course_status,
         remove_instruqt_course_finalizer_resource,
+        resolve_instruqt_course_image_build_plan,
         start_instruqt_course_image_build,
+        test_instruqt_course_track,
         wait_for_instruqt_course_image_build,
     )
     from demo_registry_operator.activities.force_reconcile import (
+        LoadCurrentInstruqtCourseForReconcileRequest,
         load_current_instruqt_course_for_reconcile,
     )
     from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
@@ -323,13 +338,15 @@ class InstruqtCourseWorkflow:
                 self._pending_reconcile_identity = None
                 instruqt_course = await workflow.execute_activity(
                     load_current_instruqt_course_for_reconcile,
-                    {
-                        "name": course_name,
-                        **force_reconcile,
-                    },
+                    LoadCurrentInstruqtCourseForReconcileRequest(
+                        name=course_name,
+                        token=force_reconcile["token"],
+                        reason=force_reconcile.get("reason"),
+                    ),
                     start_to_close_timeout=timedelta(minutes=3),
                     retry_policy=COMMON_RETRY_POLICY,
                 )
+                instruqt_course = instruqt_course.resource
                 self._current_force_reconcile_token = force_reconcile["token"]
                 self._current_reconcile_identity = reconcile_identity(instruqt_course)
             else:
@@ -347,20 +364,19 @@ class InstruqtCourseWorkflow:
                 "phase": "Reconciling",
             }
 
-            base_status = await workflow.execute_activity(
-                reconcile_instruqt_course,
+            base_status = reconcile_instruqt_course(
                 instruqt_course,
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
+                checked_at=workflow.now().isoformat(),
             )
             self._status = base_status
             if base_status.get("phase") != "Error":
-                ecr_status = await workflow.execute_activity(
+                ecr_activity = await workflow.execute_activity(
                     reconcile_instruqt_course_ecr_repositories,
-                    instruqt_course,
+                    InstruqtCourseRequest(instruqt_course),
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=COMMON_RETRY_POLICY,
                 )
+                ecr_status = ecr_activity.status
                 self._status = status_with_ecr_status(self._status, ecr_status)
 
                 build_status = await self._resolve_images(
@@ -385,16 +401,10 @@ class InstruqtCourseWorkflow:
                 )
 
                 if build_status.get("phase") in SUCCESSFUL_BUILD_PHASES:
-                    deployment_status = await workflow.execute_activity(
-                        deploy_instruqt_course_track,
-                        {
-                            "instruqtCourse": instruqt_course,
-                            "images": build_status.get("images", {}),
-                            "channel": "production",
-                        },
-                        start_to_close_timeout=timedelta(hours=3),
-                        heartbeat_timeout=timedelta(minutes=5),
-                        retry_policy=COMMON_RETRY_POLICY,
+                    deployment_status = await self._deploy_track_channel(
+                        instruqt_course,
+                        images=build_status.get("images", {}),
+                        channel="production",
                     )
                     self._status = status_with_deployment_status(
                         self._status,
@@ -467,15 +477,16 @@ class InstruqtCourseWorkflow:
         testing_status = self._status.get("testing")
         testing_status = testing_status if isinstance(testing_status, dict) else {}
         if testing_status.get("phase") == "BranchMissing":
-            testing_delete_status = await workflow.execute_activity(
+            testing_delete_activity = await workflow.execute_activity(
                 delete_instruqt_course_track,
-                {
-                    "instruqtCourse": instruqt_course,
-                    "channel": "testing",
-                },
+                InstruqtTrackDeleteRequest(
+                    instruqt_course=instruqt_course,
+                    channel="testing",
+                ),
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
+            testing_delete_status = testing_delete_activity.status
             self._status = status_with_deployment_status(
                 self._status,
                 testing_delete_status,
@@ -507,22 +518,68 @@ class InstruqtCourseWorkflow:
         if testing_build_status.get("phase") not in SUCCESSFUL_BUILD_PHASES:
             return
 
-        testing_deployment_status = await workflow.execute_activity(
-            deploy_instruqt_course_track,
-            {
-                "instruqtCourse": instruqt_course,
-                "images": testing_build_status.get("images", {}),
-                "channel": "testing",
-            },
-            start_to_close_timeout=timedelta(hours=3),
-            heartbeat_timeout=timedelta(minutes=5),
-            retry_policy=COMMON_RETRY_POLICY,
+        testing_deployment_status = await self._deploy_track_channel(
+            instruqt_course,
+            images=testing_build_status.get("images", {}),
+            channel="testing",
         )
         self._status = status_with_deployment_status(
             self._status,
             testing_deployment_status,
             testing=True,
         )
+
+    async def _deploy_track_channel(
+        self,
+        instruqt_course: dict[str, Any],
+        *,
+        images: dict[str, Any],
+        channel: str,
+    ) -> dict[str, Any]:
+        request = InstruqtCourseArtifactRequest(
+            instruqt_course=instruqt_course,
+            images=images,
+            channel=channel,
+        )
+        push_activity = await workflow.execute_activity(
+            push_instruqt_course_track,
+            request,
+            start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        push_status = push_activity.status
+        if push_status.get("phase") != "Pushed":
+            return push_status
+
+        test_activity = await workflow.execute_activity(
+            test_instruqt_course_track,
+            request,
+            start_to_close_timeout=timedelta(hours=3),
+            heartbeat_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        test_status = test_activity.status
+        if test_status.get("phase") != "Tested":
+            return {
+                **test_status,
+                "push": push_status.get("push"),
+            }
+
+        deploy_activity = await workflow.execute_activity(
+            deploy_instruqt_course_track,
+            InstruqtTrackDeployRequest(
+                instruqt_course=instruqt_course,
+                images=images,
+                channel=channel,
+                push_status=push_status,
+                test_status=test_status,
+            ),
+            start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        return deploy_activity.status
 
     async def _resolve_images(
         self,
@@ -532,37 +589,40 @@ class InstruqtCourseWorkflow:
         channel: str,
         previous_build_status: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        build_plan = await workflow.execute_activity(
-            plan_instruqt_course_images,
-            {
-                "instruqtCourse": instruqt_course,
-                "externalResources": {"ecr": ecr_status},
-                "previousBuildStatus": previous_build_status,
-                "channel": channel,
-            },
+        build_plan_result = await workflow.execute_activity(
+            resolve_instruqt_course_image_build_plan,
+            InstruqtCourseImageBuildPlanRequest(
+                instruqt_course=instruqt_course,
+                external_resources={"ecr": ecr_status},
+                previous_build_status=previous_build_status,
+                channel=channel,
+            ),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
+        build_plan = build_plan_result.plan
         build_status = completed_instruqt_image_status(build_plan)
         if build_status is not None:
             return build_status
-        started_build = await workflow.execute_activity(
+        started_activity = await workflow.execute_activity(
             start_instruqt_course_image_build,
-            build_plan,
+            InstruqtCourseImageBuildStartRequest(build_plan),
             start_to_close_timeout=timedelta(minutes=5),
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )
+        started_build = started_activity.plan
         build_status = completed_instruqt_image_status(started_build)
         if build_status is not None:
             return build_status
-        return await workflow.execute_activity(
+        wait_activity = await workflow.execute_activity(
             wait_for_instruqt_course_image_build,
-            started_build,
+            InstruqtCourseImageBuildWaitRequest(started_build),
             start_to_close_timeout=timedelta(hours=1),
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=BUILD_WAIT_RETRY_POLICY,
         )
+        return wait_activity.status
 
     async def _run_finalize(self, course_name: str) -> None:
         instruqt_course = (
@@ -570,60 +630,80 @@ class InstruqtCourseWorkflow:
             or self._pending_spec
             or {"metadata": {"name": course_name}}
         )
-        finalize_plan = await workflow.execute_activity(
-            plan_instruqt_course_finalization,
-            {"instruqtCourse": instruqt_course},
+        finalize_plan_activity = await workflow.execute_activity(
+            load_instruqt_course_finalization_plan,
+            InstruqtCourseFinalizationRequest(instruqt_course),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        source_action = await workflow.execute_activity(
+        finalize_plan = finalize_plan_activity.plan
+        source_action_activity = await workflow.execute_activity(
             delete_instruqt_course_source_repository,
-            finalize_plan,
+            InstruqtKubernetesResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan["gitRepository"],
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        source_auth_action = await workflow.execute_activity(
+        source_action = source_action_activity.action
+        source_auth_action_activity = await workflow.execute_activity(
             delete_instruqt_course_source_auth_secret,
-            finalize_plan,
+            InstruqtKubernetesResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan.get("sourceAuthSecret"),
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        content_source_action = await workflow.execute_activity(
+        source_auth_action = source_auth_action_activity.action
+        content_source_action_activity = await workflow.execute_activity(
             delete_instruqt_course_content_repository,
-            finalize_plan,
+            InstruqtKubernetesResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan.get("contentGitRepository"),
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        content_source_auth_action = await workflow.execute_activity(
+        content_source_action = content_source_action_activity.action
+        content_source_auth_action_activity = await workflow.execute_activity(
             delete_instruqt_course_content_auth_secret,
-            finalize_plan,
+            InstruqtKubernetesResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan.get("contentSourceAuthSecret"),
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        production_track_action = await workflow.execute_activity(
+        content_source_auth_action = content_source_auth_action_activity.action
+        production_track_activity = await workflow.execute_activity(
             delete_instruqt_course_track,
-            {
-                "instruqtCourse": instruqt_course,
-                "channel": "production",
-            },
+            InstruqtTrackDeleteRequest(
+                instruqt_course=instruqt_course,
+                channel="production",
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        testing_track_action = await workflow.execute_activity(
+        production_track_action = production_track_activity.status
+        testing_track_activity = await workflow.execute_activity(
             delete_instruqt_course_track,
-            {
-                "instruqtCourse": instruqt_course,
-                "channel": "testing",
-            },
+            InstruqtTrackDeleteRequest(
+                instruqt_course=instruqt_course,
+                channel="testing",
+            ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        ecr_action = await workflow.execute_activity(
+        testing_track_action = testing_track_activity.status
+        ecr_activity = await workflow.execute_activity(
             delete_instruqt_course_ecr_repositories,
-            finalize_plan,
+            InstruqtCourseFinalizationPlan(finalize_plan),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
+        ecr_action = ecr_activity.status
         self._status = instruqt_course_finalization_status(
             finalize_plan,
             source_action=source_action,
@@ -637,7 +717,7 @@ class InstruqtCourseWorkflow:
         await self._record_status(instruqt_course, self._status)
         await workflow.execute_activity(
             remove_instruqt_course_finalizer_resource,
-            finalize_plan,
+            InstruqtFinalizerRemovalRequest(course=finalize_plan["course"]),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
@@ -650,10 +730,10 @@ class InstruqtCourseWorkflow:
     ) -> None:
         await workflow.execute_activity(
             record_instruqt_course_status,
-            {
-                "instruqtCourse": instruqt_course,
-                "status": status_with_force_reconcile(status, instruqt_course),
-            },
+            InstruqtCourseStatusRecordRequest(
+                instruqt_course=instruqt_course,
+                status=status_with_force_reconcile(status, instruqt_course),
+            ),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=STATUS_RETRY_POLICY,
         )

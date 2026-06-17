@@ -10,7 +10,6 @@ from jsonschema import Draft202012Validator
 from temporalio.exceptions import ApplicationError
 
 from demo_registry_operator.activities import canary
-from demo_registry_operator.activities.canary import plan_registry_operator_canary
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.resources import (
     FINALIZATION_POLICY_ANNOTATION,
@@ -31,6 +30,31 @@ from demo_registry_operator.resources import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def plan_registry_operator_canary(request):
+    return canary.prepare_registry_operator_canary_plan(
+        canary.RegistryOperatorCanaryPlanRequest(
+            demo_project_template=(
+                request.get("demoProjectTemplate")
+                or request.get("demoProject")
+                or {}
+            ),
+            workflow_id=request.get("workflowID", "operator-canary"),
+            run_id=request.get("runID", ""),
+            project_name_prefix=request.get("projectNamePrefix", "operator-canary"),
+            project_name=request.get("projectName"),
+            expected_source_commit_sha=request.get("expectedSourceCommitSha"),
+            expected_images=request.get("expectedImages"),
+            auth_mode=request.get("authMode"),
+            expected_operator_image=request.get("expectedOperatorImage"),
+            expected_operator_source_sha=request.get("expectedOperatorSourceSha"),
+            timeout_seconds=int(request.get("timeoutSeconds", 900)),
+            poll_seconds=int(request.get("pollSeconds", 10)),
+            cleanup_timeout_seconds=int(request.get("cleanupTimeoutSeconds", 600)),
+            cleanup_policy=request.get("cleanupPolicy", "Always"),
+        )
+    ).plan
 
 
 def project(*, worker: object, smoke_check: dict | None = None) -> dict:
@@ -934,8 +958,7 @@ def test_operator_canary_plan_requires_target_version(monkeypatch):
         )
 
 
-def test_apply_operator_canary_project_signals_target_workflow(monkeypatch):
-    signals = []
+def test_apply_operator_canary_project_applies_demo_project(monkeypatch):
     demo_project = project(worker=True)
     plan = {
         "project": "operator-canary-abc123",
@@ -946,18 +969,16 @@ def test_apply_operator_canary_project_signals_target_workflow(monkeypatch):
     }
 
     monkeypatch.setattr(canary, "apply_demo_project", lambda resource, dry_run: "created")
-    monkeypatch.setattr(
-        canary,
-        "signal_registry_operator_canary_reconcile",
-        lambda request, resource: signals.append((request, resource))
-        or {"phase": "Signaled"},
-    )
 
-    result = canary.apply_registry_operator_canary_project(plan)
+    result = canary.apply_registry_operator_canary_project(
+        canary.ApplyRegistryOperatorCanaryProjectRequest(
+            project=plan["project"],
+            namespace=plan["namespace"],
+            demo_project=demo_project,
+        )
+    ).status
 
     assert result["action"] == "created"
-    assert result["workflow"] == {"phase": "Signaled"}
-    assert signals == [(plan, demo_project)]
 
 
 def test_operator_canary_force_reconcile_signal_passes_args(monkeypatch):
@@ -1085,6 +1106,40 @@ def cleanup_plan() -> dict:
     }
 
 
+def delete_canary_request(plan: dict):
+    return canary.DeleteRegistryOperatorCanaryProjectRequest(
+        project=plan["project"],
+        cleanup_policy=plan.get("cleanupPolicy", "Always"),
+    )
+
+
+def promotion_wait_request(plan: dict):
+    return canary.RegistryOperatorCanaryPromotionWaitRequest(
+        project=plan["project"],
+        namespace=plan["namespace"],
+        expected_source_commit_sha=plan.get("expectedSourceCommitSha"),
+        expected_images=plan.get("expectedImages", {}),
+        timeout_seconds=int(plan.get("timeoutSeconds", 900)),
+        poll_seconds=int(plan.get("pollSeconds", 10)),
+    )
+
+
+def cleanup_wait_request(plan: dict):
+    return canary.WaitRegistryOperatorCanaryCleanupRequest(
+        project=plan["project"],
+        namespace=plan["namespace"],
+        git_repository=plan["gitRepository"],
+        source_watch_namespace=plan["sourceWatchNamespace"],
+        catalog_status_namespace=plan["catalogStatusNamespace"],
+        catalog_status_mirror_namespace=plan["catalogStatusMirrorNamespace"],
+        catalog_status_config_map=plan["catalogStatusConfigMap"],
+        cleanup_policy=plan.get("cleanupPolicy", "Always"),
+        cleanup_timeout_seconds=int(plan.get("cleanupTimeoutSeconds", 600)),
+        poll_seconds=int(plan.get("pollSeconds", 10)),
+        delete_action=plan.get("deleteAction"),
+    )
+
+
 def test_canary_delete_requests_demo_project_deletion(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -1093,7 +1148,9 @@ def test_canary_delete_requests_demo_project_deletion(monkeypatch):
         lambda name: calls.append(name) or "deleting",
     )
 
-    result = canary.delete_registry_operator_canary_project(cleanup_plan())
+    result = canary.delete_registry_operator_canary_project(
+        delete_canary_request(cleanup_plan())
+    ).status
 
     assert result["phase"] == "DeleteRequested"
     assert result["ok"] is True
@@ -1114,7 +1171,9 @@ def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
         },
     )
 
-    result = canary.wait_for_registry_operator_canary_promotion(cleanup_plan())
+    result = canary.wait_for_registry_operator_canary_promotion(
+        promotion_wait_request(cleanup_plan())
+    ).status
 
     assert result["phase"] == "Failed"
     assert result["ok"] is False
@@ -1197,11 +1256,8 @@ def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
     )
 
     result = canary.wait_registry_operator_canary_cleanup(
-        {
-            **cleanup_plan(),
-            "deleteAction": "deleting",
-        }
-    )
+        cleanup_wait_request({**cleanup_plan(), "deleteAction": "deleting"})
+    ).status
 
     assert result["phase"] == "Deleted"
     assert result["ok"] is True
@@ -1229,7 +1285,9 @@ def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
         },
     )
 
-    result = canary.wait_registry_operator_canary_cleanup(cleanup_plan())
+    result = canary.wait_registry_operator_canary_cleanup(
+        cleanup_wait_request(cleanup_plan())
+    ).status
 
     assert result["phase"] == "CleanupFailed"
     assert result["ok"] is False

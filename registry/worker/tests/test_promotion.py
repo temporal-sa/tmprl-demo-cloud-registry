@@ -44,7 +44,9 @@ def banking_project():
 def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_SOURCE_WATCH_NAMESPACE", "source-watch")
 
-    plan = reconcile.plan_project_finalization(banking_project())
+    plan = reconcile.load_project_finalization_plan(
+        reconcile.ProjectFinalizationRequest(banking_project())
+    ).plan
 
     assert plan["action"] == "finalize"
     assert plan["project"] == "banking-money-transfer"
@@ -116,11 +118,11 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
         "frontend": "example.com/frontend:git-e12b0ed9d450",
         "worker": "example.com/worker:git-e12b0ed9d450",
     }
-    result = reconcile.promote_candidate(
-        {
-            "project": "banking-money-transfer",
-            "demoProject": banking_project(),
-            "candidate": {
+    result = reconcile.promote_candidate_routes(
+        reconcile.PromoteCandidateRoutesRequest(
+            project="banking-money-transfer",
+            demo_project=banking_project(),
+            candidate={
                 "images": images,
                 "imageVersion": "git-e12b0ed9d450",
                 "sourceCommitSha": "e12b0ed9d4505be2f6b0bc9d2664b1eb64a8d69c",
@@ -129,8 +131,8 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
                     "frontend": "frontend-git-e12b0ed9d450",
                 },
             },
-        }
-    )
+        )
+    ).status
 
     assert result["phase"] == "Promoted"
 
@@ -278,20 +280,12 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
         "worker": "example.com/worker:git-new",
     }
 
-    result = reconcile.promote_candidate(
-        {
-            "project": "banking-money-transfer",
-            "demoProject": demo_project,
-            "candidate": {
-                "images": images,
-                "imageVersion": "git-new",
-                "services": {
-                    "backend": "backend-git-new",
-                    "frontend": "frontend-git-new",
-                },
-            },
-        }
-    )
+    result = reconcile.prune_stale_runtime_candidates(
+        reconcile.PruneStaleRuntimeCandidatesRequest(
+            demo_project=demo_project,
+            active_version="git-new",
+        )
+    ).status
 
     assert deleted == [
         (
@@ -307,8 +301,8 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
             False,
         ),
     ]
-    assert result["pruneStatus"]["phase"] == "Pruned"
-    assert [resource["name"] for resource in result["prunedResources"]] == [
+    assert result["phase"] == "Pruned"
+    assert [resource["name"] for resource in result["resources"]] == [
         "backend-git-old",
         "backend-git-old",
     ]

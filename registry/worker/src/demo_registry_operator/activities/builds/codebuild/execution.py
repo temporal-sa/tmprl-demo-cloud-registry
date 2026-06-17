@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from typing import Any
 
@@ -43,10 +44,33 @@ from demo_registry_operator.activities.builds.codebuild.buildspec import (
 CODEBUILD_API_TIMEOUT_SECONDS = 10
 
 
+@dataclass(frozen=True)
+class StartProjectImageBuildRequest:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProjectImageBuildStartResult:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class WaitForProjectImageBuildRequest:
+    started: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProjectImageBuildStatusResult:
+    status: dict[str, Any]
+
+
 @activity.defn
-def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
+def start_project_image_build(
+    request: StartProjectImageBuildRequest,
+) -> ProjectImageBuildStartResult:
     """Start CodeBuild or reattach to a build ID heartbeated by a prior attempt."""
 
+    plan = request.plan
     demo_project = demo_project_from_request(plan)
     external_resources = external_resources_from_request(plan)
     config = WorkerConfig.from_env()
@@ -62,7 +86,7 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return completed_build_plan(
+        return ProjectImageBuildStartResult(completed_build_plan(
             build_status(
                 demo_project,
                 phase="Error",
@@ -74,7 +98,7 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                 build_entries=[],
                 error=f"boto3 is required for aws-codebuild mode: {error}",
             )
-        )
+        ))
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -94,7 +118,7 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                 "phase": "Reattaching",
             }
         )
-        return {**plan, "codebuildBuildId": build_id}
+        return ProjectImageBuildStartResult({**plan, "codebuildBuildId": build_id})
 
     start_args = codebuild_start_build_args(
         demo_project,
@@ -116,7 +140,7 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
         if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
-            return codebuild_api_error_status(
+            return ProjectImageBuildStartResult(codebuild_api_error_status(
                 plan,
                 message="AWS CodeBuild image build failed.",
                 error=str(error),
@@ -124,7 +148,7 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                     codebuild_build,
                     project_name=config.codebuild_project,
                 ),
-            )
+            ))
         raise aws_application_error(error, operation="Start CodeBuild build") from error
 
     build = response.get("build", {})
@@ -143,20 +167,23 @@ def start_project_image_build(plan: dict[str, Any]) -> dict[str, Any]:
             "phase": "Started",
         }
     )
-    return {
+    return ProjectImageBuildStartResult({
         **plan,
         "codebuildBuildId": build_id,
         "codebuild": codebuild_status_summary(
             codebuild_build,
             project_name=config.codebuild_project,
         ),
-    }
+    })
 
 
 @activity.defn
-def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
+def wait_for_project_image_build(
+    request: WaitForProjectImageBuildRequest,
+) -> ProjectImageBuildStatusResult:
     """Wait for a specific CodeBuild build and render the immutable image status."""
 
+    started = request.started
     demo_project = demo_project_from_request(started)
     external_resources = external_resources_from_request(started)
     config = WorkerConfig.from_env()
@@ -171,7 +198,7 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return build_status(
+        return ProjectImageBuildStatusResult(build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -181,7 +208,7 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
             message="AWS CodeBuild image build failed.",
             build_entries=[],
             error=f"boto3 is required for aws-codebuild mode: {error}",
-        )
+        ))
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -214,8 +241,8 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             if status is not None:
-                return status
-            return build_status(
+                return ProjectImageBuildStatusResult(status)
+            return ProjectImageBuildStatusResult(build_status(
                 demo_project,
                 phase="Error",
                 mode=config.build_mode,
@@ -225,7 +252,7 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
                 message="AWS CodeBuild image build failed.",
                 build_entries=[],
                 error=str(error),
-            )
+            ))
         raise aws_application_error(error, operation="Poll CodeBuild build") from error
 
     status = codebuild_build.get("buildStatus")
@@ -238,7 +265,7 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
         project_name=config.codebuild_project,
     )
     if status != "SUCCEEDED":
-        return build_status(
+        return ProjectImageBuildStatusResult(build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -255,10 +282,10 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
             ),
             error=codebuild_error_message(codebuild_build),
             codebuild_status=codebuild_status,
-        )
+        ))
 
     if not resolved_commit or not looks_like_commit_sha(resolved_commit):
-        return build_status(
+        return ProjectImageBuildStatusResult(build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -273,10 +300,10 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
                 "or verify the CodeBuild source provider."
             ),
             codebuild_status=codebuild_status,
-        )
+        ))
 
     images = render_image_templates(demo_project, image_templates, resolved_commit)
-    return build_status(
+    return ProjectImageBuildStatusResult(build_status(
         demo_project,
         phase="Pushed",
         mode=config.build_mode,
@@ -296,7 +323,7 @@ def wait_for_project_image_build(started: dict[str, Any]) -> dict[str, Any]:
             for build_name in sorted(builds(demo_project))
         ],
         codebuild_status=codebuild_status,
-    )
+    ))
 
 
 def codebuild_api_error_status(

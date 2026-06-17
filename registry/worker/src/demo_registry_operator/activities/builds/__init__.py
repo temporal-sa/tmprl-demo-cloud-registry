@@ -24,7 +24,9 @@ from demo_registry_operator.activities.builds.definitions import (
     same_commit_sha,
 )
 from demo_registry_operator.activities.builds.planning import (
-    plan_project_images,
+    ProjectImageBuildPlan,
+    ResolveProjectImageBuildRequest,
+    resolve_project_image_build_plan,
 )
 from demo_registry_operator.activities.builds.source import (
     components_for_build,
@@ -59,6 +61,10 @@ from demo_registry_operator.activities.builds.codebuild.buildspec import (
 )
 from demo_registry_operator.activities.builds.codebuild.execution import (
     CODEBUILD_API_TIMEOUT_SECONDS,
+    ProjectImageBuildStartResult,
+    ProjectImageBuildStatusResult,
+    StartProjectImageBuildRequest,
+    WaitForProjectImageBuildRequest,
     codebuild_api_error_status,
     codebuild_build_id_from_heartbeat,
     codebuild_error_message,
@@ -78,6 +84,12 @@ __all__ = [
     "DOCKERFILE_BUILD_STRATEGY",
     "GENERATED_PROCESS_BUILDPACK_ID",
     "PACK_VERSION",
+    "ProjectImageBuildPlan",
+    "ProjectImageBuildStartResult",
+    "ProjectImageBuildStatusResult",
+    "ResolveProjectImageBuildRequest",
+    "StartProjectImageBuildRequest",
+    "WaitForProjectImageBuildRequest",
     "activity",
     "build_definition_hash",
     "build_definition_input",
@@ -112,7 +124,6 @@ __all__ = [
     "manual_source_checkout_commands",
     "optional_string_field",
     "pack_install_command",
-    "plan_project_images",
     "previous_build_status_from_request",
     "render_image_templates",
     "repository_name_for_build",
@@ -120,6 +131,7 @@ __all__ = [
     "repository_uri_for_build",
     "required_build_string",
     "resolved_codebuild_source_version",
+    "resolve_project_image_build_plan",
     "reusable_previous_build_status",
     "same_commit_sha",
     "shell_quote_image_template",

@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -93,11 +94,101 @@ INSTRUQT_IMAGE_REGISTRY_MODE = "public-ecr-v1"
 PUBLIC_ECR_REGISTRY = "public.ecr.aws"
 
 
-@activity.defn
-def reconcile_instruqt_course(instruqt_course: dict[str, Any]) -> dict[str, Any]:
+@dataclass(frozen=True)
+class InstruqtCourseArtifactRequest:
+    instruqt_course: dict[str, Any]
+    images: dict[str, Any] | None = None
+    channel: str = INSTRUQT_PRODUCTION_CHANNEL
+
+
+@dataclass(frozen=True)
+class InstruqtCourseRequest:
+    instruqt_course: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtCourseImageBuildPlanRequest:
+    instruqt_course: dict[str, Any]
+    external_resources: dict[str, Any] | None = None
+    previous_build_status: dict[str, Any] | None = None
+    channel: str = INSTRUQT_PRODUCTION_CHANNEL
+
+
+@dataclass(frozen=True)
+class InstruqtCourseImageBuildStartRequest:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtCourseImageBuildWaitRequest:
+    started: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtTrackDeleteRequest:
+    instruqt_course: dict[str, Any]
+    channel: str = INSTRUQT_PRODUCTION_CHANNEL
+
+
+@dataclass(frozen=True)
+class InstruqtTrackDeployRequest:
+    instruqt_course: dict[str, Any]
+    images: dict[str, Any] | None = None
+    channel: str = INSTRUQT_PRODUCTION_CHANNEL
+    push_status: dict[str, Any] | None = None
+    test_status: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class InstruqtCourseStatusRecordRequest:
+    instruqt_course: dict[str, Any]
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtCourseFinalizationRequest:
+    instruqt_course: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtCourseFinalizationPlan:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtKubernetesResourceDeleteRequest:
+    namespace: str
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class InstruqtFinalizerRemovalRequest:
+    course: str
+
+
+@dataclass(frozen=True)
+class InstruqtActivityResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InstruqtActivityActionResult:
+    action: str
+
+
+@dataclass(frozen=True)
+class InstruqtImageBuildPlan:
+    plan: dict[str, Any]
+
+
+def reconcile_instruqt_course(
+    instruqt_course: dict[str, Any],
+    *,
+    checked_at: str | None = None,
+) -> dict[str, Any]:
     course = instruqt_course_from_request(instruqt_course)
     errors = validate_instruqt_course(course)
-    now = datetime.now(UTC).isoformat()
+    now = checked_at or datetime.now(UTC).isoformat()
     generation = resource_generation(course)
     resolved_source = bool(source_commit_sha(course) and source_artifact_digest(course))
     has_content = bool(content_source_config(course))
@@ -194,7 +285,6 @@ def reconcile_instruqt_course(instruqt_course: dict[str, Any]) -> dict[str, Any]
     return status
 
 
-@activity.defn
 def render_instruqt_course_config(request: dict[str, Any]) -> dict[str, Any]:
     instruqt_course = request.get("instruqtCourse")
     config = request.get("config")
@@ -227,10 +317,12 @@ def render_instruqt_course_config(request: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
-def prepare_instruqt_course_artifact(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
-    resolved_images = request.get("images")
-    channel = string_value(request.get("channel"), INSTRUQT_PRODUCTION_CHANNEL)
+def prepare_instruqt_course_artifact(
+    request: InstruqtCourseArtifactRequest,
+) -> InstruqtActivityResult:
+    instruqt_course = request.instruqt_course
+    resolved_images = request.images
+    channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
             "prepare_instruqt_course_artifact requires an instruqtCourse object",
@@ -250,31 +342,32 @@ def prepare_instruqt_course_artifact(request: dict[str, Any]) -> dict[str, Any]:
         if isinstance(name, str) and isinstance(image, str) and image
     }
     if image_bindings(instruqt_course) and not images:
-        return {
+        return InstruqtActivityResult({
             "phase": "WaitingForImages",
             "message": "Managed image bindings are configured but no resolved images were provided.",
             "missingImages": sorted(image_bindings(instruqt_course)),
-        }
+        })
 
     with tempfile.TemporaryDirectory(prefix="instruqt-course-") as workspace:
-        return prepare_managed_instruqt_artifact(
+        return InstruqtActivityResult(prepare_managed_instruqt_artifact(
             instruqt_course,
             Path(workspace),
             images,
             validate=True,
             channel=channel,
-        )
+        ))
 
 
 @activity.defn
 def reconcile_instruqt_course_ecr_repositories(
-    instruqt_course: dict[str, Any],
-) -> dict[str, Any]:
+    request: InstruqtCourseRequest,
+) -> InstruqtActivityResult:
+    instruqt_course = request.instruqt_course
     config = WorkerConfig.from_env()
     checked_at = datetime.now(UTC).isoformat()
     bindings = image_bindings(instruqt_course)
     if not bindings:
-        return {
+        return InstruqtActivityResult({
             "phase": "NotRequired",
             "region": config.public_ecr_region,
             "accountId": config.aws_account_id,
@@ -282,7 +375,7 @@ def reconcile_instruqt_course_ecr_repositories(
             "checkedAt": checked_at,
             "repositories": [],
             "message": "No managed Instruqt images are configured.",
-        }
+        })
 
     try:
         import boto3
@@ -307,18 +400,21 @@ def reconcile_instruqt_course_ecr_repositories(
                 operation=f"Reconcile public ECR repository {repository['name']}",
             ) from error
 
-    return {
+    return InstruqtActivityResult({
         "phase": aggregate_phase(repositories),
         "region": config.public_ecr_region,
         "accountId": config.aws_account_id,
         "registryType": "public",
         "checkedAt": checked_at,
         "repositories": repositories,
-    }
+    })
 
 
 @activity.defn
-def delete_instruqt_course_ecr_repositories(plan: dict[str, Any]) -> dict[str, Any]:
+def delete_instruqt_course_ecr_repositories(
+    request: InstruqtCourseFinalizationPlan,
+) -> InstruqtActivityResult:
+    plan = request.plan
     instruqt_course = plan.get("instruqtCourse")
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
@@ -329,18 +425,20 @@ def delete_instruqt_course_ecr_repositories(plan: dict[str, Any]) -> dict[str, A
     checked_at = string_value(plan.get("checkedAt"), datetime.now(UTC).isoformat())
     bindings = image_bindings(instruqt_course)
     if not bindings:
-        return {
+        return InstruqtActivityResult({
             "phase": "NotRequired",
             "checkedAt": checked_at,
             "repositories": [],
             "message": "No managed Instruqt image repositories to delete.",
-        }
+        })
 
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return {"phase": "Error", "message": f"boto3 is required: {error}"}
+        return InstruqtActivityResult(
+            {"phase": "Error", "message": f"boto3 is required: {error}"}
+        )
 
     ecr_public = boto3.session.Session(region_name=config.public_ecr_region).client(
         "ecr-public"
@@ -370,7 +468,9 @@ def delete_instruqt_course_ecr_repositories(plan: dict[str, Any]) -> dict[str, A
         if any(repository.get("action") == "error" for repository in repositories)
         else "Deleted"
     )
-    return {"phase": phase, "checkedAt": checked_at, "repositories": repositories}
+    return InstruqtActivityResult(
+        {"phase": phase, "checkedAt": checked_at, "repositories": repositories}
+    )
 
 
 def ensure_public_ecr_repository(
@@ -412,20 +512,18 @@ def ensure_public_ecr_repository(
 
 
 @activity.defn
-def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
+def resolve_instruqt_course_image_build_plan(
+    request: InstruqtCourseImageBuildPlanRequest,
+) -> InstruqtImageBuildPlan:
+    instruqt_course = request.instruqt_course
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
-            "plan_instruqt_course_images requires an instruqtCourse object",
+            "resolve_instruqt_course_image_build_plan requires an instruqtCourse object",
             error_type=VALIDATION_ERROR,
         )
-    external_resources = request.get("externalResources")
-    external_resources = external_resources if isinstance(external_resources, dict) else {}
-    previous_build_status = request.get("previousBuildStatus")
-    previous_build_status = (
-        previous_build_status if isinstance(previous_build_status, dict) else None
-    )
-    channel = string_value(request.get("channel"), INSTRUQT_PRODUCTION_CHANNEL)
+    external_resources = request.external_resources or {}
+    previous_build_status = request.previous_build_status
+    channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if channel not in INSTRUQT_CHANNELS:
         raise non_retryable_error(
             f"unsupported Instruqt image channel {channel!r}",
@@ -436,7 +534,7 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
     started_at = datetime.now(UTC).isoformat()
     bindings = image_bindings(instruqt_course)
     if not bindings:
-        return completed_instruqt_image_plan(
+        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
             instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
@@ -447,7 +545,7 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
                 message="No managed Instruqt images are configured.",
                 build_entries=[],
             )
-        )
+        ))
 
     reusable = reusable_instruqt_image_build_status(
         instruqt_course,
@@ -457,10 +555,10 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
         started_at=started_at,
     )
     if reusable is not None:
-        return completed_instruqt_image_plan(reusable)
+        return InstruqtImageBuildPlan(completed_instruqt_image_plan(reusable))
 
     if not config.codebuild_project:
-        return completed_instruqt_image_plan(
+        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
             instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
@@ -475,7 +573,7 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
                     "Instruqt images."
                 ),
             )
-        )
+        ))
 
     try:
         source_plan = instruqt_codebuild_source_plan(instruqt_course, channel)
@@ -485,7 +583,7 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
             config,
         )
     except ValueError as error:
-        return completed_instruqt_image_plan(
+        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
             instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
@@ -497,9 +595,9 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
                 build_entries=[],
                 error=str(error),
             )
-        )
+        ))
 
-    return {
+    return InstruqtImageBuildPlan({
         "action": "codebuild",
         "instruqtCourse": instruqt_course,
         "externalResources": external_resources,
@@ -509,11 +607,14 @@ def plan_instruqt_course_images(request: dict[str, Any]) -> dict[str, Any]:
         "codebuildProject": config.codebuild_project,
         "imageTemplates": image_templates,
         "sources": source_plan,
-    }
+    })
 
 
 @activity.defn
-def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
+def start_instruqt_course_image_build(
+    request: InstruqtCourseImageBuildStartRequest,
+) -> InstruqtImageBuildPlan:
+    plan = request.plan
     instruqt_course = instruqt_course_from_request(plan)
     config = WorkerConfig.from_env()
     channel = string_value(plan.get("channel"), INSTRUQT_PRODUCTION_CHANNEL)
@@ -527,7 +628,7 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return completed_instruqt_image_plan(
+        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
             instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
@@ -539,7 +640,7 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                 build_entries=[],
                 error=f"boto3 is required for aws-codebuild mode: {error}",
             )
-        )
+        ))
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -560,7 +661,7 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                 "phase": "Reattaching",
             }
         )
-        return {**plan, "codebuildBuildId": build_id}
+        return InstruqtImageBuildPlan({**plan, "codebuildBuildId": build_id})
 
     start_args = instruqt_codebuild_start_build_args(
         instruqt_course,
@@ -582,7 +683,7 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
         if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
-            return completed_instruqt_image_plan(
+            return InstruqtImageBuildPlan(completed_instruqt_image_plan(
                 instruqt_image_build_status(
                     instruqt_course,
                     channel=channel,
@@ -598,7 +699,7 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
                         project_name=config.codebuild_project,
                     ),
                 )
-            )
+            ))
         raise aws_application_error(error, operation="Start CodeBuild build") from error
 
     build = response.get("build", {})
@@ -618,18 +719,21 @@ def start_instruqt_course_image_build(plan: dict[str, Any]) -> dict[str, Any]:
             "phase": "Started",
         }
     )
-    return {
+    return InstruqtImageBuildPlan({
         **plan,
         "codebuildBuildId": build_id,
         "codebuild": codebuild_status_summary(
             codebuild_build,
             project_name=config.codebuild_project,
         ),
-    }
+    })
 
 
 @activity.defn
-def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, Any]:
+def wait_for_instruqt_course_image_build(
+    request: InstruqtCourseImageBuildWaitRequest,
+) -> InstruqtActivityResult:
+    started = request.started
     instruqt_course = instruqt_course_from_request(started)
     external_resources = started.get("externalResources")
     external_resources = external_resources if isinstance(external_resources, dict) else {}
@@ -644,7 +748,7 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return instruqt_image_build_status(
+        return InstruqtActivityResult(instruqt_image_build_status(
             instruqt_course,
             channel=channel,
             phase="Error",
@@ -654,7 +758,7 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
             message="AWS CodeBuild image build failed.",
             build_entries=[],
             error=f"boto3 is required for aws-codebuild mode: {error}",
-        )
+        ))
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -676,7 +780,7 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
         raise non_retryable_error(str(error), error_type=IMAGE_BUILD_TIMEOUT) from error
     except (BotoCoreError, ClientError) as error:
         if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
-            return instruqt_image_build_status(
+            return InstruqtActivityResult(instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
                 phase="Error",
@@ -686,7 +790,7 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
                 message="AWS CodeBuild image build failed.",
                 build_entries=[],
                 error=str(error),
-            )
+            ))
         raise aws_application_error(error, operation="Poll CodeBuild build") from error
 
     codebuild_status = codebuild_status_summary(
@@ -694,7 +798,7 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
         project_name=config.codebuild_project,
     )
     if codebuild_build.get("buildStatus") != "SUCCEEDED":
-        return instruqt_image_build_status(
+        return InstruqtActivityResult(instruqt_image_build_status(
             instruqt_course,
             channel=channel,
             phase="Error",
@@ -712,11 +816,11 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
             ),
             error=codebuild_error_message(codebuild_build),
             codebuild_status=codebuild_status,
-        )
+        ))
 
     source_commit = instruqt_channel_source_commit_sha(instruqt_course, channel)
     if not source_commit or not looks_like_commit_sha(source_commit):
-        return instruqt_image_build_status(
+        return InstruqtActivityResult(instruqt_image_build_status(
             instruqt_course,
             channel=channel,
             phase="Error",
@@ -730,14 +834,14 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
                 "contain a git commit SHA."
             ),
             codebuild_status=codebuild_status,
-        )
+        ))
 
     images = render_instruqt_image_templates(
         instruqt_course,
         image_templates,
         source_commit,
     )
-    return instruqt_image_build_status(
+    return InstruqtActivityResult(instruqt_image_build_status(
         instruqt_course,
         channel=channel,
         phase="Pushed",
@@ -754,24 +858,146 @@ def wait_for_instruqt_course_image_build(started: dict[str, Any]) -> dict[str, A
             source="aws-codebuild",
         ),
         codebuild_status=codebuild_status,
+    ))
+
+
+@activity.defn
+def push_instruqt_course_track(
+    request: InstruqtCourseArtifactRequest,
+) -> InstruqtActivityResult:
+    operation = run_instruqt_track_operation(
+        request,
+        prefix="instruqt-push-",
+        args=lambda _target: ["track", "push", "--force"],
+        timeout_seconds=300,
+    )
+    if operation.get("phase") != "Ran":
+        return InstruqtActivityResult(operation)
+    command = operation["command"]
+    if command.get("phase") != "Succeeded":
+        return InstruqtActivityResult(
+            instruqt_command_failure_status(
+                "PushFailed",
+                channel=operation["channel"],
+                target=operation["target"],
+                message="instruqt track push failed.",
+                artifact_status=operation["artifact"],
+                command_status=command,
+            )
+        )
+    return InstruqtActivityResult(
+        {
+            "phase": "Pushed",
+            "channel": operation["channel"],
+            "target": operation["target"],
+            "message": "Instruqt track was pushed.",
+            "artifact": operation["artifact"],
+            "push": command,
+        }
     )
 
 
 @activity.defn
-def deploy_instruqt_course_track(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
-    resolved_images = request.get("images")
-    channel = string_value(request.get("channel"), INSTRUQT_PRODUCTION_CHANNEL)
+def test_instruqt_course_track(
+    request: InstruqtCourseArtifactRequest,
+) -> InstruqtActivityResult:
+    operation = run_instruqt_track_operation(
+        request,
+        prefix="instruqt-test-",
+        args=lambda _target: ["track", "test"],
+        timeout_seconds=INSTRUQT_TEST_TIMEOUT_SECONDS,
+    )
+    if operation.get("phase") != "Ran":
+        return InstruqtActivityResult(operation)
+    command = operation["command"]
+    if command.get("phase") != "Succeeded":
+        return InstruqtActivityResult(
+            instruqt_command_failure_status(
+                "TestFailed",
+                channel=operation["channel"],
+                target=operation["target"],
+                message="instruqt track test failed.",
+                artifact_status=operation["artifact"],
+                command_status=command,
+            )
+        )
+    return InstruqtActivityResult(
+        {
+            "phase": "Tested",
+            "channel": operation["channel"],
+            "target": operation["target"],
+            "message": "Instruqt track test passed.",
+            "artifact": operation["artifact"],
+            "test": command,
+        }
+    )
+
+
+@activity.defn
+def deploy_instruqt_course_track(
+    request: InstruqtTrackDeployRequest,
+) -> InstruqtActivityResult:
+    artifact_request = InstruqtCourseArtifactRequest(
+        instruqt_course=request.instruqt_course,
+        images=request.images,
+        channel=request.channel,
+    )
+    operation = run_instruqt_track_operation(
+        artifact_request,
+        prefix="instruqt-deploy-",
+        args=lambda target: ["track", "deploy", target],
+        timeout_seconds=300,
+    )
+    if operation.get("phase") != "Ran":
+        return InstruqtActivityResult(operation)
+    command = operation["command"]
+    push_status = request.push_status or {}
+    test_status = request.test_status or {}
+    if command.get("phase") != "Succeeded":
+        return InstruqtActivityResult(
+            instruqt_command_failure_status(
+                "DeployFailed",
+                channel=operation["channel"],
+                target=operation["target"],
+                message="instruqt track deploy failed.",
+                artifact_status=operation["artifact"],
+                command_status=command,
+                push_status=push_status.get("push"),
+                test_status=test_status.get("test"),
+            )
+        )
+    return InstruqtActivityResult(
+        {
+            "phase": "Deployed",
+            "channel": operation["channel"],
+            "target": operation["target"],
+            "message": "Instruqt track was pushed, tested, and deployed.",
+            "artifact": operation["artifact"],
+            "push": push_status.get("push", push_status),
+            "test": test_status.get("test", test_status),
+            "deploy": command,
+        }
+    )
+
+
+def run_instruqt_track_operation(
+    request: InstruqtCourseArtifactRequest,
+    *,
+    prefix: str,
+    args: Any,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    instruqt_course = request.instruqt_course
+    resolved_images = request.images or {}
+    channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
-            "deploy_instruqt_course_track requires an instruqtCourse object",
+            "Instruqt track operation requires an instruqtCourse object",
             error_type=VALIDATION_ERROR,
         )
-    if resolved_images is None:
-        resolved_images = {}
     if not isinstance(resolved_images, dict):
         raise non_retryable_error(
-            "deploy_instruqt_course_track images must be an object",
+            "Instruqt track operation images must be an object",
             error_type=VALIDATION_ERROR,
         )
     images = {
@@ -787,7 +1013,7 @@ def deploy_instruqt_course_track(request: dict[str, Any]) -> dict[str, Any]:
             "missingImages": sorted(image_bindings(instruqt_course)),
         }
 
-    with tempfile.TemporaryDirectory(prefix="instruqt-deploy-") as workspace:
+    with tempfile.TemporaryDirectory(prefix=prefix) as workspace:
         workspace_path = Path(workspace)
         artifact_status = prepare_managed_instruqt_artifact(
             instruqt_course,
@@ -804,73 +1030,27 @@ def deploy_instruqt_course_track(request: dict[str, Any]) -> dict[str, Any]:
 
         track_dir = workspace_path / "rendered"
         target = instruqt_track_target(instruqt_course, channel)
-        push = run_instruqt_command(
+        command = run_instruqt_command(
             track_dir,
-            ["track", "push", "--force"],
-            timeout_seconds=300,
+            args(target),
+            timeout_seconds=timeout_seconds,
             home_dir=workspace_path / "home",
         )
-        if push.get("phase") != "Succeeded":
-            return instruqt_command_failure_status(
-                "PushFailed",
-                channel=channel,
-                target=target,
-                message="instruqt track push failed.",
-                artifact_status=artifact_status,
-                command_status=push,
-            )
-
-        test = run_instruqt_command(
-            track_dir,
-            ["track", "test"],
-            timeout_seconds=INSTRUQT_TEST_TIMEOUT_SECONDS,
-            home_dir=workspace_path / "home",
-        )
-        if test.get("phase") != "Succeeded":
-            return instruqt_command_failure_status(
-                "TestFailed",
-                channel=channel,
-                target=target,
-                message="instruqt track test failed.",
-                artifact_status=artifact_status,
-                command_status=test,
-                push_status=push,
-            )
-
-        deploy = run_instruqt_command(
-            track_dir,
-            ["track", "deploy", target],
-            timeout_seconds=300,
-            home_dir=workspace_path / "home",
-        )
-        if deploy.get("phase") != "Succeeded":
-            return instruqt_command_failure_status(
-                "DeployFailed",
-                channel=channel,
-                target=target,
-                message="instruqt track deploy failed.",
-                artifact_status=artifact_status,
-                command_status=deploy,
-                push_status=push,
-                test_status=test,
-            )
-
         return {
-            "phase": "Deployed",
+            "phase": "Ran",
             "channel": channel,
             "target": target,
-            "message": "Instruqt track was pushed, tested, and deployed.",
             "artifact": artifact_status,
-            "push": push,
-            "test": test,
-            "deploy": deploy,
+            "command": command,
         }
 
 
 @activity.defn
-def delete_instruqt_course_track(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
-    channel = string_value(request.get("channel"), INSTRUQT_PRODUCTION_CHANNEL)
+def delete_instruqt_course_track(
+    request: InstruqtTrackDeleteRequest,
+) -> InstruqtActivityResult:
+    instruqt_course = request.instruqt_course
+    channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
             "delete_instruqt_course_track requires an instruqtCourse object",
@@ -884,37 +1064,39 @@ def delete_instruqt_course_track(request: dict[str, Any]) -> dict[str, Any]:
             timeout_seconds=120,
             stdin="y\n",
             home_dir=Path(workspace) / "home",
-        )
+    )
     if command.get("phase") == "Succeeded":
-        return {
+        return InstruqtActivityResult({
             "phase": "Deleted",
             "channel": channel,
             "target": target,
             "message": "Instruqt track was deleted.",
             "delete": command,
-        }
+        })
     output = str(command.get("output") or "").lower()
     if any(marker in output for marker in ("not found", "could not find", "404")):
-        return {
+        return InstruqtActivityResult({
             "phase": "NotFound",
             "channel": channel,
             "target": target,
             "message": "Instruqt track was already absent.",
             "delete": command,
-        }
-    return {
+        })
+    return InstruqtActivityResult({
         "phase": "DeleteFailed",
         "channel": channel,
         "target": target,
         "message": "instruqt track delete failed.",
         "delete": command,
-    }
+    })
 
 
 @activity.defn
-def record_instruqt_course_status(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
-    status = request.get("status")
+def record_instruqt_course_status(
+    request: InstruqtCourseStatusRecordRequest,
+) -> InstruqtActivityResult:
+    instruqt_course = request.instruqt_course
+    status = request.status
     if not isinstance(instruqt_course, dict) or not isinstance(status, dict):
         raise non_retryable_error(
             "record_instruqt_course_status requires instruqtCourse and status objects",
@@ -929,20 +1111,22 @@ def record_instruqt_course_status(request: dict[str, Any]) -> dict[str, Any]:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return status
+    return InstruqtActivityResult(status)
 
 
 @activity.defn
-def plan_instruqt_course_finalization(request: dict[str, Any]) -> dict[str, Any]:
-    instruqt_course = request.get("instruqtCourse")
+def load_instruqt_course_finalization_plan(
+    request: InstruqtCourseFinalizationRequest,
+) -> InstruqtCourseFinalizationPlan:
+    instruqt_course = request.instruqt_course
     if not isinstance(instruqt_course, dict):
         raise non_retryable_error(
-            "plan_instruqt_course_finalization requires an instruqtCourse object",
+            "load_instruqt_course_finalization_plan requires an instruqtCourse object",
             error_type=VALIDATION_ERROR,
         )
     config = WorkerConfig.from_env()
     name = project_name(instruqt_course)
-    return {
+    return InstruqtCourseFinalizationPlan({
         "action": "finalize",
         "course": name,
         "instruqtCourse": instruqt_course,
@@ -964,76 +1148,86 @@ def plan_instruqt_course_finalization(request: dict[str, Any]) -> dict[str, Any]
             else {}
         ),
         "checkedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 @activity.defn
-def delete_instruqt_course_source_repository(plan: dict[str, Any]) -> str:
+def delete_instruqt_course_source_repository(
+    request: InstruqtKubernetesResourceDeleteRequest,
+) -> InstruqtActivityActionResult:
     try:
-        return delete_git_repository(
-            string_field(plan, "sourceWatchNamespace"),
-            string_field(plan, "gitRepository"),
+        return InstruqtActivityActionResult(delete_git_repository(
+            string_field({"namespace": request.namespace}, "namespace"),
+            string_field({"name": request.name}, "name"),
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def delete_instruqt_course_source_auth_secret(plan: dict[str, Any]) -> str:
-    name = plan.get("sourceAuthSecret")
+def delete_instruqt_course_source_auth_secret(
+    request: InstruqtKubernetesResourceDeleteRequest,
+) -> InstruqtActivityActionResult:
+    name = request.name
     if not isinstance(name, str) or not name:
-        return "not-required"
+        return InstruqtActivityActionResult("not-required")
     try:
-        return delete_external_secret(
-            string_field(plan, "sourceWatchNamespace"),
+        return InstruqtActivityActionResult(delete_external_secret(
+            string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def delete_instruqt_course_content_repository(plan: dict[str, Any]) -> str:
-    name = plan.get("contentGitRepository")
+def delete_instruqt_course_content_repository(
+    request: InstruqtKubernetesResourceDeleteRequest,
+) -> InstruqtActivityActionResult:
+    name = request.name
     if not isinstance(name, str) or not name:
-        return "not-required"
+        return InstruqtActivityActionResult("not-required")
     try:
-        return delete_git_repository(
-            string_field(plan, "sourceWatchNamespace"),
+        return InstruqtActivityActionResult(delete_git_repository(
+            string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def delete_instruqt_course_content_auth_secret(plan: dict[str, Any]) -> str:
-    name = plan.get("contentSourceAuthSecret")
+def delete_instruqt_course_content_auth_secret(
+    request: InstruqtKubernetesResourceDeleteRequest,
+) -> InstruqtActivityActionResult:
+    name = request.name
     if not isinstance(name, str) or not name:
-        return "not-required"
+        return InstruqtActivityActionResult("not-required")
     try:
-        return delete_external_secret(
-            string_field(plan, "sourceWatchNamespace"),
+        return InstruqtActivityActionResult(delete_external_secret(
+            string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
-        )
+        ))
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
 
 @activity.defn
-def remove_instruqt_course_finalizer_resource(plan: dict[str, Any]) -> str:
+def remove_instruqt_course_finalizer_resource(
+    request: InstruqtFinalizerRemovalRequest,
+) -> InstruqtActivityActionResult:
     try:
         remove_instruqt_course_finalizer(
-            string_field(plan, "course"),
+            string_field({"course": request.course}, "course"),
             dry_run=False,
         )
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
-    return "removed"
+    return InstruqtActivityActionResult("removed")
 
 
 def instruqt_course_finalization_status(

@@ -7,6 +7,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -58,19 +59,149 @@ from demo_registry_operator.temporal_client import connect
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
+@dataclass(frozen=True)
+class RegistryOperatorCanaryPlanRequest:
+    demo_project_template: dict[str, Any]
+    workflow_id: str = "operator-canary"
+    run_id: str = ""
+    project_name_prefix: str = "operator-canary"
+    project_name: str | None = None
+    expected_source_commit_sha: str | None = None
+    expected_images: dict[str, Any] | None = None
+    auth_mode: str | None = None
+    expected_operator_image: str | None = None
+    expected_operator_source_sha: str | None = None
+    timeout_seconds: int = 900
+    poll_seconds: int = 10
+    cleanup_timeout_seconds: int = 600
+    cleanup_policy: str = "Always"
+
+
+@dataclass(frozen=True)
+class RegistryOperatorCanaryPlan:
+    plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ApplyRegistryOperatorCanaryProjectRequest:
+    project: str
+    namespace: str
+    demo_project: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SignalRegistryOperatorCanaryReconcileRequest:
+    project: str
+    demo_project: dict[str, Any]
+    target_deployment_name: str
+    target_build_id: str
+
+
+@dataclass(frozen=True)
+class RegistryOperatorCanaryPromotionWaitRequest:
+    project: str
+    namespace: str
+    expected_source_commit_sha: str | None = None
+    expected_images: dict[str, Any] | None = None
+    timeout_seconds: int = 900
+    poll_seconds: int = 10
+
+    def as_plan(self) -> dict[str, Any]:
+        return {
+            "project": self.project,
+            "namespace": self.namespace,
+            "expectedSourceCommitSha": self.expected_source_commit_sha,
+            "expectedImages": self.expected_images or {},
+            "timeoutSeconds": self.timeout_seconds,
+            "pollSeconds": self.poll_seconds,
+        }
+
+
+@dataclass(frozen=True)
+class RotateRegistryOperatorCanaryCredentialsRequest:
+    project: str
+
+    def as_plan(self) -> dict[str, Any]:
+        return {"project": self.project}
+
+
+@dataclass(frozen=True)
+class RegistryOperatorCanaryRotationWaitRequest:
+    project: str
+    auth_mode: str
+    rotation_token: str
+    timeout_seconds: int = 900
+    poll_seconds: int = 10
+
+    def as_plan(self) -> dict[str, Any]:
+        return {
+            "project": self.project,
+            "authMode": self.auth_mode,
+            "rotationToken": self.rotation_token,
+            "timeoutSeconds": self.timeout_seconds,
+            "pollSeconds": self.poll_seconds,
+        }
+
+
+@dataclass(frozen=True)
+class DeleteRegistryOperatorCanaryProjectRequest:
+    project: str
+    cleanup_policy: str = "Always"
+
+    def as_plan(self) -> dict[str, Any]:
+        return {"project": self.project, "cleanupPolicy": self.cleanup_policy}
+
+
+@dataclass(frozen=True)
+class WaitRegistryOperatorCanaryCleanupRequest:
+    project: str
+    namespace: str
+    git_repository: str
+    source_watch_namespace: str
+    catalog_status_namespace: str
+    catalog_status_mirror_namespace: str
+    catalog_status_config_map: str
+    cleanup_policy: str = "Always"
+    cleanup_timeout_seconds: int = 600
+    poll_seconds: int = 10
+    delete_action: Any = None
+
+    def as_plan(self) -> dict[str, Any]:
+        return {
+            "project": self.project,
+            "namespace": self.namespace,
+            "gitRepository": self.git_repository,
+            "sourceWatchNamespace": self.source_watch_namespace,
+            "catalogStatusNamespace": self.catalog_status_namespace,
+            "catalogStatusMirrorNamespace": self.catalog_status_mirror_namespace,
+            "catalogStatusConfigMap": self.catalog_status_config_map,
+            "cleanupPolicy": self.cleanup_policy,
+            "cleanupTimeoutSeconds": self.cleanup_timeout_seconds,
+            "pollSeconds": self.poll_seconds,
+            "deleteAction": self.delete_action,
+        }
+
+
+@dataclass(frozen=True)
+class RegistryOperatorCanaryActivityResult:
+    status: dict[str, Any]
+
+
 @activity.defn
-def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
-    template = request.get("demoProjectTemplate") or request.get("demoProject")
+def prepare_registry_operator_canary_plan(
+    request: RegistryOperatorCanaryPlanRequest,
+) -> RegistryOperatorCanaryPlan:
+    template = request.demo_project_template
     if not isinstance(template, dict):
         raise non_retryable_error(
             "RegistryOperatorCanaryWorkflow requires demoProjectTemplate",
             error_type=VALIDATION_ERROR,
         )
 
-    workflow_id = string_value(request, "workflowID", default="operator-canary")
-    run_id = string_value(request, "runID", default="")
-    prefix = string_value(request, "projectNamePrefix", default="operator-canary")
-    requested_name = request.get("projectName")
+    workflow_id = request.workflow_id
+    run_id = request.run_id
+    prefix = request.project_name_prefix
+    requested_name = request.project_name
     project_name = (
         requested_name
         if isinstance(requested_name, str) and requested_name
@@ -80,8 +211,8 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
     source_resolution = canary_source_resolution(
         template,
         config,
-        expected_source_sha=request.get("expectedSourceCommitSha"),
-        expected_images=request.get("expectedImages"),
+        expected_source_sha=request.expected_source_commit_sha,
+        expected_images=request.expected_images,
     )
     expected_source_sha = source_resolution.get("sourceCommitSha")
 
@@ -89,11 +220,11 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         template,
         project_name=project_name,
         expected_source_sha=expected_source_sha,
-        expected_images=request.get("expectedImages"),
-        auth_mode=request.get("authMode"),
+        expected_images=request.expected_images,
+        auth_mode=request.auth_mode,
     )
 
-    expected_operator_image = request.get("expectedOperatorImage")
+    expected_operator_image = request.expected_operator_image
     actual_operator_image = os.getenv("DEMO_REGISTRY_OPERATOR_IMAGE")
     if (
         isinstance(expected_operator_image, str)
@@ -108,7 +239,7 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
             error_type=VALIDATION_ERROR,
         )
 
-    expected_operator_source_sha = request.get("expectedOperatorSourceSha")
+    expected_operator_source_sha = request.expected_operator_source_sha
     actual_operator_source_sha = os.getenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA")
     if (
         isinstance(expected_operator_source_sha, str)
@@ -134,7 +265,7 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
             ),
             error_type=CONFIGURATION_ERROR,
         )
-    return {
+    return RegistryOperatorCanaryPlan({
         "project": project_name,
         "namespace": project_namespace(demo_project),
         "demoProject": demo_project,
@@ -147,23 +278,25 @@ def plan_registry_operator_canary(request: dict[str, Any]) -> dict[str, Any]:
         "targetBuildID": target_build_id,
         "expectedSourceCommitSha": expected_source_sha,
         "sourceResolution": source_resolution,
-        "expectedImages": request.get("expectedImages", {}),
-        "timeoutSeconds": int(request.get("timeoutSeconds", 900)),
-        "pollSeconds": int(request.get("pollSeconds", 10)),
-        "cleanupTimeoutSeconds": int(request.get("cleanupTimeoutSeconds", 600)),
-        "cleanupPolicy": request.get("cleanupPolicy", "Always"),
+        "expectedImages": request.expected_images or {},
+        "timeoutSeconds": int(request.timeout_seconds),
+        "pollSeconds": int(request.poll_seconds),
+        "cleanupTimeoutSeconds": int(request.cleanup_timeout_seconds),
+        "cleanupPolicy": request.cleanup_policy,
         "sourceWatchNamespace": config.source_watch_namespace,
         "gitRepository": source_git_repository_name(demo_project),
         "catalogStatusNamespace": config.catalog_status_namespace,
         "catalogStatusMirrorNamespace": config.catalog_status_mirror_namespace,
         "catalogStatusConfigMap": config.catalog_status_configmap,
         "plannedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 @activity.defn
-def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, Any]:
-    demo_project = demo_project_from_plan(plan)
+def apply_registry_operator_canary_project(
+    request: ApplyRegistryOperatorCanaryProjectRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    demo_project = request.demo_project
     try:
         action = apply_demo_project(
             demo_project,
@@ -174,15 +307,13 @@ def apply_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, An
     except RuntimeError as error:
         raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
 
-    workflow_signal = signal_registry_operator_canary_reconcile(plan, demo_project)
-    return {
-        "project": string_field(plan, "project"),
-        "namespace": string_field(plan, "namespace"),
+    return RegistryOperatorCanaryActivityResult({
+        "project": request.project,
+        "namespace": request.namespace,
         "phase": "Applied",
         "action": action,
-        "workflow": workflow_signal,
         "checkedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 def canary_source_resolution(
@@ -378,7 +509,10 @@ def github_token_for_canary_source(
 
 
 @activity.defn
-def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[str, Any]:
+def wait_for_registry_operator_canary_promotion(
+    request: RegistryOperatorCanaryPromotionWaitRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    plan = request.as_plan()
     deadline = time.monotonic() + int(plan.get("timeoutSeconds", 900))
     poll_seconds = int(plan.get("pollSeconds", 10))
     last_status: dict[str, Any] | None = None
@@ -390,17 +524,17 @@ def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[st
         if isinstance(last_status, dict) and canary_promoted(plan, last_status):
             namespace_status = read_namespace(string_field(plan, "namespace"))
             if namespace_status is None:
-                return {
+                return RegistryOperatorCanaryActivityResult({
                     "project": string_field(plan, "project"),
                     "phase": "Failed",
                     "ok": False,
                     "message": "Canary promoted but namespace was not found.",
                     "status": last_status,
                     "checkedAt": datetime.now(UTC).isoformat(),
-                }
+                })
             workload_status = verify_promoted_workload_resources(plan, last_status)
             if not workload_status["ok"]:
-                return {
+                return RegistryOperatorCanaryActivityResult({
                     "project": string_field(plan, "project"),
                     "phase": "Failed",
                     "ok": False,
@@ -409,8 +543,8 @@ def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[st
                     "workloads": workload_status,
                     "status": last_status,
                     "checkedAt": datetime.now(UTC).isoformat(),
-                }
-            return {
+                })
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "Promoted",
                 "ok": True,
@@ -419,27 +553,27 @@ def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[st
                 "workloads": workload_status,
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         if isinstance(last_status, dict) and canary_failed(last_status):
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "Failed",
                 "ok": False,
                 "message": canary_failure_message(last_status),
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         if time.monotonic() >= deadline:
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "TimedOut",
                 "ok": False,
                 "message": "Timed out waiting for canary project promotion.",
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         activity.heartbeat(
             {
@@ -451,14 +585,17 @@ def wait_for_registry_operator_canary_promotion(plan: dict[str, Any]) -> dict[st
 
 
 @activity.defn
-def rotate_registry_operator_canary_credentials(plan: dict[str, Any]) -> dict[str, Any]:
+def rotate_registry_operator_canary_credentials(
+    request: RotateRegistryOperatorCanaryCredentialsRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    plan = request.as_plan()
     token = f"operator-canary-credential-rotation:{string_field(plan, 'project')}:{uuid_token()}"
     workflow_signal = signal_registry_operator_canary_force_reconcile(
         plan,
         token=token,
         reason=FORCE_TEMPORAL_AUTH_ROTATION_REASON,
     )
-    return {
+    return RegistryOperatorCanaryActivityResult({
         "project": string_field(plan, "project"),
         "phase": "Signaled",
         "ok": True,
@@ -466,11 +603,14 @@ def rotate_registry_operator_canary_credentials(plan: dict[str, Any]) -> dict[st
         "reason": FORCE_TEMPORAL_AUTH_ROTATION_REASON,
         "workflow": workflow_signal,
         "checkedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 @activity.defn
-def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str, Any]:
+def wait_for_registry_operator_canary_rotation(
+    request: RegistryOperatorCanaryRotationWaitRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    plan = request.as_plan()
     deadline = time.monotonic() + int(plan.get("timeoutSeconds", 900))
     poll_seconds = int(plan.get("pollSeconds", 10))
     token = string_field(plan, "rotationToken")
@@ -484,7 +624,7 @@ def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str
             token,
             last_status,
         ):
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "Rotated",
                 "ok": True,
@@ -493,10 +633,10 @@ def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str
                 "message": "Canary credential rotation completed after worker canary.",
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         if isinstance(last_status, dict) and canary_failed(last_status):
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "Failed",
                 "ok": False,
@@ -504,10 +644,10 @@ def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str
                 "message": canary_failure_message(last_status),
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         if time.monotonic() >= deadline:
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
                 "phase": "TimedOut",
                 "ok": False,
@@ -515,7 +655,7 @@ def wait_for_registry_operator_canary_rotation(plan: dict[str, Any]) -> dict[str
                 "message": "Timed out waiting for canary credential rotation.",
                 "status": last_status,
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         activity.heartbeat(
             {
@@ -637,37 +777,43 @@ def canary_failure_message(status: dict[str, Any]) -> str:
 
 
 @activity.defn
-def delete_registry_operator_canary_project(plan: dict[str, Any]) -> dict[str, Any]:
+def delete_registry_operator_canary_project(
+    request: DeleteRegistryOperatorCanaryProjectRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    plan = request.as_plan()
     if plan.get("cleanupPolicy") == "Never":
-        return {
+        return RegistryOperatorCanaryActivityResult({
             "project": string_field(plan, "project"),
             "phase": "Skipped",
             "ok": True,
             "message": "Canary cleanup skipped by cleanupPolicy=Never.",
             "checkedAt": datetime.now(UTC).isoformat(),
-        }
+        })
 
     action = delete_demo_project(string_field(plan, "project"))
-    return {
+    return RegistryOperatorCanaryActivityResult({
         "project": string_field(plan, "project"),
         "phase": "DeleteRequested",
         "ok": True,
         "deleteAction": action,
         "message": "Canary DemoProject deletion was requested.",
         "checkedAt": datetime.now(UTC).isoformat(),
-    }
+    })
 
 
 @activity.defn
-def wait_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any]:
+def wait_registry_operator_canary_cleanup(
+    request: WaitRegistryOperatorCanaryCleanupRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    plan = request.as_plan()
     if plan.get("cleanupPolicy") == "Never":
-        return {
+        return RegistryOperatorCanaryActivityResult({
             "project": string_field(plan, "project"),
             "phase": "Skipped",
             "ok": True,
             "message": "Canary cleanup skipped by cleanupPolicy=Never.",
             "checkedAt": datetime.now(UTC).isoformat(),
-        }
+        })
 
     deadline = time.monotonic() + int(plan.get("cleanupTimeoutSeconds", 600))
     poll_seconds = max(1, int(plan.get("pollSeconds", 10)))
@@ -681,16 +827,16 @@ def wait_registry_operator_canary_cleanup(plan: dict[str, Any]) -> dict[str, Any
                 "deleteAction": delete_action,
             }
         if last_status["ok"]:
-            return last_status
+            return RegistryOperatorCanaryActivityResult(last_status)
 
         if time.monotonic() >= deadline:
-            return {
+            return RegistryOperatorCanaryActivityResult({
                 **last_status,
                 "phase": "CleanupFailed",
                 "ok": False,
                 "message": "Timed out waiting for canary cleanup to complete.",
                 "checkedAt": datetime.now(UTC).isoformat(),
-            }
+            })
 
         activity.heartbeat(last_status)
         time.sleep(poll_seconds)
@@ -790,20 +936,22 @@ def render_canary_demo_project(
     return demo_project
 
 
+@activity.defn
 def signal_registry_operator_canary_reconcile(
-    plan: dict[str, Any],
-    demo_project: dict[str, Any],
-) -> dict[str, Any]:
-    return asyncio.run(signal_registry_operator_canary_reconcile_async(plan, demo_project))
+    request: SignalRegistryOperatorCanaryReconcileRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    return RegistryOperatorCanaryActivityResult(
+        asyncio.run(signal_registry_operator_canary_reconcile_async(request))
+    )
 
 
 async def signal_registry_operator_canary_reconcile_async(
-    plan: dict[str, Any],
-    demo_project: dict[str, Any],
+    request: SignalRegistryOperatorCanaryReconcileRequest,
 ) -> dict[str, Any]:
     config = WorkerConfig.from_env()
-    deployment_name = string_field(plan, "targetDeploymentName")
-    build_id = string_field(plan, "targetBuildID")
+    deployment_name = request.target_deployment_name
+    build_id = request.target_build_id
+    demo_project = request.demo_project
     name = demo_project_name(demo_project)
     workflow_id = f"demo-project/{name}"
     client = await connect(config)

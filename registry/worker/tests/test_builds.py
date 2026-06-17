@@ -106,7 +106,15 @@ def previous_build_status(
 
 
 def build_plan_status(request):
-    status = builds.completed_build_status(builds.plan_project_images(request))
+    status = builds.completed_build_status(
+        builds.resolve_project_image_build_plan(
+            builds.ResolveProjectImageBuildRequest(
+                demo_project=request["demoProject"],
+                external_resources=request.get("externalResources"),
+                previous_build_status=request.get("previousBuildStatus"),
+            )
+        ).plan
+    )
     assert status is not None
     return status
 

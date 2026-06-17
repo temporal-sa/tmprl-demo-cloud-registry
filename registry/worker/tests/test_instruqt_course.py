@@ -14,13 +14,15 @@ import demo_registry_operator.activities.instruqt as instruqt_activities
 import demo_registry_operator.watch as watch
 import demo_registry_operator.workflows.instruqt_course as workflow_module
 from demo_registry_operator.activities.instruqt import (
+    InstruqtCourseArtifactRequest,
+    InstruqtCourseImageBuildPlanRequest,
     instruqt_codebuild_buildspec,
     instruqt_cli_status,
-    plan_instruqt_course_images,
     prepare_instruqt_course_artifact,
     reconcile_instruqt_course,
     render_managed_instruqt_config,
     render_instruqt_track_directory,
+    resolve_instruqt_course_image_build_plan,
 )
 from demo_registry_operator.resources import (
     CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
@@ -405,11 +407,11 @@ def test_prepare_instruqt_course_artifact_waits_for_managed_images():
     }
 
     status = prepare_instruqt_course_artifact(
-        {
-            "instruqtCourse": course(images=images),
-            "images": {},
-        }
-    )
+        InstruqtCourseArtifactRequest(
+            instruqt_course=course(images=images),
+            images={},
+        )
+    ).status
 
     assert status == {
         "phase": "WaitingForImages",
@@ -518,10 +520,10 @@ def test_instruqt_image_plan_uses_codebuild_with_source_and_content(monkeypatch)
         }
     }
 
-    plan = plan_instruqt_course_images(
-        {
-            "instruqtCourse": course(content=True, images=images),
-            "externalResources": {
+    plan = resolve_instruqt_course_image_build_plan(
+        InstruqtCourseImageBuildPlanRequest(
+            instruqt_course=course(content=True, images=images),
+            external_resources={
                 "ecr": {
                     "repositories": [
                         {
@@ -537,9 +539,9 @@ def test_instruqt_image_plan_uses_codebuild_with_source_and_content(monkeypatch)
                     ]
                 }
             },
-            "channel": "production",
-        }
-    )
+            channel="production",
+        )
+    ).plan
 
     assert plan["action"] == "codebuild"
     assert set(plan["sources"]) == {"source", "content"}
@@ -643,10 +645,10 @@ def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatc
     source_commit = instruqt_course["metadata"]["annotations"][SOURCE_COMMIT_ANNOTATION]
     build_hash = instruqt_activities.instruqt_image_definition_hash(instruqt_course)
 
-    plan = plan_instruqt_course_images(
-        {
-            "instruqtCourse": instruqt_course,
-            "externalResources": {
+    plan = resolve_instruqt_course_image_build_plan(
+        InstruqtCourseImageBuildPlanRequest(
+            instruqt_course=instruqt_course,
+            external_resources={
                 "ecr": {
                     "repositories": [
                         {
@@ -659,7 +661,7 @@ def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatc
                     ]
                 }
             },
-            "previousBuildStatus": {
+            previous_build_status={
                 "phase": "Pushed",
                 "channel": "production",
                 "imageDefinitionHash": build_hash,
@@ -675,9 +677,9 @@ def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatc
                     )
                 },
             },
-            "channel": "production",
-        }
-    )
+            channel="production",
+        )
+    ).plan
 
     assert plan["action"] == "codebuild"
     assert plan["imageTemplates"]["workstation"] == (

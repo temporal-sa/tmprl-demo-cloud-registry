@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,21 +30,37 @@ from demo_registry_operator.activities.builds.status import (
 )
 
 
+@dataclass(frozen=True)
+class ResolveProjectImageBuildRequest:
+    demo_project: dict[str, Any]
+    external_resources: dict[str, Any] | None = None
+    previous_build_status: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProjectImageBuildPlan:
+    plan: dict[str, Any]
+
+
 @activity.defn
-def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
+def resolve_project_image_build_plan(
+    request: ResolveProjectImageBuildRequest,
+) -> ProjectImageBuildPlan:
     """Resolve cached/override images or prepare an AWS CodeBuild request."""
 
-    try:
-        demo_project = demo_project_from_request(request)
-    except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
-    external_resources = external_resources_from_request(request)
+    demo_project = request.demo_project
+    if not isinstance(demo_project, dict):
+        raise non_retryable_error(
+            "resolve_project_image_build_plan requires demo_project",
+            error_type=VALIDATION_ERROR,
+        )
+    external_resources = request.external_resources or {}
     config = WorkerConfig.from_env()
     started_at = datetime.now(UTC).isoformat()
 
     image_overrides = parse_image_overrides(demo_project)
     missing_images = missing_image_overrides(demo_project, image_overrides)
-    previous_build_status = previous_build_status_from_request(request)
+    previous_build_status = request.previous_build_status
 
     if not missing_images:
         status = build_status(
@@ -66,7 +83,7 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
                 for build_name in sorted(builds(demo_project))
             ],
         )
-        return completed_build_plan(status)
+        return ProjectImageBuildPlan(completed_build_plan(status))
 
     reusable_build_status = reusable_previous_build_status(
         demo_project,
@@ -75,10 +92,10 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
         started_at=started_at,
     )
     if reusable_build_status is not None:
-        return completed_build_plan(reusable_build_status)
+        return ProjectImageBuildPlan(completed_build_plan(reusable_build_status))
 
     if not config.codebuild_project:
-        return completed_build_plan(
+        return ProjectImageBuildPlan(completed_build_plan(
             build_status(
                 demo_project,
                 phase="Error",
@@ -93,7 +110,7 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
                     "aws-codebuild mode."
                 ),
             )
-        )
+        ))
 
     try:
         source = source_config(demo_project)
@@ -104,7 +121,7 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
             config,
         )
     except ValueError as error:
-        return completed_build_plan(
+        return ProjectImageBuildPlan(completed_build_plan(
             build_status(
                 demo_project,
                 phase="Error",
@@ -116,9 +133,9 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
                 build_entries=[],
                 error=str(error),
             )
-        )
+        ))
 
-    return {
+    return ProjectImageBuildPlan({
         "action": "codebuild",
         "demoProject": demo_project,
         "externalResources": external_resources,
@@ -133,4 +150,4 @@ def plan_project_images(request: dict[str, Any]) -> dict[str, Any]:
             if "sourceAuthSecretPath" in source
             else {}
         ),
-    }
+    })
