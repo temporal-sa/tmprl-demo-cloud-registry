@@ -223,7 +223,15 @@ validation leaves the live Pods on the old key.
   (`INSTRUQT_TOKEN`, optional `organization`) for operator-owned Instruqt CLI
   operations.
 - IRSA role `tmprl-dem-cld-registry-operator` on the operator ServiceAccount
-  (ECR + Secrets Manager + CodeBuild, scoped to `tmprl-dem-cld/*`).
+  (private ECR + ECR Public + Secrets Manager + CodeBuild, scoped to
+  `tmprl-dem-cld/*`).
+- Managed Instruqt image support requires `ecr-public:DescribeRepositories`,
+  `ecr-public:CreateRepository`, `ecr-public:DeleteRepository`, and
+  `ecr-public:TagResource` on
+  `arn:aws:ecr-public::429214323166:repository/tmprl-dem-cld/*` for the
+  operator role. The CodeBuild service role also needs ECR Public push
+  permissions plus `ecr-public:GetAuthorizationToken` and
+  `sts:GetServiceBearerToken` on `*`.
 - Operator RBAC: `demoprojects` needs `get/list/watch/update/patch`
   (update/patch for the finalizer), `demoprojects/status` patch, and `namespaces`
   `delete` for teardown. (These were added after the first managed project, whose

@@ -140,7 +140,9 @@ arn:aws:iam::<aws-account-id>:role/tmprl-registry-operator
 
 Scope the role to:
 
-- create/read/write ECR repositories under `tmprl-dem-cld/*`;
+- create/read/delete private ECR repositories under `tmprl-dem-cld/*`;
+- create/read/delete public ECR repositories under `tmprl-dem-cld/*` for managed
+  Instruqt images;
 - read/write Secrets Manager values under `tmprl-dem-cld/*`;
 - read `tmprl-dem-cld/platform/registry-worker-temporal`;
 - read `tmprl-dem-cld/platform/temporal-cloud-bootstrap`;
@@ -322,14 +324,27 @@ source for the shared CodeBuild project shape, source repository access,
 operator IAM policy, CodeBuild service-role policy, and ECR repository ARN
 templates.
 
-The operator role needs only:
+For CodeBuild orchestration itself, the operator role needs:
 
 ```text
 codebuild:StartBuild
 codebuild:BatchGetBuilds
 ```
 
-on the configured project. The CodeBuild service role needs:
+on the configured project.
+
+For managed Instruqt image repository reconciliation, the operator role also
+needs these ECR Public permissions scoped to
+`arn:aws:ecr-public::<aws-account-id>:repository/tmprl-dem-cld/*`:
+
+```text
+ecr-public:DescribeRepositories
+ecr-public:CreateRepository
+ecr-public:DeleteRepository
+ecr-public:TagResource
+```
+
+The CodeBuild service role needs these private ECR permissions for demo images:
 
 ```text
 ecr:GetAuthorizationToken
@@ -341,9 +356,27 @@ ecr:PutImage
 ecr:DescribeRepositories
 ```
 
-scoped to the project/build repositories under `tmprl-dem-cld/*`, plus read
-access to the `temporal-sa` source repositories through the configured
-CodeBuild source connection.
+scoped to the project/build repositories under `tmprl-dem-cld/*`.
+
+For managed Instruqt images pushed to ECR Public, the CodeBuild service role
+also needs:
+
+```text
+ecr-public:GetAuthorizationToken
+ecr-public:BatchCheckLayerAvailability
+ecr-public:InitiateLayerUpload
+ecr-public:UploadLayerPart
+ecr-public:CompleteLayerUpload
+ecr-public:PutImage
+ecr-public:DescribeRepositories
+sts:GetServiceBearerToken
+```
+
+Scope the ECR Public repository actions to
+`arn:aws:ecr-public::<aws-account-id>:repository/tmprl-dem-cld/*`. The
+authorization-token and STS service-bearer-token actions must use resource
+`*`. The CodeBuild role also needs read access to the `temporal-sa` source
+repositories through the configured CodeBuild source connection.
 
 Use `local-docker` only from an isolated build worker or trusted test
 environment with:
