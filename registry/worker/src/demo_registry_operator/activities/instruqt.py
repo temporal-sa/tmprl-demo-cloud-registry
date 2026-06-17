@@ -1682,7 +1682,13 @@ def authenticated_git_url(
     secret_name = secret_ref.get("name")
     if not isinstance(secret_name, str) or not secret_name:
         return url
-    data = read_secret_data(WorkerConfig.from_env().source_watch_namespace, secret_name)
+    try:
+        data = read_secret_data(
+            WorkerConfig.from_env().source_watch_namespace,
+            secret_name,
+        )
+    except Exception:
+        return url
     if not isinstance(data, dict):
         return url
     username = data.get("username")

@@ -825,7 +825,10 @@ def github_token_from_secret_ref(
     name = secret_ref.get("name")
     if not isinstance(name, str) or not name:
         return None
-    data = read_secret_data(config.source_watch_namespace, name)
+    try:
+        data = read_secret_data(config.source_watch_namespace, name)
+    except Exception:
+        return None
     if not isinstance(data, dict):
         return None
     for key in ("password", "token", "githubToken", "GITHUB_TOKEN"):

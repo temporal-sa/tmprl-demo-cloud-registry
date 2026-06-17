@@ -721,6 +721,54 @@ def test_operator_canary_plan_resolves_unannotated_source_branch(monkeypatch):
     ]
 
 
+def test_operator_canary_plan_resolves_public_source_when_secret_unreadable(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
+    monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "e12b0ed9d450")
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-test-1234")
+    source_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    template = project(worker=True)
+    template["metadata"]["annotations"].pop(SOURCE_COMMIT_ANNOTATION)
+    auth_headers = []
+
+    class FakeHTTPResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"commit": {"sha": source_sha}}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        auth_headers.append(request.get_header("Authorization"))
+        return FakeHTTPResponse()
+
+    def forbidden_secret(namespace, name):
+        raise RuntimeError("forbidden")
+
+    monkeypatch.setattr(canary, "read_secret_data", forbidden_secret)
+    monkeypatch.setattr(canary, "urlopen", fake_urlopen)
+
+    plan = plan_registry_operator_canary(
+        {
+            "workflowID": "worker-controller-gate",
+            "runID": "run-1",
+            "projectNamePrefix": "operator-canary",
+            "expectedOperatorImage": "example.com/operator:git-test",
+            "expectedOperatorSourceSha": "e12b0ed9d450",
+            "demoProjectTemplate": template,
+        }
+    )
+
+    assert plan["expectedSourceCommitSha"] == source_sha
+    assert plan["demoProject"]["metadata"]["annotations"][SOURCE_COMMIT_ANNOTATION] == (
+        source_sha
+    )
+    assert auth_headers == [None]
+
+
 def test_operator_canary_plan_rejects_unexpected_source_sha(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_IMAGE", "example.com/operator:git-test")
     monkeypatch.setenv("DEMO_REGISTRY_OPERATOR_SOURCE_SHA", "actual")

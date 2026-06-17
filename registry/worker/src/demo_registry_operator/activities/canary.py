@@ -357,7 +357,10 @@ def github_token_for_canary_source(
     secret_name = secret_ref.get("name")
     if not isinstance(secret_name, str) or not secret_name:
         return None
-    data = read_secret_data(config.source_watch_namespace, secret_name)
+    try:
+        data = read_secret_data(config.source_watch_namespace, secret_name)
+    except Exception:
+        return None
     if not isinstance(data, dict):
         return None
     for key in ("password", "token", "githubToken", "GITHUB_TOKEN"):
