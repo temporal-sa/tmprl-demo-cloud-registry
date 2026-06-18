@@ -9,17 +9,6 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.builds.codebuild.execution import (
-        StartProjectImageBuildRequest,
-        WaitForProjectImageBuildRequest,
-        start_project_image_build,
-        wait_for_project_image_build,
-    )
-    from demo_registry_operator.activities.builds.planning import (
-        ResolveProjectImageBuildRequest,
-        resolve_project_image_build_plan,
-    )
-    from demo_registry_operator.activities.builds.status import completed_build_status
     from demo_registry_operator.activities.external_resources import (
         ConfigureTemporalCloudNamespaceMtlsRequest,
         CreateOrVerifyTemporalCloudNamespaceRequest,
@@ -77,35 +66,21 @@ with workflow.unsafe.imports_passed_through():
         load_current_demo_project_for_reconcile,
     )
     from demo_registry_operator.activities.reconcile import (
-        ActivityActionResult,
-        ActivityStatusResult,
-        ApplyDemoProjectResourcesRequest,
-        CandidateReadinessRequest,
         OptionalResourceDeleteRequest,
         ProjectFinalizationRequest,
         ProjectFinalizerRemovalRequest,
         ProjectNamespaceDeleteRequest,
-        PromoteCandidateRoutesRequest,
-        PruneStaleRuntimeCandidatesRequest,
         RecordDemoProjectStatusRequest,
         ResourceDeleteRequest,
-        SmokeCheckRequest,
-        WorkerDeploymentRolloutRequest,
-        apply_demo_project_resources,
         completed_activity_status,
         delete_project_namespace_resource,
         delete_project_source_auth_secret,
         delete_project_source_repository,
         load_project_finalization_plan,
         project_finalization_status,
-        promote_candidate_routes,
-        prune_stale_runtime_candidates,
         record_catalog_project_status,
         record_demo_project_status,
         remove_project_finalizer,
-        run_smoke_check,
-        wait_for_candidate_readiness,
-        wait_for_worker_deployment_rollouts,
     )
     from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
     from demo_registry_operator.resources import (
@@ -122,15 +97,20 @@ with workflow.unsafe.imports_passed_through():
         force_reconcile_token,
         metadata_annotations,
         resource_without_force_reconcile,
-        worker_deployment_rollout_wait_seconds,
     )
     from demo_registry_operator.workflows.messages import (
         CheckWorkerVersionSignal,
+        DemoProjectArtifactBuildRequest,
         DemoProjectFinalizeSignal,
+        DemoProjectKubernetesRuntimeRequest,
         DemoProjectReconcileSignal,
         DemoProjectRunRequest,
         ForceReconcileSignal,
         ShutdownSignal,
+    )
+    from demo_registry_operator.workflows.demo_project_runtime import (
+        DemoProjectArtifactBuildWorkflow,
+        DemoProjectKubernetesRuntimeWorkflow,
     )
 
 
@@ -148,13 +128,6 @@ STATUS_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=12,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
-)
-BUILD_WAIT_RETRY_POLICY = RetryPolicy(
-    initial_interval=timedelta(seconds=15),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(minutes=2),
-    maximum_attempts=5,
     non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
 )
 CHECK_RETRY_POLICY = RetryPolicy(
@@ -573,316 +546,35 @@ class DemoProjectWorkflow:
                 temporal_status=temporal_status,
                 secrets_status=secrets_status.status,
             )
-            build_plan_result = await workflow.execute_activity(
-                resolve_project_image_build_plan,
-                ResolveProjectImageBuildRequest(
-                    demo_project=demo_project,
-                    external_resources=external_resources,
-                    previous_build_status=(
+            artifact_build = await workflow.execute_child_workflow(
+                DemoProjectArtifactBuildWorkflow.run,
+                DemoProjectArtifactBuildRequest(
+                    demoProject=demo_project,
+                    externalResources=external_resources,
+                    previousBuildStatus=(
                         None
                         if force_reconcile_token(demo_project)
                         else self._last_build_status
                     ),
                 ),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
+                id=self._child_workflow_id("artifact-build"),
             )
-            build_plan = build_plan_result.plan
-            build_status = completed_build_status(build_plan)
-            if build_status is None:
-                started_build_result = await workflow.execute_activity(
-                    start_project_image_build,
-                    StartProjectImageBuildRequest(build_plan),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    heartbeat_timeout=timedelta(minutes=1),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                started_build = started_build_result.plan
-                build_status = completed_build_status(started_build)
-                if build_status is None:
-                    build_status_result = await workflow.execute_activity(
-                        wait_for_project_image_build,
-                        WaitForProjectImageBuildRequest(started_build),
-                        start_to_close_timeout=timedelta(hours=1),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=BUILD_WAIT_RETRY_POLICY,
-                    )
-                    build_status = build_status_result.status
+            build_status = artifact_build.status
             remembered_build_status = rememberable_build_status(build_status)
             if remembered_build_status is not None:
                 self._last_build_status = remembered_build_status
-            reconcile_result = await workflow.execute_activity(
-                apply_demo_project_resources,
-                ApplyDemoProjectResourcesRequest(
-                    demo_project=demo_project,
-                    external_resources=external_resources,
-                    build_status=build_status,
+            runtime_result = await workflow.execute_child_workflow(
+                DemoProjectKubernetesRuntimeWorkflow.run,
+                DemoProjectKubernetesRuntimeRequest(
+                    project=project_name,
+                    demoProject=demo_project,
+                    externalResources=external_resources,
+                    buildStatus=build_status,
                 ),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
+                id=self._child_workflow_id("kubernetes-runtime"),
             )
-            reconcile_status = reconcile_result.status
-            self._status = reconcile_status
-
-            smoke_plan = {
-                "project": project_name,
-                "demoProject": demo_project,
-                "host": reconcile_status.get("desired", {}).get("host"),
-                "candidate": reconcile_status.get("candidateRolloutStatus", {}),
-                "smokeCheck": demo_project.get("spec", {}).get("smokeCheck"),
-                "workerDeployments": reconcile_status.get(
-                    "candidateRolloutStatus",
-                    {},
-                ).get("workerDeployments", {}),
-                "workerDeploymentTimeoutSeconds": (
-                    worker_deployment_rollout_wait_seconds(
-                        demo_project,
-                        base_timeout_seconds=300,
-                    )
-                ),
-            }
-
-            if reconcile_status.get("phase") == "WorkerRolloutPending":
-                worker_rollout_activity = await workflow.execute_activity(
-                    wait_for_worker_deployment_rollouts,
-                    WorkerDeploymentRolloutRequest(
-                        demo_project=demo_project,
-                        worker_deployments=smoke_plan.get("workerDeployments", {}),
-                        timeout_seconds=smoke_plan.get("workerDeploymentTimeoutSeconds"),
-                    ),
-                    start_to_close_timeout=timedelta(
-                        seconds=int(
-                            smoke_plan.get("workerDeploymentTimeoutSeconds", 300)
-                        )
-                        + 60
-                    ),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=CHECK_RETRY_POLICY,
-                )
-                worker_rollout_result = worker_rollout_activity.status
-                if not worker_rollout_result.get("ok"):
-                    candidate_status = reconcile_status.get(
-                        "candidateRolloutStatus",
-                        {},
-                    )
-                    self._status = {
-                        **reconcile_status,
-                        "phase": "WorkerRolloutFailed",
-                        "message": "WorkerDeployment rollout did not become ready; active route was not promoted.",
-                        "workerDeploymentStatus": worker_rollout_result,
-                        "candidateRolloutStatus": {
-                            **candidate_status,
-                            "phase": "WorkerRolloutFailed",
-                            "message": "WorkerDeployment rollout did not become ready; active route was not promoted.",
-                        },
-                    }
-                    await self._record_status(demo_project, self._status)
-                    self._complete_current_reconcile()
-                    self._continue_as_new_if_needed(project_name)
-                    continue
-
-                reconcile_status = {
-                    **reconcile_status,
-                    "phase": (
-                        "SmokeCheckPending"
-                        if demo_project.get("spec", {}).get("smokeCheck")
-                        else "WorkerRolloutReady"
-                    ),
-                    "message": "WorkerDeployment rollout is ready.",
-                    "workerDeploymentStatus": worker_rollout_result,
-                }
-                self._status = reconcile_status
-                await self._record_status(demo_project, self._status)
-
-                if not demo_project.get("spec", {}).get("smokeCheck"):
-                    promotion_result = await workflow.execute_activity(
-                        promote_candidate_routes,
-                        PromoteCandidateRoutesRequest(
-                            project=project_name,
-                            demo_project=demo_project,
-                            candidate=smoke_plan.get("candidate", {}),
-                        ),
-                        start_to_close_timeout=timedelta(minutes=5),
-                        retry_policy=COMMON_RETRY_POLICY,
-                    )
-                    promotion = promotion_result.status
-                    candidate_status = promotion.get(
-                        "candidate",
-                        reconcile_status.get("candidateRolloutStatus", {}),
-                    )
-                    prune_status = await self._prune_promoted_candidate(
-                        demo_project,
-                        candidate_status,
-                    )
-                    promoted_status = {
-                        **reconcile_status,
-                        "phase": promotion.get("phase", "Promoted"),
-                        "message": promotion.get("message"),
-                        "activeImages": candidate_status.get("images", {}),
-                        "activeRouteServices": candidate_status.get("services", {}),
-                        "candidateRolloutStatus": {
-                            **candidate_status,
-                            "phase": "Promoted",
-                            "completedAt": worker_rollout_result.get("checkedAt"),
-                            "message": "WorkerDeployment rollout passed and active route resources were promoted.",
-                        },
-                        "appliedResources": [
-                            *reconcile_status.get("appliedResources", []),
-                            *promotion.get("appliedResources", []),
-                        ],
-                        "pruneStatus": prune_status,
-                        "prunedResources": prune_status.get("resources", []),
-                    }
-                    active_version = candidate_status.get("imageVersion")
-                    if isinstance(active_version, str):
-                        promoted_status["activeImageVersion"] = active_version
-                    self._status = promoted_status
-                    await self._record_status(demo_project, self._status)
-                    self._complete_current_reconcile()
-                    self._continue_as_new_if_needed(project_name)
-                    continue
-
-            if reconcile_status.get("phase") == "SmokeCheckPending":
-                readiness_activity = await workflow.execute_activity(
-                    wait_for_candidate_readiness,
-                    CandidateReadinessRequest(
-                        demo_project=demo_project,
-                        candidate=smoke_plan.get("candidate", {}),
-                    ),
-                    start_to_close_timeout=timedelta(minutes=10),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=CHECK_RETRY_POLICY,
-                )
-                readiness_result = readiness_activity.status
-                if not readiness_result.get("ok"):
-                    candidate_status = reconcile_status.get(
-                        "candidateRolloutStatus",
-                        {},
-                    )
-                    self._status = {
-                        **reconcile_status,
-                        "phase": "CandidateNotReady",
-                        "message": "Candidate did not become ready; active route was not promoted.",
-                        "candidateRolloutStatus": {
-                            **candidate_status,
-                            "phase": "CandidateNotReady",
-                            "message": "Candidate did not become ready; active route was not promoted.",
-                        },
-                        "readinessStatus": readiness_result,
-                    }
-                    await self._record_status(demo_project, self._status)
-                    self._complete_current_reconcile()
-                    self._continue_as_new_if_needed(project_name)
-                    continue
-
-                self._status = {
-                    **reconcile_status,
-                    "readinessStatus": readiness_result,
-                }
-                await self._record_status(demo_project, self._status)
-
-                smoke_activity = await workflow.execute_activity(
-                    run_smoke_check,
-                    SmokeCheckRequest(
-                        project=project_name,
-                        demo_project=demo_project,
-                        host=smoke_plan.get("host"),
-                        candidate=smoke_plan.get("candidate", {}),
-                        smoke_check=smoke_plan.get("smokeCheck"),
-                    ),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=CHECK_RETRY_POLICY,
-                )
-                smoke_result = smoke_activity.status
-                if not smoke_result.get("ok"):
-                    candidate_status = reconcile_status.get(
-                        "candidateRolloutStatus",
-                        {},
-                    )
-                    self._status = {
-                        **reconcile_status,
-                        "phase": "SmokeCheckFailed",
-                        "message": "Candidate smoke check failed; active route was not promoted.",
-                        **(
-                            {"readinessStatus": readiness_result}
-                            if readiness_result
-                            else {}
-                        ),
-                        "candidateRolloutStatus": {
-                            **candidate_status,
-                            "phase": "SmokeCheckFailed",
-                            "message": "Candidate smoke check failed; active route was not promoted.",
-                        },
-                        "smokeCheckStatus": {
-                            "phase": "Failed",
-                            "path": smoke_result.get("smokeCheck", {}).get("path"),
-                            "expectedStatus": smoke_result.get("expectedStatus"),
-                            "actualStatus": smoke_result.get("actualStatus"),
-                            "checkedAt": smoke_result.get("checkedAt"),
-                            "message": smoke_result.get("message"),
-                        },
-                    }
-                else:
-                    promotion_result = await workflow.execute_activity(
-                        promote_candidate_routes,
-                        PromoteCandidateRoutesRequest(
-                            project=project_name,
-                            demo_project=demo_project,
-                            candidate=smoke_plan.get("candidate", {}),
-                        ),
-                        start_to_close_timeout=timedelta(minutes=5),
-                        retry_policy=COMMON_RETRY_POLICY,
-                    )
-                    promotion = promotion_result.status
-                    candidate_status = promotion.get(
-                        "candidate",
-                        reconcile_status.get("candidateRolloutStatus", {}),
-                    )
-                    prune_status = await self._prune_promoted_candidate(
-                        demo_project,
-                        candidate_status,
-                    )
-                    promoted_status = {
-                        **reconcile_status,
-                        "phase": promotion.get("phase", "Promoted"),
-                        "message": promotion.get("message"),
-                        "activeImages": candidate_status.get("images", {}),
-                        "activeRouteServices": candidate_status.get("services", {}),
-                        **(
-                            {"readinessStatus": readiness_result}
-                            if readiness_result
-                            else {}
-                        ),
-                        "candidateRolloutStatus": {
-                            **candidate_status,
-                            "phase": "Promoted",
-                            "completedAt": smoke_result.get("checkedAt"),
-                            "message": "Candidate passed smoke check and was promoted.",
-                        },
-                        "appliedResources": [
-                            *reconcile_status.get("appliedResources", []),
-                            *promotion.get("appliedResources", []),
-                        ],
-                        "pruneStatus": prune_status,
-                        "prunedResources": prune_status.get("resources", []),
-                        "smokeCheckStatus": {
-                            "phase": "Passed",
-                            "path": smoke_result.get("smokeCheck", {}).get("path"),
-                            "expectedStatus": smoke_result.get("expectedStatus"),
-                            "actualStatus": smoke_result.get("actualStatus"),
-                            "checkedAt": smoke_result.get("checkedAt"),
-                            "message": smoke_result.get("message"),
-                        },
-                    }
-                    active_version = candidate_status.get("imageVersion")
-                    if isinstance(active_version, str):
-                        promoted_status["activeImageVersion"] = active_version
-                    self._status = promoted_status
-
-                await self._record_status(demo_project, self._status)
-            else:
-                await self._record_status(demo_project, self._status)
+            self._status = runtime_result.status
+            await self._record_status(demo_project, self._status)
 
             self._complete_current_reconcile()
             self._continue_as_new_if_needed(project_name)
@@ -1419,29 +1111,6 @@ class DemoProjectWorkflow:
             "finalizeStatus": result,
         }
 
-    async def _prune_promoted_candidate(
-        self,
-        demo_project: dict[str, Any],
-        candidate_status: dict[str, Any],
-    ) -> dict[str, Any]:
-        active_version = candidate_status.get("imageVersion")
-        if not isinstance(active_version, str) or not active_version:
-            return {
-                "phase": "Skipped",
-                "message": "Promoted candidate did not report an image version.",
-                "resources": [],
-            }
-        prune_result = await workflow.execute_activity(
-            prune_stale_runtime_candidates,
-            PruneStaleRuntimeCandidatesRequest(
-                demo_project=demo_project,
-                active_version=active_version,
-            ),
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
-        return prune_result.status
-
     async def _record_status(
         self,
         demo_project: dict[str, Any],
@@ -1462,6 +1131,13 @@ class DemoProjectWorkflow:
             request,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=STATUS_RETRY_POLICY,
+        )
+
+    def _child_workflow_id(self, purpose: str) -> str:
+        return (
+            f"{workflow.info().workflow_id}/"
+            f"reconcile-{self._reconcile_sequence}/"
+            f"{purpose}"
         )
 
     @workflow.query

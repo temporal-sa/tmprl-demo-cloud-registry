@@ -336,3 +336,26 @@ def test_check_worker_version_signal_noops_when_target_unchanged(monkeypatch):
     workflow.check_worker_version()
 
     assert workflow._continue_as_new_for_worker_version is False
+
+
+def test_child_workflow_id_is_scoped_to_reconcile_sequence(monkeypatch):
+    workflow = workflow_instance()
+    workflow._reconcile_sequence = 7
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo"),
+    )
+
+    assert (
+        workflow._child_workflow_id("artifact-build")
+        == "DemoProject/demo/reconcile-7/artifact-build"
+    )
+
+
+def test_demo_project_reconcile_delegates_runtime_paths_to_child_workflows():
+    source = inspect.getsource(DemoProjectWorkflow.run)
+
+    assert "DemoProjectArtifactBuildWorkflow.run" in source
+    assert "DemoProjectKubernetesRuntimeWorkflow.run" in source
+    assert "workflow.execute_child_workflow" in source

@@ -99,6 +99,10 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
 from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
+from demo_registry_operator.workflows.demo_project_runtime import (
+    DemoProjectArtifactBuildWorkflow,
+    DemoProjectKubernetesRuntimeWorkflow,
+)
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.operator_canary import (
     RegistryOperatorAuthCanaryWorkflow,
@@ -138,6 +142,8 @@ async def main() -> None:
                 task_queue=config.task_queue,
                 workflows=[
                     DemoProjectWorkflow,
+                    DemoProjectArtifactBuildWorkflow,
+                    DemoProjectKubernetesRuntimeWorkflow,
                     InstruqtCourseWorkflow,
                     DemoRolloutWorkflow,
                     RegistryOperatorCanaryWorkflow,

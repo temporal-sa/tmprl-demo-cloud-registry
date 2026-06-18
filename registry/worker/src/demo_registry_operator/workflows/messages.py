@@ -26,6 +26,31 @@ class DemoProjectFinalizeSignal:
 
 
 @dataclass(frozen=True)
+class DemoProjectArtifactBuildRequest:
+    demoProject: dict[str, Any]
+    externalResources: dict[str, Any]
+    previousBuildStatus: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class DemoProjectArtifactBuildResult:
+    status: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DemoProjectKubernetesRuntimeRequest:
+    project: str
+    demoProject: dict[str, Any]
+    externalResources: dict[str, Any]
+    buildStatus: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DemoProjectKubernetesRuntimeResult:
+    status: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class InstruqtCourseRunRequest:
     course_name: str
     carried_status: dict[str, Any] | None = None
