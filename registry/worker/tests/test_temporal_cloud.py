@@ -9,6 +9,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     CloudApiReconciler,
     NamespaceInfo,
     delete_temporal_runtime_candidate_secret,
+    ensure_temporal_cloud_namespace,
     finalize_temporal_cloud,
     promote_temporal_runtime_secret,
     reconcile_temporal_cloud,
@@ -563,6 +564,48 @@ def test_existing_namespace_auth_mode_switch_requires_finalize():
     assert reconciler.called("create_namespace") == []
     assert reconciler.called("configure_namespace_mtls") == []
     assert secrets.writes == []
+
+
+def test_create_mtls_namespace_uses_tokenized_candidate_ca_material():
+    project = {
+        **PROJECT,
+        "spec": {
+            **PROJECT["spec"],
+            "temporal": {"auth": {"mode": "mtls"}},
+        },
+    }
+    ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
+        project,
+        CANDIDATE_TOKEN,
+    )
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore(
+        {
+            ca_candidate_path: {
+                "caCert": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+            }
+        }
+    )
+
+    status = asyncio.run(
+        ensure_temporal_cloud_namespace(
+            project,
+            reconciler=reconciler,
+            secret_store=secrets,
+            account_id="acct1",
+            region="aws-us-west-2",
+            checked_at="2026-06-13T00:00:00+00:00",
+            candidate_ca_secret_path=ca_candidate_path,
+            candidate_secret_token=CANDIDATE_TOKEN,
+        )
+    )
+
+    create_call = reconciler.called("create_namespace")[0]
+    assert status["phase"] == "Ready"
+    assert status["namespace"]["authMode"] == "mtls"
+    assert create_call[4] == "mtls"
+    assert create_call[5] is True
+    assert create_call[6] == "temporal-namespace:tmprl-dem-cld-banking-money-transfer"
 
 
 def test_mtls_auth_mode_creates_namespace_ca_client_secret_and_canaries():

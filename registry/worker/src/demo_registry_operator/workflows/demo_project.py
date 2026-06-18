@@ -988,6 +988,10 @@ class DemoProjectWorkflow:
                 CreateOrVerifyTemporalCloudNamespaceRequest(
                     checked_at=external_plan.checked_at,
                     project=project,
+                    candidate_ca_secret_path=(
+                        ca.candidate_ca_secret_path if ca else None
+                    ),
+                    candidate_secret_token=candidate_secret_token,
                 ),
                 start_to_close_timeout=timedelta(minutes=10),
                 heartbeat_timeout=timedelta(minutes=1),

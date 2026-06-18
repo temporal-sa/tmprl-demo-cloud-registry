@@ -199,6 +199,8 @@ class CreateOrVerifyTemporalCloudNamespaceRequest:
     region: str | None = None
     retention_days: int = 7
     enable_delete_protection: bool = True
+    candidate_ca_secret_path: str | None = None
+    candidate_secret_token: str | None = None
 
 
 @dataclass(frozen=True)

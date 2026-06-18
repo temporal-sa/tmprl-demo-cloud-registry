@@ -95,6 +95,8 @@ def create_or_verify_temporal_cloud_namespace(
             checked_at=request.checked_at,
             retention_days=request.retention_days,
             enable_delete_protection=request.enable_delete_protection,
+            candidate_ca_secret_path=request.candidate_ca_secret_path,
+            candidate_secret_token=request.candidate_secret_token,
         )
 
     try:

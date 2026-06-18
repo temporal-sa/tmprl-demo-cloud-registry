@@ -385,6 +385,8 @@ async def ensure_temporal_cloud_namespace(
     checked_at: str,
     retention_days: int = DEFAULT_NAMESPACE_RETENTION_DAYS,
     enable_delete_protection: bool = True,
+    candidate_ca_secret_path: str | None = None,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
     if not temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
@@ -458,10 +460,17 @@ async def ensure_temporal_cloud_namespace(
         accepted_client_ca = None
         certificate_common_name = None
         if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+            ca_candidate_path = candidate_ca_secret_path
+            if not ca_candidate_path:
+                ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
+                    demo_project,
+                    candidate_secret_token,
+                )
             ca_material = read_mtls_ca_material_for_reconcile(
                 demo_project,
                 secret_store,
                 allow_candidate=True,
+                candidate_ca_secret_path=ca_candidate_path,
             )
             accepted_client_ca = accepted_client_ca_bundle(ca_material)
             certificate_common_name = temporal_mtls_client_common_name(demo_project)
