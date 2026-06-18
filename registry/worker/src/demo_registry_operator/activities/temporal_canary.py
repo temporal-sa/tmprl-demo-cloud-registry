@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.client import Client, TLSConfig
 from temporalio.worker import Worker
 
@@ -88,7 +88,7 @@ async def run_temporal_runtime_canary(
             status["attemptTimeoutSeconds"] = attempt_budget
             return status
         except asyncio.CancelledError as error:
-            if current_task_cancel_requested():
+            if temporal_activity_cancel_requested():
                 raise
             if loop.time() >= deadline:
                 raise TimeoutError(
@@ -251,9 +251,13 @@ def timeout_delta(seconds: float) -> timedelta:
     return timedelta(seconds=max(1, math.ceil(seconds)))
 
 
-def current_task_cancel_requested() -> bool:
-    task = asyncio.current_task()
-    return task is not None and task.cancelling() > 0
+def temporal_activity_cancel_requested() -> bool:
+    try:
+        return activity.is_cancelled()
+    except RuntimeError as error:
+        if "activity context" not in str(error):
+            raise
+        return False
 
 
 async def sleep_before_retry(

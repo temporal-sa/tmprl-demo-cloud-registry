@@ -5,6 +5,8 @@ import time
 from datetime import timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from demo_registry_operator.activities import temporal_canary
 
 
@@ -103,6 +105,32 @@ def test_runtime_canary_retries_after_worker_shutdown_cancelled(monkeypatch):
         "execute": 2,
         "exit": 2,
     }
+
+
+def test_runtime_canary_reraises_real_activity_cancellation(monkeypatch):
+    async def cancelled_attempt(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        temporal_canary,
+        "run_temporal_runtime_canary_attempt",
+        cancelled_attempt,
+    )
+    monkeypatch.setattr(
+        temporal_canary.activity,
+        "is_cancelled",
+        lambda: True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            temporal_canary.run_temporal_runtime_canary(
+                API_KEY_CREDENTIAL,
+                timeout_seconds=1,
+                attempt_timeout_seconds=0.2,
+                retry_delay_seconds=0.001,
+            )
+        )
 
 
 def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
