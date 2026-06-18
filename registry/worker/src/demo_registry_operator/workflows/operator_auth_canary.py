@@ -15,11 +15,13 @@ with workflow.unsafe.imports_passed_through():
         RegistryOperatorCanaryRotationWaitRequest,
         RotateRegistryOperatorCanaryCredentialsRequest,
         SignalRegistryOperatorCanaryReconcileRequest,
+        SignalRegistryOperatorCanaryFinalizeRequest,
         WaitRegistryOperatorCanaryCleanupRequest,
         apply_registry_operator_canary_project,
         delete_registry_operator_canary_project,
         prepare_registry_operator_canary_plan,
         rotate_registry_operator_canary_credentials,
+        signal_registry_operator_canary_finalize,
         signal_registry_operator_canary_reconcile,
         wait_for_registry_operator_canary_promotion,
         wait_for_registry_operator_canary_rotation,
@@ -124,6 +126,10 @@ async def _run_registry_operator_auth_canary(
         "phase": "NotStarted",
         "ok": False,
     }
+    finalize_signal_result: dict[str, Any] = {
+        "phase": "NotStarted",
+        "ok": False,
+    }
     rotation_signal_result: dict[str, Any] = {
         "phase": "NotStarted",
         "ok": False,
@@ -195,6 +201,17 @@ async def _run_registry_operator_auth_canary(
         delete_result = delete_activity.status
         cleanup_result = delete_result
         if delete_result.get("phase") != "Skipped":
+            finalize_signal_activity = await workflow.execute_activity(
+                signal_registry_operator_canary_finalize,
+                SignalRegistryOperatorCanaryFinalizeRequest(
+                    project=plan["project"],
+                    demo_project=plan["demoProject"],
+                ),
+                start_to_close_timeout=timedelta(minutes=2),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+            finalize_signal_result = finalize_signal_activity.status
             cleanup_timeout_seconds = max(
                 1,
                 int(plan.get("cleanupTimeoutSeconds", 600)),
@@ -235,5 +252,6 @@ async def _run_registry_operator_auth_canary(
         promotion=promotion_result,
         rotationSignal=rotation_signal_result,
         rotation=rotation_result,
+        finalizeSignal=finalize_signal_result,
         cleanup=cleanup_result,
     )

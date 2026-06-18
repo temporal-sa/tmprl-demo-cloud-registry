@@ -28,6 +28,7 @@ from demo_registry_operator.kube import (
     apply_demo_project,
     delete_demo_project,
     demo_project_finalizers,
+    ensure_demo_project_finalizer,
     read_demo_project,
     read_config_map,
     read_deployment_status,
@@ -55,6 +56,7 @@ from demo_registry_operator.resources import (
 )
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.workflows.messages import (
+    DemoProjectFinalizeSignal,
     DemoProjectReconcileSignal,
     DemoProjectRunRequest,
     ForceReconcileSignal,
@@ -100,6 +102,12 @@ class SignalRegistryOperatorCanaryReconcileRequest:
     demo_project: dict[str, Any]
     target_deployment_name: str
     target_build_id: str
+
+
+@dataclass(frozen=True)
+class SignalRegistryOperatorCanaryFinalizeRequest:
+    project: str
+    demo_project: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -315,6 +323,7 @@ def apply_registry_operator_canary_project(
             demo_project,
             dry_run=False,
         )
+        finalizer_added = ensure_demo_project_finalizer(request.project)
     except ValueError as error:
         raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
     except RuntimeError as error:
@@ -325,6 +334,7 @@ def apply_registry_operator_canary_project(
         "namespace": request.namespace,
         "phase": "Applied",
         "action": action,
+        "finalizerAdded": finalizer_added,
         "checkedAt": datetime.now(UTC).isoformat(),
     })
 
@@ -895,6 +905,48 @@ def delete_registry_operator_canary_project(
         "message": "Canary DemoProject deletion was requested.",
         "checkedAt": datetime.now(UTC).isoformat(),
     })
+
+
+@activity.defn
+def signal_registry_operator_canary_finalize(
+    request: SignalRegistryOperatorCanaryFinalizeRequest,
+) -> RegistryOperatorCanaryActivityResult:
+    return RegistryOperatorCanaryActivityResult(
+        asyncio.run(signal_registry_operator_canary_finalize_async(request))
+    )
+
+
+async def signal_registry_operator_canary_finalize_async(
+    request: SignalRegistryOperatorCanaryFinalizeRequest,
+) -> dict[str, Any]:
+    config = WorkerConfig.from_env()
+    workflow_id = f"demo-project/{request.project}"
+    client = await connect(config)
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        await handle.signal(
+            "finalize",
+            DemoProjectFinalizeSignal(demoProject=request.demo_project),
+        )
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            return {
+                "project": request.project,
+                "phase": "Missing",
+                "ok": True,
+                "workflowID": workflow_id,
+                "message": "Canary DemoProject workflow was already absent.",
+                "checkedAt": datetime.now(UTC).isoformat(),
+            }
+        raise
+    return {
+        "project": request.project,
+        "phase": "Signaled",
+        "ok": True,
+        "workflowID": workflow_id,
+        "message": "Canary DemoProject workflow was signaled to finalize.",
+        "checkedAt": datetime.now(UTC).isoformat(),
+    }
 
 
 @activity.defn

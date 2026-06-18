@@ -165,6 +165,7 @@ class RegistryOperatorAuthCanaryResult:
     promotion: dict[str, Any] = field(default_factory=dict)
     rotationSignal: dict[str, Any] = field(default_factory=dict)
     rotation: dict[str, Any] = field(default_factory=dict)
+    finalizeSignal: dict[str, Any] = field(default_factory=dict)
     cleanup: dict[str, Any] = field(default_factory=dict)
 
 

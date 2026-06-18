@@ -1208,10 +1208,25 @@ def patch_status(
 ) -> None:
     try:
         patch_demo_project_status(name, status, dry_run=False)
-    except Exception:
+    except Exception as error:
+        if missing_demo_project_status_patch_can_be_ignored(error, status):
+            activity.logger.info(
+                "DemoProject status patch skipped because project is already gone "
+                "project=%s phase=%s",
+                name,
+                status.get("phase"),
+            )
+            return
         activity.logger.exception("DemoProject status patch failed project=%s", name)
         if raise_errors:
             raise
+
+
+def missing_demo_project_status_patch_can_be_ignored(
+    error: Exception,
+    status: dict[str, Any],
+) -> bool:
+    return getattr(error, "status", None) == 404 and status.get("phase") == "Finalized"
 
 
 def patch_catalog_status(

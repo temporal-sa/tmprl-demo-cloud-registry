@@ -10,7 +10,10 @@ from jsonschema import Draft202012Validator
 from temporalio.exceptions import ApplicationError
 
 from demo_registry_operator.activities import canary
-from demo_registry_operator.workflows.messages import ForceReconcileSignal
+from demo_registry_operator.workflows.messages import (
+    DemoProjectFinalizeSignal,
+    ForceReconcileSignal,
+)
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.resources import (
     FINALIZATION_POLICY_ANNOTATION,
@@ -1020,6 +1023,7 @@ def test_apply_operator_canary_project_applies_demo_project(monkeypatch):
     }
 
     monkeypatch.setattr(canary, "apply_demo_project", lambda resource, dry_run: "created")
+    monkeypatch.setattr(canary, "ensure_demo_project_finalizer", lambda name: True)
 
     result = canary.apply_registry_operator_canary_project(
         canary.ApplyRegistryOperatorCanaryProjectRequest(
@@ -1030,6 +1034,7 @@ def test_apply_operator_canary_project_applies_demo_project(monkeypatch):
     ).status
 
     assert result["action"] == "created"
+    assert result["finalizerAdded"] is True
 
 
 def test_operator_canary_force_reconcile_signal_passes_args(monkeypatch):
@@ -1066,6 +1071,86 @@ def test_operator_canary_force_reconcile_signal_passes_args(monkeypatch):
         reason="rotate-temporal-auth",
     )
     assert calls[1][2] is None
+
+
+def test_operator_canary_finalize_signal_passes_args(monkeypatch):
+    calls = []
+    demo_project = project(worker=True)
+
+    class FakeHandle:
+        async def signal(self, signal, arg=None, *, args=None, **_kwargs):
+            calls.append((signal, arg, args))
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            calls.append(("handle", workflow_id))
+            return FakeHandle()
+
+    async def fake_connect(_config):
+        return FakeClient()
+
+    monkeypatch.setattr(canary, "connect", fake_connect)
+
+    result = asyncio.run(
+        canary.signal_registry_operator_canary_finalize_async(
+            canary.SignalRegistryOperatorCanaryFinalizeRequest(
+                project="operator-canary-abc123",
+                demo_project=demo_project,
+            )
+        )
+    )
+
+    assert result["phase"] == "Signaled"
+    assert result["workflowID"] == "demo-project/operator-canary-abc123"
+    assert calls[0] == ("handle", "demo-project/operator-canary-abc123")
+    assert calls[1] == (
+        "finalize",
+        DemoProjectFinalizeSignal(demoProject=demo_project),
+        None,
+    )
+
+
+def test_finalized_demo_project_status_ignores_missing_cr(monkeypatch):
+    class MissingDemoProjectError(Exception):
+        status = 404
+
+    calls = []
+
+    def missing_status_patch(name, status, *, dry_run):
+        calls.append((name, status, dry_run))
+        raise MissingDemoProjectError("missing")
+
+    demo_project = {"metadata": {"name": "operator-canary-abc123"}}
+    monkeypatch.setattr(reconcile, "patch_demo_project_status", missing_status_patch)
+
+    result = reconcile.record_demo_project_status(
+        reconcile.RecordDemoProjectStatusRequest(
+            demo_project=demo_project,
+            status={"phase": "Finalized"},
+        )
+    ).status
+
+    assert result["phase"] == "Finalized"
+    assert calls[0][0] == "operator-canary-abc123"
+
+
+def test_non_final_demo_project_status_does_not_ignore_missing_cr(monkeypatch):
+    class MissingDemoProjectError(Exception):
+        status = 404
+
+    def missing_status_patch(name, status, *, dry_run):
+        raise MissingDemoProjectError("missing")
+
+    demo_project = {"metadata": {"name": "operator-canary-abc123"}}
+    monkeypatch.setattr(reconcile, "patch_demo_project_status", missing_status_patch)
+
+    with pytest.raises(MissingDemoProjectError):
+        reconcile.record_demo_project_status(
+            reconcile.RecordDemoProjectStatusRequest(
+                demo_project=demo_project,
+                status={"phase": "Ready"},
+            )
+        )
 
 
 def test_worker_deployment_config_uses_controller_env(monkeypatch):
