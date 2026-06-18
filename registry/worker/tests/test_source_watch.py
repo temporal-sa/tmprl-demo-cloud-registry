@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from temporalio.common import AutoUpgradeVersioningOverride
-
 import demo_registry_operator.watch as watch
 from demo_registry_operator.activities.reconcile import status_with_reconcile_key
 from demo_registry_operator.resources import (
@@ -360,7 +358,7 @@ def test_reconcile_key_changes_with_force_reconcile_token():
     assert reconcile_key(forced) != reconcile_key(forced_again)
 
 
-def test_signal_workflow_starts_with_auto_upgrade_versioning():
+def test_signal_workflow_starts_without_versioning_override():
     calls = []
 
     class TemporalClient:
@@ -387,7 +385,7 @@ def test_signal_workflow_starts_with_auto_upgrade_versioning():
     signal_arg = kwargs["start_signal_args"][0]
     assert isinstance(signal_arg, DemoProjectReconcileSignal)
     assert signal_arg.demoProject["metadata"]["name"] == "banking-money-transfer"
-    assert isinstance(kwargs["versioning_override"], AutoUpgradeVersioningOverride)
+    assert "versioning_override" not in kwargs
 
 
 def test_watch_skips_gate_owned_operator_canary_reconcile(monkeypatch):

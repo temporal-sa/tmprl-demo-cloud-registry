@@ -12,7 +12,6 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from temporalio.client import Client, WorkflowExecutionStatus
-from temporalio.common import AutoUpgradeVersioningOverride
 from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator.config import (
@@ -1171,7 +1170,6 @@ async def signal_workflow(
         args=[DemoProjectRunRequest(project_name=name)],
         id=demo_project_workflow_id(name),
         task_queue=config.task_queue,
-        versioning_override=AutoUpgradeVersioningOverride(),
         start_signal=signal_name,
         start_signal_args=[signal_arg],
     )
@@ -1192,7 +1190,6 @@ async def signal_instruqt_course_workflow(
         args=[InstruqtCourseRunRequest(course_name=name)],
         id=instruqt_course_workflow_id(name),
         task_queue=config.task_queue,
-        versioning_override=AutoUpgradeVersioningOverride(),
         start_signal=signal_name,
         start_signal_args=[signal_arg],
     )

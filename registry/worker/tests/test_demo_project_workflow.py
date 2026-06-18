@@ -338,6 +338,30 @@ def test_check_worker_version_signal_noops_when_target_unchanged(monkeypatch):
     assert workflow._continue_as_new_for_worker_version is False
 
 
+def test_worker_update_continue_as_new_uses_initial_auto_upgrade(monkeypatch):
+    calls = []
+    workflow = workflow_instance()
+    workflow._continue_as_new_for_worker_version = True
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: False),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "continue_as_new",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    workflow._continue_as_new_if_needed("demo")
+
+    assert len(calls) == 1
+    assert calls[0]["initial_versioning_behavior"] == (
+        demo_project_workflow.workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
+    )
+
+
 def test_child_workflow_id_is_scoped_to_reconcile_sequence(monkeypatch):
     workflow = workflow_instance()
     workflow._reconcile_sequence = 7

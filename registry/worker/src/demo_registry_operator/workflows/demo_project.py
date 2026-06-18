@@ -108,8 +108,10 @@ with workflow.unsafe.imports_passed_through():
         ForceReconcileSignal,
         ShutdownSignal,
     )
-    from demo_registry_operator.workflows.demo_project_runtime import (
+    from demo_registry_operator.workflows.demo_project_artifact_build import (
         DemoProjectArtifactBuildWorkflow,
+    )
+    from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
         DemoProjectKubernetesRuntimeWorkflow,
     )
 
@@ -1176,6 +1178,9 @@ class DemoProjectWorkflow:
                     ),
                 )
             ],
+            initial_versioning_behavior=(
+                workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
+            ),
         )
 
     async def _wait_for_next_action(self) -> None:

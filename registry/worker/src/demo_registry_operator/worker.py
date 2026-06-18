@@ -98,14 +98,18 @@ from demo_registry_operator.activities.reconcile import (
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
-from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
-from demo_registry_operator.workflows.demo_project_runtime import (
+from demo_registry_operator.workflows.demo_project_artifact_build import (
     DemoProjectArtifactBuildWorkflow,
+)
+from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
+from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
     DemoProjectKubernetesRuntimeWorkflow,
 )
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
-from demo_registry_operator.workflows.operator_canary import (
+from demo_registry_operator.workflows.operator_auth_canary import (
     RegistryOperatorAuthCanaryWorkflow,
+)
+from demo_registry_operator.workflows.operator_canary import (
     RegistryOperatorCanaryWorkflow,
 )
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow

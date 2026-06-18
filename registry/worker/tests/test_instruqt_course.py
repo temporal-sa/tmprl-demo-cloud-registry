@@ -8,7 +8,6 @@ from urllib.error import HTTPError
 
 import pytest
 import yaml
-from temporalio.common import AutoUpgradeVersioningOverride
 
 import demo_registry_operator.activities.instruqt as instruqt_activities
 import demo_registry_operator.watch as watch
@@ -816,6 +815,27 @@ def test_instruqt_check_worker_version_signal_requests_continue_as_new(monkeypat
     assert workflow._continue_as_new_for_worker_version is True
 
 
+def test_instruqt_worker_update_continue_as_new_uses_initial_auto_upgrade(
+    monkeypatch,
+):
+    calls = []
+    workflow = workflow_instance()
+    workflow._continue_as_new_for_worker_version = True
+
+    monkeypatch.setattr(
+        workflow_module.workflow,
+        "continue_as_new",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    workflow._continue_as_new_if_needed("workflow-fundamentals")
+
+    assert len(calls) == 1
+    assert calls[0]["initial_versioning_behavior"] == (
+        workflow_module.workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
+    )
+
+
 def test_instruqt_course_watch_signals_resolved_source(monkeypatch):
     calls = []
 
@@ -1149,7 +1169,7 @@ def test_instruqt_course_watch_signals_finalize_on_delete(monkeypatch):
     }
 
 
-def test_signal_instruqt_course_workflow_starts_with_auto_upgrade_versioning():
+def test_signal_instruqt_course_workflow_starts_without_versioning_override():
     calls = []
 
     class TemporalClient:
@@ -1178,7 +1198,7 @@ def test_signal_instruqt_course_workflow_starts_with_auto_upgrade_versioning():
     assert signal_arg.instruqtCourse["spec"]["source"]["repo"].endswith(
         "/workflow-fundamentals"
     )
-    assert isinstance(kwargs["versioning_override"], AutoUpgradeVersioningOverride)
+    assert "versioning_override" not in kwargs
 
 
 def test_instruqt_source_watch_uses_shared_platform_auth():

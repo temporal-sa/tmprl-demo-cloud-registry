@@ -800,7 +800,10 @@ class InstruqtCourseWorkflow:
                             self._completed_force_reconcile_token
                         ),
                     )
-                ]
+                ],
+                initial_versioning_behavior=(
+                    workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
+                ),
             )
 
 

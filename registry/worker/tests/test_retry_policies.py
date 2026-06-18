@@ -10,7 +10,11 @@ from demo_registry_operator.errors import (
     PROVIDER_TRANSIENT_ERROR,
     aws_application_error,
 )
-from demo_registry_operator.workflows import demo_project, demo_project_runtime
+from demo_registry_operator.workflows import (
+    demo_project,
+    demo_project_artifact_build,
+    demo_project_kubernetes_runtime,
+)
 
 
 class FakeAwsError(Exception):
@@ -24,9 +28,10 @@ def test_retry_policies_include_non_retryable_error_types():
         demo_project.COMMON_RETRY_POLICY,
         demo_project.STATUS_RETRY_POLICY,
         demo_project.CHECK_RETRY_POLICY,
-        demo_project_runtime.COMMON_RETRY_POLICY,
-        demo_project_runtime.BUILD_WAIT_RETRY_POLICY,
-        demo_project_runtime.CHECK_RETRY_POLICY,
+        demo_project_artifact_build.COMMON_RETRY_POLICY,
+        demo_project_artifact_build.BUILD_WAIT_RETRY_POLICY,
+        demo_project_kubernetes_runtime.COMMON_RETRY_POLICY,
+        demo_project_kubernetes_runtime.CHECK_RETRY_POLICY,
     ]
 
     for policy in policies:
