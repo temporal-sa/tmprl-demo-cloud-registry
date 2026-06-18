@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -349,6 +350,30 @@ def rotation_datetime(rotation: dict[str, Any] | None) -> datetime | None:
     if not isinstance(rotate_at, str) or not rotate_at:
         return None
     return parse_datetime(rotate_at)
+
+
+def temporal_candidate_secret_token(
+    external_plan: Any,
+    *,
+    workflow_id: str,
+    run_id: str,
+    reconcile_sequence: int,
+) -> str:
+    project = external_plan.temporal_project
+    parts = [
+        workflow_id,
+        run_id,
+        str(reconcile_sequence),
+        str(external_plan.checked_at),
+        str(project.name),
+        str(project.namespace),
+        str(project.auth_mode),
+        str(project.runtime_secret_path),
+        str(project.mtls_ca_secret_path),
+    ]
+    payload = "".join(f"{len(part)}:{part}" for part in parts)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return digest[:20]
 
 
 def parse_datetime(value: str) -> datetime | None:
@@ -927,6 +952,12 @@ class DemoProjectWorkflow:
     ) -> dict[str, Any]:
         project = external_plan.temporal_project
         auth_mode = project.auth_mode
+        candidate_secret_token = temporal_candidate_secret_token(
+            external_plan,
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            reconcile_sequence=self._reconcile_sequence,
+        )
         namespace: TemporalCloudNamespaceResult | None = None
         service_account: TemporalCloudServiceAccountResult | None = None
         ca: TemporalCloudCredentialStageResult | None = None
@@ -946,6 +977,7 @@ class DemoProjectWorkflow:
                     StageTemporalMtlsCaRequest(
                         checked_at=external_plan.checked_at,
                         project=project,
+                        candidate_secret_token=candidate_secret_token,
                     ),
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=COMMON_RETRY_POLICY,
@@ -963,7 +995,11 @@ class DemoProjectWorkflow:
             )
             if namespace.phase != "Ready":
                 if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-                    await self._delete_temporal_candidate_secret(external_plan)
+                    await self._delete_temporal_candidate_secret(
+                        external_plan,
+                        ca=ca,
+                        candidate_secret_token=candidate_secret_token,
+                    )
                 return namespace.status
 
             if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
@@ -986,6 +1022,7 @@ class DemoProjectWorkflow:
                         namespace=namespace,
                         ca=ca,
                         force_rotation=external_plan.force_temporal_auth_rotation,
+                        candidate_secret_token=candidate_secret_token,
                     ),
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=COMMON_RETRY_POLICY,
@@ -1010,6 +1047,7 @@ class DemoProjectWorkflow:
                         namespace=namespace,
                         service_account=service_account,
                         force_rotation=external_plan.force_temporal_auth_rotation,
+                        candidate_secret_token=candidate_secret_token,
                     ),
                     start_to_close_timeout=timedelta(minutes=5),
                     heartbeat_timeout=timedelta(minutes=1),
@@ -1075,7 +1113,12 @@ class DemoProjectWorkflow:
                         ca_promoted=ca_promote.ca_promoted,
                     )
                 promoted = True
-                await self._delete_temporal_candidate_secret(external_plan)
+                await self._delete_temporal_candidate_secret(
+                    external_plan,
+                    stage=stage,
+                    ca=ca,
+                    candidate_secret_token=candidate_secret_token,
+                )
             else:
                 promote = stage
 
@@ -1104,20 +1147,39 @@ class DemoProjectWorkflow:
                 namespace=namespace,
                 service_account=service_account,
                 stage=stage,
+                ca=ca,
                 ca_promoted=ca_promoted,
                 promoted=promoted,
+                candidate_secret_token=candidate_secret_token,
             )
             raise
 
     async def _delete_temporal_candidate_secret(
         self,
         external_plan: Any,
+        *,
+        stage: TemporalCloudCredentialStageResult | None = None,
+        ca: TemporalCloudCredentialStageResult | None = None,
+        candidate_secret_token: str | None = None,
     ) -> None:
+        candidate_secret_path = stage.candidate_secret_path if stage else None
+        candidate_ca_secret_path = None
+        if stage and stage.candidate_ca_secret_path:
+            candidate_ca_secret_path = stage.candidate_ca_secret_path
+        elif ca and ca.candidate_ca_secret_path:
+            candidate_ca_secret_path = ca.candidate_ca_secret_path
         await workflow.execute_activity(
             delete_temporal_runtime_candidate_secret,
             DeleteTemporalRuntimeCandidateSecretRequest(
                 checked_at=external_plan.checked_at,
                 project=external_plan.temporal_project,
+                candidate_secret_path=candidate_secret_path,
+                candidate_ca_secret_path=candidate_ca_secret_path,
+                candidate_secret_token=(
+                    candidate_secret_token
+                    or (stage.candidate_secret_token if stage else None)
+                    or (ca.candidate_secret_token if ca else None)
+                ),
             ),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
@@ -1130,8 +1192,10 @@ class DemoProjectWorkflow:
         namespace: TemporalCloudNamespaceResult | None,
         service_account: TemporalCloudServiceAccountResult | None,
         stage: TemporalCloudCredentialStageResult | None,
+        ca: TemporalCloudCredentialStageResult | None,
         ca_promoted: bool,
         promoted: bool,
+        candidate_secret_token: str | None,
     ) -> None:
         if promoted:
             return
@@ -1150,7 +1214,12 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
-        await self._delete_temporal_candidate_secret(external_plan)
+        await self._delete_temporal_candidate_secret(
+            external_plan,
+            stage=stage,
+            ca=ca,
+            candidate_secret_token=candidate_secret_token,
+        )
 
         service_account_id = (
             service_account.service_account_id

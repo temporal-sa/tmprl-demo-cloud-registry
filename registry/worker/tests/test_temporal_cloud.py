@@ -13,6 +13,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     promote_temporal_runtime_secret,
     reconcile_temporal_cloud,
     stage_temporal_api_key_candidate,
+    temporal_mtls_ca_candidate_secret_path,
     temporal_runtime_candidate_secret_path,
 )
 from demo_registry_operator.resources import temporal_mtls_ca_secret_remote_path
@@ -29,6 +30,7 @@ PROJECT = {
     },
 }
 RUNTIME_PATH = "tmprl-dem-cld/banking-money-transfer/temporal"
+CANDIDATE_TOKEN = "1a2b3c4d5e6f7890abcd"
 
 
 class FakeReconciler:
@@ -323,14 +325,17 @@ def test_stage_api_key_candidate_does_not_promote_or_return_token():
             reconciler=reconciler,
             secret_store=secrets,
             checked_at="2026-06-13T00:00:00+00:00",
+            candidate_secret_token=CANDIDATE_TOKEN,
         )
     )
 
-    candidate_path = temporal_runtime_candidate_secret_path(PROJECT)
+    candidate_path = temporal_runtime_candidate_secret_path(PROJECT, CANDIDATE_TOKEN)
     assert status["promoteRequired"] is True
+    assert status["candidateSecretToken"] == CANDIDATE_TOKEN
     assert status["candidateApiKeyId"] == "key-abc"
     assert RUNTIME_PATH not in secrets.store
     assert secrets.store[candidate_path]["apiKey"] == "SECRET-TOKEN-VALUE"
+    assert secrets.store[candidate_path]["candidateSecretToken"] == CANDIDATE_TOKEN
     assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
 
 
@@ -389,6 +394,53 @@ def test_candidate_secret_cleanup_is_idempotent():
     assert candidate_path not in secrets.store
     assert status["deleted"]["runtimeCandidateSecret"] == "scheduled-deletion"
     assert status["deleted"]["mtlsCaCandidateSecret"] == "not-found"
+
+
+def test_candidate_secret_paths_can_be_tokenized_for_no_overlap():
+    assert temporal_runtime_candidate_secret_path(PROJECT, CANDIDATE_TOKEN) == (
+        f"{RUNTIME_PATH}/candidate-{CANDIDATE_TOKEN}"
+    )
+    assert temporal_mtls_ca_candidate_secret_path(PROJECT, CANDIDATE_TOKEN) == (
+        f"{RUNTIME_PATH}/ca-candidate-{CANDIDATE_TOKEN}"
+    )
+
+
+def test_candidate_secret_cleanup_uses_tracked_exact_paths():
+    runtime_candidate_path = temporal_runtime_candidate_secret_path(
+        PROJECT,
+        CANDIDATE_TOKEN,
+    )
+    ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
+        PROJECT,
+        CANDIDATE_TOKEN,
+    )
+    legacy_candidate_path = temporal_runtime_candidate_secret_path(PROJECT)
+    secrets = FakeSecretStore(
+        {
+            runtime_candidate_path: {"apiKey": "SECRET-TOKEN-VALUE"},
+            ca_candidate_path: {"caCert": "CA"},
+            legacy_candidate_path: {"apiKey": "LEGACY"},
+        }
+    )
+
+    status = delete_temporal_runtime_candidate_secret(
+        PROJECT,
+        secret_store=secrets,
+        checked_at="2026-06-13T00:02:00+00:00",
+        candidate_secret_path=runtime_candidate_path,
+        candidate_ca_secret_path=ca_candidate_path,
+        candidate_secret_token=CANDIDATE_TOKEN,
+    )
+
+    assert runtime_candidate_path not in secrets.store
+    assert ca_candidate_path not in secrets.store
+    assert legacy_candidate_path in secrets.store
+    assert status["deleted"]["runtimeCandidateSecret"] == "scheduled-deletion"
+    assert status["deleted"]["mtlsCaCandidateSecret"] == "scheduled-deletion"
+    assert status["paths"] == {
+        "runtimeCandidateSecret": runtime_candidate_path,
+        "mtlsCaCandidateSecret": ca_candidate_path,
+    }
 
 
 def test_existing_namespace_but_missing_key_creates_only_the_key():

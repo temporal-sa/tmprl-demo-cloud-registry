@@ -56,6 +56,7 @@ def stage_temporal_mtls_ca(
         request.project.as_demo_project(),
         secret_store=store,
         checked_at=request.checked_at,
+        candidate_secret_token=request.candidate_secret_token,
     )
     return stage_result(status)
 
@@ -200,6 +201,7 @@ def stage_temporal_api_key_candidate(
             secret_store=store,
             checked_at=request.checked_at,
             force_rotation=request.force_rotation,
+            candidate_secret_token=request.candidate_secret_token,
         )
 
     try:
@@ -228,6 +230,7 @@ def stage_temporal_mtls_client_certificate(
         secret_store=store,
         checked_at=request.checked_at,
         force_client_rotation=request.force_rotation,
+        candidate_secret_token=request.candidate_secret_token,
     )
     return stage_result(status)
 
@@ -335,6 +338,9 @@ def delete_temporal_runtime_candidate_secret(
         request.project.as_demo_project(),
         secret_store=store,
         checked_at=request.checked_at,
+        candidate_secret_path=request.candidate_secret_path,
+        candidate_ca_secret_path=request.candidate_ca_secret_path,
+        candidate_secret_token=request.candidate_secret_token,
     )
     return status_result(status)
 
@@ -726,6 +732,7 @@ def stage_result(status: dict[str, Any]) -> TemporalCloudCredentialStageResult:
         candidate_ca_secret_path=string_value(
             status.get("candidateCaSecretRemotePath")
         ),
+        candidate_secret_token=string_value(status.get("candidateSecretToken")),
     )
 
 

@@ -33,10 +33,12 @@ def test_stage_temporal_mtls_ca_uses_explicit_dataclass_request_without_bootstra
         *,
         secret_store: object,
         checked_at: str,
+        candidate_secret_token: str | None = None,
     ) -> dict[str, Any]:
         captured["stageDemoProject"] = demo_project
         captured["stageSecretStore"] = secret_store
         captured["stageCheckedAt"] = checked_at
+        captured["stageCandidateSecretToken"] = candidate_secret_token
         return {"phase": "Ready"}
 
     monkeypatch.setattr(temporal, "temporal_secret_store", lambda: store)
@@ -58,3 +60,4 @@ def test_stage_temporal_mtls_ca_uses_explicit_dataclass_request_without_bootstra
     assert captured["stageDemoProject"] == PROJECT.as_demo_project()
     assert captured["stageSecretStore"] is store
     assert captured["stageCheckedAt"] == "2026-06-17T00:00:00+00:00"
+    assert captured["stageCandidateSecretToken"] is None

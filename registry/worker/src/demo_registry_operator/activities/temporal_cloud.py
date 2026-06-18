@@ -334,18 +334,45 @@ async def reconcile_temporal_cloud(
     return status
 
 
-def temporal_runtime_candidate_secret_path(demo_project: dict[str, Any]) -> str:
+def temporal_runtime_candidate_secret_path(
+    demo_project: dict[str, Any],
+    candidate_secret_token: str | None = None,
+) -> str:
+    suffix = TEMPORAL_RUNTIME_CANDIDATE_SECRET_SUFFIX
+    token = normalized_candidate_secret_token(candidate_secret_token)
+    if token:
+        suffix = f"{suffix}-{token}"
     return (
         f"{temporal_secret_remote_path(demo_project)}/"
-        f"{TEMPORAL_RUNTIME_CANDIDATE_SECRET_SUFFIX}"
+        f"{suffix}"
     )
 
 
-def temporal_mtls_ca_candidate_secret_path(demo_project: dict[str, Any]) -> str:
+def temporal_mtls_ca_candidate_secret_path(
+    demo_project: dict[str, Any],
+    candidate_secret_token: str | None = None,
+) -> str:
+    suffix = TEMPORAL_MTLS_CA_CANDIDATE_SECRET_SUFFIX
+    token = normalized_candidate_secret_token(candidate_secret_token)
+    if token:
+        suffix = f"{suffix}-{token}"
     return (
         f"{temporal_secret_remote_path(demo_project)}/"
-        f"{TEMPORAL_MTLS_CA_CANDIDATE_SECRET_SUFFIX}"
+        f"{suffix}"
     )
+
+
+def normalized_candidate_secret_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    token = value.strip().lower()
+    if not token:
+        return None
+    if len(token) < 8 or len(token) > 64:
+        raise ValueError("Temporal candidate secret token must be 8-64 hex characters.")
+    if any(char not in "0123456789abcdef" for char in token):
+        raise ValueError("Temporal candidate secret token must be hex.")
+    return token
 
 
 async def ensure_temporal_cloud_namespace(
@@ -466,6 +493,7 @@ def stage_temporal_mtls_ca(
     *,
     secret_store: SecretStore,
     checked_at: str,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
     if not temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
@@ -473,7 +501,11 @@ def stage_temporal_mtls_ca(
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     ca_path = temporal_mtls_ca_secret_remote_path(demo_project)
-    candidate_path = temporal_mtls_ca_candidate_secret_path(demo_project)
+    candidate_path = temporal_mtls_ca_candidate_secret_path(
+        demo_project,
+        candidate_secret_token,
+    )
+    token = normalized_candidate_secret_token(candidate_secret_token)
     existing = secret_store.read_json(ca_path)
     rotation = temporal_mtls_ca_rotation_decision(
         existing,
@@ -494,6 +526,8 @@ def stage_temporal_mtls_ca(
                     "previousCaRemoveAt",
                 }
             }
+            if token:
+                material["candidateSecretToken"] = token
             rotation = cleanup
             action = "cleaned-up"
             promote_required = True
@@ -521,6 +555,8 @@ def stage_temporal_mtls_ca(
             action = "rotated"
         else:
             action = "created"
+        if token:
+            material["candidateSecretToken"] = token
         promote_required = True
         secret_store.write_json(
             candidate_path,
@@ -534,8 +570,9 @@ def stage_temporal_mtls_ca(
         rotation,
         action=action,
         promote_required=promote_required,
+        candidate_path=candidate_path,
     )
-    return {
+    status = {
         "phase": "Ready",
         "provider": "temporal-cloud",
         "mode": "cloud-api",
@@ -548,6 +585,9 @@ def stage_temporal_mtls_ca(
             "caCertificate": ca_status,
         },
     }
+    if token and promote_required:
+        status["candidateSecretToken"] = token
+    return status
 
 
 async def configure_temporal_cloud_namespace_mtls(
@@ -645,6 +685,7 @@ async def stage_temporal_api_key_candidate(
     api_key_ttl_days: int = TEMPORAL_API_KEY_TTL_DAYS,
     rotate_before_days: int = TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
     force_rotation: bool = False,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
     if not temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
@@ -704,7 +745,11 @@ async def stage_temporal_api_key_candidate(
     previous_expiry_time = (
         existing.get("expiryTime") if isinstance(existing, dict) else None
     )
-    candidate_path = temporal_runtime_candidate_secret_path(demo_project)
+    candidate_path = temporal_runtime_candidate_secret_path(
+        demo_project,
+        candidate_secret_token,
+    )
+    token = normalized_candidate_secret_token(candidate_secret_token)
     secret_value: dict[str, Any] = {
         "address": namespace.grpc_address,
         "namespace": namespace.qualified_name,
@@ -721,12 +766,14 @@ async def stage_temporal_api_key_candidate(
         secret_value["previousKeyId"] = previous_key_id
     if previous_expiry_time:
         secret_value["previousExpiryTime"] = previous_expiry_time
+    if token:
+        secret_value["candidateSecretToken"] = token
     secret_store.write_json(
         candidate_path,
         secret_value,
         f"Temporal Cloud candidate runtime credentials for {project_name(demo_project)}",
     )
-    return {
+    status = {
         "phase": "Ready",
         "provider": "temporal-cloud",
         "mode": "cloud-api",
@@ -748,6 +795,9 @@ async def stage_temporal_api_key_candidate(
             previous_key_id=string_optional(previous_key_id),
         ),
     }
+    if token:
+        status["candidateSecretToken"] = token
+    return status
 
 
 def stage_temporal_mtls_client_certificate(
@@ -758,6 +808,7 @@ def stage_temporal_mtls_client_certificate(
     secret_store: SecretStore,
     checked_at: str,
     force_client_rotation: bool = False,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
     if not temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
@@ -766,14 +817,18 @@ def stage_temporal_mtls_client_certificate(
 
     namespace = namespace_info_from_status(namespace_status_value)
     runtime_path = temporal_secret_remote_path(demo_project)
-    candidate_path = temporal_runtime_candidate_secret_path(demo_project)
+    candidate_path = temporal_runtime_candidate_secret_path(
+        demo_project,
+        candidate_secret_token,
+    )
     existing = secret_store.read_json(runtime_path)
+    ca_certificate = nested_dict(ca_status, "mtls", "caCertificate")
     ca_material = read_mtls_ca_material_for_reconcile(
         demo_project,
         secret_store,
         allow_candidate=True,
+        candidate_ca_secret_path=ca_status_candidate_path(ca_certificate),
     )
-    ca_certificate = nested_dict(ca_status, "mtls", "caCertificate")
     ca_promote_required = bool(ca_status.get("promoteRequired"))
     common_name = temporal_mtls_client_common_name(demo_project)
     client_rotation = temporal_mtls_client_rotation_decision(
@@ -843,6 +898,7 @@ def stage_temporal_mtls_client_certificate(
     previous_client_serial = (
         existing.get("clientCertSerialNumber") if isinstance(existing, dict) else None
     )
+    token = normalized_candidate_secret_token(candidate_secret_token)
     secret_value: dict[str, Any] = {
         "authMode": TEMPORAL_AUTH_MODE_MTLS,
         "address": namespace.grpc_address,
@@ -865,6 +921,8 @@ def stage_temporal_mtls_client_certificate(
     }
     if previous_client_serial:
         secret_value["previousClientCertSerialNumber"] = previous_client_serial
+    if token:
+        secret_value["candidateSecretToken"] = token
     secret_store.write_json(
         candidate_path,
         secret_value,
@@ -895,7 +953,7 @@ def stage_temporal_mtls_client_certificate(
     }
     if previous_client_serial:
         client_status["previousClientCertSerialNumber"] = previous_client_serial
-    return {
+    status = {
         "phase": "Ready",
         "provider": "temporal-cloud",
         "mode": "cloud-api",
@@ -917,6 +975,9 @@ def stage_temporal_mtls_client_certificate(
             "clientCertificate": client_status,
         },
     }
+    if token:
+        status["candidateSecretToken"] = token
+    return status
 
 
 async def run_temporal_runtime_candidate_canary(
@@ -1046,14 +1107,29 @@ def delete_temporal_runtime_candidate_secret(
     *,
     secret_store: SecretStore,
     checked_at: str,
+    candidate_secret_path: str | None = None,
+    candidate_ca_secret_path: str | None = None,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
+    runtime_candidate_path = (
+        candidate_secret_path
+        if isinstance(candidate_secret_path, str) and candidate_secret_path
+        else temporal_runtime_candidate_secret_path(
+            demo_project,
+            candidate_secret_token,
+        )
+    )
+    mtls_ca_candidate_path = (
+        candidate_ca_secret_path
+        if isinstance(candidate_ca_secret_path, str) and candidate_ca_secret_path
+        else temporal_mtls_ca_candidate_secret_path(
+            demo_project,
+            candidate_secret_token,
+        )
+    )
     deleted = {
-        "runtimeCandidateSecret": secret_store.delete(
-            temporal_runtime_candidate_secret_path(demo_project)
-        ),
-        "mtlsCaCandidateSecret": secret_store.delete(
-            temporal_mtls_ca_candidate_secret_path(demo_project)
-        ),
+        "runtimeCandidateSecret": secret_store.delete(runtime_candidate_path),
+        "mtlsCaCandidateSecret": secret_store.delete(mtls_ca_candidate_path),
     }
     return {
         "phase": "Deleted",
@@ -1061,6 +1137,10 @@ def delete_temporal_runtime_candidate_secret(
         "mode": "cloud-api",
         "checkedAt": checked_at,
         "deleted": deleted,
+        "paths": {
+            "runtimeCandidateSecret": runtime_candidate_path,
+            "mtlsCaCandidateSecret": mtls_ca_candidate_path,
+        },
     }
 
 
@@ -1222,10 +1302,16 @@ def read_mtls_ca_material_for_reconcile(
     secret_store: SecretStore,
     *,
     allow_candidate: bool,
+    candidate_ca_secret_path: str | None = None,
 ) -> dict[str, Any]:
     material = None
     if allow_candidate:
-        material = secret_store.read_json(temporal_mtls_ca_candidate_secret_path(demo_project))
+        if isinstance(candidate_ca_secret_path, str) and candidate_ca_secret_path:
+            material = secret_store.read_json(candidate_ca_secret_path)
+        if not isinstance(material, dict):
+            material = secret_store.read_json(
+                temporal_mtls_ca_candidate_secret_path(demo_project)
+            )
     if not isinstance(material, dict):
         material = secret_store.read_json(temporal_mtls_ca_secret_remote_path(demo_project))
     if not isinstance(material, dict) or not material.get("caCert"):
@@ -1240,6 +1326,7 @@ def mtls_ca_certificate_status(
     *,
     action: str,
     promote_required: bool,
+    candidate_path: str | None = None,
 ) -> dict[str, Any]:
     status: dict[str, Any] = {
         "action": action,
@@ -1255,8 +1342,8 @@ def mtls_ca_certificate_status(
         },
     }
     if promote_required:
-        status["candidateSecretRemotePath"] = temporal_mtls_ca_candidate_secret_path(
-            demo_project
+        status["candidateSecretRemotePath"] = (
+            candidate_path or temporal_mtls_ca_candidate_secret_path(demo_project)
         )
     if rotation.get("reason"):
         status["rotationReason"] = rotation["reason"]

@@ -17,6 +17,7 @@ from demo_registry_operator.workflows.demo_project import (
     registry_operator_canary_branch_request,
     status_reconcile_identity,
     temporal_api_key_rotation_state,
+    temporal_candidate_secret_token,
 )
 
 
@@ -204,6 +205,42 @@ def test_temporal_api_key_status_sets_rotation_state_and_annotations():
         "rotateAt": "2026-07-03T00:00:00+00:00",
         "rotateBeforeExpiryDays": 10,
     }
+
+
+def test_temporal_candidate_secret_token_is_deterministic_and_sequence_scoped():
+    temporal_project = SimpleNamespace(
+        name="demo",
+        namespace="tmprl-dem-cld-demo.acct1",
+        auth_mode="apiKey",
+        runtime_secret_path="tmprl-dem-cld/demo/temporal",
+        mtls_ca_secret_path="tmprl-dem-cld/demo/temporal/ca",
+    )
+    plan = SimpleNamespace(
+        checked_at="2026-06-17T00:00:00+00:00",
+        temporal_project=temporal_project,
+    )
+
+    token = temporal_candidate_secret_token(
+        plan,
+        workflow_id="DemoProject/demo",
+        run_id="run-1",
+        reconcile_sequence=1,
+    )
+
+    assert token == temporal_candidate_secret_token(
+        plan,
+        workflow_id="DemoProject/demo",
+        run_id="run-1",
+        reconcile_sequence=1,
+    )
+    assert token != temporal_candidate_secret_token(
+        plan,
+        workflow_id="DemoProject/demo",
+        run_id="run-1",
+        reconcile_sequence=2,
+    )
+    assert len(token) == 20
+    int(token, 16)
 
 
 def test_registry_operator_canary_branch_request_splits_auth_modes():
