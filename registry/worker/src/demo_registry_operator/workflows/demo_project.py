@@ -176,6 +176,8 @@ CHECK_RETRY_POLICY = RetryPolicy(
     maximum_attempts=3,
     non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
 )
+TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT = timedelta(minutes=10)
+TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
 FAILED_RECONCILE_PHASES = {
     "CandidateNotReady",
     "Error",
@@ -561,16 +563,18 @@ class DemoProjectWorkflow:
                 checked_at=workflow.now().astimezone(UTC).isoformat(),
                 force_temporal_auth_rotation=force_temporal_auth_rotation,
             )
-            ecr_repositories = []
-            for repository in external_plan.ecr_repositories:
-                ecr_repositories.append(
-                    await workflow.execute_activity(
-                        create_or_verify_ecr_repository,
-                        repository,
-                        start_to_close_timeout=timedelta(minutes=5),
-                        retry_policy=COMMON_RETRY_POLICY,
-                    )
+            ecr_repository_activities = [
+                workflow.execute_activity(
+                    create_or_verify_ecr_repository,
+                    repository,
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=COMMON_RETRY_POLICY,
                 )
+                for repository in external_plan.ecr_repositories
+            ]
+            ecr_repositories = list(
+                await asyncio.gather(*ecr_repository_activities)
+            )
             ecr_status = ecr_repositories_status(external_plan, ecr_repositories)
             temporal_status = await self._reconcile_temporal_cloud(external_plan)
             demo_project = demo_project_with_temporal_api_key(demo_project, temporal_status)
@@ -1080,8 +1084,12 @@ class DemoProjectWorkflow:
                         project=project,
                         stage=stage,
                     ),
-                    start_to_close_timeout=timedelta(minutes=3),
-                    heartbeat_timeout=timedelta(seconds=30),
+                    start_to_close_timeout=(
+                        TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT
+                    ),
+                    heartbeat_timeout=(
+                        TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT
+                    ),
                     retry_policy=CHECK_RETRY_POLICY,
                 )
                 if stage.candidate_ca_secret_path:

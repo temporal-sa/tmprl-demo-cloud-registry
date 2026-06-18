@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from demo_registry_operator.activities import external_resources
 from demo_registry_operator.errors import (
     NON_RETRYABLE_ERROR_TYPES,
@@ -27,6 +29,17 @@ def test_retry_policies_include_non_retryable_error_types():
 
     for policy in policies:
         assert policy.non_retryable_error_types == NON_RETRYABLE_ERROR_TYPES
+
+
+def test_temporal_runtime_candidate_canary_has_rollout_sized_timeouts():
+    assert (
+        demo_project.TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT
+        >= timedelta(minutes=10)
+    )
+    assert (
+        demo_project.TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT
+        >= timedelta(minutes=2)
+    )
 
 
 def test_aws_access_denied_is_non_retryable_provider_authentication_error():
