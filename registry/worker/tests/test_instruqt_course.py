@@ -48,6 +48,11 @@ from demo_registry_operator.workflows.instruqt_course import (
     reconcile_identity,
     status_with_deployment_status,
 )
+from demo_registry_operator.workflows.messages import (
+    ForceReconcileSignal,
+    InstruqtCourseReconcileSignal,
+    InstruqtCourseRunRequest,
+)
 
 
 def course(
@@ -111,6 +116,16 @@ def course(
         },
         "spec": spec,
     }
+
+
+def workflow_instance(
+    name: str = "workflow-fundamentals",
+) -> InstruqtCourseWorkflow:
+    return InstruqtCourseWorkflow(InstruqtCourseRunRequest(course_name=name))
+
+
+def reconcile_signal(instruqt_course: dict[str, Any]) -> InstruqtCourseReconcileSignal:
+    return InstruqtCourseReconcileSignal(instruqtCourse=instruqt_course)
 
 
 def test_reconcile_instruqt_course_records_validated_source_status():
@@ -711,20 +726,24 @@ def test_instruqt_reconcile_key_changes_with_force_reconcile_token():
 
 def test_instruqt_workflow_reconcile_signal_dedupes_completed_identity():
     instruqt_course = course()
-    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow = workflow_instance()
     workflow._completed_reconcile_identity = reconcile_identity(instruqt_course)
 
-    workflow.reconcile(deepcopy(instruqt_course))
+    workflow.reconcile(reconcile_signal(deepcopy(instruqt_course)))
 
     assert workflow._pending_spec is None
     assert workflow._pending_reconcile_identity is None
 
 
 def test_instruqt_workflow_force_reconcile_signal_sets_pending_request_and_dedupes():
-    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow = workflow_instance()
 
-    workflow.force_reconcile(" token-1 ", " manual retry ")
-    workflow.force_reconcile("token-1", "ignored duplicate")
+    workflow.force_reconcile(
+        ForceReconcileSignal(token=" token-1 ", reason=" manual retry ")
+    )
+    workflow.force_reconcile(
+        ForceReconcileSignal(token="token-1", reason="ignored duplicate")
+    )
 
     assert workflow._pending_force_reconcile == {
         "token": "token-1",
@@ -733,7 +752,9 @@ def test_instruqt_workflow_force_reconcile_signal_sets_pending_request_and_dedup
 
     workflow._pending_force_reconcile = None
     workflow._completed_force_reconcile_token = "token-1"
-    workflow.force_reconcile("token-1", "already completed")
+    workflow.force_reconcile(
+        ForceReconcileSignal(token="token-1", reason="already completed")
+    )
 
     assert workflow._pending_force_reconcile is None
 
@@ -741,13 +762,13 @@ def test_instruqt_workflow_force_reconcile_signal_sets_pending_request_and_dedup
 def test_instruqt_workflow_failed_identity_is_not_remembered():
     instruqt_course = course()
     identity = reconcile_identity(instruqt_course)
-    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = identity
     workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Error"}
 
     workflow._complete_current_reconcile()
-    workflow.reconcile(deepcopy(instruqt_course))
+    workflow.reconcile(reconcile_signal(deepcopy(instruqt_course)))
 
     assert workflow._completed_reconcile_identity is None
     assert workflow._completed_force_reconcile_token is None
@@ -757,7 +778,7 @@ def test_instruqt_workflow_failed_identity_is_not_remembered():
 
 def test_instruqt_successful_force_reconcile_token_is_remembered_as_completed():
     instruqt_course = course()
-    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = reconcile_identity(instruqt_course)
     workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Ready"}
@@ -781,7 +802,7 @@ def test_instruqt_status_with_deployment_status_promotes_waiting_for_images():
 
 
 def test_instruqt_check_worker_version_signal_requests_continue_as_new(monkeypatch):
-    workflow = InstruqtCourseWorkflow("workflow-fundamentals")
+    workflow = workflow_instance()
     monkeypatch.setattr(
         workflow_module.workflow,
         "info",
@@ -1149,7 +1170,12 @@ def test_signal_instruqt_course_workflow_starts_with_auto_upgrade_versioning():
     assert kwargs["id"] == "instruqt-course/workflow-fundamentals"
     assert kwargs["task_queue"] == "registry-management"
     assert kwargs["start_signal"] == "reconcile"
-    assert kwargs["start_signal_args"][0]["spec"]["source"]["repo"].endswith(
+    assert kwargs["args"] == [
+        InstruqtCourseRunRequest(course_name="workflow-fundamentals")
+    ]
+    signal_arg = kwargs["start_signal_args"][0]
+    assert isinstance(signal_arg, InstruqtCourseReconcileSignal)
+    assert signal_arg.instruqtCourse["spec"]["source"]["repo"].endswith(
         "/workflow-fundamentals"
     )
     assert isinstance(kwargs["versioning_override"], AutoUpgradeVersioningOverride)

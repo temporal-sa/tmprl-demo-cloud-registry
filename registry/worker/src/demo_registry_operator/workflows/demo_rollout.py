@@ -17,6 +17,10 @@ with workflow.unsafe.imports_passed_through():
         run_smoke_check,
     )
     from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
+    from demo_registry_operator.workflows.messages import (
+        DemoRolloutRequest,
+        DemoRolloutResult,
+    )
 
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -40,8 +44,17 @@ class DemoRolloutWorkflow:
     """Smoke-test-gated rollout workflow for a demo update."""
 
     @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        plan = plan_rollout(request)
+    async def run(self, request: DemoRolloutRequest) -> DemoRolloutResult:
+        plan = plan_rollout(
+            {
+                "project": request.project,
+                "sourceCommitSha": request.sourceCommitSha,
+                "demoProject": request.demoProject,
+                "host": request.host,
+                "candidate": request.candidate,
+                "smokeCheck": request.smokeCheck,
+            }
+        )
         smoke_activity = await workflow.execute_activity(
             run_smoke_check,
             SmokeCheckRequest(
@@ -56,11 +69,16 @@ class DemoRolloutWorkflow:
         )
         smoke_result = smoke_activity.status
         if not smoke_result.get("ok"):
-            return {
+            status = {
                 "project": plan.get("project"),
                 "phase": "SmokeCheckFailed",
                 "smokeCheck": smoke_result,
             }
+            return DemoRolloutResult(
+                project=plan.get("project"),
+                phase="SmokeCheckFailed",
+                status=status,
+            )
 
         promotion_result = await workflow.execute_activity(
             promote_candidate_routes,
@@ -74,12 +92,17 @@ class DemoRolloutWorkflow:
         )
         promotion = promotion_result.status
         prune_status = await self._prune_rollout_candidate(plan, promotion)
-        return {
+        status = {
             **promotion,
             "pruneStatus": prune_status,
             "prunedResources": prune_status.get("resources", []),
             "smokeCheck": smoke_result,
         }
+        return DemoRolloutResult(
+            project=status.get("project", plan.get("project")),
+            phase=status.get("phase", "Unknown"),
+            status=status,
+        )
 
     async def _prune_rollout_candidate(
         self,

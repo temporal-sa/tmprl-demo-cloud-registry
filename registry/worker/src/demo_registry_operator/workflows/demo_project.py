@@ -124,6 +124,14 @@ with workflow.unsafe.imports_passed_through():
         resource_without_force_reconcile,
         worker_deployment_rollout_wait_seconds,
     )
+    from demo_registry_operator.workflows.messages import (
+        CheckWorkerVersionSignal,
+        DemoProjectFinalizeSignal,
+        DemoProjectReconcileSignal,
+        DemoProjectRunRequest,
+        ForceReconcileSignal,
+        ShutdownSignal,
+    )
 
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
@@ -375,17 +383,9 @@ class DemoProjectWorkflow:
     @workflow.init
     def __init__(
         self,
-        project_name: str,
-        carried_status: dict[str, Any] | None = None,
-        carried_pending_spec: dict[str, Any] | None = None,
-        carried_last_build_status: dict[str, Any] | None = None,
-        carried_completed_reconcile_identity: dict[str, str] | None = None,
-        carried_last_demo_project: dict[str, Any] | None = None,
-        carried_temporal_api_key_rotation: dict[str, Any] | None = None,
-        carried_pending_force_reconcile: dict[str, str] | None = None,
-        carried_completed_force_reconcile_token: str | None = None,
+        request: DemoProjectRunRequest,
     ) -> None:
-        self._project_name = project_name
+        self._project_name = request.project_name
         self._pending_spec: dict[str, Any] | None = None
         self._pending_reconcile_identity: dict[str, str] | None = None
         self._current_reconcile_identity: dict[str, str] | None = None
@@ -409,16 +409,9 @@ class DemoProjectWorkflow:
     @workflow.run
     async def run(
         self,
-        project_name: str,
-        carried_status: dict[str, Any] | None = None,
-        carried_pending_spec: dict[str, Any] | None = None,
-        carried_last_build_status: dict[str, Any] | None = None,
-        carried_completed_reconcile_identity: dict[str, str] | None = None,
-        carried_last_demo_project: dict[str, Any] | None = None,
-        carried_temporal_api_key_rotation: dict[str, Any] | None = None,
-        carried_pending_force_reconcile: dict[str, str] | None = None,
-        carried_completed_force_reconcile_token: str | None = None,
+        request: DemoProjectRunRequest,
     ) -> None:
+        project_name = request.project_name
         self._project_name = project_name
         # Do NOT clobber a pending spec set by a start signal. With
         # SignalWithStart the reconcile signal is delivered on the first workflow
@@ -426,38 +419,44 @@ class DemoProjectWorkflow:
         # unconditionally assigning carried_pending_spec (None on a fresh start)
         # would wipe it, leaving wait_condition permanently false. Only adopt a
         # spec actually carried over from continue-as-new.
-        if carried_pending_spec is not None:
-            self._pending_spec = carried_pending_spec
-            self._pending_reconcile_identity = reconcile_identity(carried_pending_spec)
-        if carried_last_build_status is not None:
-            self._last_build_status = carried_last_build_status
-        if carried_last_demo_project is not None:
-            self._last_demo_project = carried_last_demo_project
-        if carried_temporal_api_key_rotation is not None:
-            self._temporal_api_key_rotation = carried_temporal_api_key_rotation
-        if carried_pending_force_reconcile is not None:
-            self._pending_force_reconcile = carried_pending_force_reconcile
-        if carried_completed_force_reconcile_token is not None:
+        if request.carried_pending_spec is not None:
+            self._pending_spec = request.carried_pending_spec
+            self._pending_reconcile_identity = reconcile_identity(
+                request.carried_pending_spec
+            )
+        if request.carried_last_build_status is not None:
+            self._last_build_status = request.carried_last_build_status
+        if request.carried_last_demo_project is not None:
+            self._last_demo_project = request.carried_last_demo_project
+        if request.carried_temporal_api_key_rotation is not None:
+            self._temporal_api_key_rotation = (
+                request.carried_temporal_api_key_rotation
+            )
+        if request.carried_pending_force_reconcile is not None:
+            self._pending_force_reconcile = request.carried_pending_force_reconcile
+        if request.carried_completed_force_reconcile_token is not None:
             self._completed_force_reconcile_token = (
-                carried_completed_force_reconcile_token
+                request.carried_completed_force_reconcile_token
             )
         if (
-            carried_completed_reconcile_identity is not None
-            and remember_completed_reconcile_identity(carried_status)
+            request.carried_completed_reconcile_identity is not None
+            and remember_completed_reconcile_identity(request.carried_status)
         ):
-            self._completed_reconcile_identity = carried_completed_reconcile_identity
-        if carried_status is not None:
-            self._status = carried_status
+            self._completed_reconcile_identity = (
+                request.carried_completed_reconcile_identity
+            )
+        if request.carried_status is not None:
+            self._status = request.carried_status
             if self._last_build_status is None:
                 self._last_build_status = rememberable_build_status(
-                    carried_status.get("buildStatus")
+                    request.carried_status.get("buildStatus")
                 )
             if (
                 self._completed_reconcile_identity is None
-                and remember_completed_reconcile_identity(carried_status)
+                and remember_completed_reconcile_identity(request.carried_status)
             ):
                 self._completed_reconcile_identity = status_reconcile_identity(
-                    carried_status
+                    request.carried_status
                 )
         else:
             self._status = {
@@ -895,7 +894,8 @@ class DemoProjectWorkflow:
         }
 
     @workflow.signal
-    def reconcile(self, demo_project: dict[str, Any]) -> None:
+    def reconcile(self, request: DemoProjectReconcileSignal) -> None:
+        demo_project = request.demoProject
         identity = reconcile_identity(demo_project)
         if self._is_duplicate_reconcile_signal(identity):
             return
@@ -903,8 +903,8 @@ class DemoProjectWorkflow:
         self._pending_reconcile_identity = identity
 
     @workflow.signal
-    def force_reconcile(self, token: str, reason: str | None = None) -> None:
-        request = force_reconcile_request(token, reason)
+    def force_reconcile(self, signal: ForceReconcileSignal) -> None:
+        request = force_reconcile_request(signal.token, signal.reason)
         if request is None:
             return
         token = request["token"]
@@ -917,17 +917,20 @@ class DemoProjectWorkflow:
         self._pending_force_reconcile = request
 
     @workflow.signal
-    def check_worker_version(self) -> None:
+    def check_worker_version(
+        self,
+        _signal: CheckWorkerVersionSignal = CheckWorkerVersionSignal(),
+    ) -> None:
         if workflow.info().is_target_worker_deployment_version_changed():
             self._continue_as_new_for_worker_version = True
 
     @workflow.signal
-    def finalize(self, demo_project: dict[str, Any]) -> None:
-        self._finalize_spec = demo_project
+    def finalize(self, request: DemoProjectFinalizeSignal) -> None:
+        self._finalize_spec = request.demoProject
         self._finalize = True
 
     @workflow.signal
-    def shutdown(self) -> None:
+    def shutdown(self, _signal: ShutdownSignal = ShutdownSignal()) -> None:
         self._shutdown = True
 
     async def _reconcile_temporal_cloud(
@@ -1477,15 +1480,25 @@ class DemoProjectWorkflow:
         self._continue_as_new_for_worker_version = False
         workflow.continue_as_new(
             args=[
-                project_name,
-                self._status,
-                self._pending_spec,
-                self._last_build_status,
-                self._completed_reconcile_identity,
-                self._last_demo_project,
-                self._temporal_api_key_rotation,
-                self._pending_force_reconcile,
-                self._completed_force_reconcile_token,
+                DemoProjectRunRequest(
+                    project_name=project_name,
+                    carried_status=self._status,
+                    carried_pending_spec=self._pending_spec,
+                    carried_last_build_status=self._last_build_status,
+                    carried_completed_reconcile_identity=(
+                        self._completed_reconcile_identity
+                    ),
+                    carried_last_demo_project=self._last_demo_project,
+                    carried_temporal_api_key_rotation=(
+                        self._temporal_api_key_rotation
+                    ),
+                    carried_pending_force_reconcile=(
+                        self._pending_force_reconcile
+                    ),
+                    carried_completed_force_reconcile_token=(
+                        self._completed_force_reconcile_token
+                    ),
+                )
             ],
         )
 

@@ -13,6 +13,7 @@ from demo_registry_operator.activities.external_resources import ecr
 from demo_registry_operator.activities.external_resources import models as external_models
 from demo_registry_operator.activities.external_resources import secrets
 from demo_registry_operator.activities.external_resources import temporal
+from demo_registry_operator.workflows import messages as workflow_messages
 
 
 ACTIVITY_BOUNDARY_MODULES = (
@@ -27,6 +28,8 @@ ACTIVITY_BOUNDARY_MODULES = (
     temporal,
     build_planning,
 )
+
+WORKFLOW_BOUNDARY_MODULES = (workflow_messages,)
 
 
 def test_activity_boundary_dataclasses_use_concrete_annotations():
@@ -48,6 +51,17 @@ def test_activity_functions_use_concrete_annotations():
                 not isinstance(annotation, str)
                 for annotation in function.__annotations__.values()
             ), function
+
+
+def test_workflow_boundary_dataclasses_use_concrete_annotations():
+    for module in WORKFLOW_BOUNDARY_MODULES:
+        for payload_type in module_dataclasses(module):
+            hints = get_type_hints(payload_type)
+            assert hints
+            assert all(
+                not isinstance(annotation, str)
+                for annotation in payload_type.__annotations__.values()
+            ), payload_type
 
 
 def module_dataclasses(module: ModuleType) -> list[type]:

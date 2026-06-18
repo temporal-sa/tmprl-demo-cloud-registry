@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from temporalio.api.batch.v1 import message_pb2 as batch_pb2
+from temporalio.api.common.v1 import message_pb2 as common_pb2
 from temporalio.api.workflowservice.v1 import request_response_pb2 as workflowservice_pb2
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
@@ -104,6 +105,7 @@ from demo_registry_operator.workflows.operator_canary import (
     RegistryOperatorCanaryWorkflow,
 )
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
+from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
 
 
 logging.basicConfig(level=logging.INFO)
@@ -344,6 +346,15 @@ async def signal_running_entity_workflows_for_worker_update(
     query = running_entity_workflows_query()
     try:
         job_id = worker_update_batch_job_id()
+        signal_operation = batch_pb2.BatchOperationSignal(
+            signal=signal_name,
+            identity="registry-operator-worker-update",
+        )
+        if signal_name == CHECK_WORKER_VERSION_SIGNAL:
+            payloads = await temporal_client.data_converter.encode(
+                [CheckWorkerVersionSignal()]
+            )
+            signal_operation.input.CopyFrom(common_pb2.Payloads(payloads=payloads))
         await temporal_client.workflow_service.start_batch_operation(
             workflowservice_pb2.StartBatchOperationRequest(
                 namespace=temporal_client.namespace,
@@ -353,10 +364,7 @@ async def signal_running_entity_workflows_for_worker_update(
                     "Ask running registry entity workflows to continue-as-new "
                     "if their target WorkerDeployment version changed."
                 ),
-                signal_operation=batch_pb2.BatchOperationSignal(
-                    signal=signal_name,
-                    identity="registry-operator-worker-update",
-                ),
+                signal_operation=signal_operation,
             ),
             retry=True,
         )
@@ -400,7 +408,10 @@ async def signal_running_entity_workflows_individually(
                 execution.id,
                 run_id=execution.run_id,
             )
-            await handle.signal(signal_name)
+            if signal_name == CHECK_WORKER_VERSION_SIGNAL:
+                await handle.signal(signal_name, CheckWorkerVersionSignal())
+            else:
+                await handle.signal(signal_name)
             signaled += 1
         except Exception:
             logger.warning(

@@ -28,6 +28,12 @@ with workflow.unsafe.imports_passed_through():
         wait_registry_operator_canary_cleanup,
     )
     from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
+    from demo_registry_operator.workflows.messages import (
+        RegistryOperatorAuthCanaryRequest,
+        RegistryOperatorAuthCanaryResult,
+        RegistryOperatorCanaryRequest,
+        RegistryOperatorCanaryResult,
+    )
 
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -51,7 +57,10 @@ class RegistryOperatorCanaryWorkflow:
     """End-to-end gate workflow for registry-operator WorkerDeployment rollouts."""
 
     @workflow.run
-    async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        request: RegistryOperatorCanaryRequest,
+    ) -> RegistryOperatorCanaryResult:
         workflow_info = workflow.info()
         branch_requests = [
             registry_operator_canary_branch_request(
@@ -80,15 +89,13 @@ class RegistryOperatorCanaryWorkflow:
                 for branch_request in branch_requests
             )
         )
-        canaries = {
-            str(result.get("authMode")): result for result in canary_results
-        }
-        ok = all(result.get("phase") == "Succeeded" for result in canary_results)
-        result = {
-            "phase": "Succeeded" if ok else "Failed",
-            "canaries": canaries,
-        }
-        if result["phase"] != "Succeeded":
+        canaries = {result.authMode: result for result in canary_results}
+        ok = all(result.phase == "Succeeded" for result in canary_results)
+        result = RegistryOperatorCanaryResult(
+            phase="Succeeded" if ok else "Failed",
+            canaries=canaries,
+        )
+        if result.phase != "Succeeded":
             raise ApplicationError(
                 "Registry operator canary failed; one or more auth-mode canaries did not pass",
                 result,
@@ -103,43 +110,39 @@ class RegistryOperatorAuthCanaryWorkflow:
     """Single auth-mode branch for a registry-operator rollout canary."""
 
     @workflow.run
-    async def run(self, branch_request: dict[str, Any]) -> dict[str, Any]:
-        auth_mode = str(branch_request.get("authMode") or "")
+    async def run(
+        self,
+        branch_request: RegistryOperatorAuthCanaryRequest,
+    ) -> RegistryOperatorAuthCanaryResult:
+        auth_mode = branch_request.authMode
         return await _run_registry_operator_auth_canary(branch_request, auth_mode)
 
 
 async def _run_registry_operator_auth_canary(
-    branch_request: dict[str, Any],
+    branch_request: RegistryOperatorAuthCanaryRequest,
     auth_mode: str,
-) -> dict[str, Any]:
+) -> RegistryOperatorAuthCanaryResult:
     plan_result = await workflow.execute_activity(
         prepare_registry_operator_canary_plan,
         RegistryOperatorCanaryPlanRequest(
             demo_project_template=(
-                branch_request.get("demoProjectTemplate")
-                or branch_request.get("demoProject")
+                branch_request.demoProjectTemplate
+                or branch_request.demoProject
                 or {}
             ),
-            workflow_id=branch_request["workflowID"],
-            run_id=branch_request["runID"],
-            project_name_prefix=branch_request.get(
-                "projectNamePrefix",
-                "operator-canary",
-            ),
-            project_name=branch_request.get("projectName"),
-            expected_source_commit_sha=branch_request.get("expectedSourceCommitSha"),
-            expected_images=branch_request.get("expectedImages"),
-            auth_mode=branch_request.get("authMode"),
-            expected_operator_image=branch_request.get("expectedOperatorImage"),
-            expected_operator_source_sha=branch_request.get(
-                "expectedOperatorSourceSha"
-            ),
-            timeout_seconds=int(branch_request.get("timeoutSeconds", 900)),
-            poll_seconds=int(branch_request.get("pollSeconds", 10)),
-            cleanup_timeout_seconds=int(
-                branch_request.get("cleanupTimeoutSeconds", 600)
-            ),
-            cleanup_policy=str(branch_request.get("cleanupPolicy", "Always")),
+            workflow_id=branch_request.workflowID,
+            run_id=branch_request.runID,
+            project_name_prefix=branch_request.projectNamePrefix,
+            project_name=branch_request.projectName,
+            expected_source_commit_sha=branch_request.expectedSourceCommitSha,
+            expected_images=branch_request.expectedImages,
+            auth_mode=branch_request.authMode,
+            expected_operator_image=branch_request.expectedOperatorImage,
+            expected_operator_source_sha=branch_request.expectedOperatorSourceSha,
+            timeout_seconds=int(branch_request.timeoutSeconds),
+            poll_seconds=int(branch_request.pollSeconds),
+            cleanup_timeout_seconds=int(branch_request.cleanupTimeoutSeconds),
+            cleanup_policy=str(branch_request.cleanupPolicy),
         ),
         start_to_close_timeout=timedelta(minutes=2),
         retry_policy=COMMON_RETRY_POLICY,
@@ -279,38 +282,47 @@ async def _run_registry_operator_auth_canary(
             cleanup_result = cleanup_activity.status
 
     succeeded = promotion_ok and rotation_ok and bool(cleanup_result.get("ok"))
-    return {
-        "project": plan.get("project"),
-        "authMode": auth_mode,
-        "phase": "Succeeded" if succeeded else "Failed",
-        "plan": plan,
-        "apply": apply_result,
-        "workflow": signal_result,
-        "promotion": promotion_result,
-        "rotationSignal": rotation_signal_result,
-        "rotation": rotation_result,
-        "cleanup": cleanup_result,
-    }
+    return RegistryOperatorAuthCanaryResult(
+        project=plan.get("project"),
+        authMode=auth_mode,
+        phase="Succeeded" if succeeded else "Failed",
+        plan=plan,
+        apply=apply_result,
+        workflow=signal_result,
+        promotion=promotion_result,
+        rotationSignal=rotation_signal_result,
+        rotation=rotation_result,
+        cleanup=cleanup_result,
+    )
 
 
 def registry_operator_canary_branch_request(
-    request: dict[str, Any],
+    request: RegistryOperatorCanaryRequest,
     *,
     auth_mode: str,
     workflow_id: str,
     run_id: str,
-) -> dict[str, Any]:
+) -> RegistryOperatorAuthCanaryRequest:
     suffix = "api-key" if auth_mode == "apiKey" else auth_mode
-    prefix = request.get("projectNamePrefix")
+    prefix = request.projectNamePrefix
     prefix = prefix if isinstance(prefix, str) and prefix else "operator-canary"
-    rendered = {
-        **request,
-        "authMode": auth_mode,
-        "workflowID": f"{workflow_id}/{auth_mode}",
-        "runID": run_id,
-        "projectNamePrefix": f"{prefix}-{suffix}",
-    }
-    project_name = request.get("projectName")
+    project_name = request.projectName
     if isinstance(project_name, str) and project_name:
-        rendered["projectName"] = f"{project_name}-{suffix}"
-    return rendered
+        project_name = f"{project_name}-{suffix}"
+    return RegistryOperatorAuthCanaryRequest(
+        workflowID=f"{workflow_id}/{auth_mode}",
+        runID=run_id,
+        authMode=auth_mode,
+        projectNamePrefix=f"{prefix}-{suffix}",
+        projectName=project_name,
+        demoProjectTemplate=request.demoProjectTemplate,
+        demoProject=request.demoProject,
+        expectedSourceCommitSha=request.expectedSourceCommitSha,
+        expectedImages=request.expectedImages,
+        expectedOperatorImage=request.expectedOperatorImage,
+        expectedOperatorSourceSha=request.expectedOperatorSourceSha,
+        timeoutSeconds=request.timeoutSeconds,
+        pollSeconds=request.pollSeconds,
+        cleanupTimeoutSeconds=request.cleanupTimeoutSeconds,
+        cleanupPolicy=request.cleanupPolicy,
+    )

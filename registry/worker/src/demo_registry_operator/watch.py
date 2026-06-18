@@ -80,6 +80,14 @@ from demo_registry_operator.resources import (
 )
 from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
+from demo_registry_operator.workflows.messages import (
+    DemoProjectFinalizeSignal,
+    DemoProjectReconcileSignal,
+    DemoProjectRunRequest,
+    InstruqtCourseFinalizeSignal,
+    InstruqtCourseReconcileSignal,
+    InstruqtCourseRunRequest,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1154,17 +1162,18 @@ async def signal_workflow(
     level-triggered: a missed or duplicate signal converges on the next resync.
     """
     name = project_name(demo_project)
+    signal_arg = demo_project_signal_request(signal_name, demo_project)
     # SignalWithStart: signals the existing run if present, otherwise starts the
     # workflow and signals it. (Do not set id_conflict_policy here — combined with
     # start_signal it suppresses delivery to an already-running workflow.)
     await temporal_client.start_workflow(
         DemoProjectWorkflow.run,
-        args=[name],
+        args=[DemoProjectRunRequest(project_name=name)],
         id=demo_project_workflow_id(name),
         task_queue=config.task_queue,
         versioning_override=AutoUpgradeVersioningOverride(),
         start_signal=signal_name,
-        start_signal_args=[demo_project],
+        start_signal_args=[signal_arg],
     )
     logger.info("Signaled %s for project=%s", signal_name, name)
 
@@ -1177,16 +1186,39 @@ async def signal_instruqt_course_workflow(
 ) -> None:
     """Signal the course entity workflow, starting it if absent."""
     name = project_name(instruqt_course)
+    signal_arg = instruqt_course_signal_request(signal_name, instruqt_course)
     await temporal_client.start_workflow(
         InstruqtCourseWorkflow.run,
-        args=[name],
+        args=[InstruqtCourseRunRequest(course_name=name)],
         id=instruqt_course_workflow_id(name),
         task_queue=config.task_queue,
         versioning_override=AutoUpgradeVersioningOverride(),
         start_signal=signal_name,
-        start_signal_args=[instruqt_course],
+        start_signal_args=[signal_arg],
     )
     logger.info("Signaled %s for instruqt_course=%s", signal_name, name)
+
+
+def demo_project_signal_request(
+    signal_name: str,
+    demo_project: dict[str, Any],
+) -> DemoProjectReconcileSignal | DemoProjectFinalizeSignal:
+    if signal_name == "reconcile":
+        return DemoProjectReconcileSignal(demoProject=demo_project)
+    if signal_name == "finalize":
+        return DemoProjectFinalizeSignal(demoProject=demo_project)
+    raise ValueError(f"Unsupported DemoProject signal {signal_name!r}")
+
+
+def instruqt_course_signal_request(
+    signal_name: str,
+    instruqt_course: dict[str, Any],
+) -> InstruqtCourseReconcileSignal | InstruqtCourseFinalizeSignal:
+    if signal_name == "reconcile":
+        return InstruqtCourseReconcileSignal(instruqtCourse=instruqt_course)
+    if signal_name == "finalize":
+        return InstruqtCourseFinalizeSignal(instruqtCourse=instruqt_course)
+    raise ValueError(f"Unsupported InstruqtCourse signal {signal_name!r}")
 
 
 def demo_project_workflow_id(name: str) -> str:

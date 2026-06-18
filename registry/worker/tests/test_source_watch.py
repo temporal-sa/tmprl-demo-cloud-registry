@@ -33,6 +33,10 @@ from demo_registry_operator.watch import (
     source_commit_from_revision,
     workflow_signal_payload,
 )
+from demo_registry_operator.workflows.messages import (
+    DemoProjectReconcileSignal,
+    DemoProjectRunRequest,
+)
 
 
 def project(
@@ -377,6 +381,12 @@ def test_signal_workflow_starts_with_auto_upgrade_versioning():
     assert kwargs["id"] == "demo-project/banking-money-transfer"
     assert kwargs["task_queue"] == "registry-management"
     assert kwargs["start_signal"] == "reconcile"
+    assert kwargs["args"] == [
+        DemoProjectRunRequest(project_name="banking-money-transfer")
+    ]
+    signal_arg = kwargs["start_signal_args"][0]
+    assert isinstance(signal_arg, DemoProjectReconcileSignal)
+    assert signal_arg.demoProject["metadata"]["name"] == "banking-money-transfer"
     assert isinstance(kwargs["versioning_override"], AutoUpgradeVersioningOverride)
 
 

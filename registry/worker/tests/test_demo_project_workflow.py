@@ -21,6 +21,12 @@ from demo_registry_operator.workflows.demo_project import (
 from demo_registry_operator.workflows.operator_canary import (
     registry_operator_canary_branch_request,
 )
+from demo_registry_operator.workflows.messages import (
+    DemoProjectReconcileSignal,
+    DemoProjectRunRequest,
+    ForceReconcileSignal,
+    RegistryOperatorCanaryRequest,
+)
 
 
 def project(
@@ -51,13 +57,21 @@ def project(
     }
 
 
+def workflow_instance(name: str = "demo") -> DemoProjectWorkflow:
+    return DemoProjectWorkflow(DemoProjectRunRequest(project_name=name))
+
+
+def reconcile_signal(demo_project: dict[str, Any]) -> DemoProjectReconcileSignal:
+    return DemoProjectReconcileSignal(demoProject=demo_project)
+
+
 def test_reconcile_signal_noops_when_same_identity_is_pending():
     demo_project = project()
     duplicate = deepcopy(demo_project)
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
 
-    workflow.reconcile(demo_project)
-    workflow.reconcile(duplicate)
+    workflow.reconcile(reconcile_signal(demo_project))
+    workflow.reconcile(reconcile_signal(duplicate))
 
     assert workflow._pending_spec is demo_project
     assert workflow._pending_reconcile_identity == reconcile_identity(demo_project)
@@ -65,10 +79,10 @@ def test_reconcile_signal_noops_when_same_identity_is_pending():
 
 def test_reconcile_signal_noops_when_same_identity_is_currently_pursued():
     demo_project = project()
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = reconcile_identity(demo_project)
 
-    workflow.reconcile(deepcopy(demo_project))
+    workflow.reconcile(reconcile_signal(deepcopy(demo_project)))
 
     assert workflow._pending_spec is None
     assert workflow._pending_reconcile_identity is None
@@ -76,20 +90,24 @@ def test_reconcile_signal_noops_when_same_identity_is_currently_pursued():
 
 def test_reconcile_signal_noops_when_same_identity_is_completed():
     demo_project = project()
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._completed_reconcile_identity = reconcile_identity(demo_project)
 
-    workflow.reconcile(deepcopy(demo_project))
+    workflow.reconcile(reconcile_signal(deepcopy(demo_project)))
 
     assert workflow._pending_spec is None
     assert workflow._pending_reconcile_identity is None
 
 
 def test_force_reconcile_signal_sets_pending_request_and_dedupes():
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
 
-    workflow.force_reconcile(" token-1 ", " manual retry ")
-    workflow.force_reconcile("token-1", "ignored duplicate")
+    workflow.force_reconcile(
+        ForceReconcileSignal(token=" token-1 ", reason=" manual retry ")
+    )
+    workflow.force_reconcile(
+        ForceReconcileSignal(token="token-1", reason="ignored duplicate")
+    )
 
     assert workflow._pending_force_reconcile == {
         "token": "token-1",
@@ -98,7 +116,9 @@ def test_force_reconcile_signal_sets_pending_request_and_dedupes():
 
     workflow._pending_force_reconcile = None
     workflow._completed_force_reconcile_token = "token-1"
-    workflow.force_reconcile("token-1", "already completed")
+    workflow.force_reconcile(
+        ForceReconcileSignal(token="token-1", reason="already completed")
+    )
 
     assert workflow._pending_force_reconcile is None
 
@@ -106,13 +126,13 @@ def test_force_reconcile_signal_sets_pending_request_and_dedupes():
 def test_failed_reconcile_identity_is_not_remembered_as_completed():
     demo_project = project()
     identity = reconcile_identity(demo_project)
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = identity
     workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Error"}
 
     workflow._complete_current_reconcile()
-    workflow.reconcile(deepcopy(demo_project))
+    workflow.reconcile(reconcile_signal(deepcopy(demo_project)))
 
     assert workflow._completed_reconcile_identity is None
     assert workflow._completed_force_reconcile_token is None
@@ -122,7 +142,7 @@ def test_failed_reconcile_identity_is_not_remembered_as_completed():
 
 def test_successful_force_reconcile_token_is_remembered_as_completed():
     demo_project = project()
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = reconcile_identity(demo_project)
     workflow._current_force_reconcile_token = "manual-1"
     workflow._status = {"phase": "Promoted"}
@@ -144,10 +164,10 @@ def test_failed_status_is_not_a_rememberable_completed_identity():
 def test_reconcile_signal_accepts_same_digest_with_different_sha():
     current = project(source_commit_sha="1111111111111111111111111111111111111111")
     updated = project(source_commit_sha="2222222222222222222222222222222222222222")
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._current_reconcile_identity = reconcile_identity(current)
 
-    workflow.reconcile(updated)
+    workflow.reconcile(reconcile_signal(updated))
 
     assert workflow._pending_spec is updated
     assert workflow._pending_reconcile_identity == reconcile_identity(updated)
@@ -156,10 +176,10 @@ def test_reconcile_signal_accepts_same_digest_with_different_sha():
 def test_reconcile_signal_accepts_same_source_with_changed_spec_key():
     current = project(generation=1)
     updated = project(generation=2)
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     workflow._completed_reconcile_identity = reconcile_identity(current)
 
-    workflow.reconcile(updated)
+    workflow.reconcile(reconcile_signal(updated))
 
     assert workflow._pending_spec is updated
     assert workflow._pending_reconcile_identity == reconcile_identity(updated)
@@ -246,11 +266,11 @@ def test_temporal_candidate_secret_token_is_deterministic_and_sequence_scoped():
 
 
 def test_registry_operator_canary_branch_request_splits_auth_modes():
-    request = {
-        "projectNamePrefix": "operator-canary",
-        "projectName": "manual-canary",
-        "demoProjectTemplate": {"metadata": {"name": "template"}, "spec": {}},
-    }
+    request = RegistryOperatorCanaryRequest(
+        projectNamePrefix="operator-canary",
+        projectName="manual-canary",
+        demoProjectTemplate={"metadata": {"name": "template"}, "spec": {}},
+    )
 
     api_key = registry_operator_canary_branch_request(
         request,
@@ -265,20 +285,20 @@ def test_registry_operator_canary_branch_request_splits_auth_modes():
         run_id="run-1",
     )
 
-    assert api_key["authMode"] == "apiKey"
-    assert api_key["workflowID"] == "gate/run/apiKey"
-    assert api_key["projectNamePrefix"] == "operator-canary-api-key"
-    assert api_key["projectName"] == "manual-canary-api-key"
-    assert mtls["authMode"] == "mtls"
-    assert mtls["workflowID"] == "gate/run/mtls"
-    assert mtls["projectNamePrefix"] == "operator-canary-mtls"
-    assert mtls["projectName"] == "manual-canary-mtls"
+    assert api_key.authMode == "apiKey"
+    assert api_key.workflowID == "gate/run/apiKey"
+    assert api_key.projectNamePrefix == "operator-canary-api-key"
+    assert api_key.projectName == "manual-canary-api-key"
+    assert mtls.authMode == "mtls"
+    assert mtls.workflowID == "gate/run/mtls"
+    assert mtls.projectNamePrefix == "operator-canary-mtls"
+    assert mtls.projectName == "manual-canary-mtls"
 
 
 def test_check_worker_version_signal_requests_continue_as_new_when_target_changed(
     monkeypatch,
 ):
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     monkeypatch.setattr(
         demo_project_workflow.workflow,
         "info",
@@ -293,7 +313,7 @@ def test_check_worker_version_signal_requests_continue_as_new_when_target_change
 
 
 def test_check_worker_version_signal_noops_when_target_unchanged(monkeypatch):
-    workflow = DemoProjectWorkflow("demo")
+    workflow = workflow_instance()
     monkeypatch.setattr(
         demo_project_workflow.workflow,
         "info",

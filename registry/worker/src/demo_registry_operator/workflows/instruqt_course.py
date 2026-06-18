@@ -62,6 +62,14 @@ with workflow.unsafe.imports_passed_through():
         metadata_annotations,
         resource_without_force_reconcile,
     )
+    from demo_registry_operator.workflows.messages import (
+        CheckWorkerVersionSignal,
+        ForceReconcileSignal,
+        InstruqtCourseFinalizeSignal,
+        InstruqtCourseReconcileSignal,
+        InstruqtCourseRunRequest,
+        ShutdownSignal,
+    )
 
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
@@ -224,16 +232,9 @@ class InstruqtCourseWorkflow:
     @workflow.init
     def __init__(
         self,
-        course_name: str,
-        carried_status: dict[str, Any] | None = None,
-        carried_pending_spec: dict[str, Any] | None = None,
-        carried_last_build_status: dict[str, Any] | None = None,
-        carried_last_testing_build_status: dict[str, Any] | None = None,
-        carried_completed_reconcile_identity: dict[str, str] | None = None,
-        carried_pending_force_reconcile: dict[str, str] | None = None,
-        carried_completed_force_reconcile_token: str | None = None,
+        request: InstruqtCourseRunRequest,
     ) -> None:
-        self._course_name = course_name
+        self._course_name = request.course_name
         self._pending_spec: dict[str, Any] | None = None
         self._pending_reconcile_identity: dict[str, str] | None = None
         self._current_reconcile_identity: dict[str, str] | None = None
@@ -256,52 +257,52 @@ class InstruqtCourseWorkflow:
     @workflow.run
     async def run(
         self,
-        course_name: str,
-        carried_status: dict[str, Any] | None = None,
-        carried_pending_spec: dict[str, Any] | None = None,
-        carried_last_build_status: dict[str, Any] | None = None,
-        carried_last_testing_build_status: dict[str, Any] | None = None,
-        carried_completed_reconcile_identity: dict[str, str] | None = None,
-        carried_pending_force_reconcile: dict[str, str] | None = None,
-        carried_completed_force_reconcile_token: str | None = None,
+        request: InstruqtCourseRunRequest,
     ) -> None:
+        course_name = request.course_name
         self._course_name = course_name
-        if carried_pending_spec is not None:
-            self._pending_spec = carried_pending_spec
-            self._pending_reconcile_identity = reconcile_identity(carried_pending_spec)
-        if carried_last_build_status is not None:
-            self._last_build_status = carried_last_build_status
-        if carried_last_testing_build_status is not None:
-            self._last_testing_build_status = carried_last_testing_build_status
-        if (
-            carried_completed_reconcile_identity is not None
-            and remember_completed_reconcile_identity(carried_status)
-        ):
-            self._completed_reconcile_identity = carried_completed_reconcile_identity
-        if carried_pending_force_reconcile is not None:
-            self._pending_force_reconcile = carried_pending_force_reconcile
-        if carried_completed_force_reconcile_token is not None:
-            self._completed_force_reconcile_token = (
-                carried_completed_force_reconcile_token
+        if request.carried_pending_spec is not None:
+            self._pending_spec = request.carried_pending_spec
+            self._pending_reconcile_identity = reconcile_identity(
+                request.carried_pending_spec
             )
-        if carried_status is not None:
-            self._status = carried_status
+        if request.carried_last_build_status is not None:
+            self._last_build_status = request.carried_last_build_status
+        if request.carried_last_testing_build_status is not None:
+            self._last_testing_build_status = (
+                request.carried_last_testing_build_status
+            )
+        if (
+            request.carried_completed_reconcile_identity is not None
+            and remember_completed_reconcile_identity(request.carried_status)
+        ):
+            self._completed_reconcile_identity = (
+                request.carried_completed_reconcile_identity
+            )
+        if request.carried_pending_force_reconcile is not None:
+            self._pending_force_reconcile = request.carried_pending_force_reconcile
+        if request.carried_completed_force_reconcile_token is not None:
+            self._completed_force_reconcile_token = (
+                request.carried_completed_force_reconcile_token
+            )
+        if request.carried_status is not None:
+            self._status = request.carried_status
             if self._last_build_status is None:
                 self._last_build_status = rememberable_instruqt_build_status(
-                    carried_status.get("buildStatus")
+                    request.carried_status.get("buildStatus")
                 )
             if self._last_testing_build_status is None:
-                testing = carried_status.get("testing")
+                testing = request.carried_status.get("testing")
                 testing = testing if isinstance(testing, dict) else {}
                 self._last_testing_build_status = rememberable_instruqt_build_status(
                     testing.get("buildStatus")
                 )
             if (
                 self._completed_reconcile_identity is None
-                and remember_completed_reconcile_identity(carried_status)
+                and remember_completed_reconcile_identity(request.carried_status)
             ):
                 self._completed_reconcile_identity = status_reconcile_identity(
-                    carried_status
+                    request.carried_status
                 )
         else:
             self._status = {
@@ -432,7 +433,8 @@ class InstruqtCourseWorkflow:
         }
 
     @workflow.signal
-    def reconcile(self, instruqt_course: dict[str, Any]) -> None:
+    def reconcile(self, request: InstruqtCourseReconcileSignal) -> None:
+        instruqt_course = request.instruqtCourse
         identity = reconcile_identity(instruqt_course)
         if self._is_duplicate_reconcile_signal(identity):
             return
@@ -440,8 +442,8 @@ class InstruqtCourseWorkflow:
         self._pending_reconcile_identity = identity
 
     @workflow.signal
-    def force_reconcile(self, token: str, reason: str | None = None) -> None:
-        request = force_reconcile_request(token, reason)
+    def force_reconcile(self, signal: ForceReconcileSignal) -> None:
+        request = force_reconcile_request(signal.token, signal.reason)
         if request is None:
             return
         token = request["token"]
@@ -454,17 +456,20 @@ class InstruqtCourseWorkflow:
         self._pending_force_reconcile = request
 
     @workflow.signal
-    def check_worker_version(self) -> None:
+    def check_worker_version(
+        self,
+        _signal: CheckWorkerVersionSignal = CheckWorkerVersionSignal(),
+    ) -> None:
         if workflow.info().is_target_worker_deployment_version_changed():
             self._continue_as_new_for_worker_version = True
 
     @workflow.signal
-    def finalize(self, instruqt_course: dict[str, Any]) -> None:
-        self._finalize_spec = instruqt_course
+    def finalize(self, request: InstruqtCourseFinalizeSignal) -> None:
+        self._finalize_spec = request.instruqtCourse
         self._finalize = True
 
     @workflow.signal
-    def shutdown(self) -> None:
+    def shutdown(self, _signal: ShutdownSignal = ShutdownSignal()) -> None:
         self._shutdown = True
 
     async def _reconcile_testing_channel(
@@ -777,14 +782,24 @@ class InstruqtCourseWorkflow:
             self._continue_as_new_for_worker_version = False
             workflow.continue_as_new(
                 args=[
-                    course_name,
-                    self._status,
-                    self._pending_spec,
-                    self._last_build_status,
-                    self._last_testing_build_status,
-                    self._completed_reconcile_identity,
-                    self._pending_force_reconcile,
-                    self._completed_force_reconcile_token,
+                    InstruqtCourseRunRequest(
+                        course_name=course_name,
+                        carried_status=self._status,
+                        carried_pending_spec=self._pending_spec,
+                        carried_last_build_status=self._last_build_status,
+                        carried_last_testing_build_status=(
+                            self._last_testing_build_status
+                        ),
+                        carried_completed_reconcile_identity=(
+                            self._completed_reconcile_identity
+                        ),
+                        carried_pending_force_reconcile=(
+                            self._pending_force_reconcile
+                        ),
+                        carried_completed_force_reconcile_token=(
+                            self._completed_force_reconcile_token
+                        ),
+                    )
                 ]
             )
 

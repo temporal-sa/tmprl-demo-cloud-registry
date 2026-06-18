@@ -54,6 +54,11 @@ from demo_registry_operator.resources import (
     temporal_auth_mode,
 )
 from demo_registry_operator.temporal_client import connect
+from demo_registry_operator.workflows.messages import (
+    DemoProjectReconcileSignal,
+    DemoProjectRunRequest,
+    ForceReconcileSignal,
+)
 
 
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
@@ -725,7 +730,10 @@ async def signal_registry_operator_canary_force_reconcile_async(
     workflow_id = f"demo-project/{string_field(plan, 'project')}"
     client = await connect(config)
     handle = client.get_workflow_handle(workflow_id)
-    await handle.signal("force_reconcile", args=[token, reason])
+    await handle.signal(
+        "force_reconcile",
+        ForceReconcileSignal(token=token, reason=reason),
+    )
     return {
         "phase": "Signaled",
         "workflowID": workflow_id,
@@ -1045,11 +1053,13 @@ async def signal_registry_operator_canary_reconcile_async(
     client = await connect(config)
     handle = await client.start_workflow(
         "DemoProjectWorkflow",
-        args=[name],
+        args=[DemoProjectRunRequest(project_name=name)],
         id=workflow_id,
         task_queue=config.task_queue,
         start_signal="reconcile",
-        start_signal_args=[demo_project],
+        start_signal_args=[
+            DemoProjectReconcileSignal(demoProject=demo_project),
+        ],
         versioning_override=PinnedVersioningOverride(
             WorkerDeploymentVersion(
                 deployment_name=deployment_name,

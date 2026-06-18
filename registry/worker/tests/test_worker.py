@@ -4,8 +4,10 @@ import asyncio
 from types import SimpleNamespace
 
 from temporalio.common import WorkerDeploymentVersion
+from temporalio.converter import DataConverter
 
 from demo_registry_operator import worker
+from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
 
 
 def test_worker_deployment_info_current_matches_target_version():
@@ -67,6 +69,7 @@ def test_signal_running_entity_workflows_uses_batch_operation(monkeypatch):
     client = SimpleNamespace(
         namespace="default",
         workflow_service=WorkflowService(),
+        data_converter=DataConverter.default,
     )
 
     monkeypatch.setattr(
@@ -85,6 +88,13 @@ def test_signal_running_entity_workflows_uses_batch_operation(monkeypatch):
     assert request.namespace == "default"
     assert request.visibility_query == worker.running_entity_workflows_query()
     assert request.signal_operation.signal == worker.CHECK_WORKER_VERSION_SIGNAL
+    decoded = asyncio.run(
+        DataConverter.default.decode(
+            list(request.signal_operation.input.payloads),
+            [CheckWorkerVersionSignal],
+        )
+    )
+    assert decoded == [CheckWorkerVersionSignal()]
     assert kwargs["retry"] is True
 
 
@@ -100,8 +110,8 @@ def test_signal_running_entity_workflows_falls_back_to_individual_signals():
             self.workflow_id = workflow_id
             self.run_id = run_id
 
-        async def signal(self, signal_name: str):
-            signaled.append((self.workflow_id, self.run_id, signal_name))
+        async def signal(self, signal_name: str, arg=None):
+            signaled.append((self.workflow_id, self.run_id, signal_name, arg))
 
     class WorkflowIterator:
         def __init__(self):
@@ -144,6 +154,16 @@ def test_signal_running_entity_workflows_falls_back_to_individual_signals():
     assert client.query == worker.running_entity_workflows_query()
     assert client.page_size == 100
     assert signaled == [
-        ("demo-project/one", "run-1", worker.CHECK_WORKER_VERSION_SIGNAL),
-        ("demo-project/two", "run-2", worker.CHECK_WORKER_VERSION_SIGNAL),
+        (
+            "demo-project/one",
+            "run-1",
+            worker.CHECK_WORKER_VERSION_SIGNAL,
+            CheckWorkerVersionSignal(),
+        ),
+        (
+            "demo-project/two",
+            "run-2",
+            worker.CHECK_WORKER_VERSION_SIGNAL,
+            CheckWorkerVersionSignal(),
+        ),
     ]

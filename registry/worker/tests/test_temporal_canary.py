@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from demo_registry_operator.activities import temporal_canary
+from demo_registry_operator.workflows.messages import (
+    TemporalRuntimeCredentialCanaryRequest,
+)
 
 
 API_KEY_CREDENTIAL = {
@@ -192,6 +195,9 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
     assert calls["connect"]["api_key"] == "candidate-key"
     assert calls["connect"]["tls"] is True
     assert calls["workflow"]["execution_timeout"] == timedelta(seconds=5)
+    request = calls["workflow"]["request"]
+    assert isinstance(request, TemporalRuntimeCredentialCanaryRequest)
+    assert request.authMode == "apiKey"
     assert calls["workflow"]["run_timeout"] == timedelta(seconds=5)
     assert calls["workflow"]["task_timeout"] == timedelta(seconds=5)
     assert calls["workflow"]["rpc_timeout"] == timedelta(seconds=3)

@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from temporalio.exceptions import ApplicationError
 
 from demo_registry_operator.activities import canary
+from demo_registry_operator.workflows.messages import ForceReconcileSignal
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.resources import (
     FINALIZATION_POLICY_ANNOTATION,
@@ -1010,8 +1011,11 @@ def test_operator_canary_force_reconcile_signal_passes_args(monkeypatch):
     assert result["workflowID"] == "demo-project/operator-canary-abc123"
     assert calls[0] == ("handle", "demo-project/operator-canary-abc123")
     assert calls[1][0] == "force_reconcile"
-    assert calls[1][1] is unset
-    assert calls[1][2] == ["rotation-token", "rotate-temporal-auth"]
+    assert calls[1][1] == ForceReconcileSignal(
+        token="rotation-token",
+        reason="rotate-temporal-auth",
+    )
+    assert calls[1][2] is None
 
 
 def test_worker_deployment_config_uses_controller_env(monkeypatch):
