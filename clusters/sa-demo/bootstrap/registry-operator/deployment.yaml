@@ -21,7 +21,7 @@ spec:
       serviceAccountName: registry-operator
       containers:
         - name: watch
-          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/worker:git-ae9e00d56d5f
+          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/worker:git-c44b36380890
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
