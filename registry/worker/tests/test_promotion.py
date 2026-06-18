@@ -270,7 +270,7 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
         "worker": {
             "versioning": {
                 "enabled": True,
-                "taskQueue": "versioned-worker",
+                "deploymentName": "versioned-worker",
             }
         },
     }

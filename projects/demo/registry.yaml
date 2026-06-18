@@ -113,7 +113,6 @@ spec:
       worker:
         versioning:
           enabled: true
-          taskQueue: registry-operator
           rollout:
             strategy: AllAtOnce
             gate:

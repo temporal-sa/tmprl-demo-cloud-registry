@@ -99,10 +99,12 @@ tmprl-dem-cld/<project-name>/source-auth
 
 ## Worker Versioning (only when the app uses it)
 
-Use the object form. `taskQueue` lives here because it is consumed only by
-versioning (it becomes the Worker Deployment Name). Worker Controller injects
-`TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_DEPLOYMENT_NAME`, and
-`TEMPORAL_WORKER_BUILD_ID`; do not author those values in `env`.
+Use the object form. `deploymentName` is optional and identifies the Worker
+Deployment managed by the operator; when omitted it defaults to the component
+name. Worker Controller injects `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`,
+`TEMPORAL_DEPLOYMENT_NAME`, and `TEMPORAL_WORKER_BUILD_ID`; do not author those
+values in `env`. Task queues are app-owned routing names; configure them through
+generic component `env` only when the app needs an env-driven task queue value.
 
 ```yaml
 spec:
@@ -112,7 +114,7 @@ spec:
       worker:
         versioning:
           enabled: true
-          taskQueue: money-transfer
+          deploymentName: money-transfer
           rollout:
             strategy: AllAtOnce
             gate:

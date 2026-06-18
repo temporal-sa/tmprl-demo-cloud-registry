@@ -189,8 +189,9 @@ that need an inspectable UI without Temporal Cloud creds; TTL cleanup workflow.
   `scripts/generate_projects.py`, `clusters/sa-demo/generated/`, and the
   `--check` CI gate were removed.
 - **Authoring stays thin.** `worker: true` marks a Temporal worker; versioning is
-  the object form `worker.versioning` (with `taskQueue`, consumed only there as
-  the Worker Deployment Name). Defaults: `source.branch`→`main`,
+  the object form `worker.versioning` with optional `deploymentName` for the
+  Worker Deployment identity. Task queues remain app-owned routing names.
+  Defaults: `source.branch`→`main`,
   `ingress.routes`→catch-all to the `servicePort: 80` component, single unnamed
   port→`http`, `smokeCheck` omitted→promote on readiness (no probe), `registry`
   block optional (title falls back to a humanized name). `temporalAccess: true`

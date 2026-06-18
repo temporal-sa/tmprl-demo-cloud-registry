@@ -268,16 +268,19 @@ Rules:
 - Switching between `apiKey` and `mtls` is destructive because Temporal Cloud
   namespaces cannot enable both at once. Finalize the project first so the
   existing namespace is deleted, then deploy it again with the new auth mode.
-- Worker versioning is opt-in via the object form: `components.<name>.worker.versioning`
-  with `enabled`, `taskQueue`, and optional `rollout`/`sunset` settings.
-  `taskQueue` is consumed only here (as the Worker Deployment Name), so it lives
-  under `versioning`. Do not hard-code worker build/version env values in
-  `components.<name>.env`; Worker Controller injects `TEMPORAL_DEPLOYMENT_NAME`
-  and `TEMPORAL_WORKER_BUILD_ID`. For versioned workers, Worker Controller also
-  owns `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE`; the runtime secret only
-  supplies `TEMPORAL_API_KEY` and `TEMPORAL_TLS`. mTLS is currently blocked with
-  Worker Controller versioning until the Connection CRD supports client
-  certificate refs.
+- Worker versioning is opt-in via the object form:
+  `components.<name>.worker.versioning` with `enabled`, optional
+  `deploymentName`, and optional `rollout`/`sunset` settings. `deploymentName`
+  is the Worker Deployment identity managed by the operator; when omitted it
+  defaults to the component name. Do not hard-code worker build/version env
+  values in `components.<name>.env`; Worker Controller injects
+  `TEMPORAL_DEPLOYMENT_NAME` and `TEMPORAL_WORKER_BUILD_ID`. For versioned
+  workers, Worker Controller also owns `TEMPORAL_ADDRESS` and
+  `TEMPORAL_NAMESPACE`; the runtime secret only supplies `TEMPORAL_API_KEY` and
+  `TEMPORAL_TLS`. Task queues are app-owned routing names; configure them with
+  generic component env when the app needs an env-driven value. mTLS is
+  currently blocked with Worker Controller versioning until the Connection CRD
+  supports client certificate refs.
 - For non-versioned workers and API components, the platform injects standard
   Temporal env vars. API-key projects receive `TEMPORAL_ADDRESS`,
   `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and `TEMPORAL_TLS`. mTLS projects

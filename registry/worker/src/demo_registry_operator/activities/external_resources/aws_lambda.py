@@ -70,7 +70,6 @@ def ensure_lambda_function(
         "timeoutSeconds": request.timeout_seconds,
         "deploymentName": request.deployment_name,
         "buildId": request.build_id,
-        "taskQueue": request.task_queue,
         "temporalAuthMode": "apiKey" if temporal_secret.get("apiKey") else "mtls",
     }
     return EnsureLambdaFunctionResult(
@@ -407,7 +406,6 @@ def lambda_environment(
             "HOME": "/tmp",
             "TEMPORAL_ADDRESS": str(temporal_secret["address"]),
             "TEMPORAL_NAMESPACE": str(temporal_secret["namespace"]),
-            "TEMPORAL_TASK_QUEUE": request.task_queue,
             "TEMPORAL_DEPLOYMENT_NAME": request.deployment_name,
             "TEMPORAL_WORKER_DEPLOYMENT_NAME": request.deployment_name,
             "TEMPORAL_WORKER_BUILD_ID": request.build_id,

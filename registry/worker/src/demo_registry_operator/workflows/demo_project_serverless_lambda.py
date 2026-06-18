@@ -31,7 +31,6 @@ with workflow.unsafe.imports_passed_through():
         serverless_config,
         temporal_secret_remote_path,
         worker_deployment_name,
-        worker_versioning,
     )
     from demo_registry_operator.workflows.messages import (
         DemoProjectServerlessLambdaRequest,
@@ -120,14 +119,6 @@ class DemoProjectServerlessLambdaWorkflow:
                 "message": f"Build {build_name!r} does not have a resolved image.",
             }
 
-        versioning = worker_versioning(component)
-        task_queue = versioning.get("taskQueue") if isinstance(versioning, dict) else None
-        if not isinstance(task_queue, str) or not task_queue:
-            return {
-                "phase": "InvalidConfiguration",
-                "message": "Serverless Lambda worker requires worker.versioning.taskQueue.",
-            }
-
         project = project_name(demo_project)
         deployment_name = worker_deployment_name(component_name, component)
         function_name = lambda_function_name(project, component_name)
@@ -159,7 +150,6 @@ class DemoProjectServerlessLambdaWorkflow:
                 timeout_seconds=int(serverless.get("timeoutSeconds", 600)),
                 deployment_name=deployment_name,
                 build_id=build_id,
-                task_queue=task_queue,
                 temporal_secret_path=temporal_secret_remote_path(demo_project),
                 env=literal_env(component),
             ),
@@ -205,7 +195,6 @@ class DemoProjectServerlessLambdaWorkflow:
             ),
             "deploymentName": deployment_name,
             "buildId": build_id,
-            "taskQueue": task_queue,
             "image": image_uri,
             "steps": {
                 "executionRole": execution_role.status,
@@ -254,4 +243,3 @@ def aggregate_phase(statuses: dict[str, Any]) -> str:
     if phases and phases <= {"Ready", "NotRequired"}:
         return "Ready"
     return "Unknown"
-

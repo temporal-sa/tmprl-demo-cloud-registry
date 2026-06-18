@@ -165,7 +165,7 @@ def test_mtls_auth_rejects_temporal_proxy_and_worker_versioning():
         "worker": {
             "versioning": {
                 "enabled": True,
-                "taskQueue": "worker",
+                "deploymentName": "worker",
             }
         },
     }
@@ -199,7 +199,7 @@ def test_schema_accepts_serverless_lambda_component():
         "worker": {
             "versioning": {
                 "enabled": True,
-                "taskQueue": "worker",
+                "deploymentName": "worker",
             }
         },
     }
@@ -213,6 +213,29 @@ def test_schema_accepts_serverless_lambda_component():
     assert errors == []
 
 
+def test_schema_rejects_worker_versioning_task_queue_field():
+    spec = base_spec()
+    spec["components"]["app"] = {
+        "build": "app",
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "taskQueue": "app",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert len(errors) == 1
+    assert "schema error at spec.components.app.worker" in errors[0].message
+    assert "taskQueue" in errors[0].message
+
+
 def test_mtls_auth_allows_serverless_lambda_worker_versioning():
     spec = base_spec()
     spec["temporal"] = {"auth": {"mode": "mtls"}}
@@ -222,7 +245,7 @@ def test_mtls_auth_allows_serverless_lambda_worker_versioning():
         "worker": {
             "versioning": {
                 "enabled": True,
-                "taskQueue": "worker",
+                "deploymentName": "worker",
             }
         },
     }

@@ -3119,7 +3119,6 @@ def serverless_workers_summary(value: Any) -> dict[str, Any]:
                 "phase": component.get("phase"),
                 "deploymentName": component.get("deploymentName"),
                 "buildId": component.get("buildId"),
-                "taskQueue": component.get("taskQueue"),
             }
             for name, component in components.items()
             if isinstance(name, str) and isinstance(component, dict)
@@ -3660,8 +3659,12 @@ def kubernetes_versioned_worker_components(
 
 def worker_deployment_name(component_name: str, component: dict[str, Any]) -> str:
     versioning = worker_versioning(component)
-    task_queue = versioning.get("taskQueue") if isinstance(versioning, dict) else None
-    return dns_label(task_queue if isinstance(task_queue, str) else component_name)
+    deployment_name = (
+        versioning.get("deploymentName") if isinstance(versioning, dict) else None
+    )
+    return dns_label(
+        deployment_name if isinstance(deployment_name, str) else component_name
+    )
 
 
 def temporal_components(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:

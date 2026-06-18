@@ -110,7 +110,6 @@ class EnsureLambdaFunctionRequest:
     timeout_seconds: int
     deployment_name: str
     build_id: str
-    task_queue: str
     temporal_secret_path: str
     env: dict[str, str]
 

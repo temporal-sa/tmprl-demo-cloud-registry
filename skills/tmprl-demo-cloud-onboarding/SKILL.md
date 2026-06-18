@@ -147,17 +147,19 @@ the operator fill in the rest.
      those remain explicit config.
    - **Worker versioning — ask explicitly.**
      - If the repo already uses Worker Versioning, suggest the object form and
-       help shape it: `worker.versioning` with `enabled: true`, the `taskQueue`
-       (this becomes the Worker Deployment Name), optional `rollout` strategy
-       and gate settings, and optional `sunset` delays. Do not map app-specific
-       build/deployment env names; Worker Controller injects
+       help shape it: `worker.versioning` with `enabled: true`, optional
+       `deploymentName` (the Worker Deployment identity; defaults to the
+       component name), optional `rollout` strategy and gate settings, and
+       optional `sunset` delays. Do not map app-specific build/deployment env
+       names; Worker Controller injects
        `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_DEPLOYMENT_NAME`,
        and `TEMPORAL_WORKER_BUILD_ID`; the runtime secret supplies
-       `TEMPORAL_API_KEY` and `TEMPORAL_TLS`.
+       `TEMPORAL_API_KEY` and `TEMPORAL_TLS`. Task queues are app-owned routing
+       names; configure them through generic component `env` only when the app
+       needs an env-driven task queue value.
      - If the repo does **not** use versioning, prompt the SA: *"This worker
        isn't using Temporal Worker Versioning — do you want to enable it?"* If
-       no, use the shorthand `worker: true` (no `taskQueue` needed — it's only
-       consumed by versioning, and the app keeps its own task-queue default).
+       no, use the shorthand `worker: true`.
    - **Mark Temporal access correctly.** `worker: true` workers get credentials
      automatically. Set `temporalAccess: true` on any **non-worker** component
      that starts or queries workflows (e.g. an API/backend) — without it the
@@ -182,6 +184,9 @@ the operator fill in the rest.
      - `ingress.routes` can be omitted — the operator exposes a single catch-all
        to the component serving `servicePort: 80`. Declare routes explicitly only
        for multi-route ingress or when no component serves 80.
+     - `ingress.routes[].passHostHeader` defaults to `true`. Set it `false` only
+       when an upstream app rejects the public `tmprl-demo.cloud` Host header
+       and can safely receive Traefik's upstream host instead.
      - Public demo URLs are HTTPS; HTTP redirects to HTTPS. `ingress.temporalAuthRequired`
        defaults to `true`; set it `false` only for reviewed public demos.
      - A lone port needs no `name` (becomes `http`); `servicePort` defaults to
@@ -205,7 +210,10 @@ the operator fill in the rest.
      in component env vars or metadata links when the app genuinely needs them.
    - Keep `source.repo` in the `temporal-sa` GitHub organization.
    - Declare every container image under `builds`; the operator derives ECR
-     repositories and immutable `git-<source-sha>` tags.
+     repositories and immutable tags. Dockerfile-only demos use
+     `git-<source-sha>`. Buildpack demos include the build definition hash in
+     the version so changes to buildpack env/processes produce a new image and
+     deployment.
 
 7. Document custom secrets exactly.
    - Required path format: `tmprl-dem-cld/<project-name>/<secret-name>`.
@@ -234,8 +242,8 @@ python3 scripts/validate_projects.py
 
 9. Explain what the operator does automatically vs. what stays manual.
    - Automatic on reconcile (default operator config): creates/verifies the ECR
-     repositories; builds images via AWS CodeBuild and pushes immutable
-     `git-<sha>` tags; creates/verifies the Temporal Cloud namespace, a
+     repositories; builds images via AWS CodeBuild and pushes immutable image
+     tags; creates/verifies the Temporal Cloud namespace, a
      namespace-scoped service account, and a 30-day API key (rotated on a durable
      timer); writes the runtime key to Secrets Manager and syncs it via External
      Secrets; deploys, waits for candidate readiness, smoke-tests, and promotes;

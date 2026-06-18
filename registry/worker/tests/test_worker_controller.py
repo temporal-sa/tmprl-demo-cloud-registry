@@ -122,7 +122,7 @@ def versioned_worker() -> dict:
     return {
         "versioning": {
             "enabled": True,
-            "taskQueue": "money-transfer",
+            "deploymentName": "money-transfer",
             "rollout": {
                 "strategy": "Progressive",
                 "steps": [
@@ -503,6 +503,15 @@ def test_versioned_worker_with_ports_uses_stable_service_name_and_rollout_select
 def test_worker_deployment_status_maps_versioned_components():
     assert worker_deployment_status(project(worker=versioned_worker()), images()) == {
         "worker": "money-transfer"
+    }
+
+
+def test_worker_deployment_name_defaults_to_component_name():
+    worker = versioned_worker()
+    worker["versioning"].pop("deploymentName")
+
+    assert worker_deployment_status(project(worker=worker), images()) == {
+        "worker": "worker"
     }
 
 

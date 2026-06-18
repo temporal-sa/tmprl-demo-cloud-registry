@@ -39,7 +39,6 @@ def lambda_request() -> EnsureLambdaFunctionRequest:
         timeout_seconds=600,
         deployment_name="money-transfer",
         build_id="git-e12b0ed9d450",
-        task_queue="money-transfer",
         temporal_secret_path="tmprl-dem-cld/banking-money-transfer/temporal",
         env={"APP_MODE": "demo", "TEMPORAL_API_KEY": "user-value"},
     )
@@ -59,7 +58,6 @@ def test_lambda_environment_injects_api_key_runtime_config():
     assert environment["APP_MODE"] == "demo"
     assert environment["TEMPORAL_ADDRESS"] == "namespace.account.tmprl.cloud:7233"
     assert environment["TEMPORAL_NAMESPACE"] == "namespace.account"
-    assert environment["TEMPORAL_TASK_QUEUE"] == "money-transfer"
     assert environment["TEMPORAL_DEPLOYMENT_NAME"] == "money-transfer"
     assert environment["TEMPORAL_WORKER_BUILD_ID"] == "git-e12b0ed9d450"
     assert environment["TEMPORAL_TLS"] == "true"
