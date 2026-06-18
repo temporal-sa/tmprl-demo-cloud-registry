@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
 import demo_registry_operator.workflows.demo_project as demo_project_workflow
+import demo_registry_operator.workflows.operator_canary as operator_canary_workflow
 from demo_registry_operator.resources import (
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     SOURCE_COMMIT_ANNOTATION,
@@ -293,6 +295,15 @@ def test_registry_operator_canary_branch_request_splits_auth_modes():
     assert mtls.workflowID == "gate/run/mtls"
     assert mtls.projectNamePrefix == "operator-canary-mtls"
     assert mtls.projectName == "manual-canary-mtls"
+
+
+def test_registry_operator_canary_parent_uses_branch_dataclass_fields():
+    source = inspect.getsource(
+        operator_canary_workflow.RegistryOperatorCanaryWorkflow.run
+    )
+
+    assert 'branch_request["workflowID"]' not in source
+    assert "branch_request.workflowID" in source
 
 
 def test_check_worker_version_signal_requests_continue_as_new_when_target_changed(

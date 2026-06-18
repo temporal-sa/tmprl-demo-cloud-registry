@@ -81,7 +81,7 @@ class RegistryOperatorCanaryWorkflow:
                 workflow.execute_child_workflow(
                     RegistryOperatorAuthCanaryWorkflow.run,
                     branch_request,
-                    id=branch_request["workflowID"],
+                    id=branch_request.workflowID,
                     task_queue=workflow_info.task_queue,
                     parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
                     versioning_intent=workflow.VersioningIntent.COMPATIBLE,
