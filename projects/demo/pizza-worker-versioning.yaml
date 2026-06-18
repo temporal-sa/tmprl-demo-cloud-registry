@@ -1,0 +1,92 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: pizza-worker-versioning
+spec:
+  registry:
+    title: Pizza Worker Versioning
+    summary: Interactive Temporal Worker Versioning demo that ramps, promotes, rolls back, and recovers pizza-order workflows across v1, v2, and v3 worker builds.
+    tags:
+      - Worker Versioning
+      - Rollouts
+      - Go
+      - Workflows
+    temporalSdks:
+      - Go
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-versioning-demo
+    # branch defaults to main
+
+  builds:
+    backend:
+      context: .
+      dockerfile: Dockerfile.backend
+    worker:
+      context: .
+      dockerfile: Dockerfile.worker
+
+  components:
+    # Dashboard and order generator. It talks to Temporal through the platform
+    # proxy because the app expects a local/plaintext Temporal endpoint.
+    backend:
+      build: backend
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      env:
+        - name: TEMPORAL_DEPLOYMENT_NAME
+          value: pizza-worker
+      ports:
+        - containerPort: 8080
+          servicePort: 80
+
+    # These are Temporal SDK workers, but intentionally not platform
+    # WorkerDeployment components. The app registers SDK Worker Deployment
+    # versions itself so the dashboard can own ramp/promote/rollback.
+    worker-v1:
+      build: worker
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      env:
+        - name: TEMPORAL_DEPLOYMENT_NAME
+          value: pizza-worker
+        - name: TEMPORAL_WORKER_BUILD_ID
+          value: v1
+        - name: PIZZA_VERSION
+          value: v1
+
+    worker-v2:
+      build: worker
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      env:
+        - name: TEMPORAL_DEPLOYMENT_NAME
+          value: pizza-worker
+        - name: TEMPORAL_WORKER_BUILD_ID
+          value: v2
+        - name: PIZZA_VERSION
+          value: v2
+
+    worker-v3:
+      build: worker
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      env:
+        - name: TEMPORAL_DEPLOYMENT_NAME
+          value: pizza-worker
+        - name: TEMPORAL_WORKER_BUILD_ID
+          value: v3
+        - name: PIZZA_VERSION
+          value: v3
+
+  ingress:
+    subdomain: pizza
+    temporalAuthRequired: false
+
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
