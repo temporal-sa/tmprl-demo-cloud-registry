@@ -55,6 +55,12 @@ TEMPORAL_MTLS_INPUT_REFS = {
     "temporal.clientKey",
 }
 TEMPORAL_INPUT_REFS = TEMPORAL_API_KEY_INPUT_REFS | TEMPORAL_MTLS_INPUT_REFS
+TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH = "/var/run/secrets/tmprl-demo.cloud/temporal"
+TEMPORAL_MTLS_CERT_FILES = {
+    "caCert": "ca.crt",
+    "clientCert": "tls.crt",
+    "clientKey": "tls.key",
+}
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_ingress_routes(document))
         errors.extend(validate_env_input_refs(document))
         errors.extend(validate_temporal_auth_compatibility(document))
+        errors.extend(validate_temporal_mtls_cert_files(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
         errors.extend(validate_serverless_components(document))
@@ -606,6 +613,41 @@ def validate_temporal_auth_compatibility(
     return errors
 
 
+def validate_temporal_mtls_cert_files(
+    document: ProjectDocument,
+) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+    auth_mode = temporal_auth_mode(document)
+
+    for component_name, component in components(document).items():
+        if not temporal_mtls_cert_files_configured(component):
+            continue
+
+        if auth_mode != TEMPORAL_AUTH_MODE_MTLS:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.temporalMtls.certFiles "
+                        "requires temporal auth mode mtls"
+                    ),
+                )
+            )
+
+        if temporal_mtls_cert_files_mount_root(component) == "/":
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.temporalMtls.certFiles.paths "
+                        "must share a non-root parent directory"
+                    ),
+                )
+            )
+
+    return errors
+
+
 def validate_serverless_components(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
     project_builds = builds(document)
@@ -661,6 +703,7 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 "command",
                 "args",
                 "temporalProxy",
+                "temporalMtls",
                 "temporalAccess",
                 "secrets",
             )
@@ -1004,6 +1047,7 @@ def component_needs_temporal(component: dict[str, Any]) -> bool:
         or isinstance(worker, dict)
         or component.get("temporalAccess") is True
         or bool(component_temporal_input_refs(component))
+        or temporal_mtls_cert_files_requested(component)
     )
 
 
@@ -1030,6 +1074,71 @@ def serverless_lambda_enabled(component: dict[str, Any]) -> bool:
         serverless_config(component).get("provider")
         == SERVERLESS_PROVIDER_AWS_LAMBDA
     )
+
+
+def temporal_mtls_config(component: dict[str, Any]) -> dict[str, Any]:
+    config = component.get("temporalMtls")
+    return config if isinstance(config, dict) else {}
+
+
+def temporal_mtls_cert_files_configured(component: dict[str, Any]) -> bool:
+    return "certFiles" in temporal_mtls_config(component)
+
+
+def temporal_mtls_cert_files_config(component: dict[str, Any]) -> dict[str, Any]:
+    cert_files = temporal_mtls_config(component).get("certFiles")
+    return cert_files if isinstance(cert_files, dict) else {}
+
+
+def temporal_mtls_cert_files_enabled(component: dict[str, Any]) -> bool:
+    return temporal_mtls_cert_files_config(component).get("enabled") is not False
+
+
+def temporal_mtls_cert_files_requested(component: dict[str, Any]) -> bool:
+    return (
+        temporal_mtls_cert_files_configured(component)
+        and temporal_mtls_cert_files_enabled(component)
+    )
+
+
+def temporal_mtls_cert_files_mount_path(component: dict[str, Any]) -> str:
+    configured = temporal_mtls_cert_files_config(component).get("mountPath")
+    if isinstance(configured, str) and configured.startswith("/"):
+        return configured.rstrip("/") or "/"
+    return TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH
+
+
+def temporal_mtls_cert_file_paths(component: dict[str, Any]) -> dict[str, str]:
+    mount_path = temporal_mtls_cert_files_mount_path(component)
+    paths = {
+        name: f"{mount_path}/{filename}"
+        for name, filename in TEMPORAL_MTLS_CERT_FILES.items()
+    }
+    configured = temporal_mtls_cert_files_config(component).get("paths")
+    if isinstance(configured, dict):
+        paths.update(
+            {
+                name: value
+                for name, value in configured.items()
+                if name in TEMPORAL_MTLS_CERT_FILES
+                and isinstance(value, str)
+                and value.startswith("/")
+            }
+        )
+    return paths
+
+
+def temporal_mtls_cert_files_mount_root(component: dict[str, Any]) -> str:
+    paths = list(temporal_mtls_cert_file_paths(component).values())
+    split_paths = [path.strip("/").split("/") for path in paths]
+    common: list[str] = []
+    for parts in zip(*split_paths):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    if not common:
+        return "/"
+    return "/" + "/".join(common)
 
 
 def temporal_auth_mode(document: ProjectDocument) -> str:

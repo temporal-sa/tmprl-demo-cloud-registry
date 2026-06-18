@@ -215,6 +215,9 @@
         "temporalProxy": {
           "$ref": "#/$defs/temporalProxy"
         },
+        "temporalMtls": {
+          "$ref": "#/$defs/temporalMtls"
+        },
         "serverless": {
           "$ref": "#/$defs/serverless"
         },
@@ -617,6 +620,71 @@
           "items": {
             "$ref": "#/$defs/envName"
           }
+        }
+      }
+    },
+    "temporalMtls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "certFiles": {
+          "$ref": "#/$defs/temporalMtlsCertFiles"
+        }
+      }
+    },
+    "temporalMtlsCertFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "mountPath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "paths": {
+          "$ref": "#/$defs/temporalMtlsCertFilePaths"
+        },
+        "pathEnv": {
+          "$ref": "#/$defs/temporalMtlsCertFilePathEnv"
+        }
+      }
+    },
+    "temporalMtlsCertFilePaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caCert": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "clientCert": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "clientKey": {
+          "type": "string",
+          "pattern": "^/.+$"
+        }
+      }
+    },
+    "temporalMtlsCertFilePathEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "certDir": {
+          "$ref": "#/$defs/envName"
+        },
+        "caCert": {
+          "$ref": "#/$defs/envName"
+        },
+        "clientCert": {
+          "$ref": "#/$defs/envName"
+        },
+        "clientKey": {
+          "$ref": "#/$defs/envName"
         }
       }
     },

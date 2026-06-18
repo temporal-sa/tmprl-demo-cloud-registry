@@ -272,6 +272,130 @@ def test_component_env_can_map_temporal_and_user_secret_inputs():
     } in container["env"]
 
 
+def test_mtls_temporal_components_mount_cert_files_and_path_envs():
+    demo_project = project(worker=True)
+    demo_project["spec"]["temporal"] = {"auth": {"mode": "mtls"}}
+
+    deployments = deployment_resources(demo_project, images())
+    api_deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("api-")
+    )
+    pod_spec = api_deployment["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+
+    assert pod_spec["volumes"] == [
+        {
+            "name": "temporal-mtls-certs",
+            "secret": {
+                "secretName": "temporal-credentials",
+                "items": [
+                    {"key": "TEMPORAL_CA_CERT", "path": "ca.crt"},
+                    {"key": "TEMPORAL_CLIENT_CERT", "path": "tls.crt"},
+                    {"key": "TEMPORAL_CLIENT_KEY", "path": "tls.key"},
+                ],
+            },
+        }
+    ]
+    assert {
+        "name": "temporal-mtls-certs",
+        "mountPath": "/var/run/secrets/tmprl-demo.cloud/temporal",
+        "readOnly": True,
+    } in container["volumeMounts"]
+    env = {item["name"]: item["value"] for item in container["env"] if "value" in item}
+    assert env["TEMPORAL_MTLS_CERT_DIR"] == (
+        "/var/run/secrets/tmprl-demo.cloud/temporal"
+    )
+    assert env["TEMPORAL_MTLS_CA_CERT_PATH"] == (
+        "/var/run/secrets/tmprl-demo.cloud/temporal/ca.crt"
+    )
+    assert env["TEMPORAL_MTLS_CLIENT_CERT_PATH"] == (
+        "/var/run/secrets/tmprl-demo.cloud/temporal/tls.crt"
+    )
+    assert env["TEMPORAL_MTLS_CLIENT_KEY_PATH"] == (
+        "/var/run/secrets/tmprl-demo.cloud/temporal/tls.key"
+    )
+
+
+def test_mtls_cert_files_can_set_legacy_path_env_names():
+    demo_project = project(worker=True)
+    demo_project["spec"]["temporal"] = {"auth": {"mode": "mtls"}}
+    api = demo_project["spec"]["components"]["api"]
+    api["temporalMtls"] = {
+        "certFiles": {
+            "mountPath": "/etc/temporal/certs",
+            "paths": {
+                "caCert": "/etc/temporal/certs/root-ca.pem",
+                "clientCert": "/etc/temporal/certs/client.pem",
+                "clientKey": "/etc/temporal/certs/client-key.pem",
+            },
+            "pathEnv": {
+                "clientCert": "TEMPORAL_TLS_CERT",
+                "clientKey": "TEMPORAL_TLS_KEY",
+            },
+        }
+    }
+    api["env"] = [
+        {"name": "TEMPORAL_TLS_CERT", "value": "/wrong/path"},
+    ]
+
+    deployments = deployment_resources(demo_project, images())
+    api_deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("api-")
+    )
+    pod_spec = api_deployment["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+
+    assert {
+        "name": "temporal-mtls-certs",
+        "mountPath": "/etc/temporal/certs",
+        "readOnly": True,
+    } in container["volumeMounts"]
+    assert pod_spec["volumes"] == [
+        {
+            "name": "temporal-mtls-certs",
+            "secret": {
+                "secretName": "temporal-credentials",
+                "items": [
+                    {"key": "TEMPORAL_CA_CERT", "path": "root-ca.pem"},
+                    {"key": "TEMPORAL_CLIENT_CERT", "path": "client.pem"},
+                    {"key": "TEMPORAL_CLIENT_KEY", "path": "client-key.pem"},
+                ],
+            },
+        }
+    ]
+    env = {item["name"]: item["value"] for item in container["env"] if "value" in item}
+    assert env["TEMPORAL_TLS_CERT"] == "/etc/temporal/certs/client.pem"
+    assert env["TEMPORAL_TLS_KEY"] == "/etc/temporal/certs/client-key.pem"
+    assert env["TEMPORAL_MTLS_CERT_DIR"] == "/etc/temporal/certs"
+    assert env["TEMPORAL_MTLS_CA_CERT_PATH"] == "/etc/temporal/certs/root-ca.pem"
+    assert env["TEMPORAL_MTLS_CLIENT_CERT_PATH"] == "/etc/temporal/certs/client.pem"
+    assert env["TEMPORAL_MTLS_CLIENT_KEY_PATH"] == (
+        "/etc/temporal/certs/client-key.pem"
+    )
+
+
+def test_mtls_cert_file_mount_can_be_disabled():
+    demo_project = project(worker=True)
+    demo_project["spec"]["temporal"] = {"auth": {"mode": "mtls"}}
+    demo_project["spec"]["components"]["api"]["temporalMtls"] = {
+        "certFiles": {"enabled": False}
+    }
+
+    deployments = deployment_resources(demo_project, images())
+    api_deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("api-")
+    )
+    pod_spec = api_deployment["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+
+    assert "volumes" not in pod_spec
+    assert "volumeMounts" not in container
+    assert all(
+        item.get("name") != "TEMPORAL_MTLS_CLIENT_CERT_PATH"
+        for item in container.get("env", [])
+    )
+
+
 def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment():
     demo_project = project(worker=versioned_worker())
 

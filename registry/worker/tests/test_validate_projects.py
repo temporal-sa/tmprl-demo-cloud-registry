@@ -156,6 +156,78 @@ def test_mtls_cert_input_refs_are_allowed_with_mtls_auth_mode():
     assert validate_projects.validate_env_input_refs(document) == []
 
 
+def test_mtls_cert_files_require_mtls_auth_mode():
+    spec = base_spec()
+    spec["components"]["app"]["temporalMtls"] = {
+        "certFiles": {
+            "pathEnv": {
+                "clientCert": "TEMPORAL_TLS_CERT",
+            }
+        }
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_temporal_mtls_cert_files(document)
+
+    assert [error.message for error in errors] == [
+        "components.app.temporalMtls.certFiles requires temporal auth mode mtls"
+    ]
+
+
+def test_schema_accepts_mtls_cert_file_path_env_config():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"]["temporalMtls"] = {
+        "certFiles": {
+            "mountPath": "/etc/temporal/certs",
+            "paths": {
+                "caCert": "/etc/temporal/certs/root-ca.pem",
+                "clientCert": "/etc/temporal/certs/client.pem",
+                "clientKey": "/etc/temporal/certs/client-key.pem",
+            },
+            "pathEnv": {
+                "certDir": "TEMPORAL_CERT_DIR",
+                "caCert": "TEMPORAL_CA_CERT_FILE",
+                "clientCert": "TEMPORAL_TLS_CERT",
+                "clientKey": "TEMPORAL_TLS_KEY",
+            },
+        }
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+    assert validate_projects.validate_temporal_mtls_cert_files(document) == []
+
+
+def test_mtls_cert_file_paths_must_share_parent_directory():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"]["temporalMtls"] = {
+        "certFiles": {
+            "paths": {
+                "caCert": "/etc/temporal/ca.pem",
+                "clientCert": "/var/run/temporal/client.pem",
+                "clientKey": "/opt/temporal/client-key.pem",
+            }
+        }
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_temporal_mtls_cert_files(document)
+
+    assert [error.message for error in errors] == [
+        (
+            "components.app.temporalMtls.certFiles.paths must share a non-root "
+            "parent directory"
+        )
+    ]
+
+
 def test_mtls_auth_rejects_temporal_proxy_and_worker_versioning():
     spec = base_spec()
     spec["temporal"] = {"auth": {"mode": "mtls"}}

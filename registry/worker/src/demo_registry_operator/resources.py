@@ -181,6 +181,19 @@ TEMPORAL_WORKER_RUNTIME_INPUT_REFS = {
 TEMPORAL_SECRET_NAME = "temporal-credentials"
 TEMPORAL_WORKER_RUNTIME_SECRET_NAME = "temporal-worker-runtime"
 TEMPORAL_CONNECTION_NAME = "temporal"
+TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME = "temporal-mtls-certs"
+TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH = "/var/run/secrets/tmprl-demo.cloud/temporal"
+TEMPORAL_MTLS_CERT_FILES = {
+    "caCert": ("TEMPORAL_CA_CERT", "ca.crt"),
+    "clientCert": ("TEMPORAL_CLIENT_CERT", "tls.crt"),
+    "clientKey": ("TEMPORAL_CLIENT_KEY", "tls.key"),
+}
+TEMPORAL_MTLS_CERT_FILE_PATH_ENVS = {
+    "certDir": "TEMPORAL_MTLS_CERT_DIR",
+    "caCert": "TEMPORAL_MTLS_CA_CERT_PATH",
+    "clientCert": "TEMPORAL_MTLS_CLIENT_CERT_PATH",
+    "clientKey": "TEMPORAL_MTLS_CLIENT_KEY_PATH",
+}
 TEMPORAL_PROXY_BUILD_NAME = "temporal-cloud-proxy"
 TEMPORAL_PROXY_CONTAINER_NAME = "temporal-cloud-proxy"
 TEMPORAL_PROXY_IMAGE_ENV = "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE"
@@ -1376,8 +1389,13 @@ def workload_pod_spec(
         "automountServiceAccountToken": automount_service_account_token(component),
         "containers": containers,
     }
+    volumes: list[dict[str, Any]] = []
+    if mounts_temporal_mtls_cert_files(demo_project, component):
+        volumes.append(temporal_mtls_cert_files_volume(component))
     if mounts_catalog_status(demo_project, component_name):
-        pod_spec["volumes"] = [catalog_status_volume(), catalog_volume()]
+        volumes.extend([catalog_status_volume(), catalog_volume()])
+    if volumes:
+        pod_spec["volumes"] = volumes
     return pod_spec
 
 
@@ -1716,10 +1734,21 @@ def container(
     env.extend(
         platform_env_vars(demo_project, component_name, image, image_overrides or {})
     )
+    if mounts_temporal_mtls_cert_files(demo_project, component):
+        env = env_with_overrides(env, temporal_mtls_cert_file_path_env(component))
     if temporal_proxy_enabled(component):
         env = env_with_overrides(env, temporal_proxy_app_env(component))
     if env:
         rendered["env"] = env
+    volume_mounts: list[dict[str, Any]] = []
+    if mounts_temporal_mtls_cert_files(demo_project, component):
+        volume_mounts.append(
+            {
+                "name": TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME,
+                "mountPath": temporal_mtls_cert_files_mount_root(component),
+                "readOnly": True,
+            }
+        )
     if mounts_catalog_status(demo_project, component_name):
         rendered.setdefault("env", []).append(
             {
@@ -1727,18 +1756,22 @@ def container(
                 "value": CATALOG_STATUS_MOUNT_PATH,
             }
         )
-        rendered["volumeMounts"] = [
-            {
-                "name": CATALOG_STATUS_VOLUME_NAME,
-                "mountPath": CATALOG_STATUS_MOUNT_PATH,
-                "readOnly": True,
-            },
-            {
-                "name": CATALOG_VOLUME_NAME,
-                "mountPath": CATALOG_MOUNT_PATH,
-                "readOnly": True,
-            },
-        ]
+        volume_mounts.extend(
+            [
+                {
+                    "name": CATALOG_STATUS_VOLUME_NAME,
+                    "mountPath": CATALOG_STATUS_MOUNT_PATH,
+                    "readOnly": True,
+                },
+                {
+                    "name": CATALOG_VOLUME_NAME,
+                    "mountPath": CATALOG_MOUNT_PATH,
+                    "readOnly": True,
+                },
+            ]
+        )
+    if volume_mounts:
+        rendered["volumeMounts"] = volume_mounts
 
     return rendered
 
@@ -1846,6 +1879,158 @@ def env_with_overrides(
     return [
         item for item in existing if item.get("name") not in override_names
     ] + overrides
+
+
+def mounts_temporal_mtls_cert_files(
+    demo_project: dict[str, Any],
+    component: dict[str, Any],
+) -> bool:
+    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_MTLS:
+        return False
+    if temporal_proxy_enabled(component):
+        return False
+    if serverless_lambda_enabled(component):
+        return False
+    if worker_versioning_enabled(component):
+        return False
+    if not temporal_mtls_cert_files_enabled(component):
+        return False
+    return component_needs_temporal(component)
+
+
+def temporal_mtls_config(component: dict[str, Any]) -> dict[str, Any]:
+    config = component.get("temporalMtls")
+    return config if isinstance(config, dict) else {}
+
+
+def temporal_mtls_cert_files_config(component: dict[str, Any]) -> dict[str, Any]:
+    config = temporal_mtls_config(component).get("certFiles")
+    return config if isinstance(config, dict) else {}
+
+
+def temporal_mtls_cert_files_configured(component: dict[str, Any]) -> bool:
+    return "certFiles" in temporal_mtls_config(component)
+
+
+def temporal_mtls_cert_files_enabled(component: dict[str, Any]) -> bool:
+    return temporal_mtls_cert_files_config(component).get("enabled") is not False
+
+
+def temporal_mtls_cert_files_requested(component: dict[str, Any]) -> bool:
+    return (
+        temporal_mtls_cert_files_configured(component)
+        and temporal_mtls_cert_files_enabled(component)
+    )
+
+
+def temporal_mtls_cert_files_mount_path(component: dict[str, Any]) -> str:
+    configured = temporal_mtls_cert_files_config(component).get("mountPath")
+    if isinstance(configured, str) and configured.startswith("/"):
+        return configured.rstrip("/") or "/"
+    return TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH
+
+
+def temporal_mtls_cert_file_path_overrides(component: dict[str, Any]) -> dict[str, str]:
+    configured = temporal_mtls_cert_files_config(component).get("paths")
+    if not isinstance(configured, dict):
+        return {}
+    return {
+        name: value
+        for name, value in configured.items()
+        if name in TEMPORAL_MTLS_CERT_FILES
+        and isinstance(value, str)
+        and value.startswith("/")
+    }
+
+
+def temporal_mtls_cert_file_paths(component: dict[str, Any]) -> dict[str, str]:
+    mount_path = temporal_mtls_cert_files_mount_path(component)
+    paths = {
+        "certDir": mount_path,
+        **{
+            name: f"{mount_path}/{path}"
+            for name, (_secret_key, path) in TEMPORAL_MTLS_CERT_FILES.items()
+        },
+    }
+    paths.update(temporal_mtls_cert_file_path_overrides(component))
+    return paths
+
+
+def temporal_mtls_cert_files_mount_root(component: dict[str, Any]) -> str:
+    paths = [
+        value
+        for key, value in temporal_mtls_cert_file_paths(component).items()
+        if key != "certDir"
+    ]
+    if not paths:
+        return temporal_mtls_cert_files_mount_path(component)
+
+    split_paths = [path.strip("/").split("/") for path in paths]
+    common: list[str] = []
+    for parts in zip(*split_paths):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+
+    if not common:
+        raise ValueError(
+            "temporalMtls.certFiles.paths must share a non-root parent directory"
+        )
+    return "/" + "/".join(common)
+
+
+def temporal_mtls_cert_files_relative_path(component: dict[str, Any], path: str) -> str:
+    mount_root = temporal_mtls_cert_files_mount_root(component)
+    if mount_root == "/":
+        return path.lstrip("/")
+    prefix = mount_root.rstrip("/") + "/"
+    if path.startswith(prefix):
+        return path[len(prefix) :]
+    return path.lstrip("/")
+
+
+def temporal_mtls_cert_file_path_env(
+    component: dict[str, Any],
+) -> list[dict[str, str]]:
+    configured = temporal_mtls_cert_files_config(component).get("pathEnv")
+    path_envs = list(TEMPORAL_MTLS_CERT_FILE_PATH_ENVS.items())
+    if isinstance(configured, dict):
+        path_envs.extend(
+            (key, value)
+            for key, value in configured.items()
+            if key in TEMPORAL_MTLS_CERT_FILE_PATH_ENVS
+            and isinstance(value, str)
+            and value
+        )
+    paths = temporal_mtls_cert_file_paths(component)
+    rendered: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key, env_name in path_envs:
+        if key not in paths or env_name in seen:
+            continue
+        rendered.append({"name": env_name, "value": paths[key]})
+        seen.add(env_name)
+    return rendered
+
+
+def temporal_mtls_cert_files_volume(component: dict[str, Any]) -> dict[str, Any]:
+    paths = temporal_mtls_cert_file_paths(component)
+    return {
+        "name": TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME,
+        "secret": {
+            "secretName": TEMPORAL_SECRET_NAME,
+            "items": [
+                {
+                    "key": secret_key,
+                    "path": temporal_mtls_cert_files_relative_path(
+                        component,
+                        str(paths[name]),
+                    ),
+                }
+                for name, (secret_key, _default_path) in TEMPORAL_MTLS_CERT_FILES.items()
+            ],
+        },
+    }
 
 
 def mounts_catalog_status(demo_project: dict[str, Any], component_name: str) -> bool:
@@ -3557,8 +3742,10 @@ def temporal_mtls_status(demo_project: dict[str, Any]) -> dict[str, Any]:
 
 
 def component_needs_temporal(component: dict[str, Any]) -> bool:
-    return component_receives_default_temporal_env(component) or bool(
-        temporal_input_refs(component)
+    return (
+        component_receives_default_temporal_env(component)
+        or bool(temporal_input_refs(component))
+        or temporal_mtls_cert_files_requested(component)
     )
 
 

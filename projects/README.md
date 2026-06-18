@@ -286,6 +286,33 @@ Rules:
   `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and `TEMPORAL_TLS`. mTLS projects
   receive `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TLS`,
   `TEMPORAL_CA_CERT`, `TEMPORAL_CLIENT_CERT`, and `TEMPORAL_CLIENT_KEY`.
+  mTLS projects also mount the same certificate material as read-only files for
+  Kubernetes components that receive Temporal credentials. The default mount is
+  `/var/run/secrets/tmprl-demo.cloud/temporal` with `ca.crt`, `tls.crt`, and
+  `tls.key`. The platform injects path env vars
+  `TEMPORAL_MTLS_CERT_DIR`, `TEMPORAL_MTLS_CA_CERT_PATH`,
+  `TEMPORAL_MTLS_CLIENT_CERT_PATH`, and `TEMPORAL_MTLS_CLIENT_KEY_PATH`.
+  Components can customize the mount and app-specific path env var names with
+  `components.<name>.temporalMtls.certFiles`:
+
+  ```yaml
+  temporalMtls:
+    certFiles:
+      mountPath: /etc/temporal/certs
+      paths:
+        caCert: /etc/temporal/certs/root-ca.pem
+        clientCert: /etc/temporal/certs/client.pem
+        clientKey: /etc/temporal/certs/client-key.pem
+      pathEnv:
+        clientCert: TEMPORAL_TLS_CERT
+        clientKey: TEMPORAL_TLS_KEY
+  ```
+
+  `paths` is optional; when omitted, the platform uses `ca.crt`, `tls.crt`,
+  and `tls.key` under `mountPath`. Custom file paths must share a non-root
+  parent directory so they can be mounted from the same Secret volume.
+  Use `enabled: false` under `certFiles` only when the component needs PEM env
+  values but should not receive mounted cert files.
 - Components can remap platform inputs with
   `components.<name>.env[].valueFrom.inputRef`. API-key Temporal refs are
   `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and
