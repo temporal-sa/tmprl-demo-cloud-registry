@@ -87,6 +87,18 @@ async def run_temporal_runtime_canary(
             status["canaryTimeoutSeconds"] = total_timeout
             status["attemptTimeoutSeconds"] = attempt_budget
             return status
+        except asyncio.CancelledError as error:
+            if current_task_cancel_requested():
+                raise
+            if loop.time() >= deadline:
+                raise TimeoutError(
+                    "Temporal runtime credential canary did not pass within "
+                    f"{total_timeout:g} seconds after {attempt} attempts."
+                ) from error
+            await sleep_before_retry(
+                deadline=deadline,
+                retry_delay_seconds=retry_delay_seconds,
+            )
         except Exception as error:  # noqa: BLE001 - retry propagation/transient auth lag
             if loop.time() >= deadline:
                 if isinstance(error, TimeoutError):
@@ -95,14 +107,9 @@ async def run_temporal_runtime_canary(
                         f"{total_timeout:g} seconds after {attempt} attempts."
                     ) from error
                 raise
-            await asyncio.sleep(
-                min(
-                    retry_delay_seconds,
-                    max(
-                        MIN_RUNTIME_CANARY_TIMEOUT_SECONDS,
-                        deadline - loop.time(),
-                    ),
-                )
+            await sleep_before_retry(
+                deadline=deadline,
+                retry_delay_seconds=retry_delay_seconds,
             )
 
 
@@ -242,3 +249,24 @@ def bounded_timeout_seconds(value: float, maximum: float) -> float:
 
 def timeout_delta(seconds: float) -> timedelta:
     return timedelta(seconds=max(1, math.ceil(seconds)))
+
+
+def current_task_cancel_requested() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
+async def sleep_before_retry(
+    *,
+    deadline: float,
+    retry_delay_seconds: float,
+) -> None:
+    await asyncio.sleep(
+        min(
+            retry_delay_seconds,
+            max(
+                MIN_RUNTIME_CANARY_TIMEOUT_SECONDS,
+                deadline - asyncio.get_running_loop().time(),
+            ),
+        )
+    )
