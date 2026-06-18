@@ -72,6 +72,19 @@ def test_temporal_cloud_cleanup_timeout_is_retryable_provider_error():
     assert error.non_retryable is False
 
 
+def test_temporal_cloud_runtime_canary_timeout_is_retryable_provider_error():
+    error = external_resources.temporal_cloud_application_error(
+        TimeoutError(
+            "Temporal runtime credential canary did not pass within "
+            "60 seconds after 4 attempts."
+        ),
+        operation="Temporal runtime candidate canary",
+    )
+
+    assert error.type == PROVIDER_TRANSIENT_ERROR
+    assert error.non_retryable is False
+
+
 def test_temporal_cloud_cleanup_validation_error_is_terminal():
     error = external_resources.temporal_cloud_application_error(
         RuntimeError("invalid namespace retention policy"),

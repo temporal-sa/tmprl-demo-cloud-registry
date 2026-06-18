@@ -769,6 +769,8 @@ def temporal_cloud_application_error(
             message,
             error_type=PROVIDER_AUTHENTICATION_ERROR,
         )
+    if isinstance(error, TimeoutError):
+        return retryable_provider_error(message)
     if temporal_cloud_transient_error_message(str(error)):
         return retryable_provider_error(message)
     return non_retryable_error(

@@ -156,6 +156,8 @@ async def run_temporal_runtime_canary_attempt(
     )
 
     original_error: Exception | None = None
+    result: Any = None
+    completed = False
     try:
         async with Worker(
             client,
@@ -176,15 +178,55 @@ async def run_temporal_runtime_canary_attempt(
                     ),
                     timeout=attempt_timeout,
                 )
+                completed = True
             except Exception as error:  # noqa: BLE001 - preserve through worker shutdown
                 original_error = error
                 raise
     except asyncio.CancelledError:
+        if completed and not temporal_activity_cancel_requested():
+            return runtime_canary_passed_status(
+                auth_mode=auth_mode,
+                namespace=namespace,
+                task_queue=task_queue,
+                workflow_id=workflow_id,
+                started_at=started_at,
+                connect_timeout=connect_timeout,
+                workflow_rpc_timeout=workflow_rpc_timeout,
+                workflow_task_timeout=workflow_task_timeout,
+                result=result,
+                worker_shutdown_cancelled=True,
+            )
         if original_error is not None:
             raise original_error
         raise
 
-    return {
+    return runtime_canary_passed_status(
+        auth_mode=auth_mode,
+        namespace=namespace,
+        task_queue=task_queue,
+        workflow_id=workflow_id,
+        started_at=started_at,
+        connect_timeout=connect_timeout,
+        workflow_rpc_timeout=workflow_rpc_timeout,
+        workflow_task_timeout=workflow_task_timeout,
+        result=result,
+    )
+
+
+def runtime_canary_passed_status(
+    *,
+    auth_mode: str,
+    namespace: str,
+    task_queue: str,
+    workflow_id: str,
+    started_at: datetime,
+    connect_timeout: float,
+    workflow_rpc_timeout: float,
+    workflow_task_timeout: float,
+    result: Any,
+    worker_shutdown_cancelled: bool = False,
+) -> dict[str, Any]:
+    status = {
         "phase": "Passed",
         "ok": True,
         "authMode": auth_mode,
@@ -198,6 +240,9 @@ async def run_temporal_runtime_canary_attempt(
         "workflowTaskTimeoutSeconds": workflow_task_timeout,
         "result": result,
     }
+    if worker_shutdown_cancelled:
+        status["workerShutdownCancelledAfterCompletion"] = True
+    return status
 
 
 def credential_auth_mode(credential: dict[str, Any]) -> str:

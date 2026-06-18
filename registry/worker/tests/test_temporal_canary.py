@@ -53,7 +53,7 @@ def test_runtime_canary_retries_after_attempt_timeout(monkeypatch):
     assert calls[0] == temporal_canary.MIN_RUNTIME_CANARY_TIMEOUT_SECONDS
 
 
-def test_runtime_canary_retries_after_worker_shutdown_cancelled(monkeypatch):
+def test_runtime_canary_passes_when_worker_shutdown_cancelled_after_completion(monkeypatch):
     calls = {
         "connect": 0,
         "execute": 0,
@@ -99,11 +99,12 @@ def test_runtime_canary_retries_after_worker_shutdown_cancelled(monkeypatch):
     )
 
     assert status["ok"] is True
-    assert status["attempts"] == 2
+    assert status["attempts"] == 1
+    assert status["workerShutdownCancelledAfterCompletion"] is True
     assert calls == {
-        "connect": 2,
-        "execute": 2,
-        "exit": 2,
+        "connect": 1,
+        "execute": 1,
+        "exit": 1,
     }
 
 
