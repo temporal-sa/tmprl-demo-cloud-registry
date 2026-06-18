@@ -131,6 +131,8 @@ def configure_temporal_cloud_namespace_mtls(
             reconciler=reconciler,
             secret_store=store,
             checked_at=request.checked_at,
+            candidate_ca_secret_path=request.candidate_ca_secret_path,
+            candidate_secret_token=request.candidate_secret_token,
         )
 
     try:

@@ -606,6 +606,8 @@ async def configure_temporal_cloud_namespace_mtls(
     reconciler: TemporalCloudReconciler,
     secret_store: SecretStore,
     checked_at: str,
+    candidate_ca_secret_path: str | None = None,
+    candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
     if not temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
@@ -613,10 +615,17 @@ async def configure_temporal_cloud_namespace_mtls(
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     namespace = namespace_info_from_status(namespace_status_value)
+    ca_candidate_path = candidate_ca_secret_path
+    if not ca_candidate_path:
+        ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
+            demo_project,
+            candidate_secret_token,
+        )
     ca_material = read_mtls_ca_material_for_reconcile(
         demo_project,
         secret_store,
         allow_candidate=True,
+        candidate_ca_secret_path=ca_candidate_path,
     )
     common_name = temporal_mtls_client_common_name(demo_project)
     action = await reconciler.configure_namespace_mtls(

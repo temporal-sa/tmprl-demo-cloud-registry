@@ -6,14 +6,16 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from temporalio import activity
+from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
+from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator.activities.builds.definitions import looks_like_commit_sha
 from demo_registry_operator.config import WorkerConfig
@@ -101,6 +103,8 @@ class RegistryOperatorCanaryPromotionWaitRequest:
     namespace: str
     expected_source_commit_sha: str | None = None
     expected_images: dict[str, Any] | None = None
+    workflow_id: str | None = None
+    run_id: str | None = None
     timeout_seconds: int = 900
     poll_seconds: int = 10
 
@@ -110,6 +114,8 @@ class RegistryOperatorCanaryPromotionWaitRequest:
             "namespace": self.namespace,
             "expectedSourceCommitSha": self.expected_source_commit_sha,
             "expectedImages": self.expected_images or {},
+            "workflowID": self.workflow_id,
+            "runID": self.run_id,
             "timeoutSeconds": self.timeout_seconds,
             "pollSeconds": self.poll_seconds,
         }
@@ -128,6 +134,8 @@ class RegistryOperatorCanaryRotationWaitRequest:
     project: str
     auth_mode: str
     rotation_token: str
+    workflow_id: str | None = None
+    run_id: str | None = None
     timeout_seconds: int = 900
     poll_seconds: int = 10
 
@@ -136,6 +144,8 @@ class RegistryOperatorCanaryRotationWaitRequest:
             "project": self.project,
             "authMode": self.auth_mode,
             "rotationToken": self.rotation_token,
+            "workflowID": self.workflow_id,
+            "runID": self.run_id,
             "timeoutSeconds": self.timeout_seconds,
             "pollSeconds": self.poll_seconds,
         }
@@ -563,6 +573,18 @@ def wait_for_registry_operator_canary_promotion(
                 "checkedAt": datetime.now(UTC).isoformat(),
             })
 
+        workflow_failure = canary_workflow_terminal_failure(plan)
+        if workflow_failure is not None:
+            return RegistryOperatorCanaryActivityResult({
+                "project": string_field(plan, "project"),
+                "phase": "Failed",
+                "ok": False,
+                "message": workflow_failure["message"],
+                "workflow": workflow_failure,
+                "status": last_status,
+                "checkedAt": datetime.now(UTC).isoformat(),
+            })
+
         if time.monotonic() >= deadline:
             return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
@@ -644,6 +666,19 @@ def wait_for_registry_operator_canary_rotation(
                 "checkedAt": datetime.now(UTC).isoformat(),
             })
 
+        workflow_failure = canary_workflow_terminal_failure(plan)
+        if workflow_failure is not None:
+            return RegistryOperatorCanaryActivityResult({
+                "project": string_field(plan, "project"),
+                "phase": "Failed",
+                "ok": False,
+                "token": token,
+                "message": workflow_failure["message"],
+                "workflow": workflow_failure,
+                "status": last_status,
+                "checkedAt": datetime.now(UTC).isoformat(),
+            })
+
         if time.monotonic() >= deadline:
             return RegistryOperatorCanaryActivityResult({
                 "project": string_field(plan, "project"),
@@ -696,6 +731,61 @@ async def signal_registry_operator_canary_force_reconcile_async(
         "workflowID": workflow_id,
         "token": token,
         "reason": reason,
+    }
+
+
+FAILED_CANARY_WORKFLOW_STATUSES = {
+    WorkflowExecutionStatus.FAILED,
+    WorkflowExecutionStatus.CANCELED,
+    WorkflowExecutionStatus.TERMINATED,
+    WorkflowExecutionStatus.TIMED_OUT,
+}
+
+
+def canary_workflow_terminal_failure(
+    plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    workflow_id = plan.get("workflowID")
+    if not isinstance(workflow_id, str) or not workflow_id:
+        workflow_id = f"demo-project/{string_field(plan, 'project')}"
+    run_id = plan.get("runID")
+    run_id = run_id if isinstance(run_id, str) and run_id else None
+    return asyncio.run(canary_workflow_terminal_failure_async(workflow_id, run_id))
+
+
+async def canary_workflow_terminal_failure_async(
+    workflow_id: str,
+    run_id: str | None,
+) -> dict[str, Any] | None:
+    config = WorkerConfig.from_env()
+    client = await connect(config)
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        description = await handle.describe(rpc_timeout=timedelta(seconds=5))
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            return None
+        activity.logger.warning(
+            "Could not describe canary workflow %s/%s: %s",
+            workflow_id,
+            run_id,
+            error,
+        )
+        return None
+
+    status = description.status
+    if status not in FAILED_CANARY_WORKFLOW_STATUSES:
+        return None
+    return {
+        "phase": "Failed",
+        "workflowID": workflow_id,
+        "runID": description.run_id,
+        "firstExecutionRunID": run_id,
+        "executionStatus": status.name,
+        "message": (
+            "Canary DemoProject workflow reached terminal failed state "
+            f"{status.name} before the gate completed."
+        ),
     }
 
 

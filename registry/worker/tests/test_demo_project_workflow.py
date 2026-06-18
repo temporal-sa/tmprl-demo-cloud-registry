@@ -14,10 +14,12 @@ from demo_registry_operator.workflows.demo_project import (
     demo_project_with_temporal_api_key,
     remember_completed_reconcile_identity,
     reconcile_identity,
-    registry_operator_canary_branch_request,
     status_reconcile_identity,
     temporal_api_key_rotation_state,
     temporal_candidate_secret_token,
+)
+from demo_registry_operator.workflows.operator_canary import (
+    registry_operator_canary_branch_request,
 )
 
 

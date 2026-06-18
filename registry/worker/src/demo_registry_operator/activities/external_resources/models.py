@@ -208,6 +208,8 @@ class ConfigureTemporalCloudNamespaceMtlsRequest:
     checked_at: str
     project: TemporalCloudProject
     namespace: TemporalCloudNamespaceResult
+    candidate_ca_secret_path: str | None = None
+    candidate_secret_token: str | None = None
 
 
 @dataclass(frozen=True)

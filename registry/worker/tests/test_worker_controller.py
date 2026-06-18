@@ -1183,6 +1183,32 @@ def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
     )
 
 
+def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
+    monkeypatch.setattr(canary, "read_demo_project", lambda name: {"status": {}})
+    monkeypatch.setattr(
+        canary,
+        "canary_workflow_terminal_failure",
+        lambda plan: {
+            "phase": "Failed",
+            "workflowID": "demo-project/operator-canary-abc123",
+            "runID": "run-1",
+            "executionStatus": "FAILED",
+            "message": (
+                "Canary DemoProject workflow reached terminal failed state "
+                "FAILED before the gate completed."
+            ),
+        },
+    )
+
+    result = canary.wait_for_registry_operator_canary_promotion(
+        promotion_wait_request(cleanup_plan())
+    ).status
+
+    assert result["phase"] == "Failed"
+    assert result["ok"] is False
+    assert result["workflow"]["executionStatus"] == "FAILED"
+
+
 def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
     monkeypatch.setattr(canary, "read_namespace", lambda name: None)
     monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)

@@ -8,6 +8,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     CloudApiReconciler,
     NamespaceInfo,
+    configure_temporal_cloud_namespace_mtls,
     delete_temporal_runtime_candidate_secret,
     ensure_temporal_cloud_namespace,
     finalize_temporal_cloud,
@@ -606,6 +607,59 @@ def test_create_mtls_namespace_uses_tokenized_candidate_ca_material():
     assert create_call[4] == "mtls"
     assert create_call[5] is True
     assert create_call[6] == "temporal-namespace:tmprl-dem-cld-banking-money-transfer"
+
+
+def test_configure_mtls_namespace_uses_tokenized_candidate_ca_material():
+    project = {
+        **PROJECT,
+        "spec": {
+            **PROJECT["spec"],
+            "temporal": {"auth": {"mode": "mtls"}},
+        },
+    }
+    ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
+        project,
+        CANDIDATE_TOKEN,
+    )
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore(
+        {
+            ca_candidate_path: {
+                "caCert": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+            }
+        }
+    )
+
+    status = asyncio.run(
+        configure_temporal_cloud_namespace_mtls(
+            project,
+            namespace_status_value={
+                "namespace": {
+                    "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+                    "grpcAddress": (
+                        "tmprl-dem-cld-banking-money-transfer.acct1."
+                        "tmprl.cloud:7233"
+                    ),
+                    "authMode": "mtls",
+                }
+            },
+            reconciler=reconciler,
+            secret_store=secrets,
+            checked_at="2026-06-13T00:00:00+00:00",
+            candidate_ca_secret_path=ca_candidate_path,
+            candidate_secret_token=CANDIDATE_TOKEN,
+        )
+    )
+
+    configure_call = reconciler.called("configure_namespace_mtls")[0]
+    assert status["phase"] == "Ready"
+    assert status["mtls"]["namespaceConfigAction"] == "updated"
+    assert configure_call == (
+        "configure_namespace_mtls",
+        "tmprl-dem-cld-banking-money-transfer.acct1",
+        True,
+        "temporal-namespace:tmprl-dem-cld-banking-money-transfer",
+    )
 
 
 def test_mtls_auth_mode_creates_namespace_ca_client_secret_and_canaries():

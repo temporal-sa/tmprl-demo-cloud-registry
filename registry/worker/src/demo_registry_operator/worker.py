@@ -97,9 +97,10 @@ from demo_registry_operator.activities.reconcile import (
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
-from demo_registry_operator.workflows.demo_project import (
-    DemoProjectWorkflow,
-    DemoRolloutWorkflow,
+from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
+from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
+from demo_registry_operator.workflows.operator_canary import (
+    RegistryOperatorAuthCanaryWorkflow,
     RegistryOperatorCanaryWorkflow,
 )
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
@@ -138,6 +139,7 @@ async def main() -> None:
                     InstruqtCourseWorkflow,
                     DemoRolloutWorkflow,
                     RegistryOperatorCanaryWorkflow,
+                    RegistryOperatorAuthCanaryWorkflow,
                 ],
                 activities=[
                     prepare_registry_operator_canary_plan,
