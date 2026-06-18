@@ -14,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
         CreateOrVerifyTemporalCloudNamespaceRequest,
         CreateOrVerifyTemporalCloudServiceAccountRequest,
         DeleteEcrRepositoriesRequest,
+        DeleteServerlessLambdaResourcesRequest,
         DeleteTemporalCloudApiKeyRequest,
         DeleteTemporalCloudMtlsCaSecretRequest,
         DeleteTemporalCloudServiceAccountRequest,
@@ -36,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
         create_or_verify_temporal_cloud_namespace,
         create_or_verify_temporal_cloud_service_account,
         delete_ecr_repositories,
+        delete_serverless_lambda_resources,
         delete_temporal_cloud_api_key,
         delete_temporal_cloud_api_key_by_id,
         delete_temporal_cloud_mtls_ca_secret,
@@ -95,6 +97,7 @@ with workflow.unsafe.imports_passed_through():
         demo_project_reconcile_key,
         force_reconcile_status,
         force_reconcile_token,
+        has_serverless_lambda_components,
         metadata_annotations,
         resource_without_force_reconcile,
     )
@@ -105,6 +108,7 @@ with workflow.unsafe.imports_passed_through():
         DemoProjectKubernetesRuntimeRequest,
         DemoProjectReconcileSignal,
         DemoProjectRunRequest,
+        DemoProjectServerlessLambdaRequest,
         ForceReconcileSignal,
         ShutdownSignal,
     )
@@ -113,6 +117,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
         DemoProjectKubernetesRuntimeWorkflow,
+    )
+    from demo_registry_operator.workflows.demo_project_serverless_lambda import (
+        DemoProjectServerlessLambdaWorkflow,
     )
 
 
@@ -174,6 +181,27 @@ def force_reconcile_request(
     if isinstance(reason, str) and reason.strip():
         request["reason"] = reason.strip()
     return request
+
+
+def status_with_serverless_lambda(
+    runtime_status: dict[str, Any],
+    serverless_status: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(serverless_status, dict):
+        return runtime_status
+
+    merged = {
+        **runtime_status,
+        "serverlessWorkerStatus": serverless_status,
+    }
+    phase = serverless_status.get("phase")
+    if phase not in {"Ready", "NotRequired"}:
+        return {
+            **merged,
+            "phase": "Error",
+            "message": "Serverless Lambda worker reconciliation failed.",
+        }
+    return merged
 
 
 def status_reconcile_identity(status: dict[str, Any]) -> dict[str, str] | None:
@@ -565,6 +593,19 @@ class DemoProjectWorkflow:
             remembered_build_status = rememberable_build_status(build_status)
             if remembered_build_status is not None:
                 self._last_build_status = remembered_build_status
+            serverless_status = None
+            if has_serverless_lambda_components(demo_project):
+                serverless_result = await workflow.execute_child_workflow(
+                    DemoProjectServerlessLambdaWorkflow.run,
+                    DemoProjectServerlessLambdaRequest(
+                        project=project_name,
+                        demoProject=demo_project,
+                        externalResources=external_resources,
+                        buildStatus=build_status,
+                    ),
+                    id=self._child_workflow_id("serverless-lambda"),
+                )
+                serverless_status = serverless_result.status
             runtime_result = await workflow.execute_child_workflow(
                 DemoProjectKubernetesRuntimeWorkflow.run,
                 DemoProjectKubernetesRuntimeRequest(
@@ -575,7 +616,10 @@ class DemoProjectWorkflow:
                 ),
                 id=self._child_workflow_id("kubernetes-runtime"),
             )
-            self._status = runtime_result.status
+            self._status = status_with_serverless_lambda(
+                runtime_result.status,
+                serverless_status,
+            )
             await self._record_status(demo_project, self._status)
 
             self._complete_current_reconcile()
@@ -1020,6 +1064,15 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
             source_auth_action = source_auth_action.action
+            serverless_lambda_teardown = await workflow.execute_activity(
+                delete_serverless_lambda_resources,
+                DeleteServerlessLambdaResourcesRequest(
+                    checked_at=finalize_external_plan.checked_at,
+                    demo_project=demo_project,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
             temporal_api_key_teardown = await workflow.execute_activity(
                 delete_temporal_cloud_api_key,
                 temporal_delete_request,
@@ -1085,6 +1138,7 @@ class DemoProjectWorkflow:
                 finalize_plan,
                 temporal_status=temporal_teardown,
                 ecr_status=ecr_teardown.status,
+                serverless_lambda_status=serverless_lambda_teardown.status,
             )
             result = project_finalization_status(
                 finalize_plan,

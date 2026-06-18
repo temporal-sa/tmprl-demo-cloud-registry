@@ -183,3 +183,89 @@ def test_mtls_auth_rejects_temporal_proxy_and_worker_versioning():
             "temporal auth mode mtls"
         ),
     ]
+
+
+def test_schema_accepts_serverless_lambda_component():
+    spec = base_spec()
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {
+            "provider": "aws-lambda",
+            "packageType": "image",
+            "architecture": "x86_64",
+            "memoryMb": 512,
+            "timeoutSeconds": 600,
+        },
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "taskQueue": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_mtls_auth_allows_serverless_lambda_worker_versioning():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {"provider": "aws-lambda"},
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "taskQueue": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    assert validate_projects.validate_temporal_auth_compatibility(document) == []
+    assert validate_projects.validate_serverless_components(document) == []
+
+
+def test_serverless_lambda_component_rejects_kubernetes_and_buildpack_shape():
+    spec = base_spec()
+    spec["builds"]["app"] = {
+        "context": ".",
+        "strategy": "buildpack",
+        "builder": "paketobuildpacks/builder-jammy-base",
+    }
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {"provider": "aws-lambda"},
+        "ports": [{"containerPort": 8000}],
+        "env": [
+            {
+                "name": "TEMPORAL_TOKEN",
+                "valueFrom": {"inputRef": "temporal.apiKey"},
+            }
+        ],
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_serverless_components(document)
+
+    assert [error.message for error in errors] == [
+        (
+            "components.app.build must reference a dockerfile build for "
+            "serverless aws-lambda"
+        ),
+        (
+            "components.app.serverless aws-lambda requires "
+            "worker.versioning.enabled true"
+        ),
+        "components.app.ports is not supported for serverless aws-lambda components",
+        (
+            "components.app.env[0].valueFrom is not supported for serverless "
+            "aws-lambda components"
+        ),
+    ]

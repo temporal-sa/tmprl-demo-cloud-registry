@@ -335,6 +335,47 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
     assert "TEMPORAL_NAMESPACE" not in rendered
 
 
+def test_serverless_lambda_worker_skips_kubernetes_worker_resources():
+    demo_project = project(worker=versioned_worker())
+    worker = demo_project["spec"]["components"]["worker"]
+    worker["serverless"] = {
+        "provider": "aws-lambda",
+        "packageType": "image",
+        "architecture": "x86_64",
+        "memoryMb": 512,
+        "timeoutSeconds": 600,
+    }
+
+    secrets = runtime_secret_resources(demo_project)
+    deployments = deployment_resources(demo_project, images())
+    resources = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+
+    assert {item["metadata"]["name"] for item in secrets} == {
+        "temporal-credentials",
+        "temporal-worker-runtime",
+    }
+    assert {item["metadata"]["name"] for item in deployments} == {
+        "api-git-e12b0ed9d450"
+    }
+    assert "worker" not in candidate_service_status(demo_project, images())
+    assert worker_deployment_status(demo_project, images()) == {}
+    assert {item["kind"] for item in resources}.isdisjoint(
+        {"Connection", "WorkerDeployment"}
+    )
+    assert (
+        worker_deployment_rollout_wait_seconds(
+            demo_project,
+            base_timeout_seconds=300,
+        )
+        == 300
+    )
+
+
 def test_versioned_worker_maps_auth_input_refs_to_worker_runtime_secret():
     demo_project = project(worker=versioned_worker())
     worker = demo_project["spec"]["components"]["worker"]

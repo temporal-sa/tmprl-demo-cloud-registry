@@ -37,6 +37,7 @@ from demo_registry_operator.activities.external_resources import (
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_service_account,
     delete_ecr_repositories,
+    delete_serverless_lambda_resources,
     delete_temporal_cloud_api_key,
     delete_temporal_cloud_api_key_by_id,
     delete_temporal_cloud_mtls_ca_secret,
@@ -48,9 +49,13 @@ from demo_registry_operator.activities.external_resources import (
     delete_temporal_runtime_candidate_secret,
     disable_temporal_cloud_namespace_delete_protection,
     disable_temporal_cloud_namespace_delete_protection_by_name,
+    ensure_lambda_execution_role,
+    ensure_lambda_function,
+    ensure_temporal_lambda_invoke_role,
     mirror_temporal_runtime_secret,
     promote_temporal_mtls_ca,
     promote_temporal_runtime_credential,
+    reconcile_serverless_worker_deployment,
     run_temporal_runtime_candidate_canary,
     stage_temporal_api_key_candidate,
     stage_temporal_mtls_ca,
@@ -105,6 +110,9 @@ from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
 from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
     DemoProjectKubernetesRuntimeWorkflow,
 )
+from demo_registry_operator.workflows.demo_project_serverless_lambda import (
+    DemoProjectServerlessLambdaWorkflow,
+)
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.operator_auth_canary import (
     RegistryOperatorAuthCanaryWorkflow,
@@ -148,6 +156,7 @@ async def main() -> None:
                     DemoProjectWorkflow,
                     DemoProjectArtifactBuildWorkflow,
                     DemoProjectKubernetesRuntimeWorkflow,
+                    DemoProjectServerlessLambdaWorkflow,
                     InstruqtCourseWorkflow,
                     DemoRolloutWorkflow,
                     RegistryOperatorCanaryWorkflow,
@@ -202,6 +211,11 @@ async def main() -> None:
                     disable_temporal_cloud_namespace_delete_protection_by_name,
                     delete_temporal_cloud_namespace_by_name,
                     verify_secrets_manager_resources,
+                    ensure_lambda_execution_role,
+                    ensure_lambda_function,
+                    ensure_temporal_lambda_invoke_role,
+                    reconcile_serverless_worker_deployment,
+                    delete_serverless_lambda_resources,
                     delete_temporal_cloud_api_key,
                     delete_temporal_cloud_service_account,
                     disable_temporal_cloud_namespace_delete_protection,

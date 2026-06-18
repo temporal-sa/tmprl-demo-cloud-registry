@@ -167,18 +167,29 @@ def external_resource_finalization_status(
     *,
     temporal_status: dict[str, Any],
     ecr_status: dict[str, Any],
+    serverless_lambda_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     phase = "Deleted"
-    if temporal_status.get("phase") == "Error" or ecr_status.get("phase") == "Error":
+    if (
+        temporal_status.get("phase") == "Error"
+        or ecr_status.get("phase") == "Error"
+        or (
+            isinstance(serverless_lambda_status, dict)
+            and serverless_lambda_status.get("phase") == "Error"
+        )
+    ):
         phase = "Error"
     elif {temporal_status.get("phase"), ecr_status.get("phase")} <= {"Skipped"}:
         phase = "Skipped"
-    return {
+    status = {
         "phase": phase,
         "checkedAt": string_field(finalization_plan, "checkedAt"),
         "temporalCloud": temporal_status,
         "ecr": ecr_status,
     }
+    if serverless_lambda_status is not None:
+        status["serverlessLambda"] = serverless_lambda_status
+    return status
 
 
 def temporal_cloud_finalization_status(

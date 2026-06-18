@@ -51,6 +51,19 @@ class DemoProjectKubernetesRuntimeResult:
 
 
 @dataclass(frozen=True)
+class DemoProjectServerlessLambdaRequest:
+    project: str
+    demoProject: dict[str, Any]
+    externalResources: dict[str, Any]
+    buildStatus: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DemoProjectServerlessLambdaResult:
+    status: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class InstruqtCourseRunRequest:
     course_name: str
     carried_status: dict[str, Any] | None = None

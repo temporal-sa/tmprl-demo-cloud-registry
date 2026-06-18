@@ -85,6 +85,92 @@ class DeleteEcrRepositoriesResult:
 
 
 @dataclass(frozen=True)
+class EnsureLambdaExecutionRoleRequest:
+    project: str
+    component: str
+    role_name: str
+
+
+@dataclass(frozen=True)
+class EnsureLambdaExecutionRoleResult:
+    status: dict[str, Any]
+    role_name: str
+    role_arn: str
+
+
+@dataclass(frozen=True)
+class EnsureLambdaFunctionRequest:
+    project: str
+    component: str
+    function_name: str
+    execution_role_arn: str
+    image_uri: str
+    architecture: str
+    memory_mb: int
+    timeout_seconds: int
+    deployment_name: str
+    build_id: str
+    task_queue: str
+    temporal_secret_path: str
+    env: dict[str, str]
+
+
+@dataclass(frozen=True)
+class EnsureLambdaFunctionResult:
+    status: dict[str, Any]
+    function_name: str
+    function_arn: str
+    function_version_arn: str
+    version: str
+
+
+@dataclass(frozen=True)
+class EnsureTemporalLambdaInvokeRoleRequest:
+    project: str
+    component: str
+    role_name: str
+    function_arn: str
+    function_version_arn: str
+    external_id: str
+
+
+@dataclass(frozen=True)
+class EnsureTemporalLambdaInvokeRoleResult:
+    status: dict[str, Any]
+    role_name: str
+    role_arn: str
+    external_id: str
+
+
+@dataclass(frozen=True)
+class ReconcileServerlessWorkerDeploymentRequest:
+    project: str
+    component: str
+    temporal_secret_path: str
+    deployment_name: str
+    build_id: str
+    function_version_arn: str
+    invoke_role_arn: str
+    invoke_role_external_id: str
+
+
+@dataclass(frozen=True)
+class ReconcileServerlessWorkerDeploymentResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DeleteServerlessLambdaResourcesRequest:
+    checked_at: str
+    demo_project: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DeleteServerlessLambdaResourcesResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SecretRequirement:
     path: str
     required: bool

@@ -5,6 +5,14 @@ from demo_registry_operator.activities.external_resources.ecr import (
     create_or_verify_ecr_repository,
     delete_ecr_repositories,
 )
+from demo_registry_operator.activities.external_resources.aws_lambda import (
+    delete_serverless_lambda_resources,
+    ensure_lambda_function,
+)
+from demo_registry_operator.activities.external_resources.iam import (
+    ensure_lambda_execution_role,
+    ensure_temporal_lambda_invoke_role,
+)
 from demo_registry_operator.activities.external_resources.models import (
     CreateOrVerifyTemporalCloudNamespaceRequest,
     CreateOrVerifyTemporalCloudServiceAccountRequest,
@@ -15,12 +23,22 @@ from demo_registry_operator.activities.external_resources.models import (
     DeleteTemporalCloudMtlsCaSecretRequest,
     DeleteTemporalCloudServiceAccountRequest,
     DeleteTemporalRuntimeCandidateSecretRequest,
+    DeleteServerlessLambdaResourcesRequest,
+    DeleteServerlessLambdaResourcesResult,
     EcrRepositoryRequest,
     EcrRepositoryResult,
+    EnsureLambdaExecutionRoleRequest,
+    EnsureLambdaExecutionRoleResult,
+    EnsureLambdaFunctionRequest,
+    EnsureLambdaFunctionResult,
+    EnsureTemporalLambdaInvokeRoleRequest,
+    EnsureTemporalLambdaInvokeRoleResult,
     ExternalResourcesPlan,
     MirrorTemporalRuntimeSecretRequest,
     PromoteTemporalMtlsCaRequest,
     PromoteTemporalRuntimeCredentialRequest,
+    ReconcileServerlessWorkerDeploymentRequest,
+    ReconcileServerlessWorkerDeploymentResult,
     RunTemporalRuntimeCandidateCanaryRequest,
     SecretsManagerVerificationResult,
     StageTemporalApiKeyCandidateRequest,
@@ -46,6 +64,9 @@ from demo_registry_operator.activities.external_resources.planning import (
 )
 from demo_registry_operator.activities.external_resources.secrets import (
     verify_secrets_manager_resources,
+)
+from demo_registry_operator.activities.external_resources.serverless_worker import (
+    reconcile_serverless_worker_deployment,
 )
 from demo_registry_operator.activities.external_resources.temporal import (
     configure_temporal_cloud_namespace_mtls,
@@ -83,12 +104,22 @@ __all__ = [
     "DeleteTemporalCloudMtlsCaSecretRequest",
     "DeleteTemporalCloudServiceAccountRequest",
     "DeleteTemporalRuntimeCandidateSecretRequest",
+    "DeleteServerlessLambdaResourcesRequest",
+    "DeleteServerlessLambdaResourcesResult",
     "EcrRepositoryRequest",
     "EcrRepositoryResult",
+    "EnsureLambdaExecutionRoleRequest",
+    "EnsureLambdaExecutionRoleResult",
+    "EnsureLambdaFunctionRequest",
+    "EnsureLambdaFunctionResult",
+    "EnsureTemporalLambdaInvokeRoleRequest",
+    "EnsureTemporalLambdaInvokeRoleResult",
     "ExternalResourcesPlan",
     "MirrorTemporalRuntimeSecretRequest",
     "PromoteTemporalMtlsCaRequest",
     "PromoteTemporalRuntimeCredentialRequest",
+    "ReconcileServerlessWorkerDeploymentRequest",
+    "ReconcileServerlessWorkerDeploymentResult",
     "RunTemporalRuntimeCandidateCanaryRequest",
     "SecretsManagerVerificationResult",
     "StageTemporalApiKeyCandidateRequest",
@@ -109,6 +140,7 @@ __all__ = [
     "create_or_verify_temporal_cloud_namespace",
     "create_or_verify_temporal_cloud_service_account",
     "delete_ecr_repositories",
+    "delete_serverless_lambda_resources",
     "delete_temporal_cloud_api_key",
     "delete_temporal_cloud_api_key_by_id",
     "delete_temporal_cloud_mtls_ca_secret",
@@ -121,6 +153,9 @@ __all__ = [
     "disable_temporal_cloud_namespace_delete_protection",
     "disable_temporal_cloud_namespace_delete_protection_by_name",
     "ecr_repositories_status",
+    "ensure_lambda_execution_role",
+    "ensure_lambda_function",
+    "ensure_temporal_lambda_invoke_role",
     "error_code",
     "external_resource_finalization_status",
     "external_resources_status",
@@ -128,6 +163,7 @@ __all__ = [
     "plan_external_resources",
     "promote_temporal_mtls_ca",
     "promote_temporal_runtime_credential",
+    "reconcile_serverless_worker_deployment",
     "run_temporal_runtime_candidate_canary",
     "stage_temporal_api_key_candidate",
     "stage_temporal_mtls_ca",

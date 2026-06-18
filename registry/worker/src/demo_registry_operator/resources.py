@@ -100,6 +100,7 @@ CATALOG_STATUS_FIELDS = [
     "candidate",
     "readiness",
     "workerDeployments",
+    "serverlessWorkers",
     "smokeCheck",
     "prune",
     "activeImageVersion",
@@ -188,6 +189,8 @@ TEMPORAL_PROXY_DEFAULT_ADDRESS_ENVS = ["TEMPORAL_ADDRESS", "TEMPORAL_HOST"]
 TEMPORAL_WORKER_DEFAULT_ROLLOUT_STRATEGY = "AllAtOnce"
 TEMPORAL_WORKER_DEFAULT_SCALEDOWN_DELAY = "1h"
 TEMPORAL_WORKER_DEFAULT_DELETE_DELAY = "24h"
+SERVERLESS_PROVIDER_AWS_LAMBDA = "aws-lambda"
+SERVERLESS_PACKAGE_TYPE_IMAGE = "image"
 TEMPORAL_WORKER_ROLLOUT_STRATEGIES = {"AllAtOnce", "Manual", "Progressive"}
 MAX_DNS_LABEL_LENGTH = 63
 
@@ -1128,7 +1131,7 @@ def rbac_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     }
 
     resources = [role]
-    project_components = components(demo_project)
+    project_components = kubernetes_components(demo_project)
     for component_name in sorted(project_components):
         component = project_components[component_name]
         service_account_name = service_account_for_component(component_name)
@@ -1199,7 +1202,9 @@ def service_resources(
     resources: list[dict[str, Any]] = []
     namespace = project_namespace(demo_project)
     version = candidate_version(demo_project, image_overrides or {})
-    for component_name, component in sorted(components(demo_project).items()):
+    for component_name, component in sorted(
+        kubernetes_components(demo_project).items()
+    ):
         ports = component_ports(component)
         if not ports:
             continue
@@ -1285,7 +1290,9 @@ def deployment_resources(
     resources: list[dict[str, Any]] = []
     namespace = project_namespace(demo_project)
     version = candidate_version(demo_project, image_overrides)
-    for component_name, component in sorted(components(demo_project).items()):
+    for component_name, component in sorted(
+        kubernetes_components(demo_project).items()
+    ):
         if worker_versioning_enabled(component):
             continue
 
@@ -1380,7 +1387,7 @@ def worker_controller_resources(
     *,
     external_resources: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    workers = versioned_worker_components(demo_project)
+    workers = kubernetes_versioned_worker_components(demo_project)
     if not workers:
         return []
 
@@ -1604,7 +1611,7 @@ def worker_deployment_rollout_wait_seconds(
 ) -> int:
     base = max(1, int(base_timeout_seconds))
     wait_seconds = base
-    for component in versioned_worker_components(demo_project).values():
+    for component in kubernetes_versioned_worker_components(demo_project).values():
         wait_seconds = max(
             wait_seconds,
             base + worker_component_rollout_seconds(component),
@@ -3018,6 +3025,9 @@ def catalog_status_entry(
         "workerDeployments": worker_deployments_summary(
             status.get("workerDeploymentStatus")
         ),
+        "serverlessWorkers": serverless_workers_summary(
+            status.get("serverlessWorkerStatus")
+        ),
         "smokeCheck": status.get("smokeCheckStatus"),
         "prune": status.get("pruneStatus"),
         "prunedResources": status.get("prunedResources", []),
@@ -3093,6 +3103,27 @@ def worker_deployments_summary(value: Any) -> dict[str, Any]:
         "checkedAt": value.get("checkedAt"),
         "resources": value.get("resources", []),
         "message": value.get("message"),
+    }
+
+
+def serverless_workers_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    components = value.get("components")
+    components = components if isinstance(components, dict) else {}
+    return {
+        "phase": value.get("phase"),
+        "message": value.get("message"),
+        "components": {
+            name: {
+                "phase": component.get("phase"),
+                "deploymentName": component.get("deploymentName"),
+                "buildId": component.get("buildId"),
+                "taskQueue": component.get("taskQueue"),
+            }
+            for name, component in components.items()
+            if isinstance(name, str) and isinstance(component, dict)
+        },
     }
 
 
@@ -3244,7 +3275,9 @@ def candidate_service_status(
                 version,
             )
         )
-        for component_name, component in sorted(components(demo_project).items())
+        for component_name, component in sorted(
+            kubernetes_components(demo_project).items()
+        )
         if component_ports(component)
     }
 
@@ -3263,7 +3296,9 @@ def candidate_deployment_status(
             component_name,
             version,
         )
-        for component_name, component in sorted(components(demo_project).items())
+        for component_name, component in sorted(
+            kubernetes_components(demo_project).items()
+        )
         if isinstance(component.get("build"), str)
         and component["build"] in image_overrides
         and not worker_versioning_enabled(component)
@@ -3285,6 +3320,7 @@ def worker_deployment_status(
         )
         if isinstance(component.get("build"), str)
         and component["build"] in image_overrides
+        and not serverless_lambda_enabled(component)
     }
 
 
@@ -3321,6 +3357,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "candidate",
                 "readiness",
                 "workerDeployments",
+                "serverlessWorkers",
                 "smokeCheck",
                 "activeImageVersion",
                 "finalizeStatus",
@@ -3424,7 +3461,7 @@ def default_ingress_routes(demo_project: dict[str, Any]) -> list[dict[str, Any]]
     HTTP convention); other components (APIs, workers) are reached internally. If
     no component serves 80, routing is ambiguous and must be declared explicitly.
     """
-    for name, component in sorted(components(demo_project).items()):
+    for name, component in sorted(kubernetes_components(demo_project).items()):
         for port in component_ports(component):
             if port.get("servicePort") == 80 and isinstance(port.get("name"), str):
                 return [{"component": name, "port": port["name"]}]
@@ -3557,6 +3594,50 @@ def worker_versioning_enabled(component: dict[str, Any]) -> bool:
     return bool(versioning and versioning.get("enabled") is True)
 
 
+def serverless_config(component: dict[str, Any]) -> dict[str, Any]:
+    serverless = component.get("serverless")
+    return serverless if isinstance(serverless, dict) else {}
+
+
+def serverless_lambda_enabled(component: dict[str, Any]) -> bool:
+    config = serverless_config(component)
+    return config.get("provider") == SERVERLESS_PROVIDER_AWS_LAMBDA
+
+
+def serverless_lambda_package_type(component: dict[str, Any]) -> str:
+    config = serverless_config(component)
+    package_type = config.get("packageType")
+    return (
+        package_type
+        if isinstance(package_type, str)
+        else SERVERLESS_PACKAGE_TYPE_IMAGE
+    )
+
+
+def serverless_lambda_components(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: component
+        for name, component in components(demo_project).items()
+        if serverless_lambda_enabled(component)
+    }
+
+
+def has_serverless_lambda_components(demo_project: dict[str, Any]) -> bool:
+    return bool(serverless_lambda_components(demo_project))
+
+
+def kubernetes_components(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: component
+        for name, component in components(demo_project).items()
+        if not serverless_lambda_enabled(component)
+    }
+
+
 def versioned_worker_components(
     demo_project: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
@@ -3564,6 +3645,16 @@ def versioned_worker_components(
         name: component
         for name, component in components(demo_project).items()
         if worker_versioning_enabled(component)
+    }
+
+
+def kubernetes_versioned_worker_components(
+    demo_project: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: component
+        for name, component in versioned_worker_components(demo_project).items()
+        if not serverless_lambda_enabled(component)
     }
 
 

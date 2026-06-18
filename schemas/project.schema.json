@@ -215,6 +215,9 @@
         "temporalProxy": {
           "$ref": "#/$defs/temporalProxy"
         },
+        "serverless": {
+          "$ref": "#/$defs/serverless"
+        },
         "worker": {
           "$ref": "#/$defs/worker"
         }
@@ -539,6 +542,39 @@
           "minimum": 1,
           "maximum": 60,
           "default": 10
+        }
+      }
+    },
+    "serverless": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["aws-lambda"]
+        },
+        "packageType": {
+          "type": "string",
+          "const": "image",
+          "default": "image"
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["x86_64", "arm64"],
+          "default": "x86_64"
+        },
+        "memoryMb": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 10240,
+          "default": 512
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900,
+          "default": 600
         }
       }
     },

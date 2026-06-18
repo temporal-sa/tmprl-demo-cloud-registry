@@ -41,6 +41,8 @@ DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
 TEMPORAL_AUTH_MODE_MTLS = "mtls"
+SERVERLESS_PROVIDER_AWS_LAMBDA = "aws-lambda"
+SERVERLESS_PACKAGE_TYPE_IMAGE = "image"
 TEMPORAL_API_KEY_INPUT_REFS = {
     "temporal.address",
     "temporal.namespace",
@@ -189,6 +191,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_temporal_auth_compatibility(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
+        errors.extend(validate_serverless_components(document))
         errors.extend(validate_registry(document))
 
     for document in instruqt_courses:
@@ -588,7 +591,9 @@ def validate_temporal_auth_compatibility(
                     ),
                 )
             )
-        if worker_versioning_enabled(component):
+        if worker_versioning_enabled(component) and not serverless_lambda_enabled(
+            component
+        ):
             errors.append(
                 ProjectError(
                     document.path,
@@ -598,6 +603,92 @@ def validate_temporal_auth_compatibility(
                     ),
                 )
             )
+    return errors
+
+
+def validate_serverless_components(document: ProjectDocument) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+    project_builds = builds(document)
+
+    for component_name, component in components(document).items():
+        if not serverless_lambda_enabled(component):
+            continue
+
+        serverless = serverless_config(component)
+        package_type = serverless.get("packageType", SERVERLESS_PACKAGE_TYPE_IMAGE)
+        if package_type != SERVERLESS_PACKAGE_TYPE_IMAGE:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.serverless.packageType must be image",
+                )
+            )
+
+        build_name = component.get("build")
+        build = project_builds.get(build_name) if isinstance(build_name, str) else None
+        strategy = (
+            build.get("strategy", "dockerfile") if isinstance(build, dict) else None
+        )
+        if strategy != "dockerfile":
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.build must reference a "
+                        "dockerfile build for serverless aws-lambda"
+                    ),
+                )
+            )
+
+        if not worker_versioning_enabled(component):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.serverless aws-lambda "
+                        "requires worker.versioning.enabled true"
+                    ),
+                )
+            )
+
+        unsupported_fields = [
+            field
+            for field in (
+                "ports",
+                "serviceName",
+                "replicas",
+                "automountServiceAccountToken",
+                "command",
+                "args",
+                "temporalProxy",
+                "temporalAccess",
+                "secrets",
+            )
+            if field in component
+        ]
+        for field in unsupported_fields:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.{field} is not supported "
+                        "for serverless aws-lambda components"
+                    ),
+                )
+            )
+
+        for index, item in enumerate(component.get("env", [])):
+            if isinstance(item, dict) and "valueFrom" in item:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        (
+                            f"components.{component_name}.env[{index}].valueFrom "
+                            "is not supported for serverless aws-lambda components"
+                        ),
+                    )
+                )
+
     return errors
 
 
@@ -927,6 +1018,18 @@ def worker_versioning_enabled(component: dict[str, Any]) -> bool:
         return False
     versioning = worker.get("versioning")
     return isinstance(versioning, dict) and versioning.get("enabled") is True
+
+
+def serverless_config(component: dict[str, Any]) -> dict[str, Any]:
+    serverless = component.get("serverless")
+    return serverless if isinstance(serverless, dict) else {}
+
+
+def serverless_lambda_enabled(component: dict[str, Any]) -> bool:
+    return (
+        serverless_config(component).get("provider")
+        == SERVERLESS_PROVIDER_AWS_LAMBDA
+    )
 
 
 def temporal_auth_mode(document: ProjectDocument) -> str:
