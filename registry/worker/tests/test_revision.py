@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from demo_registry_operator import kube
+
 ROOT = Path(__file__).resolve().parents[3]
 CRD_DIR = ROOT / "clusters" / "sa-demo" / "bootstrap" / "crds"
 DEMOPROJECTS_CRD = CRD_DIR / "demoprojects.registry.tmprl-demo.cloud.yaml"
@@ -157,3 +159,64 @@ def test_rbac_covers_ownerreference_patch_targets():
     assert {"get", "create", "patch"} <= _verbs_for(
         rules, "temporal.io", "workerdeployments"
     )
+
+
+# --- Task 1.4: kube helpers + merge-patch content-type guard ---
+
+
+def test_revision_kube_constants():
+    assert kube.DEMO_PROJECT_REVISION_GROUP == "registry.tmprl-demo.cloud"
+    assert kube.DEMO_PROJECT_REVISION_VERSION == "v1alpha1"
+    assert kube.DEMO_PROJECT_REVISION_PLURAL == "demoprojectrevisions"
+
+
+def test_status_patch_preserves_unrelated_keys_and_uses_json_merge_patch(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        kube,
+        "_patch_demo_project_status_raw",
+        lambda name, body, *, content_type: sent.update(
+            name=name, body=body, content_type=content_type
+        ),
+    )
+    kube.patch_demo_project_status(
+        "p", {"candidateRevision": {"name": "x"}}, dry_run=False
+    )
+    # merge-patch body contains ONLY the changed key; server preserves phase/etc.
+    assert sent["body"] == {"status": {"candidateRevision": {"name": "x"}}}
+    assert sent["content_type"] == "application/merge-patch+json"
+
+
+def test_status_patch_dry_run_skips_raw_call(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        kube,
+        "_patch_demo_project_status_raw",
+        lambda *a, **k: called.append(1),
+    )
+    kube.patch_demo_project_status("p", {"phase": "Promoted"}, dry_run=True)
+    assert called == []
+
+
+def test_revision_status_patch_uses_json_merge_patch(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        kube,
+        "_patch_demo_project_revision_status_raw",
+        lambda name, body, *, content_type: sent.update(
+            name=name, body=body, content_type=content_type
+        ),
+    )
+    kube.patch_demo_project_revision_status("r", {"phase": "Applied"}, dry_run=False)
+    assert sent["body"] == {"status": {"phase": "Applied"}}
+    assert sent["content_type"] == "application/merge-patch+json"
+
+
+def test_revision_owner_reference_shape():
+    ref = kube.revision_owner_reference("rev-1", "uid-123")
+    assert ref["apiVersion"] == "registry.tmprl-demo.cloud/v1alpha1"
+    assert ref["kind"] == "DemoProjectRevision"
+    assert ref["name"] == "rev-1"
+    assert ref["uid"] == "uid-123"
+    assert ref["controller"] is True
+    assert ref["blockOwnerDeletion"] is True
