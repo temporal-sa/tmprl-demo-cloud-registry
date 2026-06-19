@@ -626,3 +626,63 @@ def test_patch_revision_refs_only_patches_ref_keys(monkeypatch):
         )
     )
     assert sent["status"] == {"candidateRevision": {"name": "x"}}
+
+
+# --- Task 3.3: bounded cleanup wait ---
+
+
+def test_wait_cleanup_runtime_namespace_cleaned_when_namespace_gone(monkeypatch):
+    monkeypatch.setattr(revision_activities.kube, "read_namespace", lambda name: None)
+    result = revision_activities.wait_for_revision_cleanup_impl(
+        "rev",
+        mode="runtime-namespace",
+        boundary={"namespace": "ns-x"},
+        sleep=lambda *_: None,
+        now=lambda: 0.0,
+    )
+    assert result["phase"] == "Cleaned"
+
+
+def test_wait_cleanup_control_plane_cleaned_when_no_candidate(monkeypatch):
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "list_deployments",
+        lambda ns, *, label_selector: [],
+    )
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "list_services",
+        lambda ns, *, label_selector: [],
+    )
+    result = revision_activities.wait_for_revision_cleanup_impl(
+        "rev",
+        mode="control-plane",
+        boundary={"namespace": "p", "rolloutVersion": "git-v1"},
+        sleep=lambda *_: None,
+        now=lambda: 0.0,
+    )
+    assert result["phase"] == "Cleaned"
+
+
+def test_wait_cleanup_terminating_on_deadline_and_heartbeats(monkeypatch):
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "read_namespace",
+        lambda name: {"metadata": {"name": name}},  # never disappears
+    )
+    times = iter([0.0, 0.5, 2.0])  # deadline=1.0; 0.5 < deadline, then 2.0 >= deadline
+    beats: list = []
+    slept: list = []
+    result = revision_activities.wait_for_revision_cleanup_impl(
+        "rev",
+        mode="runtime-namespace",
+        boundary={"namespace": "ns-x"},
+        timeout_seconds=1,
+        poll_seconds=5,
+        sleep=lambda s: slept.append(s),
+        heartbeat=lambda *a: beats.append(a),
+        now=lambda: next(times),
+    )
+    assert result["phase"] == "Terminating"
+    assert beats  # heartbeated while waiting
+    assert slept == [5]

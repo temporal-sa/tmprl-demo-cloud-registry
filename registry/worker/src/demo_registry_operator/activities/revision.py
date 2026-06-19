@@ -8,6 +8,7 @@ apply import cycle and keeps renderability a single source of truth.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -158,3 +159,84 @@ def patch_demo_project_revision_refs(
     if patch:
         kube.patch_demo_project_status(request.project, patch, dry_run=False)
     return {"project": request.project, "patched": sorted(patch)}
+
+
+# --- Task 3.3: bounded cleanup wait ---
+
+RUNTIME_NAMESPACE_CLEANUP_MODE = "runtime-namespace"
+CONTROL_PLANE_CLEANUP_MODE = "control-plane"
+_ROLLOUT_VERSION_LABEL = "platform.temporal.io/rollout-version"
+
+
+def _revision_boundary_present(mode: str, boundary: dict[str, Any]) -> bool:
+    namespace = boundary.get("namespace")
+    if mode == RUNTIME_NAMESPACE_CLEANUP_MODE:
+        return bool(namespace) and kube.read_namespace(namespace) is not None
+    # control-plane: candidate Deploy/Svc for that rollout version still present.
+    version = boundary.get("rolloutVersion")
+    if not namespace or not version:
+        return False
+    selector = f"{_ROLLOUT_VERSION_LABEL}={version}"
+    if kube.list_deployments(namespace, label_selector=selector):
+        return True
+    if kube.list_services(namespace, label_selector=selector):
+        return True
+    return False
+
+
+def wait_for_revision_cleanup_impl(
+    name: str,
+    *,
+    mode: str,
+    boundary: dict[str, Any],
+    timeout_seconds: int = 300,
+    poll_seconds: int = 5,
+    sleep=time.sleep,
+    heartbeat=lambda *_: None,
+    now=time.monotonic,
+) -> dict[str, Any]:
+    """Poll until the revision's cleanup boundary is gone, or the deadline hits.
+
+    Never hangs: returns {"phase": "Terminating"} at the deadline so a stuck
+    finalizer downstream surfaces as a status instead of a wedged activity.
+    """
+    deadline = now() + timeout_seconds
+    while True:
+        if not _revision_boundary_present(mode, boundary):
+            return {"name": name, "mode": mode, "phase": "Cleaned"}
+        if now() >= deadline:
+            return {
+                "name": name,
+                "mode": mode,
+                "phase": "Terminating",
+                "message": "Revision cleanup did not finish before the deadline.",
+            }
+        heartbeat({"name": name, "mode": mode})
+        sleep(poll_seconds)
+
+
+@dataclass(frozen=True)
+class WaitForRevisionCleanupRequest:
+    name: str
+    mode: str
+    namespace: str | None = None
+    rollout_version: str | None = None
+    timeout_seconds: int = 300
+    poll_seconds: int = 5
+
+
+@activity.defn
+def wait_for_revision_cleanup(
+    request: WaitForRevisionCleanupRequest,
+) -> dict[str, Any]:
+    return wait_for_revision_cleanup_impl(
+        request.name,
+        mode=request.mode,
+        boundary={
+            "namespace": request.namespace,
+            "rolloutVersion": request.rollout_version,
+        },
+        timeout_seconds=request.timeout_seconds,
+        poll_seconds=request.poll_seconds,
+        heartbeat=activity.heartbeat,
+    )

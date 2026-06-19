@@ -116,6 +116,7 @@ from demo_registry_operator.activities.revision import (
     patch_demo_project_revision_refs,
     plan_candidate_revision,
     set_revision_phase,
+    wait_for_revision_cleanup,
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
@@ -285,6 +286,7 @@ async def main() -> None:
                     set_revision_phase,
                     delete_revision,
                     patch_demo_project_revision_refs,
+                    wait_for_revision_cleanup,
                     delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,
