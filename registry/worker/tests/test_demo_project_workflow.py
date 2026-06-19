@@ -761,3 +761,24 @@ def test_revision_name_of():
     assert kubernetes_runtime_workflow._revision_name_of({"name": "rev-1"}) == "rev-1"
     assert kubernetes_runtime_workflow._revision_name_of(None) is None
     assert kubernetes_runtime_workflow._revision_name_of({}) is None
+
+
+# --- Task 5.1: entity dedupe settles a terminal failure; force_reconcile retries ---
+
+
+def test_smoke_check_failed_settles_then_force_reconcile_retries():
+    demo_project = project()
+    identity = reconcile_identity(demo_project)
+    wf = workflow_instance()
+    wf._current_reconcile_identity = identity
+    wf._status = {"phase": "SmokeCheckFailed"}
+    wf._complete_current_reconcile()
+    # 0.2: terminal rollout failure is settled (remembered)
+    assert wf._completed_reconcile_identity == identity
+    # 5.1: re-signalling the SAME identity does not queue a new attempt
+    wf.reconcile(reconcile_signal(deepcopy(demo_project)))
+    assert wf._pending_spec is None
+    assert wf._pending_reconcile_identity is None
+    # 5.1: force_reconcile queues exactly one new attempt
+    wf.force_reconcile(ForceReconcileSignal(token="retry-1", reason="manual"))
+    assert wf._pending_force_reconcile == {"token": "retry-1", "reason": "manual"}
