@@ -126,7 +126,7 @@ spec:
               # shared run policy (naming, timeouts, cleanup).
               input:
                 projectNamePrefix: operator-canary
-                timeoutSeconds: 1800
+                timeoutSeconds: 900
                 cleanupTimeoutSeconds: 900
                 pollSeconds: 10
                 cleanupPolicy: Always

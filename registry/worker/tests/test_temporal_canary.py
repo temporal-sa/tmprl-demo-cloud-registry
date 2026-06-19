@@ -247,3 +247,18 @@ def test_api_key_canary_template_worker_has_no_cert_mount():
     worker = apikey["spec"]["components"]["worker"]
     assert _resources.temporal_auth_mode(apikey) != "mtls"
     assert not _resources.mounts_temporal_mtls_cert_files(apikey, worker)
+
+
+def test_canary_failed_fails_fast_on_terminal_rollout_phases():
+    # The gate's promotion wait must treat terminal rollout-failure phases as
+    # failures so it fails fast instead of polling until the timeout.
+    from demo_registry_operator.activities.canary import canary_failed
+
+    for phase in ("CandidateNotReady", "SmokeCheckFailed", "WorkerRolloutFailed",
+                  "Error", "FinalizationError"):
+        assert canary_failed({"phase": phase}) is True, phase
+    # in-progress / success phases must NOT be treated as failed
+    for phase in ("Reconciling", "SmokeCheckPending", "Promoted", "Ready"):
+        assert canary_failed({"phase": phase}) is False, phase
+    # candidate-level terminal failures also count
+    assert canary_failed({"candidateRolloutStatus": {"phase": "SmokeCheckFailed"}}) is True

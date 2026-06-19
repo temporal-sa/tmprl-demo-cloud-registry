@@ -843,7 +843,16 @@ def canary_rotation_complete(token: str, status: dict[str, Any]) -> bool:
 
 
 def canary_failed(status: dict[str, Any]) -> bool:
-    if status.get("phase") in {"Error", "FinalizationError"}:
+    # A canary is a single-shot rollout attempt: any terminal rollout-failure
+    # phase means it will not promote on its own, so fail the gate fast instead
+    # of polling until the (generous) promotion timeout.
+    if status.get("phase") in {
+        "Error",
+        "FinalizationError",
+        "CandidateNotReady",
+        "SmokeCheckFailed",
+        "WorkerRolloutFailed",
+    }:
         return True
     external = status.get("externalResources")
     if isinstance(external, dict) and external.get("phase") == "Error":
@@ -855,6 +864,7 @@ def canary_failed(status: dict[str, Any]) -> bool:
     return isinstance(candidate_status, dict) and candidate_status.get("phase") in {
         "BuildFailed",
         "WorkerRolloutFailed",
+        "SmokeCheckFailed",
     }
 
 
