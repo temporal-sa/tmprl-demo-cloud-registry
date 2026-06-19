@@ -163,6 +163,21 @@ spec:
             status:
               type: object
               properties:
+                activeRevision:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                candidateRevision:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                lastFailedRevision:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                workerDeploymentRollbackStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                revisionCleanupStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 observedGeneration:
                   type: integer
                   minimum: 0
