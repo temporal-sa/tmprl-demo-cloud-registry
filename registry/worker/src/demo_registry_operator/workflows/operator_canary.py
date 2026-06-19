@@ -5,15 +5,10 @@ import asyncio
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.workflows.messages import (
-        RegistryOperatorAuthCanaryRequest,
-        RegistryOperatorCanaryRequest,
-        RegistryOperatorCanaryResult,
-    )
-    from demo_registry_operator.workflows.operator_auth_canary import (
-        RegistryOperatorAuthCanaryWorkflow,
-    )
+from demo_registry_operator.workflows import (
+    messages,
+    operator_auth_canary as auth_canary_workflow,
+)
 
 
 @workflow.defn
@@ -23,8 +18,8 @@ class RegistryOperatorCanaryWorkflow:
     @workflow.run
     async def run(
         self,
-        request: RegistryOperatorCanaryRequest,
-    ) -> RegistryOperatorCanaryResult:
+        request: messages.RegistryOperatorCanaryRequest,
+    ) -> messages.RegistryOperatorCanaryResult:
         workflow_info = workflow.info()
         branch_requests = [
             registry_operator_canary_branch_request(
@@ -43,7 +38,7 @@ class RegistryOperatorCanaryWorkflow:
         canary_results = await asyncio.gather(
             *(
                 workflow.execute_child_workflow(
-                    RegistryOperatorAuthCanaryWorkflow.run,
+                    auth_canary_workflow.RegistryOperatorAuthCanaryWorkflow.run,
                     branch_request,
                     id=branch_request.workflowID,
                     task_queue=workflow_info.task_queue,
@@ -55,7 +50,7 @@ class RegistryOperatorCanaryWorkflow:
         )
         canaries = {result.authMode: result for result in canary_results}
         ok = all(result.phase == "Succeeded" for result in canary_results)
-        result = RegistryOperatorCanaryResult(
+        result = messages.RegistryOperatorCanaryResult(
             phase="Succeeded" if ok else "Failed",
             canaries=canaries,
         )
@@ -70,19 +65,19 @@ class RegistryOperatorCanaryWorkflow:
 
 
 def registry_operator_canary_branch_request(
-    request: RegistryOperatorCanaryRequest,
+    request: messages.RegistryOperatorCanaryRequest,
     *,
     auth_mode: str,
     workflow_id: str,
     run_id: str,
-) -> RegistryOperatorAuthCanaryRequest:
+) -> messages.RegistryOperatorAuthCanaryRequest:
     suffix = "api-key" if auth_mode == "apiKey" else auth_mode
     prefix = request.projectNamePrefix
     prefix = prefix if isinstance(prefix, str) and prefix else "operator-canary"
     project_name = request.projectName
     if isinstance(project_name, str) and project_name:
         project_name = f"{project_name}-{suffix}"
-    return RegistryOperatorAuthCanaryRequest(
+    return messages.RegistryOperatorAuthCanaryRequest(
         workflowID=f"{workflow_id}/{auth_mode}",
         runID=run_id,
         authMode=auth_mode,

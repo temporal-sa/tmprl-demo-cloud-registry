@@ -6,21 +6,9 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.reconcile import (
-        PromoteCandidateRoutesRequest,
-        PruneStaleRuntimeCandidatesRequest,
-        SmokeCheckRequest,
-        plan_rollout,
-        promote_candidate_routes,
-        prune_stale_runtime_candidates,
-        run_smoke_check,
-    )
-    from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
-    from demo_registry_operator.workflows.messages import (
-        DemoRolloutRequest,
-        DemoRolloutResult,
-    )
+from demo_registry_operator import errors
+from demo_registry_operator.activities import reconcile as reconcile_activities
+from demo_registry_operator.workflows import messages
 
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -28,14 +16,14 @@ COMMON_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 CHECK_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 
 
@@ -44,8 +32,11 @@ class DemoRolloutWorkflow:
     """Smoke-test-gated rollout workflow for a demo update."""
 
     @workflow.run
-    async def run(self, request: DemoRolloutRequest) -> DemoRolloutResult:
-        plan = plan_rollout(
+    async def run(
+        self,
+        request: messages.DemoRolloutRequest,
+    ) -> messages.DemoRolloutResult:
+        plan = reconcile_activities.plan_rollout(
             {
                 "project": request.project,
                 "sourceCommitSha": request.sourceCommitSha,
@@ -56,8 +47,8 @@ class DemoRolloutWorkflow:
             }
         )
         smoke_activity = await workflow.execute_activity(
-            run_smoke_check,
-            SmokeCheckRequest(
+            reconcile_activities.run_smoke_check,
+            reconcile_activities.SmokeCheckRequest(
                 project=str(plan.get("project", "unknown")),
                 demo_project=plan.get("demoProject"),
                 host=plan.get("host"),
@@ -74,15 +65,15 @@ class DemoRolloutWorkflow:
                 "phase": "SmokeCheckFailed",
                 "smokeCheck": smoke_result,
             }
-            return DemoRolloutResult(
+            return messages.DemoRolloutResult(
                 project=plan.get("project"),
                 phase="SmokeCheckFailed",
                 status=status,
             )
 
         promotion_result = await workflow.execute_activity(
-            promote_candidate_routes,
-            PromoteCandidateRoutesRequest(
+            reconcile_activities.promote_candidate_routes,
+            reconcile_activities.PromoteCandidateRoutesRequest(
                 project=str(plan.get("project", "unknown")),
                 demo_project=plan.get("demoProject", {}),
                 candidate=plan.get("candidate", {}),
@@ -98,7 +89,7 @@ class DemoRolloutWorkflow:
             "prunedResources": prune_status.get("resources", []),
             "smokeCheck": smoke_result,
         }
-        return DemoRolloutResult(
+        return messages.DemoRolloutResult(
             project=status.get("project", plan.get("project")),
             phase=status.get("phase", "Unknown"),
             status=status,
@@ -117,8 +108,8 @@ class DemoRolloutWorkflow:
         if not isinstance(demo_project, dict) or not isinstance(active_version, str):
             return {"phase": "Skipped", "resources": []}
         prune_result = await workflow.execute_activity(
-            prune_stale_runtime_candidates,
-            PruneStaleRuntimeCandidatesRequest(
+            reconcile_activities.prune_stale_runtime_candidates,
+            reconcile_activities.PruneStaleRuntimeCandidatesRequest(
                 demo_project=demo_project,
                 active_version=active_version,
             ),

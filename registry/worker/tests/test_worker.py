@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from temporalio import workflow
 from temporalio.common import WorkerDeploymentVersion
 from temporalio.converter import DataConverter
 
@@ -49,6 +50,34 @@ def test_running_entity_workflows_query_selects_running_entity_workflows():
         '(WorkflowType = "DemoProjectWorkflow" OR WorkflowType = "InstruqtCourseWorkflow") '
         'AND ExecutionStatus = "Running"'
     )
+
+
+def test_workflow_runner_prepares_registered_workflows_in_sandbox():
+    async def prepare_workflows() -> None:
+        workflow_runner = worker.create_workflow_runner()
+        for workflow_type in (
+            worker.DemoProjectWorkflow,
+            worker.DemoProjectArtifactBuildWorkflow,
+            worker.DemoProjectKubernetesRuntimeWorkflow,
+            worker.DemoProjectServerlessLambdaWorkflow,
+            worker.InstruqtCourseWorkflow,
+            worker.DemoRolloutWorkflow,
+            worker.RegistryOperatorCanaryWorkflow,
+            worker.RegistryOperatorAuthCanaryWorkflow,
+        ):
+            workflow_runner.prepare_workflow(
+                workflow._Definition.must_from_class(workflow_type)
+            )
+
+    asyncio.run(prepare_workflows())
+
+
+def test_workflow_runner_has_centralized_passthrough_modules():
+    workflow_runner = worker.create_workflow_runner()
+    passthrough_modules = workflow_runner.restrictions.passthrough_modules
+
+    for module in worker.WORKFLOW_PASSTHROUGH_MODULES:
+        assert module in passthrough_modules
 
 
 def test_worker_update_batch_job_id_includes_sanitized_build(monkeypatch):

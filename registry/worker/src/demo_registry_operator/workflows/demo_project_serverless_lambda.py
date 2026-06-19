@@ -6,36 +6,10 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.external_resources import (
-        EnsureLambdaExecutionRoleRequest,
-        EnsureLambdaFunctionRequest,
-        EnsureTemporalLambdaInvokeRoleRequest,
-        ReconcileServerlessWorkerDeploymentRequest,
-        ensure_lambda_execution_role,
-        ensure_lambda_function,
-        ensure_temporal_lambda_invoke_role,
-        reconcile_serverless_worker_deployment,
-    )
-    from demo_registry_operator.activities.external_resources.serverless_names import (
-        lambda_execution_role_name,
-        lambda_function_name,
-        temporal_invoke_external_id,
-        temporal_lambda_invoke_role_name,
-    )
-    from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
-    from demo_registry_operator.resources import (
-        candidate_version,
-        project_name,
-        serverless_lambda_components,
-        serverless_config,
-        temporal_secret_remote_path,
-        worker_deployment_name,
-    )
-    from demo_registry_operator.workflows.messages import (
-        DemoProjectServerlessLambdaRequest,
-        DemoProjectServerlessLambdaResult,
-    )
+from demo_registry_operator import errors, resources
+from demo_registry_operator.activities import external_resources
+from demo_registry_operator.activities.external_resources import serverless_names
+from demo_registry_operator.workflows import messages
 
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -43,14 +17,14 @@ COMMON_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 LAMBDA_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=10),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 
 
@@ -61,12 +35,12 @@ class DemoProjectServerlessLambdaWorkflow:
     @workflow.run
     async def run(
         self,
-        request: DemoProjectServerlessLambdaRequest,
-    ) -> DemoProjectServerlessLambdaResult:
+        request: messages.DemoProjectServerlessLambdaRequest,
+    ) -> messages.DemoProjectServerlessLambdaResult:
         demo_project = request.demoProject
-        serverless_components = serverless_lambda_components(demo_project)
+        serverless_components = resources.serverless_lambda_components(demo_project)
         if not serverless_components:
-            return DemoProjectServerlessLambdaResult(
+            return messages.DemoProjectServerlessLambdaResult(
                 status={
                     "phase": "NotRequired",
                     "message": "No serverless Lambda workers configured.",
@@ -75,9 +49,9 @@ class DemoProjectServerlessLambdaWorkflow:
             )
 
         images = build_images(request.buildStatus)
-        build_id = candidate_version(demo_project, images)
+        build_id = resources.candidate_version(demo_project, images)
         if not build_id:
-            return DemoProjectServerlessLambdaResult(
+            return messages.DemoProjectServerlessLambdaResult(
                 status={
                     "phase": "ImagesMissing",
                     "message": "Serverless Lambda workers require resolved images.",
@@ -95,7 +69,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 build_id,
             )
 
-        return DemoProjectServerlessLambdaResult(
+        return messages.DemoProjectServerlessLambdaResult(
             status={
                 "phase": aggregate_phase(component_statuses),
                 "message": "Serverless Lambda workers reconciled.",
@@ -119,17 +93,23 @@ class DemoProjectServerlessLambdaWorkflow:
                 "message": f"Build {build_name!r} does not have a resolved image.",
             }
 
-        project = project_name(demo_project)
-        deployment_name = worker_deployment_name(component_name, component)
-        function_name = lambda_function_name(project, component_name)
-        execution_role_name = lambda_execution_role_name(project, component_name)
-        invoke_role_name = temporal_lambda_invoke_role_name(project, component_name)
-        external_id = temporal_invoke_external_id(project, component_name)
-        serverless = serverless_config(component)
+        project = resources.project_name(demo_project)
+        deployment_name = resources.worker_deployment_name(component_name, component)
+        function_name = serverless_names.lambda_function_name(project, component_name)
+        execution_role_name = serverless_names.lambda_execution_role_name(
+            project, component_name
+        )
+        invoke_role_name = serverless_names.temporal_lambda_invoke_role_name(
+            project, component_name
+        )
+        external_id = serverless_names.temporal_invoke_external_id(
+            project, component_name
+        )
+        serverless = resources.serverless_config(component)
 
         execution_role = await workflow.execute_activity(
-            ensure_lambda_execution_role,
-            EnsureLambdaExecutionRoleRequest(
+            external_resources.ensure_lambda_execution_role,
+            external_resources.EnsureLambdaExecutionRoleRequest(
                 project=project,
                 component=component_name,
                 role_name=execution_role_name,
@@ -138,8 +118,8 @@ class DemoProjectServerlessLambdaWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         function = await workflow.execute_activity(
-            ensure_lambda_function,
-            EnsureLambdaFunctionRequest(
+            external_resources.ensure_lambda_function,
+            external_resources.EnsureLambdaFunctionRequest(
                 project=project,
                 component=component_name,
                 function_name=function_name,
@@ -150,15 +130,17 @@ class DemoProjectServerlessLambdaWorkflow:
                 timeout_seconds=int(serverless.get("timeoutSeconds", 600)),
                 deployment_name=deployment_name,
                 build_id=build_id,
-                temporal_secret_path=temporal_secret_remote_path(demo_project),
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
                 env=literal_env(component),
             ),
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=LAMBDA_RETRY_POLICY,
         )
         invoke_role = await workflow.execute_activity(
-            ensure_temporal_lambda_invoke_role,
-            EnsureTemporalLambdaInvokeRoleRequest(
+            external_resources.ensure_temporal_lambda_invoke_role,
+            external_resources.EnsureTemporalLambdaInvokeRoleRequest(
                 project=project,
                 component=component_name,
                 role_name=invoke_role_name,
@@ -170,11 +152,13 @@ class DemoProjectServerlessLambdaWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         worker_deployment = await workflow.execute_activity(
-            reconcile_serverless_worker_deployment,
-            ReconcileServerlessWorkerDeploymentRequest(
+            external_resources.reconcile_serverless_worker_deployment,
+            external_resources.ReconcileServerlessWorkerDeploymentRequest(
                 project=project,
                 component=component_name,
-                temporal_secret_path=temporal_secret_remote_path(demo_project),
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
                 deployment_name=deployment_name,
                 build_id=build_id,
                 function_version_arn=function.function_version_arn,

@@ -267,6 +267,49 @@ def test_temporal_candidate_secret_token_is_deterministic_and_sequence_scoped():
     int(token, 16)
 
 
+def test_temporal_cloud_reconcile_state_merges_status_sections():
+    state = demo_project_workflow.TemporalCloudReconcileState(
+        namespace=demo_project_workflow.external_resources.TemporalCloudNamespaceResult(
+            status={
+                "phase": "Ready",
+                "namespace": {"name": "tmprl-dem-cld-demo", "action": "verified"},
+            },
+            namespace="tmprl-dem-cld-demo.acct1",
+            grpc_address="tmprl-dem-cld-demo.acct1.tmprl.cloud:7233",
+            auth_mode="apiKey",
+            created=False,
+        ),
+        service_account=demo_project_workflow.external_resources.TemporalCloudServiceAccountResult(
+            status={
+                "phase": "Ready",
+                "serviceAccount": {"id": "sa-1", "action": "created"},
+            },
+            service_account_id="sa-1",
+            service_account_name="demo-runtime",
+            created=True,
+        ),
+        promote=demo_project_workflow.external_resources.TemporalCloudPromotionResult(
+            status={
+                "phase": "Ready",
+                "apiKey": {"keyId": "key-1"},
+                "promoted": {"runtimeSecret": True},
+            },
+            promoted=True,
+        ),
+        mirror=demo_project_workflow.external_resources.TemporalCloudStatusResult(
+            status={"phase": "Ready", "action": "mirrored"},
+        ),
+    )
+
+    status = state.merged_status()
+
+    assert status["namespace"]["name"] == "tmprl-dem-cld-demo"
+    assert status["serviceAccount"]["id"] == "sa-1"
+    assert status["apiKey"]["keyId"] == "key-1"
+    assert status["promoted"]["runtimeSecret"] is True
+    assert status["runtimeSecretMirror"]["action"] == "mirrored"
+
+
 def test_registry_operator_canary_branch_request_splits_auth_modes():
     request = RegistryOperatorCanaryRequest(
         projectNamePrefix="operator-canary",
@@ -383,3 +426,23 @@ def test_demo_project_reconcile_delegates_runtime_paths_to_child_workflows():
     assert "DemoProjectArtifactBuildWorkflow.run" in source
     assert "DemoProjectKubernetesRuntimeWorkflow.run" in source
     assert "workflow.execute_child_workflow" in source
+
+
+def test_temporal_cloud_reconcile_delegates_to_named_steps():
+    source = inspect.getsource(DemoProjectWorkflow._reconcile_temporal_cloud)
+
+    assert "workflow.execute_activity" not in source
+    assert "_stage_temporal_mtls_ca_if_needed" in source
+    assert "_create_or_verify_temporal_cloud_namespace" in source
+    assert "_stage_temporal_runtime_credential" in source
+    assert "_promote_temporal_runtime_credential_if_needed" in source
+    assert "_mirror_temporal_runtime_secret" in source
+
+    compensation_source = inspect.getsource(
+        DemoProjectWorkflow._compensate_temporal_cloud_reconcile
+    )
+    assert "workflow.execute_activity" not in compensation_source
+    assert "_compensate_temporal_candidate_api_key" in compensation_source
+    assert "_delete_temporal_candidate_secret" in compensation_source
+    assert "_compensate_temporal_service_account" in compensation_source
+    assert "_compensate_temporal_namespace" in compensation_source

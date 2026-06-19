@@ -2,125 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.external_resources import (
-        ConfigureTemporalCloudNamespaceMtlsRequest,
-        CreateOrVerifyTemporalCloudNamespaceRequest,
-        CreateOrVerifyTemporalCloudServiceAccountRequest,
-        DeleteEcrRepositoriesRequest,
-        DeleteServerlessLambdaResourcesRequest,
-        DeleteTemporalCloudApiKeyRequest,
-        DeleteTemporalCloudMtlsCaSecretRequest,
-        DeleteTemporalCloudServiceAccountRequest,
-        DeleteTemporalRuntimeCandidateSecretRequest,
-        MirrorTemporalRuntimeSecretRequest,
-        PromoteTemporalMtlsCaRequest,
-        PromoteTemporalRuntimeCredentialRequest,
-        RunTemporalRuntimeCandidateCanaryRequest,
-        StageTemporalApiKeyCandidateRequest,
-        StageTemporalMtlsCaRequest,
-        StageTemporalMtlsClientCertificateRequest,
-        TemporalCloudCredentialStageResult,
-        TemporalCloudNamespaceRequest,
-        TemporalCloudNamespaceResult,
-        TemporalCloudPromotionResult,
-        TemporalCloudServiceAccountResult,
-        TemporalCloudStatusResult,
-        configure_temporal_cloud_namespace_mtls,
-        create_or_verify_ecr_repository,
-        create_or_verify_temporal_cloud_namespace,
-        create_or_verify_temporal_cloud_service_account,
-        delete_ecr_repositories,
-        delete_serverless_lambda_resources,
-        delete_temporal_cloud_api_key,
-        delete_temporal_cloud_api_key_by_id,
-        delete_temporal_cloud_mtls_ca_secret,
-        delete_temporal_cloud_namespace,
-        delete_temporal_cloud_namespace_by_name,
-        delete_temporal_cloud_runtime_secret,
-        delete_temporal_cloud_service_account,
-        delete_temporal_cloud_service_account_by_id,
-        delete_temporal_runtime_candidate_secret,
-        disable_temporal_cloud_namespace_delete_protection,
-        disable_temporal_cloud_namespace_delete_protection_by_name,
-        external_resource_finalization_status,
-        external_resources_status,
-        plan_external_resources,
-        ecr_repositories_status,
-        mirror_temporal_runtime_secret,
-        promote_temporal_mtls_ca,
-        promote_temporal_runtime_credential,
-        run_temporal_runtime_candidate_canary,
-        stage_temporal_api_key_candidate,
-        stage_temporal_mtls_ca,
-        stage_temporal_mtls_client_certificate,
-        temporal_cloud_finalization_status,
-        verify_secrets_manager_resources,
-    )
-    from demo_registry_operator.activities.force_reconcile import (
-        LoadCurrentDemoProjectForReconcileRequest,
-        load_current_demo_project_for_reconcile,
-    )
-    from demo_registry_operator.activities.reconcile import (
-        OptionalResourceDeleteRequest,
-        ProjectFinalizationRequest,
-        ProjectFinalizerRemovalRequest,
-        ProjectNamespaceDeleteRequest,
-        RecordDemoProjectStatusRequest,
-        ResourceDeleteRequest,
-        completed_activity_status,
-        delete_project_namespace_resource,
-        delete_project_source_auth_secret,
-        delete_project_source_repository,
-        load_project_finalization_plan,
-        project_finalization_status,
-        record_catalog_project_status,
-        record_demo_project_status,
-        remove_project_finalizer,
-    )
-    from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
-    from demo_registry_operator.resources import (
-        SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-        SOURCE_COMMIT_ANNOTATION,
-        TEMPORAL_API_KEY_EXPIRY_ANNOTATION,
-        TEMPORAL_API_KEY_ID_ANNOTATION,
-        TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION,
-        TEMPORAL_AUTH_MODE_API_KEY,
-        TEMPORAL_AUTH_MODE_MTLS,
-        BASE_RECONCILE_KEY_STATUS_FIELD,
-        demo_project_reconcile_key,
-        force_reconcile_status,
-        force_reconcile_token,
-        has_serverless_lambda_components,
-        metadata_annotations,
-        resource_without_force_reconcile,
-    )
-    from demo_registry_operator.workflows.messages import (
-        CheckWorkerVersionSignal,
-        DemoProjectArtifactBuildRequest,
-        DemoProjectFinalizeSignal,
-        DemoProjectKubernetesRuntimeRequest,
-        DemoProjectReconcileSignal,
-        DemoProjectRunRequest,
-        DemoProjectServerlessLambdaRequest,
-        ForceReconcileSignal,
-        ShutdownSignal,
-    )
-    from demo_registry_operator.workflows.demo_project_artifact_build import (
-        DemoProjectArtifactBuildWorkflow,
-    )
-    from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
-        DemoProjectKubernetesRuntimeWorkflow,
-    )
-    from demo_registry_operator.workflows.demo_project_serverless_lambda import (
-        DemoProjectServerlessLambdaWorkflow,
-    )
+from demo_registry_operator import errors, resources
+from demo_registry_operator.activities import (
+    external_resources,
+    force_reconcile as force_reconcile_activities,
+    reconcile as reconcile_activities,
+)
+from demo_registry_operator.workflows import (
+    demo_project_artifact_build as artifact_build_workflow,
+    demo_project_kubernetes_runtime as kubernetes_runtime_workflow,
+    demo_project_serverless_lambda as serverless_lambda_workflow,
+    messages,
+)
 
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
@@ -130,21 +30,21 @@ COMMON_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 STATUS_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=12,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 CHECK_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT = timedelta(minutes=10)
 TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
@@ -157,15 +57,49 @@ FAILED_RECONCILE_PHASES = {
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
+@dataclass
+class TemporalCloudReconcileState:
+    namespace: external_resources.TemporalCloudNamespaceResult | None = None
+    service_account: external_resources.TemporalCloudServiceAccountResult | None = None
+    ca: external_resources.TemporalCloudCredentialStageResult | None = None
+    mtls_config: external_resources.TemporalCloudStatusResult | None = None
+    stage: external_resources.TemporalCloudCredentialStageResult | None = None
+    canary: external_resources.TemporalCloudStatusResult | None = None
+    ca_promote: external_resources.TemporalCloudPromotionResult | None = None
+    promote: (
+        external_resources.TemporalCloudPromotionResult | external_resources.TemporalCloudCredentialStageResult | None
+    ) = None
+    mirror: external_resources.TemporalCloudStatusResult | None = None
+    ca_promoted: bool = False
+    promoted: bool = False
+
+    def merged_status(self) -> dict[str, Any]:
+        if self.namespace is None:
+            return {}
+        credential = self.promote if self.promote is not None else self.stage
+        return merge_temporal_cloud_status(
+            self.namespace.status,
+            ca_status=self.ca.status if self.ca else None,
+            mtls_config_status=(
+                self.mtls_config.status if self.mtls_config else None
+            ),
+            service_account_status=(
+                self.service_account.status if self.service_account else None
+            ),
+            credential_status=credential.status if credential else None,
+            mirror_status=self.mirror.status if self.mirror else None,
+        )
+
+
 def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
-    annotations = metadata_annotations(demo_project)
+    annotations = resources.metadata_annotations(demo_project)
     identity = {
-        "reconcileKey": demo_project_reconcile_key(demo_project),
+        "reconcileKey": resources.demo_project_reconcile_key(demo_project),
     }
-    source_commit_sha = annotations.get(SOURCE_COMMIT_ANNOTATION)
+    source_commit_sha = annotations.get(resources.SOURCE_COMMIT_ANNOTATION)
     if source_commit_sha:
         identity["sourceCommitSha"] = source_commit_sha
-    source_artifact_digest = annotations.get(SOURCE_ARTIFACT_DIGEST_ANNOTATION)
+    source_artifact_digest = annotations.get(resources.SOURCE_ARTIFACT_DIGEST_ANNOTATION)
     if source_artifact_digest:
         identity["sourceArtifactDigest"] = source_artifact_digest
     return identity
@@ -263,14 +197,14 @@ def demo_project_with_temporal_api_key(
     rendered = {**demo_project}
     rendered_metadata = {**metadata} if isinstance(metadata, dict) else {}
     rendered_annotations = {**annotations} if isinstance(annotations, dict) else {}
-    rendered_annotations[TEMPORAL_API_KEY_ID_ANNOTATION] = key_id
+    rendered_annotations[resources.TEMPORAL_API_KEY_ID_ANNOTATION] = key_id
 
     expiry_time = api_key.get("expiryTime")
     if isinstance(expiry_time, str) and expiry_time:
-        rendered_annotations[TEMPORAL_API_KEY_EXPIRY_ANNOTATION] = expiry_time
+        rendered_annotations[resources.TEMPORAL_API_KEY_EXPIRY_ANNOTATION] = expiry_time
     created_at = api_key.get("createdAt")
     if isinstance(created_at, str) and created_at:
-        rendered_annotations[TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION] = created_at
+        rendered_annotations[resources.TEMPORAL_API_KEY_SYNCED_AT_ANNOTATION] = created_at
 
     rendered_metadata["annotations"] = rendered_annotations
     rendered["metadata"] = rendered_metadata
@@ -386,7 +320,7 @@ class DemoProjectWorkflow:
     @workflow.init
     def __init__(
         self,
-        request: DemoProjectRunRequest,
+        request: messages.DemoProjectRunRequest,
     ) -> None:
         self._project_name = request.project_name
         self._pending_spec: dict[str, Any] | None = None
@@ -412,7 +346,7 @@ class DemoProjectWorkflow:
     @workflow.run
     async def run(
         self,
-        request: DemoProjectRunRequest,
+        request: messages.DemoProjectRunRequest,
     ) -> None:
         project_name = request.project_name
         self._project_name = project_name
@@ -495,8 +429,8 @@ class DemoProjectWorkflow:
                 self._pending_spec = None
                 self._pending_reconcile_identity = None
                 demo_project = await workflow.execute_activity(
-                    load_current_demo_project_for_reconcile,
-                    LoadCurrentDemoProjectForReconcileRequest(
+                    force_reconcile_activities.load_current_demo_project_for_reconcile,
+                    force_reconcile_activities.LoadCurrentDemoProjectForReconcileRequest(
                         name=project_name,
                         token=force_reconcile["token"],
                         reason=force_reconcile.get("reason"),
@@ -540,14 +474,14 @@ class DemoProjectWorkflow:
                 and force_reconcile.get("reason")
                 == FORCE_TEMPORAL_AUTH_ROTATION_REASON
             )
-            external_plan = plan_external_resources(
+            external_plan = external_resources.plan_external_resources(
                 demo_project,
                 checked_at=workflow.now().astimezone(UTC).isoformat(),
                 force_temporal_auth_rotation=force_temporal_auth_rotation,
             )
             ecr_repository_activities = [
                 workflow.execute_activity(
-                    create_or_verify_ecr_repository,
+                    external_resources.create_or_verify_ecr_repository,
                     repository,
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=COMMON_RETRY_POLICY,
@@ -557,33 +491,39 @@ class DemoProjectWorkflow:
             ecr_repositories = list(
                 await asyncio.gather(*ecr_repository_activities)
             )
-            ecr_status = ecr_repositories_status(external_plan, ecr_repositories)
+            ecr_status = external_resources.ecr_repositories_status(
+                external_plan,
+                ecr_repositories,
+            )
             temporal_status = await self._reconcile_temporal_cloud(external_plan)
-            demo_project = demo_project_with_temporal_api_key(demo_project, temporal_status)
+            demo_project = demo_project_with_temporal_api_key(
+                demo_project,
+                temporal_status,
+            )
             self._last_demo_project = demo_project
             self._temporal_api_key_rotation = temporal_auth_rotation_state(
                 temporal_status
             )
             secrets_status = await workflow.execute_activity(
-                verify_secrets_manager_resources,
+                external_resources.verify_secrets_manager_resources,
                 external_plan.secrets_manager,
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            external_resources = external_resources_status(
+            external_resource_status = external_resources.external_resources_status(
                 external_plan,
                 ecr_status=ecr_status,
                 temporal_status=temporal_status,
                 secrets_status=secrets_status.status,
             )
             artifact_build = await workflow.execute_child_workflow(
-                DemoProjectArtifactBuildWorkflow.run,
-                DemoProjectArtifactBuildRequest(
+                artifact_build_workflow.DemoProjectArtifactBuildWorkflow.run,
+                messages.DemoProjectArtifactBuildRequest(
                     demoProject=demo_project,
-                    externalResources=external_resources,
+                    externalResources=external_resource_status,
                     previousBuildStatus=(
                         None
-                        if force_reconcile_token(demo_project)
+                        if resources.force_reconcile_token(demo_project)
                         else self._last_build_status
                     ),
                 ),
@@ -594,24 +534,24 @@ class DemoProjectWorkflow:
             if remembered_build_status is not None:
                 self._last_build_status = remembered_build_status
             serverless_status = None
-            if has_serverless_lambda_components(demo_project):
+            if resources.has_serverless_lambda_components(demo_project):
                 serverless_result = await workflow.execute_child_workflow(
-                    DemoProjectServerlessLambdaWorkflow.run,
-                    DemoProjectServerlessLambdaRequest(
+                    serverless_lambda_workflow.DemoProjectServerlessLambdaWorkflow.run,
+                    messages.DemoProjectServerlessLambdaRequest(
                         project=project_name,
                         demoProject=demo_project,
-                        externalResources=external_resources,
+                        externalResources=external_resource_status,
                         buildStatus=build_status,
                     ),
                     id=self._child_workflow_id("serverless-lambda"),
                 )
                 serverless_status = serverless_result.status
             runtime_result = await workflow.execute_child_workflow(
-                DemoProjectKubernetesRuntimeWorkflow.run,
-                DemoProjectKubernetesRuntimeRequest(
+                kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow.run,
+                messages.DemoProjectKubernetesRuntimeRequest(
                     project=project_name,
                     demoProject=demo_project,
-                    externalResources=external_resources,
+                    externalResources=external_resource_status,
                     buildStatus=build_status,
                 ),
                 id=self._child_workflow_id("kubernetes-runtime"),
@@ -632,7 +572,7 @@ class DemoProjectWorkflow:
         }
 
     @workflow.signal
-    def reconcile(self, request: DemoProjectReconcileSignal) -> None:
+    def reconcile(self, request: messages.DemoProjectReconcileSignal) -> None:
         demo_project = request.demoProject
         identity = reconcile_identity(demo_project)
         if self._is_duplicate_reconcile_signal(identity):
@@ -641,7 +581,7 @@ class DemoProjectWorkflow:
         self._pending_reconcile_identity = identity
 
     @workflow.signal
-    def force_reconcile(self, signal: ForceReconcileSignal) -> None:
+    def force_reconcile(self, signal: messages.ForceReconcileSignal) -> None:
         request = force_reconcile_request(signal.token, signal.reason)
         if request is None:
             return
@@ -657,64 +597,155 @@ class DemoProjectWorkflow:
     @workflow.signal
     def check_worker_version(
         self,
-        _signal: CheckWorkerVersionSignal = CheckWorkerVersionSignal(),
+        _signal: messages.CheckWorkerVersionSignal = messages.CheckWorkerVersionSignal(),
     ) -> None:
         if workflow.info().is_target_worker_deployment_version_changed():
             self._continue_as_new_for_worker_version = True
 
     @workflow.signal
-    def finalize(self, request: DemoProjectFinalizeSignal) -> None:
+    def finalize(self, request: messages.DemoProjectFinalizeSignal) -> None:
         self._finalize_spec = request.demoProject
         self._finalize = True
 
     @workflow.signal
-    def shutdown(self, _signal: ShutdownSignal = ShutdownSignal()) -> None:
+    def shutdown(self, _signal: messages.ShutdownSignal = messages.ShutdownSignal()) -> None:
         self._shutdown = True
 
     async def _reconcile_temporal_cloud(
         self,
         external_plan: Any,
     ) -> dict[str, Any]:
-        project = external_plan.temporal_project
-        auth_mode = project.auth_mode
         candidate_secret_token = temporal_candidate_secret_token(
             external_plan,
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             reconcile_sequence=self._reconcile_sequence,
         )
-        namespace: TemporalCloudNamespaceResult | None = None
-        service_account: TemporalCloudServiceAccountResult | None = None
-        ca: TemporalCloudCredentialStageResult | None = None
-        mtls_config: TemporalCloudStatusResult | None = None
-        stage: TemporalCloudCredentialStageResult | None = None
-        canary: TemporalCloudStatusResult | None = None
-        ca_promote: TemporalCloudPromotionResult | None = None
-        promote: TemporalCloudPromotionResult | TemporalCloudCredentialStageResult | None = None
-        mirror: TemporalCloudStatusResult | None = None
-        ca_promoted = False
-        promoted = False
+        state = TemporalCloudReconcileState()
 
         try:
-            if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-                ca = await workflow.execute_activity(
-                    stage_temporal_mtls_ca,
-                    StageTemporalMtlsCaRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        candidate_secret_token=candidate_secret_token,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
+            await self._stage_temporal_mtls_ca_if_needed(
+                external_plan,
+                state,
+                candidate_secret_token,
+            )
+            await self._create_or_verify_temporal_cloud_namespace(
+                external_plan,
+                state,
+                candidate_secret_token,
+            )
+            namespace = state.namespace
+            assert namespace is not None
+            if namespace.phase != "Ready":
+                await self._delete_mtls_ca_candidate_secret_if_needed(
+                    external_plan,
+                    state,
+                    candidate_secret_token,
                 )
+                return namespace.status
 
-            namespace = await workflow.execute_activity(
-                create_or_verify_temporal_cloud_namespace,
-                CreateOrVerifyTemporalCloudNamespaceRequest(
+            staged = await self._stage_temporal_runtime_credential(
+                external_plan,
+                state,
+                candidate_secret_token,
+            )
+            if not staged:
+                return namespace.status
+            if state.stage is None or state.stage.phase != "Ready":
+                return state.merged_status()
+
+            await self._promote_temporal_runtime_credential_if_needed(
+                external_plan,
+                state,
+                candidate_secret_token,
+            )
+            state.mirror = await self._mirror_temporal_runtime_secret(
+                external_plan
+            )
+            return state.merged_status()
+        except Exception:
+            await self._compensate_temporal_cloud_reconcile(
+                external_plan,
+                state=state,
+                candidate_secret_token=candidate_secret_token,
+            )
+            raise
+
+    async def _stage_temporal_mtls_ca_if_needed(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> None:
+        project = external_plan.temporal_project
+        if project.auth_mode != resources.TEMPORAL_AUTH_MODE_MTLS:
+            return
+
+        state.ca = await workflow.execute_activity(
+            external_resources.stage_temporal_mtls_ca,
+            external_resources.StageTemporalMtlsCaRequest(
+                checked_at=external_plan.checked_at,
+                project=project,
+                candidate_secret_token=candidate_secret_token,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _create_or_verify_temporal_cloud_namespace(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> None:
+        state.namespace = await workflow.execute_activity(
+            external_resources.create_or_verify_temporal_cloud_namespace,
+            external_resources.CreateOrVerifyTemporalCloudNamespaceRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+                candidate_ca_secret_path=(
+                    state.ca.candidate_ca_secret_path if state.ca else None
+                ),
+                candidate_secret_token=candidate_secret_token,
+            ),
+            start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _delete_mtls_ca_candidate_secret_if_needed(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> None:
+        if external_plan.temporal_project.auth_mode != resources.TEMPORAL_AUTH_MODE_MTLS:
+            return
+        await self._delete_temporal_candidate_secret(
+            external_plan,
+            ca=state.ca,
+            candidate_secret_token=candidate_secret_token,
+        )
+
+    async def _stage_temporal_runtime_credential(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> bool:
+        project = external_plan.temporal_project
+        if state.namespace is None:
+            return False
+
+        if project.auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
+            state.mtls_config = await workflow.execute_activity(
+                external_resources.configure_temporal_cloud_namespace_mtls,
+                external_resources.ConfigureTemporalCloudNamespaceMtlsRequest(
                     checked_at=external_plan.checked_at,
                     project=project,
+                    namespace=state.namespace,
                     candidate_ca_secret_path=(
-                        ca.candidate_ca_secret_path if ca else None
+                        state.ca.candidate_ca_secret_path if state.ca else None
                     ),
                     candidate_secret_token=candidate_secret_token,
                 ),
@@ -722,181 +753,140 @@ class DemoProjectWorkflow:
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            if namespace.phase != "Ready":
-                if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-                    await self._delete_temporal_candidate_secret(
-                        external_plan,
-                        ca=ca,
-                        candidate_secret_token=candidate_secret_token,
-                    )
-                return namespace.status
-
-            if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-                mtls_config = await workflow.execute_activity(
-                    configure_temporal_cloud_namespace_mtls,
-                    ConfigureTemporalCloudNamespaceMtlsRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        namespace=namespace,
-                        candidate_ca_secret_path=(
-                            ca.candidate_ca_secret_path if ca else None
-                        ),
-                        candidate_secret_token=candidate_secret_token,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=10),
-                    heartbeat_timeout=timedelta(minutes=1),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                stage = await workflow.execute_activity(
-                    stage_temporal_mtls_client_certificate,
-                    StageTemporalMtlsClientCertificateRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        namespace=namespace,
-                        ca=ca,
-                        force_rotation=external_plan.force_temporal_auth_rotation,
-                        candidate_secret_token=candidate_secret_token,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-            elif auth_mode == TEMPORAL_AUTH_MODE_API_KEY:
-                service_account = await workflow.execute_activity(
-                    create_or_verify_temporal_cloud_service_account,
-                    CreateOrVerifyTemporalCloudServiceAccountRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        namespace=namespace,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=10),
-                    heartbeat_timeout=timedelta(minutes=1),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                stage = await workflow.execute_activity(
-                    stage_temporal_api_key_candidate,
-                    StageTemporalApiKeyCandidateRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        namespace=namespace,
-                        service_account=service_account,
-                        force_rotation=external_plan.force_temporal_auth_rotation,
-                        candidate_secret_token=candidate_secret_token,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    heartbeat_timeout=timedelta(minutes=1),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-            else:
-                return namespace.status
-
-            if stage is None or stage.phase != "Ready":
-                return merge_temporal_cloud_status(
-                    namespace.status,
-                    ca_status=ca.status if ca else None,
-                    mtls_config_status=mtls_config.status if mtls_config else None,
-                    service_account_status=(
-                        service_account.status if service_account else None
-                    ),
-                    credential_status=stage.status if stage else None,
-                    mirror_status=mirror.status if mirror else None,
-                )
-
-            if stage.promote_required:
-                canary = await workflow.execute_activity(
-                    run_temporal_runtime_candidate_canary,
-                    RunTemporalRuntimeCandidateCanaryRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        stage=stage,
-                    ),
-                    start_to_close_timeout=(
-                        TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT
-                    ),
-                    heartbeat_timeout=(
-                        TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT
-                    ),
-                    retry_policy=CHECK_RETRY_POLICY,
-                )
-                if stage.candidate_ca_secret_path:
-                    ca_promote = await workflow.execute_activity(
-                        promote_temporal_mtls_ca,
-                        PromoteTemporalMtlsCaRequest(
-                            checked_at=external_plan.checked_at,
-                            project=project,
-                            stage=stage,
-                        ),
-                        start_to_close_timeout=timedelta(minutes=5),
-                        retry_policy=COMMON_RETRY_POLICY,
-                    )
-                    ca_promoted = ca_promote.ca_promoted
-                promote = await workflow.execute_activity(
-                    promote_temporal_runtime_credential,
-                    PromoteTemporalRuntimeCredentialRequest(
-                        checked_at=external_plan.checked_at,
-                        project=project,
-                        stage=stage,
-                        canary=canary,
-                    ),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                if ca_promote is not None:
-                    promote = TemporalCloudPromotionResult(
-                        status=merge_promoted_status(
-                            promote.status,
-                            ca_promote.status,
-                        ),
-                        promoted=promote.promoted,
-                        ca_promoted=ca_promote.ca_promoted,
-                    )
-                promoted = True
-                await self._delete_temporal_candidate_secret(
-                    external_plan,
-                    stage=stage,
-                    ca=ca,
-                    candidate_secret_token=candidate_secret_token,
-                )
-            else:
-                promote = stage
-
-            mirror = await workflow.execute_activity(
-                mirror_temporal_runtime_secret,
-                MirrorTemporalRuntimeSecretRequest(
+            state.stage = await workflow.execute_activity(
+                external_resources.stage_temporal_mtls_client_certificate,
+                external_resources.StageTemporalMtlsClientCertificateRequest(
                     checked_at=external_plan.checked_at,
                     project=project,
+                    namespace=state.namespace,
+                    ca=state.ca,
+                    force_rotation=external_plan.force_temporal_auth_rotation,
+                    candidate_secret_token=candidate_secret_token,
                 ),
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            return merge_temporal_cloud_status(
-                namespace.status,
-                ca_status=ca.status if ca else None,
-                mtls_config_status=mtls_config.status if mtls_config else None,
-                service_account_status=(
-                    service_account.status if service_account else None
+            return True
+
+        if project.auth_mode == resources.TEMPORAL_AUTH_MODE_API_KEY:
+            state.service_account = await workflow.execute_activity(
+                external_resources.create_or_verify_temporal_cloud_service_account,
+                external_resources.CreateOrVerifyTemporalCloudServiceAccountRequest(
+                    checked_at=external_plan.checked_at,
+                    project=project,
+                    namespace=state.namespace,
                 ),
-                credential_status=promote.status if promote else None,
-                mirror_status=mirror.status if mirror else None,
+                start_to_close_timeout=timedelta(minutes=10),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
             )
-        except Exception:
-            await self._compensate_temporal_cloud_reconcile(
-                external_plan,
-                namespace=namespace,
-                service_account=service_account,
-                stage=stage,
-                ca=ca,
-                ca_promoted=ca_promoted,
-                promoted=promoted,
-                candidate_secret_token=candidate_secret_token,
+            state.stage = await workflow.execute_activity(
+                external_resources.stage_temporal_api_key_candidate,
+                external_resources.StageTemporalApiKeyCandidateRequest(
+                    checked_at=external_plan.checked_at,
+                    project=project,
+                    namespace=state.namespace,
+                    service_account=state.service_account,
+                    force_rotation=external_plan.force_temporal_auth_rotation,
+                    candidate_secret_token=candidate_secret_token,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
             )
-            raise
+            return True
+
+        return False
+
+    async def _promote_temporal_runtime_credential_if_needed(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> None:
+        if state.stage is None:
+            return
+        if not state.stage.promote_required:
+            state.promote = state.stage
+            return
+
+        state.canary = await workflow.execute_activity(
+            external_resources.run_temporal_runtime_candidate_canary,
+            external_resources.RunTemporalRuntimeCandidateCanaryRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+                stage=state.stage,
+            ),
+            start_to_close_timeout=(
+                TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT
+            ),
+            heartbeat_timeout=(
+                TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT
+            ),
+            retry_policy=CHECK_RETRY_POLICY,
+        )
+        if state.stage.candidate_ca_secret_path:
+            state.ca_promote = await workflow.execute_activity(
+                external_resources.promote_temporal_mtls_ca,
+                external_resources.PromoteTemporalMtlsCaRequest(
+                    checked_at=external_plan.checked_at,
+                    project=external_plan.temporal_project,
+                    stage=state.stage,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            state.ca_promoted = state.ca_promote.ca_promoted
+
+        promote = await workflow.execute_activity(
+            external_resources.promote_temporal_runtime_credential,
+            external_resources.PromoteTemporalRuntimeCredentialRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+                stage=state.stage,
+                canary=state.canary,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        if state.ca_promote is not None:
+            promote = external_resources.TemporalCloudPromotionResult(
+                status=merge_promoted_status(
+                    promote.status,
+                    state.ca_promote.status,
+                ),
+                promoted=promote.promoted,
+                ca_promoted=state.ca_promote.ca_promoted,
+            )
+        state.promote = promote
+        state.promoted = True
+        await self._delete_temporal_candidate_secret(
+            external_plan,
+            stage=state.stage,
+            ca=state.ca,
+            candidate_secret_token=candidate_secret_token,
+        )
+
+    async def _mirror_temporal_runtime_secret(
+        self,
+        external_plan: Any,
+    ) -> external_resources.TemporalCloudStatusResult:
+        return await workflow.execute_activity(
+            external_resources.mirror_temporal_runtime_secret,
+            external_resources.MirrorTemporalRuntimeSecretRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
 
     async def _delete_temporal_candidate_secret(
         self,
         external_plan: Any,
         *,
-        stage: TemporalCloudCredentialStageResult | None = None,
-        ca: TemporalCloudCredentialStageResult | None = None,
+        stage: external_resources.TemporalCloudCredentialStageResult | None = None,
+        ca: external_resources.TemporalCloudCredentialStageResult | None = None,
         candidate_secret_token: str | None = None,
     ) -> None:
         candidate_secret_path = stage.candidate_secret_path if stage else None
@@ -906,8 +896,8 @@ class DemoProjectWorkflow:
         elif ca and ca.candidate_ca_secret_path:
             candidate_ca_secret_path = ca.candidate_ca_secret_path
         await workflow.execute_activity(
-            delete_temporal_runtime_candidate_secret,
-            DeleteTemporalRuntimeCandidateSecretRequest(
+            external_resources.delete_temporal_runtime_candidate_secret,
+            external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
                 checked_at=external_plan.checked_at,
                 project=external_plan.temporal_project,
                 candidate_secret_path=candidate_secret_path,
@@ -926,22 +916,43 @@ class DemoProjectWorkflow:
         self,
         external_plan: Any,
         *,
-        namespace: TemporalCloudNamespaceResult | None,
-        service_account: TemporalCloudServiceAccountResult | None,
-        stage: TemporalCloudCredentialStageResult | None,
-        ca: TemporalCloudCredentialStageResult | None,
-        ca_promoted: bool,
-        promoted: bool,
+        state: TemporalCloudReconcileState,
         candidate_secret_token: str | None,
     ) -> None:
-        if promoted:
+        if state.promoted:
             return
 
-        candidate_key_id = stage.candidate_api_key_id if stage else None
+        await self._compensate_temporal_candidate_api_key(
+            external_plan,
+            state,
+        )
+        await self._delete_temporal_candidate_secret(
+            external_plan,
+            stage=state.stage,
+            ca=state.ca,
+            candidate_secret_token=candidate_secret_token,
+        )
+        await self._compensate_temporal_service_account(
+            external_plan,
+            state,
+        )
+        await self._compensate_temporal_namespace(
+            external_plan,
+            state,
+        )
+
+    async def _compensate_temporal_candidate_api_key(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
+        candidate_key_id = (
+            state.stage.candidate_api_key_id if state.stage else None
+        )
         if candidate_key_id:
             await workflow.execute_activity(
-                delete_temporal_cloud_api_key_by_id,
-                DeleteTemporalCloudApiKeyRequest(
+                external_resources.delete_temporal_cloud_api_key_by_id,
+                external_resources.DeleteTemporalCloudApiKeyRequest(
                     checked_at=external_plan.checked_at,
                     project=external_plan.temporal_project,
                     key_id=candidate_key_id,
@@ -951,22 +962,20 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
-        await self._delete_temporal_candidate_secret(
-            external_plan,
-            stage=stage,
-            ca=ca,
-            candidate_secret_token=candidate_secret_token,
-        )
-
+    async def _compensate_temporal_service_account(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
         service_account_id = (
-            service_account.service_account_id
-            if service_account and service_account.created
+            state.service_account.service_account_id
+            if state.service_account and state.service_account.created
             else None
         )
         if service_account_id:
             await workflow.execute_activity(
-                delete_temporal_cloud_service_account_by_id,
-                DeleteTemporalCloudServiceAccountRequest(
+                external_resources.delete_temporal_cloud_service_account_by_id,
+                external_resources.DeleteTemporalCloudServiceAccountRequest(
                     checked_at=external_plan.checked_at,
                     project=external_plan.temporal_project,
                     service_account_id=service_account_id,
@@ -976,12 +985,21 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
-        namespace_name = namespace.namespace if namespace and namespace.created else None
+    async def _compensate_temporal_namespace(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
+        namespace_name = (
+            state.namespace.namespace
+            if state.namespace and state.namespace.created
+            else None
+        )
         if namespace_name:
-            if ca_promoted:
+            if state.ca_promoted:
                 await workflow.execute_activity(
-                    delete_temporal_cloud_mtls_ca_secret,
-                    DeleteTemporalCloudMtlsCaSecretRequest(
+                    external_resources.delete_temporal_cloud_mtls_ca_secret,
+                    external_resources.DeleteTemporalCloudMtlsCaSecretRequest(
                         checked_at=external_plan.checked_at,
                         project=external_plan.temporal_project,
                     ),
@@ -989,8 +1007,8 @@ class DemoProjectWorkflow:
                     retry_policy=COMMON_RETRY_POLICY,
                 )
             await workflow.execute_activity(
-                disable_temporal_cloud_namespace_delete_protection_by_name,
-                TemporalCloudNamespaceRequest(
+                external_resources.disable_temporal_cloud_namespace_delete_protection_by_name,
+                external_resources.TemporalCloudNamespaceRequest(
                     checked_at=external_plan.checked_at,
                     project=external_plan.temporal_project,
                     namespace=namespace_name,
@@ -1000,8 +1018,8 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
             await workflow.execute_activity(
-                delete_temporal_cloud_namespace_by_name,
-                TemporalCloudNamespaceRequest(
+                external_resources.delete_temporal_cloud_namespace_by_name,
+                external_resources.TemporalCloudNamespaceRequest(
                     checked_at=external_plan.checked_at,
                     project=external_plan.temporal_project,
                     namespace=namespace_name,
@@ -1018,35 +1036,35 @@ class DemoProjectWorkflow:
             or {"metadata": {"name": project_name}}
         )
         finalize_plan_result = await workflow.execute_activity(
-            load_project_finalization_plan,
-            ProjectFinalizationRequest(demo_project),
+            reconcile_activities.load_project_finalization_plan,
+            reconcile_activities.ProjectFinalizationRequest(demo_project),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
         finalize_plan = finalize_plan_result.plan
-        result = completed_activity_status(finalize_plan)
+        result = reconcile_activities.completed_activity_status(finalize_plan)
         if result is None:
             finalize_checked_at = finalize_plan.get("checkedAt")
             if not isinstance(finalize_checked_at, str) or not finalize_checked_at:
                 finalize_checked_at = workflow.now().astimezone(UTC).isoformat()
-            finalize_external_plan = plan_external_resources(
+            finalize_external_plan = external_resources.plan_external_resources(
                 demo_project,
                 checked_at=finalize_checked_at,
             )
-            temporal_delete_request = DeleteTemporalRuntimeCandidateSecretRequest(
+            temporal_delete_request = external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
                 checked_at=finalize_external_plan.checked_at,
                 project=finalize_external_plan.temporal_project,
             )
             namespace_action = await workflow.execute_activity(
-                delete_project_namespace_resource,
-                ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
+                reconcile_activities.delete_project_namespace_resource,
+                reconcile_activities.ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             namespace_action = namespace_action.action
             source_action = await workflow.execute_activity(
-                delete_project_source_repository,
-                ResourceDeleteRequest(
+                reconcile_activities.delete_project_source_repository,
+                reconcile_activities.ResourceDeleteRequest(
                     namespace=finalize_plan["sourceWatchNamespace"],
                     name=finalize_plan["gitRepository"],
                 ),
@@ -1055,8 +1073,8 @@ class DemoProjectWorkflow:
             )
             source_action = source_action.action
             source_auth_action = await workflow.execute_activity(
-                delete_project_source_auth_secret,
-                OptionalResourceDeleteRequest(
+                reconcile_activities.delete_project_source_auth_secret,
+                reconcile_activities.OptionalResourceDeleteRequest(
                     namespace=finalize_plan["sourceWatchNamespace"],
                     name=finalize_plan.get("sourceAuthSecret"),
                 ),
@@ -1065,8 +1083,8 @@ class DemoProjectWorkflow:
             )
             source_auth_action = source_auth_action.action
             serverless_lambda_teardown = await workflow.execute_activity(
-                delete_serverless_lambda_resources,
-                DeleteServerlessLambdaResourcesRequest(
+                external_resources.delete_serverless_lambda_resources,
+                external_resources.DeleteServerlessLambdaResourcesRequest(
                     checked_at=finalize_external_plan.checked_at,
                     demo_project=demo_project,
                 ),
@@ -1074,49 +1092,49 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_api_key_teardown = await workflow.execute_activity(
-                delete_temporal_cloud_api_key,
+                external_resources.delete_temporal_cloud_api_key,
                 temporal_delete_request,
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_service_account_teardown = await workflow.execute_activity(
-                delete_temporal_cloud_service_account,
+                external_resources.delete_temporal_cloud_service_account,
                 temporal_delete_request,
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_namespace_protection_teardown = await workflow.execute_activity(
-                disable_temporal_cloud_namespace_delete_protection,
+                external_resources.disable_temporal_cloud_namespace_delete_protection,
                 temporal_delete_request,
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_namespace_teardown = await workflow.execute_activity(
-                delete_temporal_cloud_namespace,
+                external_resources.delete_temporal_cloud_namespace,
                 temporal_delete_request,
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_secret_teardown = await workflow.execute_activity(
-                delete_temporal_cloud_runtime_secret,
+                external_resources.delete_temporal_cloud_runtime_secret,
                 temporal_delete_request,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             temporal_mtls_ca_teardown = await workflow.execute_activity(
-                delete_temporal_cloud_mtls_ca_secret,
-                DeleteTemporalCloudMtlsCaSecretRequest(
+                external_resources.delete_temporal_cloud_mtls_ca_secret,
+                external_resources.DeleteTemporalCloudMtlsCaSecretRequest(
                     checked_at=finalize_external_plan.checked_at,
                     project=finalize_external_plan.temporal_project,
                 ),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            temporal_teardown = temporal_cloud_finalization_status(
+            temporal_teardown = external_resources.temporal_cloud_finalization_status(
                 finalize_plan,
                 api_key_status=temporal_api_key_teardown.status,
                 service_account_status=temporal_service_account_teardown.status,
@@ -1126,21 +1144,21 @@ class DemoProjectWorkflow:
                 mtls_ca_secret_status=temporal_mtls_ca_teardown.status,
             )
             ecr_teardown = await workflow.execute_activity(
-                delete_ecr_repositories,
-                DeleteEcrRepositoriesRequest(
+                external_resources.delete_ecr_repositories,
+                external_resources.DeleteEcrRepositoriesRequest(
                     checked_at=finalize_external_plan.checked_at,
                     repositories=finalize_external_plan.ecr_repositories,
                 ),
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            external = external_resource_finalization_status(
+            external = external_resources.external_resource_finalization_status(
                 finalize_plan,
                 temporal_status=temporal_teardown,
                 ecr_status=ecr_teardown.status,
                 serverless_lambda_status=serverless_lambda_teardown.status,
             )
-            result = project_finalization_status(
+            result = reconcile_activities.project_finalization_status(
                 finalize_plan,
                 namespace_action=namespace_action,
                 source_action=source_action,
@@ -1155,8 +1173,8 @@ class DemoProjectWorkflow:
             }
             await self._record_status(demo_project, self._status)
             await workflow.execute_activity(
-                remove_project_finalizer,
-                ProjectFinalizerRemovalRequest(project=finalize_plan["project"]),
+                reconcile_activities.remove_project_finalizer,
+                reconcile_activities.ProjectFinalizerRemovalRequest(project=finalize_plan["project"]),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=STATUS_RETRY_POLICY,
             )
@@ -1172,18 +1190,18 @@ class DemoProjectWorkflow:
         demo_project: dict[str, Any],
         status: dict[str, Any],
     ) -> None:
-        request = RecordDemoProjectStatusRequest(
+        request = reconcile_activities.RecordDemoProjectStatusRequest(
             demo_project=demo_project,
             status=status_with_force_reconcile(status, demo_project),
         )
         await workflow.execute_activity(
-            record_demo_project_status,
+            reconcile_activities.record_demo_project_status,
             request,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=STATUS_RETRY_POLICY,
         )
         await workflow.execute_activity(
-            record_catalog_project_status,
+            reconcile_activities.record_catalog_project_status,
             request,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=STATUS_RETRY_POLICY,
@@ -1212,7 +1230,7 @@ class DemoProjectWorkflow:
         self._continue_as_new_for_worker_version = False
         workflow.continue_as_new(
             args=[
-                DemoProjectRunRequest(
+                messages.DemoProjectRunRequest(
                     project_name=project_name,
                     carried_status=self._status,
                     carried_pending_spec=self._pending_spec,
@@ -1337,13 +1355,13 @@ def status_with_force_reconcile(
     status: dict[str, Any],
     resource: dict[str, Any],
 ) -> dict[str, Any]:
-    force_status = force_reconcile_status(resource)
+    force_status = resources.force_reconcile_status(resource)
     if force_status is None:
         return status
     return {
         **status,
-        BASE_RECONCILE_KEY_STATUS_FIELD: demo_project_reconcile_key(
-            resource_without_force_reconcile(resource)
+        resources.BASE_RECONCILE_KEY_STATUS_FIELD: resources.demo_project_reconcile_key(
+            resources.resource_without_force_reconcile(resource)
         ),
         "forceReconcile": force_status,
     }

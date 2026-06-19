@@ -6,70 +6,12 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.instruqt import (
-        InstruqtCourseArtifactRequest,
-        InstruqtCourseFinalizationPlan,
-        InstruqtCourseFinalizationRequest,
-        InstruqtCourseImageBuildPlanRequest,
-        InstruqtCourseImageBuildStartRequest,
-        InstruqtCourseImageBuildWaitRequest,
-        InstruqtCourseRequest,
-        InstruqtCourseStatusRecordRequest,
-        InstruqtFinalizerRemovalRequest,
-        InstruqtKubernetesResourceDeleteRequest,
-        InstruqtTrackDeleteRequest,
-        InstruqtTrackDeployRequest,
-        completed_instruqt_image_status,
-        delete_instruqt_course_content_auth_secret,
-        delete_instruqt_course_content_repository,
-        delete_instruqt_course_ecr_repositories,
-        delete_instruqt_course_source_auth_secret,
-        delete_instruqt_course_source_repository,
-        delete_instruqt_course_track,
-        deploy_instruqt_course_track,
-        instruqt_course_finalization_status,
-        load_instruqt_course_finalization_plan,
-        push_instruqt_course_track,
-        reconcile_instruqt_course,
-        reconcile_instruqt_course_ecr_repositories,
-        record_instruqt_course_status,
-        remove_instruqt_course_finalizer_resource,
-        resolve_instruqt_course_image_build_plan,
-        start_instruqt_course_image_build,
-        test_instruqt_course_track,
-        wait_for_instruqt_course_image_build,
-    )
-    from demo_registry_operator.activities.force_reconcile import (
-        LoadCurrentInstruqtCourseForReconcileRequest,
-        load_current_instruqt_course_for_reconcile,
-    )
-    from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
-    from demo_registry_operator.resources import (
-        CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-        CONTENT_SOURCE_COMMIT_ANNOTATION,
-        SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-        SOURCE_COMMIT_ANNOTATION,
-        TESTING_BRANCH_STATE_ANNOTATION,
-        TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-        TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION,
-        TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-        TESTING_SOURCE_COMMIT_ANNOTATION,
-        BASE_RECONCILE_KEY_STATUS_FIELD,
-        force_reconcile_status,
-        force_reconcile_token,
-        instruqt_course_reconcile_key,
-        metadata_annotations,
-        resource_without_force_reconcile,
-    )
-    from demo_registry_operator.workflows.messages import (
-        CheckWorkerVersionSignal,
-        ForceReconcileSignal,
-        InstruqtCourseFinalizeSignal,
-        InstruqtCourseReconcileSignal,
-        InstruqtCourseRunRequest,
-        ShutdownSignal,
-    )
+from demo_registry_operator import errors, resources
+from demo_registry_operator.activities import (
+    force_reconcile as force_reconcile_activities,
+    instruqt as instruqt_activities,
+)
+from demo_registry_operator.workflows import messages
 
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
@@ -79,21 +21,21 @@ COMMON_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 STATUS_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=12,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 BUILD_WAIT_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=15),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=5,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 INCOMPLETE_RECONCILE_PHASES = {
     "BuildFailed",
@@ -110,42 +52,42 @@ SUCCESSFUL_BUILD_PHASES = {"Pushed", "Resolved", "NotRequired"}
 
 
 def reconcile_identity(instruqt_course: dict[str, Any]) -> dict[str, str]:
-    annotations = metadata_annotations(instruqt_course)
+    annotations = resources.metadata_annotations(instruqt_course)
     identity = {
-        "reconcileKey": instruqt_course_reconcile_key(instruqt_course),
+        "reconcileKey": resources.instruqt_course_reconcile_key(instruqt_course),
     }
-    source_commit_sha = annotations.get(SOURCE_COMMIT_ANNOTATION)
+    source_commit_sha = annotations.get(resources.SOURCE_COMMIT_ANNOTATION)
     if source_commit_sha:
         identity["sourceCommitSha"] = source_commit_sha
-    source_artifact_digest = annotations.get(SOURCE_ARTIFACT_DIGEST_ANNOTATION)
+    source_artifact_digest = annotations.get(resources.SOURCE_ARTIFACT_DIGEST_ANNOTATION)
     if source_artifact_digest:
         identity["sourceArtifactDigest"] = source_artifact_digest
-    content_source_commit_sha = annotations.get(CONTENT_SOURCE_COMMIT_ANNOTATION)
+    content_source_commit_sha = annotations.get(resources.CONTENT_SOURCE_COMMIT_ANNOTATION)
     if content_source_commit_sha:
         identity["contentSourceCommitSha"] = content_source_commit_sha
     content_source_artifact_digest = annotations.get(
-        CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+        resources.CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
     )
     if content_source_artifact_digest:
         identity["contentSourceArtifactDigest"] = content_source_artifact_digest
-    testing_branch_state = annotations.get(TESTING_BRANCH_STATE_ANNOTATION)
+    testing_branch_state = annotations.get(resources.TESTING_BRANCH_STATE_ANNOTATION)
     if testing_branch_state:
         identity["testingBranchState"] = testing_branch_state
-    testing_source_commit_sha = annotations.get(TESTING_SOURCE_COMMIT_ANNOTATION)
+    testing_source_commit_sha = annotations.get(resources.TESTING_SOURCE_COMMIT_ANNOTATION)
     if testing_source_commit_sha:
         identity["testingSourceCommitSha"] = testing_source_commit_sha
     testing_source_artifact_digest = annotations.get(
-        TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+        resources.TESTING_SOURCE_ARTIFACT_DIGEST_ANNOTATION
     )
     if testing_source_artifact_digest:
         identity["testingSourceArtifactDigest"] = testing_source_artifact_digest
     testing_content_source_commit_sha = annotations.get(
-        TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION
+        resources.TESTING_CONTENT_SOURCE_COMMIT_ANNOTATION
     )
     if testing_content_source_commit_sha:
         identity["testingContentSourceCommitSha"] = testing_content_source_commit_sha
     testing_content_source_artifact_digest = annotations.get(
-        TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
+        resources.TESTING_CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION
     )
     if testing_content_source_artifact_digest:
         identity["testingContentSourceArtifactDigest"] = (
@@ -232,7 +174,7 @@ class InstruqtCourseWorkflow:
     @workflow.init
     def __init__(
         self,
-        request: InstruqtCourseRunRequest,
+        request: messages.InstruqtCourseRunRequest,
     ) -> None:
         self._course_name = request.course_name
         self._pending_spec: dict[str, Any] | None = None
@@ -257,7 +199,7 @@ class InstruqtCourseWorkflow:
     @workflow.run
     async def run(
         self,
-        request: InstruqtCourseRunRequest,
+        request: messages.InstruqtCourseRunRequest,
     ) -> None:
         course_name = request.course_name
         self._course_name = course_name
@@ -338,8 +280,8 @@ class InstruqtCourseWorkflow:
                 self._pending_spec = None
                 self._pending_reconcile_identity = None
                 instruqt_course = await workflow.execute_activity(
-                    load_current_instruqt_course_for_reconcile,
-                    LoadCurrentInstruqtCourseForReconcileRequest(
+                    force_reconcile_activities.load_current_instruqt_course_for_reconcile,
+                    force_reconcile_activities.LoadCurrentInstruqtCourseForReconcileRequest(
                         name=course_name,
                         token=force_reconcile["token"],
                         reason=force_reconcile.get("reason"),
@@ -365,15 +307,15 @@ class InstruqtCourseWorkflow:
                 "phase": "Reconciling",
             }
 
-            base_status = reconcile_instruqt_course(
+            base_status = instruqt_activities.reconcile_instruqt_course(
                 instruqt_course,
                 checked_at=workflow.now().isoformat(),
             )
             self._status = base_status
             if base_status.get("phase") != "Error":
                 ecr_activity = await workflow.execute_activity(
-                    reconcile_instruqt_course_ecr_repositories,
-                    InstruqtCourseRequest(instruqt_course),
+                    instruqt_activities.reconcile_instruqt_course_ecr_repositories,
+                    instruqt_activities.InstruqtCourseRequest(instruqt_course),
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=COMMON_RETRY_POLICY,
                 )
@@ -386,7 +328,7 @@ class InstruqtCourseWorkflow:
                     channel="production",
                     previous_build_status=(
                         None
-                        if force_reconcile_token(instruqt_course)
+                        if resources.force_reconcile_token(instruqt_course)
                         else self._last_build_status
                     ),
                 )
@@ -417,7 +359,7 @@ class InstruqtCourseWorkflow:
                     await self._reconcile_testing_channel(
                         instruqt_course,
                         ecr_status,
-                        force_reconcile=bool(force_reconcile_token(instruqt_course)),
+                        force_reconcile=bool(resources.force_reconcile_token(instruqt_course)),
                     )
 
                 self._status = finalized_instruqt_status(self._status)
@@ -433,7 +375,7 @@ class InstruqtCourseWorkflow:
         }
 
     @workflow.signal
-    def reconcile(self, request: InstruqtCourseReconcileSignal) -> None:
+    def reconcile(self, request: messages.InstruqtCourseReconcileSignal) -> None:
         instruqt_course = request.instruqtCourse
         identity = reconcile_identity(instruqt_course)
         if self._is_duplicate_reconcile_signal(identity):
@@ -442,7 +384,7 @@ class InstruqtCourseWorkflow:
         self._pending_reconcile_identity = identity
 
     @workflow.signal
-    def force_reconcile(self, signal: ForceReconcileSignal) -> None:
+    def force_reconcile(self, signal: messages.ForceReconcileSignal) -> None:
         request = force_reconcile_request(signal.token, signal.reason)
         if request is None:
             return
@@ -458,18 +400,18 @@ class InstruqtCourseWorkflow:
     @workflow.signal
     def check_worker_version(
         self,
-        _signal: CheckWorkerVersionSignal = CheckWorkerVersionSignal(),
+        _signal: messages.CheckWorkerVersionSignal = messages.CheckWorkerVersionSignal(),
     ) -> None:
         if workflow.info().is_target_worker_deployment_version_changed():
             self._continue_as_new_for_worker_version = True
 
     @workflow.signal
-    def finalize(self, request: InstruqtCourseFinalizeSignal) -> None:
+    def finalize(self, request: messages.InstruqtCourseFinalizeSignal) -> None:
         self._finalize_spec = request.instruqtCourse
         self._finalize = True
 
     @workflow.signal
-    def shutdown(self, _signal: ShutdownSignal = ShutdownSignal()) -> None:
+    def shutdown(self, _signal: messages.ShutdownSignal = messages.ShutdownSignal()) -> None:
         self._shutdown = True
 
     async def _reconcile_testing_channel(
@@ -483,8 +425,8 @@ class InstruqtCourseWorkflow:
         testing_status = testing_status if isinstance(testing_status, dict) else {}
         if testing_status.get("phase") == "BranchMissing":
             testing_delete_activity = await workflow.execute_activity(
-                delete_instruqt_course_track,
-                InstruqtTrackDeleteRequest(
+                instruqt_activities.delete_instruqt_course_track,
+                instruqt_activities.InstruqtTrackDeleteRequest(
                     instruqt_course=instruqt_course,
                     channel="testing",
                 ),
@@ -541,13 +483,13 @@ class InstruqtCourseWorkflow:
         images: dict[str, Any],
         channel: str,
     ) -> dict[str, Any]:
-        request = InstruqtCourseArtifactRequest(
+        request = instruqt_activities.InstruqtCourseArtifactRequest(
             instruqt_course=instruqt_course,
             images=images,
             channel=channel,
         )
         push_activity = await workflow.execute_activity(
-            push_instruqt_course_track,
+            instruqt_activities.push_instruqt_course_track,
             request,
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(minutes=2),
@@ -558,7 +500,7 @@ class InstruqtCourseWorkflow:
             return push_status
 
         test_activity = await workflow.execute_activity(
-            test_instruqt_course_track,
+            instruqt_activities.test_instruqt_course_track,
             request,
             start_to_close_timeout=timedelta(hours=3),
             heartbeat_timeout=timedelta(minutes=5),
@@ -572,8 +514,8 @@ class InstruqtCourseWorkflow:
             }
 
         deploy_activity = await workflow.execute_activity(
-            deploy_instruqt_course_track,
-            InstruqtTrackDeployRequest(
+            instruqt_activities.deploy_instruqt_course_track,
+            instruqt_activities.InstruqtTrackDeployRequest(
                 instruqt_course=instruqt_course,
                 images=images,
                 channel=channel,
@@ -595,8 +537,8 @@ class InstruqtCourseWorkflow:
         previous_build_status: dict[str, Any] | None,
     ) -> dict[str, Any]:
         build_plan_result = await workflow.execute_activity(
-            resolve_instruqt_course_image_build_plan,
-            InstruqtCourseImageBuildPlanRequest(
+            instruqt_activities.resolve_instruqt_course_image_build_plan,
+            instruqt_activities.InstruqtCourseImageBuildPlanRequest(
                 instruqt_course=instruqt_course,
                 external_resources={"ecr": ecr_status},
                 previous_build_status=previous_build_status,
@@ -606,23 +548,23 @@ class InstruqtCourseWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         build_plan = build_plan_result.plan
-        build_status = completed_instruqt_image_status(build_plan)
+        build_status = instruqt_activities.completed_instruqt_image_status(build_plan)
         if build_status is not None:
             return build_status
         started_activity = await workflow.execute_activity(
-            start_instruqt_course_image_build,
-            InstruqtCourseImageBuildStartRequest(build_plan),
+            instruqt_activities.start_instruqt_course_image_build,
+            instruqt_activities.InstruqtCourseImageBuildStartRequest(build_plan),
             start_to_close_timeout=timedelta(minutes=5),
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )
         started_build = started_activity.plan
-        build_status = completed_instruqt_image_status(started_build)
+        build_status = instruqt_activities.completed_instruqt_image_status(started_build)
         if build_status is not None:
             return build_status
         wait_activity = await workflow.execute_activity(
-            wait_for_instruqt_course_image_build,
-            InstruqtCourseImageBuildWaitRequest(started_build),
+            instruqt_activities.wait_for_instruqt_course_image_build,
+            instruqt_activities.InstruqtCourseImageBuildWaitRequest(started_build),
             start_to_close_timeout=timedelta(hours=1),
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=BUILD_WAIT_RETRY_POLICY,
@@ -636,15 +578,15 @@ class InstruqtCourseWorkflow:
             or {"metadata": {"name": course_name}}
         )
         finalize_plan_activity = await workflow.execute_activity(
-            load_instruqt_course_finalization_plan,
-            InstruqtCourseFinalizationRequest(instruqt_course),
+            instruqt_activities.load_instruqt_course_finalization_plan,
+            instruqt_activities.InstruqtCourseFinalizationRequest(instruqt_course),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
         finalize_plan = finalize_plan_activity.plan
         source_action_activity = await workflow.execute_activity(
-            delete_instruqt_course_source_repository,
-            InstruqtKubernetesResourceDeleteRequest(
+            instruqt_activities.delete_instruqt_course_source_repository,
+            instruqt_activities.InstruqtKubernetesResourceDeleteRequest(
                 namespace=finalize_plan["sourceWatchNamespace"],
                 name=finalize_plan["gitRepository"],
             ),
@@ -653,8 +595,8 @@ class InstruqtCourseWorkflow:
         )
         source_action = source_action_activity.action
         source_auth_action_activity = await workflow.execute_activity(
-            delete_instruqt_course_source_auth_secret,
-            InstruqtKubernetesResourceDeleteRequest(
+            instruqt_activities.delete_instruqt_course_source_auth_secret,
+            instruqt_activities.InstruqtKubernetesResourceDeleteRequest(
                 namespace=finalize_plan["sourceWatchNamespace"],
                 name=finalize_plan.get("sourceAuthSecret"),
             ),
@@ -663,8 +605,8 @@ class InstruqtCourseWorkflow:
         )
         source_auth_action = source_auth_action_activity.action
         content_source_action_activity = await workflow.execute_activity(
-            delete_instruqt_course_content_repository,
-            InstruqtKubernetesResourceDeleteRequest(
+            instruqt_activities.delete_instruqt_course_content_repository,
+            instruqt_activities.InstruqtKubernetesResourceDeleteRequest(
                 namespace=finalize_plan["sourceWatchNamespace"],
                 name=finalize_plan.get("contentGitRepository"),
             ),
@@ -673,8 +615,8 @@ class InstruqtCourseWorkflow:
         )
         content_source_action = content_source_action_activity.action
         content_source_auth_action_activity = await workflow.execute_activity(
-            delete_instruqt_course_content_auth_secret,
-            InstruqtKubernetesResourceDeleteRequest(
+            instruqt_activities.delete_instruqt_course_content_auth_secret,
+            instruqt_activities.InstruqtKubernetesResourceDeleteRequest(
                 namespace=finalize_plan["sourceWatchNamespace"],
                 name=finalize_plan.get("contentSourceAuthSecret"),
             ),
@@ -683,8 +625,8 @@ class InstruqtCourseWorkflow:
         )
         content_source_auth_action = content_source_auth_action_activity.action
         production_track_activity = await workflow.execute_activity(
-            delete_instruqt_course_track,
-            InstruqtTrackDeleteRequest(
+            instruqt_activities.delete_instruqt_course_track,
+            instruqt_activities.InstruqtTrackDeleteRequest(
                 instruqt_course=instruqt_course,
                 channel="production",
             ),
@@ -693,8 +635,8 @@ class InstruqtCourseWorkflow:
         )
         production_track_action = production_track_activity.status
         testing_track_activity = await workflow.execute_activity(
-            delete_instruqt_course_track,
-            InstruqtTrackDeleteRequest(
+            instruqt_activities.delete_instruqt_course_track,
+            instruqt_activities.InstruqtTrackDeleteRequest(
                 instruqt_course=instruqt_course,
                 channel="testing",
             ),
@@ -703,13 +645,13 @@ class InstruqtCourseWorkflow:
         )
         testing_track_action = testing_track_activity.status
         ecr_activity = await workflow.execute_activity(
-            delete_instruqt_course_ecr_repositories,
-            InstruqtCourseFinalizationPlan(finalize_plan),
+            instruqt_activities.delete_instruqt_course_ecr_repositories,
+            instruqt_activities.InstruqtCourseFinalizationPlan(finalize_plan),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
         ecr_action = ecr_activity.status
-        self._status = instruqt_course_finalization_status(
+        self._status = instruqt_activities.instruqt_course_finalization_status(
             finalize_plan,
             source_action=source_action,
             source_auth_action=source_auth_action,
@@ -721,8 +663,8 @@ class InstruqtCourseWorkflow:
         )
         await self._record_status(instruqt_course, self._status)
         await workflow.execute_activity(
-            remove_instruqt_course_finalizer_resource,
-            InstruqtFinalizerRemovalRequest(course=finalize_plan["course"]),
+            instruqt_activities.remove_instruqt_course_finalizer_resource,
+            instruqt_activities.InstruqtFinalizerRemovalRequest(course=finalize_plan["course"]),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
@@ -734,8 +676,8 @@ class InstruqtCourseWorkflow:
         status: dict[str, Any],
     ) -> None:
         await workflow.execute_activity(
-            record_instruqt_course_status,
-            InstruqtCourseStatusRecordRequest(
+            instruqt_activities.record_instruqt_course_status,
+            instruqt_activities.InstruqtCourseStatusRecordRequest(
                 instruqt_course=instruqt_course,
                 status=status_with_force_reconcile(status, instruqt_course),
             ),
@@ -782,7 +724,7 @@ class InstruqtCourseWorkflow:
             self._continue_as_new_for_worker_version = False
             workflow.continue_as_new(
                 args=[
-                    InstruqtCourseRunRequest(
+                    messages.InstruqtCourseRunRequest(
                         course_name=course_name,
                         carried_status=self._status,
                         carried_pending_spec=self._pending_spec,
@@ -828,13 +770,13 @@ def status_with_force_reconcile(
     status: dict[str, Any],
     resource: dict[str, Any],
 ) -> dict[str, Any]:
-    force_status = force_reconcile_status(resource)
+    force_status = resources.force_reconcile_status(resource)
     if force_status is None:
         return status
     return {
         **status,
-        BASE_RECONCILE_KEY_STATUS_FIELD: instruqt_course_reconcile_key(
-            resource_without_force_reconcile(resource)
+        resources.BASE_RECONCILE_KEY_STATUS_FIELD: resources.instruqt_course_reconcile_key(
+            resources.resource_without_force_reconcile(resource)
         ),
         "forceReconcile": force_status,
     }

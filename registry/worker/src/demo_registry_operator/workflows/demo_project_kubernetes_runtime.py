@@ -6,29 +6,9 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from demo_registry_operator.activities.reconcile import (
-        ApplyDemoProjectResourcesRequest,
-        CandidateReadinessRequest,
-        PromoteCandidateRoutesRequest,
-        PruneStaleRuntimeCandidatesRequest,
-        SmokeCheckRequest,
-        WorkerDeploymentRolloutRequest,
-        apply_demo_project_resources,
-        promote_candidate_routes,
-        prune_stale_runtime_candidates,
-        run_smoke_check,
-        wait_for_candidate_readiness,
-        wait_for_worker_deployment_rollouts,
-    )
-    from demo_registry_operator.errors import NON_RETRYABLE_ERROR_TYPES
-    from demo_registry_operator.resources import (
-        worker_deployment_rollout_wait_seconds,
-    )
-    from demo_registry_operator.workflows.messages import (
-        DemoProjectKubernetesRuntimeRequest,
-        DemoProjectKubernetesRuntimeResult,
-    )
+from demo_registry_operator import errors, resources
+from demo_registry_operator.activities import reconcile as reconcile_activities
+from demo_registry_operator.workflows import messages
 
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -36,14 +16,14 @@ COMMON_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=2),
     maximum_attempts=8,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 CHECK_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
-    non_retryable_error_types=NON_RETRYABLE_ERROR_TYPES,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 
 
@@ -54,13 +34,13 @@ class DemoProjectKubernetesRuntimeWorkflow:
     @workflow.run
     async def run(
         self,
-        request: DemoProjectKubernetesRuntimeRequest,
-    ) -> DemoProjectKubernetesRuntimeResult:
+        request: messages.DemoProjectKubernetesRuntimeRequest,
+    ) -> messages.DemoProjectKubernetesRuntimeResult:
         project = request.project
         demo_project = request.demoProject
         reconcile_result = await workflow.execute_activity(
-            apply_demo_project_resources,
-            ApplyDemoProjectResourcesRequest(
+            reconcile_activities.apply_demo_project_resources,
+            reconcile_activities.ApplyDemoProjectResourcesRequest(
                 demo_project=demo_project,
                 external_resources=request.externalResources,
                 build_status=request.buildStatus,
@@ -81,7 +61,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 {},
             ).get("workerDeployments", {}),
             "workerDeploymentTimeoutSeconds": (
-                worker_deployment_rollout_wait_seconds(
+                resources.worker_deployment_rollout_wait_seconds(
                     demo_project,
                     base_timeout_seconds=300,
                 )
@@ -98,7 +78,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     reconcile_status,
                     worker_rollout_result,
                 )
-                return DemoProjectKubernetesRuntimeResult(status=status)
+                return messages.DemoProjectKubernetesRuntimeResult(status=status)
 
             reconcile_status = {
                 **reconcile_status,
@@ -123,10 +103,14 @@ class DemoProjectKubernetesRuntimeWorkflow:
                         "resources were promoted."
                     ),
                 )
-                return DemoProjectKubernetesRuntimeResult(status=promoted_status)
+                return messages.DemoProjectKubernetesRuntimeResult(
+                    status=promoted_status
+                )
 
         if reconcile_status.get("phase") != "SmokeCheckPending":
-            return DemoProjectKubernetesRuntimeResult(status=reconcile_status)
+            return messages.DemoProjectKubernetesRuntimeResult(
+                status=reconcile_status
+            )
 
         readiness_result = await self._wait_for_candidate_readiness(
             demo_project,
@@ -137,7 +121,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 reconcile_status,
                 readiness_result,
             )
-            return DemoProjectKubernetesRuntimeResult(status=status)
+            return messages.DemoProjectKubernetesRuntimeResult(status=status)
 
         smoke_result = await self._run_smoke_check(
             project,
@@ -150,7 +134,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 readiness_result,
                 smoke_result,
             )
-            return DemoProjectKubernetesRuntimeResult(status=status)
+            return messages.DemoProjectKubernetesRuntimeResult(status=status)
 
         promoted_status = await self._promote_with_smoke_check(
             project,
@@ -160,7 +144,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             smoke_result,
             smoke_plan,
         )
-        return DemoProjectKubernetesRuntimeResult(status=promoted_status)
+        return messages.DemoProjectKubernetesRuntimeResult(status=promoted_status)
 
     async def _wait_for_worker_rollout(
         self,
@@ -169,8 +153,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
     ) -> dict[str, Any]:
         timeout_seconds = int(smoke_plan.get("workerDeploymentTimeoutSeconds", 300))
         worker_rollout_activity = await workflow.execute_activity(
-            wait_for_worker_deployment_rollouts,
-            WorkerDeploymentRolloutRequest(
+            reconcile_activities.wait_for_worker_deployment_rollouts,
+            reconcile_activities.WorkerDeploymentRolloutRequest(
                 demo_project=demo_project,
                 worker_deployments=smoke_plan.get("workerDeployments", {}),
                 timeout_seconds=timeout_seconds,
@@ -187,8 +171,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
         readiness_activity = await workflow.execute_activity(
-            wait_for_candidate_readiness,
-            CandidateReadinessRequest(
+            reconcile_activities.wait_for_candidate_readiness,
+            reconcile_activities.CandidateReadinessRequest(
                 demo_project=demo_project,
                 candidate=smoke_plan.get("candidate", {}),
             ),
@@ -205,8 +189,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
         smoke_activity = await workflow.execute_activity(
-            run_smoke_check,
-            SmokeCheckRequest(
+            reconcile_activities.run_smoke_check,
+            reconcile_activities.SmokeCheckRequest(
                 project=project,
                 demo_project=demo_project,
                 host=smoke_plan.get("host"),
@@ -320,8 +304,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
         promotion_result = await workflow.execute_activity(
-            promote_candidate_routes,
-            PromoteCandidateRoutesRequest(
+            reconcile_activities.promote_candidate_routes,
+            reconcile_activities.PromoteCandidateRoutesRequest(
                 project=project,
                 demo_project=demo_project,
                 candidate=smoke_plan.get("candidate", {}),
@@ -344,8 +328,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 "resources": [],
             }
         prune_result = await workflow.execute_activity(
-            prune_stale_runtime_candidates,
-            PruneStaleRuntimeCandidatesRequest(
+            reconcile_activities.prune_stale_runtime_candidates,
+            reconcile_activities.PruneStaleRuntimeCandidatesRequest(
                 demo_project=demo_project,
                 active_version=active_version,
             ),

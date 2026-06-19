@@ -13,6 +13,10 @@ from temporalio.api.workflowservice.v1 import request_response_pb2 as workflowse
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
 from temporalio.worker import Worker, WorkerDeploymentConfig
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 
 from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
@@ -130,6 +134,32 @@ logger = logging.getLogger(__name__)
 
 ENTITY_WORKFLOW_TYPES = ("DemoProjectWorkflow", "InstruqtCourseWorkflow")
 CHECK_WORKER_VERSION_SIGNAL = "check_worker_version"
+WORKFLOW_PASSTHROUGH_MODULES = (
+    "demo_registry_operator.activities.builds.codebuild.execution",
+    "demo_registry_operator.activities.builds.planning",
+    "demo_registry_operator.activities.builds.status",
+    "demo_registry_operator.activities.canary",
+    "demo_registry_operator.activities.external_resources",
+    "demo_registry_operator.activities.external_resources.serverless_names",
+    "demo_registry_operator.activities.force_reconcile",
+    "demo_registry_operator.activities.instruqt",
+    "demo_registry_operator.activities.reconcile",
+    "demo_registry_operator.errors",
+    "demo_registry_operator.resources",
+    "demo_registry_operator.workflows.demo_project_artifact_build",
+    "demo_registry_operator.workflows.demo_project_kubernetes_runtime",
+    "demo_registry_operator.workflows.demo_project_serverless_lambda",
+    "demo_registry_operator.workflows.messages",
+    "demo_registry_operator.workflows.operator_auth_canary",
+)
+
+
+def create_workflow_runner() -> SandboxedWorkflowRunner:
+    return SandboxedWorkflowRunner(
+        restrictions=SandboxRestrictions.default.with_passthrough_modules(
+            *WORKFLOW_PASSTHROUGH_MODULES
+        )
+    )
 
 
 async def main() -> None:
@@ -153,6 +183,7 @@ async def main() -> None:
             worker = Worker(
                 client,
                 task_queue=config.task_queue,
+                workflow_runner=create_workflow_runner(),
                 workflows=[
                     DemoProjectWorkflow,
                     DemoProjectArtifactBuildWorkflow,
