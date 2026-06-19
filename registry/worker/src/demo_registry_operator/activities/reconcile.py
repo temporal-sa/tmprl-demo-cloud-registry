@@ -8,6 +8,11 @@ from urllib.request import Request, urlopen
 from temporalio import activity
 
 from demo_registry_operator import errors, kube, resources
+from demo_registry_operator.candidate_plan import (
+    candidate_renderability,
+    external_resource_blocker,
+    images_from_build_status,
+)
 from demo_registry_operator.config import WorkerConfig
 
 
@@ -150,6 +155,10 @@ def apply_demo_project_resources(
     missing_images = resources.missing_image_overrides(demo_project, image_overrides)
     build_failed = bool(build_status and build_status.get("phase") == "Error")
     external_resource_block = external_resource_blocker(external_resources)
+    # Single source of truth shared with the revision planner (candidate_plan).
+    renderability = candidate_renderability(
+        demo_project, external_resources, build_status
+    )
 
     rendered_resources = resources.base_resources(demo_project)
     runtime_namespace_rollout = resources.runtime_namespace_rollout_enabled(
@@ -160,12 +169,9 @@ def apply_demo_project_resources(
     smoke_check = resources.spec_of(demo_project).get("smokeCheck")
     has_versioned_workers = bool(resources.versioned_worker_components(demo_project))
     defer_route_promotion = bool(smoke_check) or has_versioned_workers
-    if not missing_images and not build_failed and external_resource_block is None:
-        version = resources.candidate_version(demo_project, image_overrides)
-        runtime_namespace = resources.candidate_runtime_namespace(
-            demo_project,
-            image_overrides,
-        )
+    if renderability.ready:
+        version = renderability.rollout_version
+        runtime_namespace = renderability.runtime_namespace
         if runtime_namespace and version:
             rendered_resources.extend(
                 resources.runtime_base_resources(
@@ -1327,89 +1333,6 @@ def target_test_workflows(status: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in workflows if isinstance(item, dict)] if isinstance(workflows, list) else []
 
 
-def external_resource_blocker(
-    external_resources: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not isinstance(external_resources, dict):
-        return None
-
-    temporal_cloud = external_resources.get("temporalCloud")
-    if isinstance(temporal_cloud, dict) and temporal_cloud.get("phase") == "Error":
-        reason = str(temporal_cloud.get("reason") or "TemporalCloudError")
-        return {
-            "phase": "Error",
-            "reason": reason,
-            "message": temporal_cloud.get(
-                "message",
-                "Temporal Cloud external resource reconciliation failed.",
-            ),
-            "temporalCloud": {
-                key: temporal_cloud.get(key)
-                for key in ("phase", "reason", "message", "auth", "namespace")
-                if key in temporal_cloud
-            },
-        }
-
-    secrets_manager = external_resources.get("secretsManager")
-    if not isinstance(secrets_manager, dict):
-        return None
-
-    phase = secrets_manager.get("phase")
-    if phase not in {"ValuesRequired", "Error"}:
-        return None
-
-    blocking = blocking_secret_statuses(secrets_manager)
-    return {
-        "phase": phase,
-        "reason": (
-            "SecretValuesRequired"
-            if phase == "ValuesRequired"
-            else "SecretVerificationFailed"
-        ),
-        "message": (
-            "Required AWS Secrets Manager values are not ready; runtime "
-            "workloads were not deployed."
-        ),
-        "secretsManager": {
-            "phase": phase,
-            "blocking": blocking,
-        },
-    }
-
-
-def blocking_secret_statuses(secrets_manager: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates = [
-        secrets_manager.get("temporalBootstrap"),
-        secrets_manager.get("temporalCredentials"),
-        *(
-            secrets_manager.get("userManaged")
-            if isinstance(secrets_manager.get("userManaged"), list)
-            else []
-        ),
-    ]
-    blocking = []
-    for secret in candidates:
-        if not isinstance(secret, dict) or secret.get("required") is False:
-            continue
-        if secret.get("phase") in {"Ready", "NotRequired"}:
-            continue
-        blocking.append(
-            {
-                key: secret.get(key)
-                for key in (
-                    "path",
-                    "phase",
-                    "message",
-                    "missingProperties",
-                    "managedBy",
-                    "components",
-                )
-                if key in secret
-            }
-        )
-    return blocking
-
-
 def external_secret_sync_status(
     applied_resources: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
@@ -1630,19 +1553,6 @@ def build_status_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(build_status, dict):
         return build_status
     return None
-
-
-def images_from_build_status(build_status: dict[str, Any] | None) -> dict[str, str]:
-    if not isinstance(build_status, dict):
-        return {}
-    images = build_status.get("images")
-    if not isinstance(images, dict):
-        return {}
-    return {
-        str(build_name): str(image)
-        for build_name, image in images.items()
-        if isinstance(build_name, str) and isinstance(image, str) and image
-    }
 
 
 def demo_project_with_build_source(

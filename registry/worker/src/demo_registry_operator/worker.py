@@ -110,6 +110,9 @@ from demo_registry_operator.activities.reconcile import (
     wait_for_candidate_readiness,
     wait_for_worker_deployment_rollouts,
 )
+from demo_registry_operator.activities.revision import (
+    plan_candidate_revision,
+)
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
@@ -273,6 +276,7 @@ async def main() -> None:
                     restore_active_runtime_routes,
                     rollback_worker_deployments,
                     prune_stale_runtime_candidates,
+                    plan_candidate_revision,
                     delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,

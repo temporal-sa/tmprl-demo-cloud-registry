@@ -410,3 +410,134 @@ def test_promotion_stable_service_is_never_owned():
     for resource in promoted:
         if resource["kind"] == "Service":
             assert "ownerReferences" not in resource["metadata"]
+
+
+# --- Task 3.1: PARITY TEST — planner readiness == apply renders workloads ---
+
+import pytest  # noqa: E402
+
+from demo_registry_operator import candidate_plan  # noqa: E402
+from demo_registry_operator.activities import reconcile  # noqa: E402
+
+
+def _apply_req(dp, ext, build):
+    return reconcile.ApplyDemoProjectResourcesRequest(
+        demo_project=dp, external_resources=ext, build_status=build
+    )
+
+
+def _parity_base_project():
+    return {
+        "metadata": {
+            "name": "parity-demo",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "c" * 40},
+        },
+        "spec": {
+            "builds": {"backend": {"context": ".", "dockerfile": "docker/b"}},
+            "components": {
+                "backend": {
+                    "build": "backend",
+                    "ports": [{"containerPort": 8000, "servicePort": 8000}],
+                }
+            },
+        },
+    }
+
+
+def _parity_worker_only_project():
+    return {
+        "metadata": {
+            "name": "parity-worker",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "d" * 40},
+        },
+        "spec": {
+            "builds": {"worker": {"context": ".", "dockerfile": "docker/w"}},
+            "components": {
+                "worker": {
+                    "build": "worker",
+                    "worker": {
+                        "versioning": {"enabled": True, "deploymentName": "parity-worker"}
+                    },
+                }
+            },
+        },
+    }
+
+
+def _parity_fixture(case):
+    if case == "worker_only":
+        dp = _parity_worker_only_project()
+        return dp, None, {"phase": "Pushed", "images": {"worker": "ex.com/w:git-d"}}
+    dp = _parity_base_project()
+    ok = {"phase": "Pushed", "images": {"backend": "ex.com/b:git-c"}}
+    if case == "missing_images":
+        return dp, None, {"phase": "Pushed", "images": {}}
+    if case == "build_error":
+        return dp, None, {"phase": "Error", "images": {"backend": "ex.com/b:git-c"}}
+    if case == "external_block":
+        return dp, {"temporalCloud": {"phase": "Error", "reason": "Boom"}}, ok
+    if case == "all_clear":
+        return dp, None, ok
+    raise ValueError(case)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_images", "build_error", "external_block", "all_clear", "worker_only"],
+)
+def test_planner_matches_apply(case, monkeypatch):
+    dp, ext, build = _parity_fixture(case)
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "apply_resources",
+        lambda res, dry_run: rendered.extend(r["kind"] for r in res) or [],
+    )
+    reconcile.apply_demo_project_resources(_apply_req(dp, ext, build))
+    workloads_rendered = any(
+        kind in rendered for kind in ("Deployment", "Service", "WorkerDeployment")
+    )
+    assert (
+        candidate_plan.candidate_renderability(dp, ext, build).ready
+        == workloads_rendered
+    )
+
+
+def test_worker_only_renders_workerdeployment_not_deployment(monkeypatch):
+    dp, ext, build = _parity_fixture("worker_only")
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "apply_resources",
+        lambda res, dry_run: rendered.extend(r["kind"] for r in res) or [],
+    )
+    reconcile.apply_demo_project_resources(_apply_req(dp, ext, build))
+    assert "WorkerDeployment" in rendered
+    assert "Deployment" not in rendered
+
+
+# --- Task 3.1: plan_candidate_revision activity + neutral-module guard ---
+
+from demo_registry_operator.activities import revision as revision_activities  # noqa: E402
+
+
+def test_plan_candidate_revision_wraps_renderability():
+    dp, ext, build = _parity_fixture("all_clear")
+    plan = revision_activities.plan_candidate_revision(
+        revision_activities.PlanCandidateRevisionRequest(
+            demo_project=dp, external_resources=ext, build_status=build
+        )
+    )
+    expected = candidate_plan.candidate_renderability(dp, ext, build)
+    assert plan.ready == expected.ready is True
+    assert plan.phase == expected.phase == "Ready"
+    assert plan.rollout_version == expected.rollout_version
+    assert plan.images == expected.images
+
+
+def test_revision_activities_do_not_import_reconcile():
+    # activities/revision.py must depend on the neutral candidate_plan module, never
+    # on activities/reconcile.py (one-directional dependency).
+    source = Path(revision_activities.__file__).read_text()
+    assert "activities.reconcile" not in source
+    assert "import reconcile" not in source
