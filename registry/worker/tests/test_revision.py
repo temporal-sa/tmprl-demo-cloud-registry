@@ -106,3 +106,54 @@ def test_demoprojectrevision_crd_is_cluster_scoped_with_expected_shape():
 def test_demoprojectrevision_crd_registered_in_kustomization():
     resources = _load(KUSTOMIZATION).get("resources", [])
     assert "demoprojectrevisions.registry.tmprl-demo.cloud.yaml" in resources
+
+
+# --- Task 1.3: RBAC (cluster-scoped + finalizers subresource) ---
+
+RBAC = ROOT / "clusters" / "sa-demo" / "bootstrap" / "registry-operator" / "rbac.yaml"
+
+
+def _cluster_role_rules() -> list[dict]:
+    docs = [d for d in yaml.safe_load_all(RBAC.read_text()) if d]
+    cluster_role = next(d for d in docs if d.get("kind") == "ClusterRole")
+    return cluster_role["rules"]
+
+
+def _verbs_for(rules: list[dict], group: str, resource: str) -> set:
+    verbs: set = set()
+    for rule in rules:
+        if group in rule["apiGroups"] and resource in rule["resources"]:
+            verbs |= set(rule["verbs"])
+    return verbs
+
+
+def test_rbac_grants_demoprojectrevision_access():
+    rules = _cluster_role_rules()
+    group = "registry.tmprl-demo.cloud"
+    assert {
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "patch",
+        "delete",
+    } <= _verbs_for(rules, group, "demoprojectrevisions")
+    assert {"get", "patch", "update"} <= _verbs_for(
+        rules, group, "demoprojectrevisions/status"
+    )
+    # finalizers subresource: required by OwnerReferencesPermissionEnforcement to set
+    # blockOwnerDeletion referencing a Revision.
+    assert {"update", "patch"} <= _verbs_for(
+        rules, group, "demoprojectrevisions/finalizers"
+    )
+
+
+def test_rbac_covers_ownerreference_patch_targets():
+    rules = _cluster_role_rules()
+    assert {"get", "patch", "delete"} <= _verbs_for(rules, "", "namespaces")
+    assert {"get", "patch", "delete"} <= _verbs_for(rules, "apps", "deployments")
+    assert {"get", "patch", "delete"} <= _verbs_for(rules, "", "services")
+    assert {"get", "create", "patch"} <= _verbs_for(
+        rules, "temporal.io", "workerdeployments"
+    )
