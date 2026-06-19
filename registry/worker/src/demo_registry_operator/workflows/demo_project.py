@@ -50,6 +50,14 @@ FAILED_RECONCILE_PHASES = {
     "SmokeCheckFailed",
     "WorkerRolloutFailed",
 }
+# Terminal rollout outcomes: the rollout was attempted and failed definitively.
+# We settle (remember the identity) so the entity workflow stops re-attempting
+# the identical rollout; recovery requires a new reconcile identity (new source)
+# or an explicit force_reconcile.
+TERMINAL_ROLLOUT_FAILURE_PHASES = {
+    "SmokeCheckFailed",
+    "WorkerRolloutFailed",
+}
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
@@ -1728,6 +1736,8 @@ def remember_completed_reconcile_identity(status: Any) -> bool:
     phase = status.get("phase")
     if not isinstance(phase, str) or not phase:
         return False
+    if phase in TERMINAL_ROLLOUT_FAILURE_PHASES:
+        return True  # settle; retry only on new identity or force_reconcile
     return phase not in FAILED_RECONCILE_PHASES and not phase.endswith("Failed")
 
 

@@ -158,12 +158,31 @@ def test_successful_force_reconcile_token_is_remembered_as_completed():
     assert workflow._completed_force_reconcile_token == "manual-1"
 
 
-def test_failed_status_is_not_a_rememberable_completed_identity():
+def test_terminal_rollout_failures_are_remembered_to_settle():
+    # SmokeCheckFailed / WorkerRolloutFailed are terminal: the rollout was
+    # attempted and failed definitively. Settle (remember the identity) so the
+    # entity workflow does not re-attempt the identical rollout; recovery needs
+    # a new reconcile identity (new source) or an explicit force_reconcile.
+    assert (
+        remember_completed_reconcile_identity({"phase": "SmokeCheckFailed"}) is True
+    )
+    assert (
+        remember_completed_reconcile_identity({"phase": "WorkerRolloutFailed"}) is True
+    )
+
+
+def test_transient_failures_are_not_a_rememberable_completed_identity():
+    # Non-terminal failures keep reconciling on every signal.
     assert remember_completed_reconcile_identity({"phase": "Error"}) is False
     assert (
-        remember_completed_reconcile_identity({"phase": "SmokeCheckFailed"}) is False
+        remember_completed_reconcile_identity({"phase": "CandidateNotReady"}) is False
     )
+    assert remember_completed_reconcile_identity({"phase": "DeployFailed"}) is False
+
+
+def test_successful_status_is_a_rememberable_completed_identity():
     assert remember_completed_reconcile_identity({"phase": "Promoted"}) is True
+    assert remember_completed_reconcile_identity({"phase": "Ready"}) is True
 
 
 def test_kubernetes_runtime_failed_status_includes_compensation_status():
