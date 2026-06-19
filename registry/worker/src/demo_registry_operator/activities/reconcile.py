@@ -581,7 +581,13 @@ def wait_for_candidate_readiness(
             "deployments": {},
         })
 
-    namespace = resources.project_namespace(demo_project)
+    # Candidate Deployments live in the candidate runtime namespace (the
+    # active->candidate rollout creates a suffixed namespace); fall back to the
+    # base project namespace only when runtime-namespace rollout is disabled
+    # (e.g. control-plane projects deploy in place).
+    namespace = candidate.get("runtimeNamespace") or resources.project_namespace(
+        demo_project
+    )
     deadline = time.monotonic() + config.readiness_timeout_seconds
     last_status: dict[str, Any] = {}
     while True:
