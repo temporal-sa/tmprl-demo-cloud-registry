@@ -249,27 +249,22 @@ def current_worker_activation_status(config: WorkerConfig) -> dict[str, Any]:
             "buildID": build_id,
             "currentBuildID": current_build_id,
         }
-    if not worker_deployment_ready(status):
-        return {
-            "active": False,
-            "mode": WATCH_MODE_CURRENT,
-            "reason": "WorkerDeploymentNotReady",
-            "message": (
-                f"Watcher build {build_id} is current but "
-                f"WorkerDeployment {namespace}/{name} is not Ready yet."
-            ),
-            "workerDeployment": f"{namespace}/{name}",
-            "buildID": build_id,
-            "currentBuildID": current_build_id,
-        }
-
+    # A current-but-not-Ready WorkerDeployment must keep this worker watching:
+    # idling the current build deadlocks a failed self-rollout (the running
+    # operator stops reconciling its own recovery). Readiness is surfaced in the
+    # status so callers can observe it without changing activation.
+    ready = worker_deployment_ready(status)
+    readiness_text = (
+        "and is Ready" if ready else "but the WorkerDeployment is not Ready yet"
+    )
     return {
         "active": True,
         "mode": WATCH_MODE_CURRENT,
         "reason": "CurrentWorkerVersion",
+        "ready": ready,
         "message": (
-            f"Watcher build {build_id} is the current ready version for "
-            f"WorkerDeployment {namespace}/{name}."
+            f"Watcher build {build_id} is the current version for "
+            f"WorkerDeployment {namespace}/{name} {readiness_text}."
         ),
         "workerDeployment": f"{namespace}/{name}",
         "buildID": build_id,

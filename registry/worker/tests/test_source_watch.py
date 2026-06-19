@@ -907,6 +907,60 @@ def test_watch_auto_mode_runs_only_for_current_ready_worker(monkeypatch):
     assert status["reason"] == "CurrentWorkerVersion"
 
 
+def test_watch_current_mode_stays_active_when_worker_deployment_not_ready(monkeypatch):
+    config = SimpleNamespace(
+        watch_mode="current",
+        source_watch_namespace="tmprl-dem-cld-registry-operator",
+    )
+    monkeypatch.setenv(
+        "TEMPORAL_DEPLOYMENT_NAME",
+        "tmprl-dem-cld-registry-operator/registry-operator",
+    )
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-new")
+
+    monkeypatch.setattr(
+        watch,
+        "read_worker_deployment_status",
+        lambda namespace, name: {
+            "currentVersion": {"buildID": "git-new"},
+            "conditions": [{"type": "Ready", "status": "False"}],
+        },
+    )
+
+    status = watch.watch_activation_status(config)
+
+    assert status["active"] is True
+    assert status["reason"] == "CurrentWorkerVersion"
+    assert status["ready"] is False
+    assert "not ready" in status["message"].lower()
+
+
+def test_watch_current_mode_idles_for_non_current_build_when_not_ready(monkeypatch):
+    config = SimpleNamespace(
+        watch_mode="current",
+        source_watch_namespace="tmprl-dem-cld-registry-operator",
+    )
+    monkeypatch.setenv(
+        "TEMPORAL_DEPLOYMENT_NAME",
+        "tmprl-dem-cld-registry-operator/registry-operator",
+    )
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-new")
+
+    monkeypatch.setattr(
+        watch,
+        "read_worker_deployment_status",
+        lambda namespace, name: {
+            "currentVersion": {"buildID": "git-old"},
+            "conditions": [{"type": "Ready", "status": "False"}],
+        },
+    )
+
+    status = watch.watch_activation_status(config)
+
+    assert status["active"] is False
+    assert status["reason"] == "NotCurrentWorkerVersion"
+
+
 def test_watch_bootstrap_mode_idles_after_handoff_is_ready(monkeypatch):
     config = SimpleNamespace(
         watch_mode="bootstrap",
