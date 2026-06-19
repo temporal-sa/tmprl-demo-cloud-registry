@@ -751,3 +751,28 @@ def test_apply_without_revision_owner_reference_leaves_namespace_unowned(monkeyp
         == "true"
     )
     assert "ownerReferences" not in runtime_ns["metadata"]
+
+
+# --- Task 4.4: one Revision identity per attempt ---
+
+
+def test_one_revision_identity_version_is_consistent():
+    dp = {
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "c" * 40},
+        },
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    build = {"phase": "Pushed", "images": {"backend": "ex/b:git-c"}}
+    plan = candidate_plan.candidate_renderability(dp, None, build)
+    # The planner's rolloutVersion is exactly the candidate version apply renders with
+    # (single identity) and the Revision records that same version + runtime namespace.
+    assert plan.ready is True
+    assert plan.rollout_version == resources.candidate_version(dp, plan.images)
+    assert plan.runtime_namespace == resources.candidate_runtime_namespace(
+        dp, plan.images
+    )
+    rev = resources.revision_resource(dp, plan.rollout_version, images=plan.images)
+    assert rev["spec"]["rolloutVersion"] == plan.rollout_version
+    assert rev["spec"]["runtimeNamespace"] == plan.runtime_namespace
