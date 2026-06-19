@@ -945,3 +945,81 @@ def test_operator_canary_uses_full_banking_template_unchanged():
     assert set(template["components"]) == {"frontend", "backend", "worker"}
     assert template["smokeCheck"]["path"] == "/api/health"
     assert template["smokeCheck"]["expectedStatus"] == 200
+
+
+# --- Task 6.1: operator self-rollout behaviors are separate ---
+
+
+def test_operator_self_rollout_behaviors_are_separate():
+    # (1) WorkerDeployment rollback, (2) candidate Deploy/Svc cleanup via Revision
+    # ownership, (3) operator-canary cleanup are distinct. Pin (1) vs (2): the
+    # control-plane candidate render owns web Deploy/Svc but NEVER the WorkerDeployment
+    # (its rollback is the separate rollback_worker_deployments activity).
+    dp = _control_plane_web_project()
+    images = {"web": "ex/web:git-v1", "worker": "ex/worker:git-v1"}
+    owner = kube.revision_owner_reference("rev-op", "uid-op")
+    res = resources.runtime_resources(dp, images, owner_references=[owner])
+    owned_kinds = {
+        r["kind"] for r in res if "ownerReferences" in r.get("metadata", {})
+    }
+    worker_deployments = [r for r in res if r["kind"] == "WorkerDeployment"]
+    assert worker_deployments
+    assert all(
+        "ownerReferences" not in wd["metadata"] for wd in worker_deployments
+    )
+    assert {"Deployment", "Service"} <= owned_kinds
+
+
+# --- Task 7: label-prune is a managed-only, version-targeted migration fallback ---
+
+
+def test_prune_only_targets_managed_candidate_resources(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_deployments",
+        lambda ns, *, label_selector: (captured.update(dep=label_selector), [])[1],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_services",
+        lambda ns, *, label_selector: (captured.update(svc=label_selector), [])[1],
+    )
+    dp = {
+        "metadata": {"name": "banking-money-transfer"},
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    reconcile.prune_stale_runtime_candidates(
+        reconcile.PruneStaleRuntimeCandidatesRequest(
+            demo_project=dp, active_version="git-new"
+        )
+    )
+    for selector in (captured["dep"], captured["svc"]):
+        assert "app.kubernetes.io/managed-by=demo-registry" in selector
+        assert "platform.temporal.io/rollout-role=candidate" in selector
+
+
+def test_delete_candidate_resources_targets_candidate_version_and_managed(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_deployments",
+        lambda ns, *, label_selector: (captured.update(dep=label_selector), [])[1],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_services",
+        lambda ns, *, label_selector: (captured.update(svc=label_selector), [])[1],
+    )
+    dp = {
+        "metadata": {"name": "banking-money-transfer"},
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    reconcile.delete_runtime_candidate_resources(
+        reconcile.DeleteRuntimeCandidateResourcesRequest(
+            demo_project=dp, candidate_version="git-failed"
+        )
+    )
+    for selector in (captured["dep"], captured["svc"]):
+        assert "app.kubernetes.io/managed-by=demo-registry" in selector
+        assert "platform.temporal.io/rollout-version=git-failed" in selector
