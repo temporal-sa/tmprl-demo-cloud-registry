@@ -97,6 +97,15 @@ class RestoreActiveRuntimeRoutesRequest:
 
 
 @dataclass(frozen=True)
+class WorkerDeploymentRollbackRequest:
+    demo_project: dict[str, Any]
+    external_resources: dict[str, Any] | None
+    active_images: dict[str, str]
+    active_version: str
+    worker_deployments: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class PruneStaleRuntimeCandidatesRequest:
     demo_project: dict[str, Any]
     active_version: str
@@ -638,6 +647,88 @@ def restore_active_runtime_routes(
         "message": "Previous active route resources were restored.",
         "activeVersion": active_version,
         "activeImages": active_images,
+        "appliedResources": applied,
+    })
+
+
+@activity.defn
+def rollback_worker_deployments(
+    request: WorkerDeploymentRollbackRequest,
+) -> ActivityStatusResult:
+    """Render + apply the previous active WorkerDeployment(s) on rollout failure.
+
+    Worker Versioning is the rollback mechanism: we re-render each Kubernetes
+    versioned worker component at the previous active image/version and apply it
+    (no delete, no guessed target field). In-flight pinned child workflows are
+    unaffected; sunset only fires post-drain.
+    """
+    demo_project = request.demo_project
+    active_images = request.active_images or {}
+    active_version = required_string(request.active_version, "active_version")
+    project = resources.project_name(demo_project)
+    workers = resources.kubernetes_versioned_worker_components(demo_project)
+
+    applied: list[dict[str, Any]] = []
+    rolled_back: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for component_name, component in sorted(workers.items()):
+        build_name = component.get("build")
+        if not isinstance(build_name, str) or build_name not in active_images:
+            skipped.append(
+                {"component": component_name, "reason": "no-active-image"}
+            )
+            continue
+        rendered = resources.worker_deployment_resource(
+            demo_project,
+            component_name,
+            component,
+            active_images[build_name],
+            version=active_version,
+            external_resources=request.external_resources,
+            image_overrides=active_images,
+        )
+        action = kube.apply_resource(rendered)
+        rolled_back.append(component_name)
+        metadata = rendered.get("metadata", {})
+        applied.append(
+            {
+                "apiVersion": rendered.get("apiVersion"),
+                "kind": rendered.get("kind"),
+                "name": metadata.get("name"),
+                "namespace": metadata.get("namespace"),
+                "action": action,
+            }
+        )
+
+    if not applied:
+        return ActivityStatusResult({
+            "project": project,
+            "phase": "Skipped",
+            "message": (
+                "No versioned worker components had a previous active image to "
+                "restore."
+            ),
+            "activeVersion": active_version,
+            "rolledBackComponents": [],
+            "skippedComponents": skipped,
+            "appliedResources": [],
+        })
+
+    activity.logger.info(
+        "Rolled back WorkerDeployment(s) for project=%s to version=%s components=%s",
+        project,
+        active_version,
+        rolled_back,
+    )
+    return ActivityStatusResult({
+        "project": project,
+        "phase": "RolledBack",
+        "message": (
+            f"Previous active WorkerDeployment(s) restored to {active_version}."
+        ),
+        "activeVersion": active_version,
+        "rolledBackComponents": rolled_back,
+        "skippedComponents": skipped,
         "appliedResources": applied,
     })
 
