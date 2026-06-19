@@ -1631,6 +1631,29 @@ def deployment_resources(
     return resources
 
 
+def workload_dns_config() -> dict[str, Any]:
+    """Pod dnsConfig applied to every rendered workload (operator + all projects).
+
+    Workers dial multi-dot external hostnames (the Temporal Cloud endpoint
+    ``<namespace>.<account>.tmprl.cloud``, 4 dots). With the default ``ndots:5``
+    glibc tries the cluster search domains FIRST — 5 lookups x A/AAAA per
+    resolve — so a burst of pollers produces a DNS query storm that hits the
+    kernel conntrack-insertion race on parallel UDP, dropping responses. A
+    single dropped lookup can wedge the worker's gRPC DNS resolver in a permanent
+    "dns error" retry loop (only a pod restart clears it), even though the node's
+    DNS is fine. ``ndots:2`` makes the multi-dot FQDN resolve absolute-first (one
+    lookup, no fan-out) while keeping in-cluster short-name resolution (e.g.
+    ``backend``); ``single-request-reopen`` serializes A/AAAA on separate sockets
+    to avoid the conntrack race.
+    """
+    return {
+        "options": [
+            {"name": "ndots", "value": "2"},
+            {"name": "single-request-reopen"},
+        ],
+    }
+
+
 def workload_pod_spec(
     demo_project: dict[str, Any],
     component_name: str,
@@ -1654,6 +1677,7 @@ def workload_pod_spec(
     pod_spec: dict[str, Any] = {
         "serviceAccountName": service_account_for_component(component_name),
         "automountServiceAccountToken": automount_service_account_token(component),
+        "dnsConfig": workload_dns_config(),
         "containers": containers,
     }
     volumes: list[dict[str, Any]] = []

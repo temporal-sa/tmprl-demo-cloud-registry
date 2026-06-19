@@ -1080,3 +1080,27 @@ def test_status_and_ownerref_patches_drive_real_client_with_merge_patch(monkeypa
     for c in captured:
         assert c["method"] == "PATCH", c
         assert c["ct"] == "application/merge-patch+json", c
+
+
+# --- DNS: workloads resolve external FQDNs absolute-first (ndots:2) to avoid the
+#     conntrack-race that wedges the worker's gRPC DNS resolver ---
+
+def test_workload_dns_config_uses_ndots2_and_single_request_reopen():
+    opts = {o["name"]: o.get("value") for o in resources.workload_dns_config()["options"]}
+    assert opts["ndots"] == "2"
+    assert "single-request-reopen" in opts
+
+
+def test_rendered_pods_set_dns_config_for_deployment_and_workerdeployment():
+    dp = _control_plane_web_project()
+    images = {"web": "ex/web:git-v1", "worker": "ex/worker:git-v1"}
+    res = resources.runtime_resources(dp, images)
+    checked = set()
+    for r in res:
+        if r["kind"] in ("Deployment", "WorkerDeployment"):
+            spec = r["spec"]["template"]["spec"]
+            opts = {o["name"]: o.get("value") for o in spec.get("dnsConfig", {}).get("options", [])}
+            assert opts.get("ndots") == "2", f"{r['kind']} missing ndots:2"
+            assert "single-request-reopen" in opts, f"{r['kind']} missing single-request-reopen"
+            checked.add(r["kind"])
+    assert {"Deployment", "WorkerDeployment"} <= checked, checked
