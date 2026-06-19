@@ -572,3 +572,52 @@ def string_map(value: Any) -> dict[str, str]:
         for key, item in value.items()
         if isinstance(key, str) and isinstance(item, str) and item
     }
+
+
+def compute_delete_targets(
+    *,
+    active_revision: str | None,
+    candidate_revision: str | None,
+    promoted: bool,
+    previous_active_revision: str | None,
+) -> dict[str, Any]:
+    """First-failure-safe delete planning. Never selects the active revision.
+
+    On promotion we may delete the *previous* active revision, but only once the new
+    active is recorded (else 'active-not-recorded'). On failure we delete the
+    candidate — including a failed FIRST rollout with no active revision yet.
+    """
+    delete: list[str] = []
+    refused: list[str] = []
+    if promoted:
+        if not active_revision:
+            return {"delete": [], "refused": [], "reason": "active-not-recorded"}
+        candidates = (
+            [previous_active_revision]
+            if (
+                previous_active_revision
+                and previous_active_revision != candidate_revision
+            )
+            else []
+        )
+    else:
+        candidates = [candidate_revision] if candidate_revision else []
+    for name in candidates:
+        if active_revision and name == active_revision:
+            refused.append(name)
+        else:
+            delete.append(name)
+    return {"delete": delete, "refused": refused}
+
+
+def require_allowed_revision_delete(target: str, decision: dict[str, Any]) -> str:
+    """Workflow-visible guard: a delete target must be in compute_delete_targets()['delete'].
+
+    Python ``assert`` can be optimized away and is not an acceptable safety boundary,
+    so this raises a real error instead.
+    """
+    if target not in set(decision.get("delete") or []):
+        raise RuntimeError(
+            f"Refusing to delete revision {target!r}; not in computed delete targets."
+        )
+    return target

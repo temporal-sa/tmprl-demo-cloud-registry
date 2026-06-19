@@ -623,3 +623,69 @@ def test_temporal_cloud_reconcile_delegates_to_named_steps():
     assert "_delete_temporal_candidate_secret" in compensation_source
     assert "_compensate_temporal_service_account" in compensation_source
     assert "_compensate_temporal_namespace" in compensation_source
+
+
+# --- Task 4.0: first-failure-safe delete-target helper + guard ---
+
+
+def test_compute_delete_targets_never_deletes_active():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision="rev-active",
+        candidate_revision="rev-active",  # candidate == active
+        promoted=False,
+        previous_active_revision=None,
+    )
+    assert decision["delete"] == []
+    assert decision["refused"] == ["rev-active"]
+
+
+def test_compute_delete_targets_failed_first_rollout_deletes_candidate():
+    # No active revision yet (first rollout) -> still clean up the failed candidate.
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision=None,
+        candidate_revision="rev-cand",
+        promoted=False,
+        previous_active_revision=None,
+    )
+    assert decision["delete"] == ["rev-cand"]
+    assert decision["refused"] == []
+
+
+def test_compute_delete_targets_promotion_refuses_until_active_recorded():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision=None,  # new active not yet recorded
+        candidate_revision="rev-new",
+        promoted=True,
+        previous_active_revision="rev-old",
+    )
+    assert decision["delete"] == []
+    assert decision.get("reason") == "active-not-recorded"
+
+
+def test_compute_delete_targets_promotion_deletes_previous_when_active_recorded():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision="rev-new",
+        candidate_revision="rev-new",
+        promoted=True,
+        previous_active_revision="rev-old",
+    )
+    assert decision["delete"] == ["rev-old"]
+    assert decision["refused"] == []
+
+
+def test_require_allowed_revision_delete_passes_allowed_target():
+    decision = {"delete": ["rev-old"], "refused": []}
+    assert (
+        kubernetes_runtime_workflow.require_allowed_revision_delete("rev-old", decision)
+        == "rev-old"
+    )
+
+
+def test_require_allowed_revision_delete_raises_on_unexpected_target():
+    decision = {"delete": ["rev-old"], "refused": []}
+    import pytest
+
+    with pytest.raises(RuntimeError, match="not in computed delete targets"):
+        kubernetes_runtime_workflow.require_allowed_revision_delete(
+            "rev-active", decision
+        )
