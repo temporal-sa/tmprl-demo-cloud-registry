@@ -111,6 +111,12 @@ spec:
         - name: DEMO_REGISTRY_WATCH_ENABLED
           value: auto
       worker:
+        # Restart the worker if its in-process Temporal connection wedges (e.g. a
+        # stuck gRPC DNS resolver leaves it Running but not polling). The worker
+        # process refreshes the heartbeat file only on a successful Temporal
+        # round-trip; the rendered liveness probe restarts the container when it
+        # goes stale. Safe to enable here because this worker writes the heartbeat.
+        livenessProbe: true
         versioning:
           enabled: true
           rollout:

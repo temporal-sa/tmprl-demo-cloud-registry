@@ -5,6 +5,8 @@ import concurrent.futures
 import logging
 import os
 import uuid
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from temporalio.api.batch.v1 import message_pb2 as batch_pb2
@@ -121,6 +123,7 @@ from demo_registry_operator.activities.revision import (
     wait_for_revision_cleanup,
 )
 from demo_registry_operator.config import WorkerConfig
+from demo_registry_operator.resources import WORKER_LIVENESS_FILE
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
 from demo_registry_operator.workflows.demo_project_artifact_build import (
@@ -175,6 +178,47 @@ def create_workflow_runner() -> SandboxedWorkflowRunner:
             *WORKFLOW_PASSTHROUGH_MODULES
         )
     )
+
+
+WORKER_LIVENESS_INTERVAL_SECONDS = 30
+WORKER_LIVENESS_CHECK_TIMEOUT_SECONDS = 10
+
+
+async def liveness_heartbeat(
+    client: Client,
+    *,
+    interval_seconds: int = WORKER_LIVENESS_INTERVAL_SECONDS,
+    timeout_seconds: int = WORKER_LIVENESS_CHECK_TIMEOUT_SECONDS,
+    path: str = WORKER_LIVENESS_FILE,
+) -> None:
+    """Refresh the liveness heartbeat file only while Temporal is actually reachable.
+
+    Pairs with resources.worker_liveness_probe(). A wedged worker (e.g. the gRPC
+    DNS resolver stuck) stays Running but can't poll, and an OS-level probe would
+    falsely pass — so the heartbeat is driven by a real Temporal health round-trip
+    over the worker's own client. If that stops succeeding the file goes stale and
+    the kubelet restarts the container (fresh process -> fresh resolver).
+    """
+    heartbeat = Path(path)
+    try:
+        heartbeat.touch()  # cover the probe's initialDelay window before the first check
+    except OSError:
+        logger.warning("Liveness heartbeat: cannot write %s", path)
+    while True:
+        try:
+            healthy = await client.service_client.check_health(
+                timeout=timedelta(seconds=timeout_seconds)
+            )
+            if healthy:
+                heartbeat.touch()
+            else:
+                logger.warning("Liveness heartbeat: Temporal reported unhealthy")
+        except Exception:  # noqa: BLE001 - any failure means we can't reach Temporal
+            logger.warning(
+                "Liveness heartbeat: Temporal health check failed; %s not refreshed",
+                path,
+            )
+        await asyncio.sleep(interval_seconds)
 
 
 async def main() -> None:
@@ -301,6 +345,7 @@ async def main() -> None:
                 deployment_config=deployment_config,
             )
             tasks.append(asyncio.create_task(worker.run()))
+            tasks.append(asyncio.create_task(liveness_heartbeat(client)))
             if deployment_config is not None:
                 tasks.append(
                     asyncio.create_task(

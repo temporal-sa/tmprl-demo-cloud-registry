@@ -196,3 +196,50 @@ def test_signal_running_entity_workflows_falls_back_to_individual_signals():
             CheckWorkerVersionSignal(),
         ),
     ]
+
+
+def test_liveness_heartbeat_refreshes_via_temporal_health_check(tmp_path, monkeypatch):
+    # Must drive the heartbeat from the worker's OWN client (check_health) — an
+    # OS-level probe would falsely pass while the in-process resolver is wedged.
+    path = tmp_path / "alive"
+    calls = {"health": 0}
+
+    async def fake_check_health(**kwargs):
+        calls["health"] += 1
+        return True
+
+    client = SimpleNamespace(service_client=SimpleNamespace(check_health=fake_check_health))
+
+    async def stop_after_one(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker.asyncio, "sleep", stop_after_one)
+    try:
+        asyncio.run(worker.liveness_heartbeat(client, path=str(path), interval_seconds=0))
+    except asyncio.CancelledError:
+        pass
+    assert path.exists()
+    assert calls["health"] == 1
+
+
+def test_liveness_heartbeat_survives_unreachable_temporal(tmp_path, monkeypatch):
+    # A wedged connection (check_health raises) must NOT crash the loop; it stops
+    # refreshing the file so the probe restarts the pod.
+    path = tmp_path / "alive"
+    sleeps = {"n": 0}
+
+    async def fake_check_health(**kwargs):
+        raise RuntimeError("dns error")
+
+    client = SimpleNamespace(service_client=SimpleNamespace(check_health=fake_check_health))
+
+    async def count_then_stop(_seconds):
+        sleeps["n"] += 1
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker.asyncio, "sleep", count_then_stop)
+    try:
+        asyncio.run(worker.liveness_heartbeat(client, path=str(path), interval_seconds=0))
+    except asyncio.CancelledError:
+        pass
+    assert sleeps["n"] == 1  # the failed health check was caught; loop proceeded

@@ -1104,3 +1104,38 @@ def test_rendered_pods_set_dns_config_for_deployment_and_workerdeployment():
             assert "single-request-reopen" in opts, f"{r['kind']} missing single-request-reopen"
             checked.add(r["kind"])
     assert {"Deployment", "WorkerDeployment"} <= checked, checked
+
+
+# --- Worker liveness probe (heartbeat-driven; recovers a Running-but-wedged worker) ---
+
+def test_worker_liveness_probe_enabled_is_opt_in():
+    assert resources.worker_liveness_probe_enabled({"worker": {"livenessProbe": True}}) is True
+    assert resources.worker_liveness_probe_enabled(
+        {"worker": {"versioning": {"enabled": True}, "livenessProbe": True}}
+    ) is True
+    assert resources.worker_liveness_probe_enabled(
+        {"worker": {"versioning": {"enabled": True}}}
+    ) is False
+    assert resources.worker_liveness_probe_enabled({"worker": True}) is False
+    assert resources.worker_liveness_probe_enabled({}) is False
+
+
+def test_worker_liveness_probe_checks_heartbeat_freshness():
+    probe = resources.worker_liveness_probe()
+    cmd = probe["exec"]["command"]
+    assert cmd[0] == "sh"
+    assert resources.WORKER_LIVENESS_FILE in cmd[2]
+    assert str(resources.WORKER_LIVENESS_MAX_STALE_SECONDS) in cmd[2]
+    assert probe["failureThreshold"] >= 1 and probe["periodSeconds"] >= 1
+
+
+def test_container_renders_liveness_probe_only_when_opted_in():
+    dp = {"metadata": {"name": "x"}}
+    opted = resources.container(
+        dp, "worker",
+        {"build": "worker", "worker": {"livenessProbe": True, "versioning": {"enabled": True}}},
+        "img:git-x",
+    )
+    assert "livenessProbe" in opted
+    plain = resources.container(dp, "worker", {"build": "worker", "worker": True}, "img:git-x")
+    assert "livenessProbe" not in plain

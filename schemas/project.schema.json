@@ -782,6 +782,10 @@
           "properties": {
             "versioning": {
               "$ref": "#/$defs/workerVersioning"
+            },
+            "livenessProbe": {
+              "type": "boolean",
+              "description": "Enable the heartbeat-driven liveness probe. The worker process must refresh the heartbeat file on a successful Temporal round-trip; the rendered probe restarts the container if it goes stale (recovers a Running-but-wedged worker)."
             }
           }
         }

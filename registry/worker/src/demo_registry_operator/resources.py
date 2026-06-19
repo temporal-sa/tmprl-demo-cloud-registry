@@ -1991,6 +1991,52 @@ def go_duration_seconds(value: Any) -> int:
     return 0
 
 
+WORKER_LIVENESS_FILE = "/tmp/worker-alive"
+WORKER_LIVENESS_MAX_STALE_SECONDS = 120
+
+
+def worker_liveness_probe_enabled(component: dict[str, Any]) -> bool:
+    """True if this worker maintains the liveness heartbeat (opt-in, uniform).
+
+    Set ``worker.livenessProbe: true`` on a worker whose process refreshes
+    WORKER_LIVENESS_FILE on a successful Temporal round-trip (the operator's own
+    worker does; demo workers can opt in once their app writes the same heartbeat).
+    A worker that does NOT write it must leave this off, or the probe would
+    restart-loop a healthy pod.
+    """
+    worker = component.get("worker")
+    return isinstance(worker, dict) and bool(worker.get("livenessProbe"))
+
+
+def worker_liveness_probe() -> dict[str, Any]:
+    """Restart a worker whose in-process Temporal connection is wedged.
+
+    A wedged worker (e.g. the gRPC DNS resolver stuck) stays Running but stops
+    polling; an OS-level probe would falsely pass, so the heartbeat is driven by
+    the worker process from a real Temporal health round-trip. When it stops
+    refreshing WORKER_LIVENESS_FILE this probe fails and the kubelet restarts the
+    container (fresh process -> fresh resolver). This is the only layer that can
+    recover a Running-but-dead worker; the gate/readiness only cover rollout time.
+    """
+    return {
+        "exec": {
+            "command": [
+                "sh",
+                "-c",
+                (
+                    'test "$(( $(date +%s) - '
+                    f"$(stat -c %Y {WORKER_LIVENESS_FILE} 2>/dev/null || echo 0) ))\" "
+                    f"-lt {WORKER_LIVENESS_MAX_STALE_SECONDS}"
+                ),
+            ],
+        },
+        "initialDelaySeconds": 60,
+        "periodSeconds": 30,
+        "timeoutSeconds": 5,
+        "failureThreshold": 2,
+    }
+
+
 def container(
     demo_project: dict[str, Any],
     component_name: str,
@@ -2027,6 +2073,9 @@ def container(
             "periodSeconds": 5,
             "failureThreshold": 30,
         }
+
+    if worker_liveness_probe_enabled(component):
+        rendered["livenessProbe"] = worker_liveness_probe()
 
     env_from = env_from_refs(demo_project, component_name, component)
     if env_from:
