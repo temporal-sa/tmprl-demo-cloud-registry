@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import ssl
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -449,6 +450,20 @@ def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+def _smoke_check_tls_context() -> ssl.SSLContext:
+    """Unverified TLS context for smoke probes.
+
+    Demo and operator endpoints terminate TLS with self-signed / internal certs that
+    the operator cannot verify (there is no internal CA). The smoke check only asserts
+    the app answers with the expected HTTP status, so certificate verification is
+    intentionally disabled. (For non-https URLs urlopen ignores the context.)
+    """
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
     smoke_check = request.smoke_check
     if not smoke_check:
@@ -475,7 +490,11 @@ def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
         checked_at = datetime.now(UTC).isoformat()
         try:
             request = Request(url, headers={"User-Agent": "registry-operator/0"})
-            with urlopen(request, timeout=timeout) as response:
+            with urlopen(
+                request,
+                timeout=timeout,
+                context=_smoke_check_tls_context(),
+            ) as response:
                 actual_status = int(response.status)
             last_error = None
         except HTTPError as error:

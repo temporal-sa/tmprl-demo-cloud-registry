@@ -812,3 +812,41 @@ def test_delete_runtime_candidate_resources_deletes_runtime_namespace(monkeypatc
             "action": "deleting",
         }
     ]
+
+
+def test_smoke_check_uses_unverified_tls_for_https(monkeypatch):
+    # No internal signed cert exists for demo/operator endpoints, so the smoke probe
+    # must connect over unverified TLS (it only asserts the app's HTTP status).
+    import ssl
+
+    captured = {}
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout, context=None):
+        captured["url"] = req.full_url
+        captured["context"] = context
+        return _Resp()
+
+    monkeypatch.setattr(reconcile, "urlopen", fake_urlopen)
+    result = reconcile.run_smoke_check(
+        reconcile.SmokeCheckRequest(
+            project="p",
+            host="example.com",
+            smoke_check={"path": "/health", "expectedStatus": 200},
+        )
+    ).status
+
+    assert result["ok"] is True
+    assert captured["url"] == "https://example.com/health"
+    context = captured["context"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_NONE
+    assert context.check_hostname is False
