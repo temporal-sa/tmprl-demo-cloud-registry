@@ -76,6 +76,8 @@ INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
+DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
     "http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify"
 )
@@ -281,6 +283,11 @@ def runtime_namespace(demo_project: dict[str, Any], rollout_version: str) -> str
 
 
 def runtime_namespace_rollout_enabled(demo_project: dict[str, Any]) -> bool:
+    # TODO(footgun): finalization-policy=retain is overloaded — it drives BOTH
+    # teardown-retain (is_control_plane_project) AND runtime-namespace-disable here.
+    # These should be decoupled into explicit spec.controlPlane and
+    # spec.runtimeNamespace.enabled fields so an ordinary demo can retain without
+    # losing runtime-namespace rollout (and vice versa).
     return not is_control_plane_project(demo_project)
 
 
@@ -294,6 +301,67 @@ def candidate_runtime_namespace(
     if not version:
         return None
     return runtime_namespace(demo_project, version)
+
+
+def revision_name(demo_project: dict[str, Any], rollout_version: str) -> str:
+    digest = hashlib.sha256(rollout_version.encode("utf-8")).hexdigest()[:12]
+    return suffixed_dns_name(project_name(demo_project), digest)
+
+
+def revision_resource(
+    demo_project: dict[str, Any],
+    rollout_version: str,
+    *,
+    images: dict[str, str],
+    reconcile_key: str | None = None,
+) -> dict[str, Any]:
+    """Render a cluster-scoped DemoProjectRevision describing one rollout attempt."""
+    runtime_ns_enabled = runtime_namespace_rollout_enabled(demo_project)
+    runtime_ns = (
+        runtime_namespace(demo_project, rollout_version)
+        if runtime_ns_enabled
+        else None
+    )
+    worker_deployments = {
+        name: worker_deployment_name(name, component)
+        for name, component in kubernetes_versioned_worker_components(
+            demo_project
+        ).items()
+    }
+    spec: dict[str, Any] = {
+        "projectName": project_name(demo_project),
+        "rolloutVersion": rollout_version,
+        "runtimeNamespaceEnabled": runtime_ns_enabled,
+        "host": project_host(demo_project),
+        "images": dict(images),
+        "components": components(demo_project),
+        "workerDeployments": worker_deployments,
+    }
+    if reconcile_key:
+        spec["reconcileKey"] = reconcile_key
+    commit = source_commit_sha(demo_project)
+    if commit:
+        spec["sourceCommitSha"] = commit
+    digest = source_artifact_digest(demo_project)
+    if digest:
+        spec["sourceArtifactDigest"] = digest
+    if runtime_ns:
+        spec["runtimeNamespace"] = runtime_ns
+    smoke = spec_of(demo_project).get("smokeCheck")
+    if isinstance(smoke, dict):
+        spec["smokeCheck"] = smoke
+    return {
+        "apiVersion": DEMO_PROJECT_API_VERSION,
+        "kind": DEMO_PROJECT_REVISION_KIND,
+        "metadata": {
+            "name": revision_name(demo_project, rollout_version),
+            "labels": {
+                **common_labels(demo_project),
+                "platform.temporal.io/rollout-version": rollout_version,
+            },
+        },
+        "spec": spec,
+    }
 
 
 def project_temporal_namespace(demo_project: dict[str, Any]) -> str:
@@ -1096,12 +1164,14 @@ def runtime_base_resources(
     *,
     namespace: str,
     rollout_version: str,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         namespace_resource(
             demo_project,
             namespace=namespace,
             rollout_version=rollout_version,
+            owner_references=owner_references,
         ),
         *rbac_resources(demo_project, namespace=namespace),
         platform_metadata_configmap(demo_project, namespace=namespace),
@@ -1114,6 +1184,7 @@ def runtime_resources(
     *,
     include_routes: bool = True,
     external_resources: dict[str, Any] | None = None,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     version = candidate_version(demo_project, image_overrides)
     runtime_ns = candidate_runtime_namespace(demo_project, image_overrides)
@@ -1123,6 +1194,7 @@ def runtime_resources(
                 demo_project,
                 namespace=runtime_ns,
                 rollout_version=version,
+                owner_references=owner_references,
             )
             if runtime_ns and version
             else []
@@ -1134,6 +1206,7 @@ def runtime_resources(
             include_routes=include_routes,
             external_resources=external_resources,
             namespace=runtime_ns,
+            owner_references=owner_references,
         ),
     ]
 
@@ -1163,9 +1236,13 @@ def runtime_workload_resources(
     include_routes: bool = True,
     external_resources: dict[str, Any] | None = None,
     namespace: str | None = None,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     runtime_ns = namespace or candidate_runtime_namespace(demo_project, image_overrides)
+    # Per-object ownerRefs only apply in no-runtime-namespace (control-plane) mode;
+    # when a runtime Namespace exists it is the cleanup boundary and owns its contents.
+    object_owner_references = None if runtime_ns else owner_references
     resources.extend(
         service_resources(
             demo_project,
@@ -1173,9 +1250,17 @@ def runtime_workload_resources(
             promote_base=bool(runtime_ns),
             include_candidates=not bool(runtime_ns),
             namespace=runtime_ns,
+            owner_references=object_owner_references,
         )
     )
-    resources.extend(deployment_resources(demo_project, image_overrides, namespace=runtime_ns))
+    resources.extend(
+        deployment_resources(
+            demo_project,
+            image_overrides,
+            namespace=runtime_ns,
+            owner_references=object_owner_references,
+        )
+    )
     resources.extend(
         worker_controller_resources(
             demo_project,
@@ -1240,6 +1325,7 @@ def namespace_resource(
     *,
     namespace: str | None = None,
     rollout_version: str | None = None,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     name = project_name(demo_project)
     labels = common_labels(demo_project)
@@ -1253,14 +1339,20 @@ def namespace_resource(
             "platform.temporal.io/rollout-version": rollout_version,
         }
         annotations["platform.temporal.io/rollout-version"] = rollout_version
+    metadata: dict[str, Any] = {
+        "name": namespace or project_namespace(demo_project),
+        "labels": labels,
+        "annotations": annotations,
+    }
+    # The runtime Namespace is the cleanup boundary: a DemoProjectRevision ownerRef
+    # here lets GC reap the Namespace (and everything in it) when the Revision is
+    # deleted. No per-object ownerRefs are set on resources inside the Namespace.
+    if owner_references:
+        metadata["ownerReferences"] = owner_references
     return {
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {
-            "name": namespace or project_namespace(demo_project),
-            "labels": labels,
-            "annotations": annotations,
-        },
+        "metadata": metadata,
     }
 
 
@@ -1358,6 +1450,7 @@ def service_resources(
     include_candidates: bool = True,
     rollout_version: str | None = None,
     namespace: str | None = None,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     namespace = namespace or project_namespace(demo_project)
@@ -1439,6 +1532,11 @@ def service_resources(
                         "namespace": namespace,
                         "labels": candidate_labels,
                         "annotations": candidate_annotations,
+                        **(
+                            {"ownerReferences": owner_references}
+                            if owner_references
+                            else {}
+                        ),
                     },
                     "spec": {
                         "type": "ClusterIP",
@@ -1462,6 +1560,7 @@ def deployment_resources(
     image_overrides: dict[str, str],
     *,
     namespace: str | None = None,
+    owner_references: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     namespace = namespace or project_namespace(demo_project)
@@ -1501,6 +1600,11 @@ def deployment_resources(
                         "platform.temporal.io/component": component_name,
                         "platform.temporal.io/rollout-version": version,
                     },
+                    **(
+                        {"ownerReferences": owner_references}
+                        if owner_references
+                        else {}
+                    ),
                 },
                 "spec": {
                     "replicas": component.get("replicas", 1),

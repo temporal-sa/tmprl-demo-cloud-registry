@@ -621,6 +621,78 @@ def test_restore_active_runtime_routes_uses_explicit_active_version(monkeypatch)
     )
 
 
+def test_rollback_worker_deployments_restores_previous_active_workerdeployment(
+    monkeypatch,
+):
+    # Observed incident shape: previous active git-0d, candidate git-cd times out.
+    # The rollback activity must render + apply the previous active WorkerDeployment.
+    applied = []
+
+    def capture_apply(rendered):
+        applied.append(rendered)
+        return "applied"
+
+    monkeypatch.setattr(reconcile.kube, "apply_resource", capture_apply)
+
+    demo_project = banking_project()
+    demo_project["spec"]["components"]["versioned-worker"] = {
+        "build": "worker",
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "deploymentName": "versioned-worker",
+            }
+        },
+    }
+
+    result = reconcile.rollback_worker_deployments(
+        reconcile.WorkerDeploymentRollbackRequest(
+            demo_project=demo_project,
+            external_resources=None,
+            active_images=banking_images("git-0d"),
+            active_version="git-0d",
+            worker_deployments={},
+        )
+    ).status
+
+    assert result["phase"] == "RolledBack"
+    assert result["rolledBackComponents"] == ["versioned-worker"]
+
+    worker_deployment = next(
+        rendered for rendered in applied if rendered["kind"] == "WorkerDeployment"
+    )
+    assert (
+        "git-0d"
+        in worker_deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+    )
+    assert (
+        worker_deployment["metadata"]["annotations"][
+            "platform.temporal.io/rollout-version"
+        ]
+        == "git-0d"
+    )
+
+
+def test_rollback_worker_deployments_skips_when_no_active_image(monkeypatch):
+    applied = []
+    monkeypatch.setattr(
+        reconcile.kube, "apply_resource", lambda rendered: applied.append(rendered)
+    )
+
+    result = reconcile.rollback_worker_deployments(
+        reconcile.WorkerDeploymentRollbackRequest(
+            demo_project=banking_project(),
+            external_resources=None,
+            active_images={},
+            active_version="git-0d",
+            worker_deployments={},
+        )
+    ).status
+
+    assert result["phase"] == "Skipped"
+    assert applied == []
+
+
 def test_delete_runtime_candidate_resources_deletes_only_failed_candidate(
     monkeypatch,
 ):
@@ -740,3 +812,51 @@ def test_delete_runtime_candidate_resources_deletes_runtime_namespace(monkeypatc
             "action": "deleting",
         }
     ]
+
+
+def test_smoke_check_uses_unverified_tls_for_https(monkeypatch):
+    # No internal signed cert exists for demo/operator endpoints, so the smoke probe
+    # must connect over unverified TLS (it only asserts the app's HTTP status).
+    import ssl
+
+    captured = {}
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout, context=None):
+        captured["url"] = req.full_url
+        captured["context"] = context
+        return _Resp()
+
+    monkeypatch.setattr(reconcile, "urlopen", fake_urlopen)
+    result = reconcile.run_smoke_check(
+        reconcile.SmokeCheckRequest(
+            project="p",
+            host="example.com",
+            smoke_check={"path": "/health", "expectedStatus": 200},
+        )
+    ).status
+
+    assert result["ok"] is True
+    assert captured["url"] == "https://example.com/health"
+    context = captured["context"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_NONE
+    assert context.check_hostname is False
+
+
+def test_run_smoke_check_is_a_registered_temporal_activity():
+    # Regression: a helper added next to run_smoke_check must not steal its
+    # @activity.defn decorator. The worker validates this at startup; unit tests
+    # that call the function directly do NOT, so assert the decoration explicitly.
+    assert hasattr(reconcile.run_smoke_check, "__temporal_activity_definition")
+    assert not hasattr(
+        reconcile._smoke_check_tls_context, "__temporal_activity_definition"
+    )

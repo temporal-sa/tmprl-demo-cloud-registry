@@ -7,7 +7,12 @@ from typing import Any
 DEMO_PROJECT_GROUP = "registry.tmprl-demo.cloud"
 DEMO_PROJECT_VERSION = "v1alpha1"
 DEMO_PROJECT_PLURAL = "demoprojects"
+DEMO_PROJECT_REVISION_GROUP = "registry.tmprl-demo.cloud"
+DEMO_PROJECT_REVISION_VERSION = "v1alpha1"
+DEMO_PROJECT_REVISION_PLURAL = "demoprojectrevisions"
+DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 INSTRUQT_COURSE_PLURAL = "instruqtcourses"
+JSON_MERGE_PATCH_CONTENT_TYPE = "application/merge-patch+json"
 FLUX_SOURCE_GROUP = "source.toolkit.fluxcd.io"
 FLUX_SOURCE_VERSION = "v1"
 FLUX_GIT_REPOSITORY_PLURAL = "gitrepositories"
@@ -168,7 +173,55 @@ def read_namespace(name: str) -> dict[str, Any] | None:
         "name": name,
         "phase": getattr(status, "phase", None),
         "deletionTimestamp": getattr(metadata, "deletion_timestamp", None),
+        "ownerReferences": _owner_reference_summaries(metadata),
     }
+
+
+def _owner_reference_summaries(metadata: Any) -> list[dict[str, Any]]:
+    owner_references = getattr(metadata, "owner_references", None)
+    if not owner_references:
+        return []
+    summaries = []
+    for ref in owner_references:
+        summaries.append(
+            {
+                "apiVersion": getattr(ref, "api_version", None),
+                "kind": getattr(ref, "kind", None),
+                "name": getattr(ref, "name", None),
+                "uid": getattr(ref, "uid", None),
+                "controller": getattr(ref, "controller", None),
+                "blockOwnerDeletion": getattr(ref, "block_owner_deletion", None),
+            }
+        )
+    return summaries
+
+
+def read_deployment_owner_references(
+    namespace: str, name: str
+) -> list[dict[str, Any]] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        deployment = client.AppsV1Api().read_namespaced_deployment(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return _owner_reference_summaries(getattr(deployment, "metadata", None))
+
+
+def read_service_owner_references(
+    namespace: str, name: str
+) -> list[dict[str, Any]] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        service = client.CoreV1Api().read_namespaced_service(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return _owner_reference_summaries(getattr(service, "metadata", None))
 
 
 def list_namespaces(*, label_selector: str | None = None) -> list[dict[str, Any]]:
@@ -594,17 +647,230 @@ def delete_namespace(name: str, *, dry_run: bool = False) -> str:
 def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
+    # JSON merge patch: keys absent from `status` are preserved by the server, so a
+    # child mid-rollout patch and the parent's end-of-reconcile write don't clobber
+    # each other. Pass the content type explicitly; do not rely on the client default.
+    _patch_demo_project_status_raw(
+        name,
+        {"status": status},
+        content_type=JSON_MERGE_PATCH_CONTENT_TYPE,
+    )
 
+
+def _patch_demo_project_status_raw(
+    name: str,
+    body: dict[str, Any],
+    *,
+    content_type: str,
+) -> None:
     client = _client_module()
     load_kubernetes_config()
-    api = client.CustomObjectsApi()
-    api.patch_cluster_custom_object_status(
+    client.CustomObjectsApi().patch_cluster_custom_object_status(
         group=DEMO_PROJECT_GROUP,
         version=DEMO_PROJECT_VERSION,
         plural=DEMO_PROJECT_PLURAL,
         name=name,
-        body={"status": status},
+        body=body,
+        _content_type=content_type,
     )
+
+
+# --- DemoProjectRevision (cluster-scoped) ---
+
+
+def revision_owner_reference(name: str, uid: str) -> dict[str, Any]:
+    return {
+        "apiVersion": f"{DEMO_PROJECT_REVISION_GROUP}/{DEMO_PROJECT_REVISION_VERSION}",
+        "kind": DEMO_PROJECT_REVISION_KIND,
+        "name": name,
+        "uid": uid,
+        "controller": True,
+        "blockOwnerDeletion": True,
+    }
+
+
+def read_demo_project_revision(name: str) -> dict[str, Any] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        return client.CustomObjectsApi().get_cluster_custom_object(
+            DEMO_PROJECT_REVISION_GROUP,
+            DEMO_PROJECT_REVISION_VERSION,
+            DEMO_PROJECT_REVISION_PLURAL,
+            name,
+        )
+    except Exception as error:  # noqa: BLE001 - translate 404 to None
+        if str(getattr(error, "status", None)) == "404":
+            return None
+        raise
+
+
+def list_demo_project_revisions(
+    label_selector: str | None = None,
+) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CustomObjectsApi().list_cluster_custom_object(
+        group=DEMO_PROJECT_REVISION_GROUP,
+        version=DEMO_PROJECT_REVISION_VERSION,
+        plural=DEMO_PROJECT_REVISION_PLURAL,
+        label_selector=label_selector,
+    )
+    items = response.get("items") if isinstance(response, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def apply_demo_project_revision(
+    resource: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    custom = client.CustomObjectsApi()
+    name = resource["metadata"]["name"]
+    return _create_or_patch(
+        read=lambda: custom.get_cluster_custom_object(
+            DEMO_PROJECT_REVISION_GROUP,
+            DEMO_PROJECT_REVISION_VERSION,
+            DEMO_PROJECT_REVISION_PLURAL,
+            name,
+        ),
+        create=lambda: custom.create_cluster_custom_object(
+            DEMO_PROJECT_REVISION_GROUP,
+            DEMO_PROJECT_REVISION_VERSION,
+            DEMO_PROJECT_REVISION_PLURAL,
+            resource,
+        ),
+        patch=lambda: custom.patch_cluster_custom_object(
+            DEMO_PROJECT_REVISION_GROUP,
+            DEMO_PROJECT_REVISION_VERSION,
+            DEMO_PROJECT_REVISION_PLURAL,
+            name,
+            resource,
+        ),
+    )
+
+
+def patch_demo_project_revision_status(
+    name: str,
+    status: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        return
+    _patch_demo_project_revision_status_raw(
+        name,
+        {"status": status},
+        content_type=JSON_MERGE_PATCH_CONTENT_TYPE,
+    )
+
+
+def _patch_demo_project_revision_status_raw(
+    name: str,
+    body: dict[str, Any],
+    *,
+    content_type: str,
+) -> None:
+    client = _client_module()
+    load_kubernetes_config()
+    client.CustomObjectsApi().patch_cluster_custom_object_status(
+        group=DEMO_PROJECT_REVISION_GROUP,
+        version=DEMO_PROJECT_REVISION_VERSION,
+        plural=DEMO_PROJECT_REVISION_PLURAL,
+        name=name,
+        body=body,
+        _content_type=content_type,
+    )
+
+
+def delete_demo_project_revision(
+    name: str,
+    *,
+    propagation_policy: str = "Foreground",
+    dry_run: bool = False,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CustomObjectsApi().delete_cluster_custom_object(
+            DEMO_PROJECT_REVISION_GROUP,
+            DEMO_PROJECT_REVISION_VERSION,
+            DEMO_PROJECT_REVISION_PLURAL,
+            name,
+            body=client.V1DeleteOptions(propagation_policy=propagation_policy),
+        )
+        return "deleting"
+    except Exception as error:  # noqa: BLE001 - already gone is success
+        if str(getattr(error, "status", None)) == "404":
+            return "absent"
+        raise
+
+
+def patch_namespace_owner_references(
+    name: str,
+    owner_references: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> str:
+    return _patch_owner_references(
+        lambda body, content_type: _client_module()
+        .CoreV1Api()
+        .patch_namespace(name, body, _content_type=content_type),
+        owner_references,
+        dry_run=dry_run,
+    )
+
+
+def patch_deployment_owner_references(
+    namespace: str,
+    name: str,
+    owner_references: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> str:
+    return _patch_owner_references(
+        lambda body, content_type: _client_module()
+        .AppsV1Api()
+        .patch_namespaced_deployment(name, namespace, body, _content_type=content_type),
+        owner_references,
+        dry_run=dry_run,
+    )
+
+
+def patch_service_owner_references(
+    namespace: str,
+    name: str,
+    owner_references: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> str:
+    return _patch_owner_references(
+        lambda body, content_type: _client_module()
+        .CoreV1Api()
+        .patch_namespaced_service(name, namespace, body, _content_type=content_type),
+        owner_references,
+        dry_run=dry_run,
+    )
+
+
+def _patch_owner_references(
+    patch: Any,
+    owner_references: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> str:
+    if dry_run:
+        return "planned"
+    load_kubernetes_config()
+    body = {"metadata": {"ownerReferences": owner_references}}
+    patch(body, JSON_MERGE_PATCH_CONTENT_TYPE)
+    return "patched"
 
 
 def patch_instruqt_course_status(

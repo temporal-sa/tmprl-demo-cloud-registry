@@ -1001,3 +1001,46 @@ def test_watch_bootstrap_mode_stays_active_until_handoff_exists(monkeypatch):
 
     assert status["active"] is True
     assert status["reason"] == "WorkerDeploymentMissing"
+
+
+# --- Task 5.2: watch keeps signalling on terminal failure (entity dedupe handles it) ---
+
+
+def test_status_observed_keeps_signalling_on_terminal_failure():
+    failed = {
+        "metadata": {"name": "p", "generation": 3},
+        "status": {
+            "observedGeneration": 3,
+            "reconcileKey": "k",
+            "phase": "SmokeCheckFailed",
+            "conditions": [
+                {"type": "Reconciled", "observedGeneration": 3, "status": "True"}
+            ],
+        },
+    }
+    # A terminal-failed status is NOT observed -> the watcher keeps signalling
+    # (level-triggered); entity dedupe (0.2) prevents repeated rollout attempts.
+    assert (
+        watch.status_observed_reconcile_key(
+            failed, reconcile_key="k", source_artifact_digest=None
+        )
+        is False
+    )
+
+    promoted = {
+        "metadata": {"name": "p", "generation": 3},
+        "status": {
+            "observedGeneration": 3,
+            "reconcileKey": "k",
+            "phase": "Promoted",
+            "conditions": [
+                {"type": "Reconciled", "observedGeneration": 3, "status": "True"}
+            ],
+        },
+    }
+    assert (
+        watch.status_observed_reconcile_key(
+            promoted, reconcile_key="k", source_artifact_digest=None
+        )
+        is True
+    )

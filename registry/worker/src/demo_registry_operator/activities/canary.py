@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import hashlib
+import importlib.resources
 import json
 import os
 import time
@@ -12,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+import yaml
 from temporalio import activity
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
@@ -22,6 +24,38 @@ from demo_registry_operator.activities.builds import definitions as build_defini
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.workflows import messages
+
+CANARY_TEMPLATES_PACKAGE = "demo_registry_operator.canary_templates"
+
+
+@activity.defn
+def load_canary_templates() -> list[dict[str, Any]]:
+    """Load the external operator-canary templates (one YAML file per type).
+
+    Returns a sorted list of ``{name, authMode, demoProjectTemplate}``. Adding a new
+    canary type is just a new YAML file in the canary_templates package — no workflow
+    or registry.yaml change needed.
+    """
+    templates: list[dict[str, Any]] = []
+    package_files = importlib.resources.files(CANARY_TEMPLATES_PACKAGE)
+    for entry in sorted(package_files.iterdir(), key=lambda path: path.name):
+        if not entry.name.endswith((".yaml", ".yml")):
+            continue
+        data = yaml.safe_load(entry.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("demoProjectTemplate"), dict):
+            templates.append(
+                {
+                    "name": data.get("name") or entry.name.rsplit(".", 1)[0],
+                    "authMode": data.get("authMode") or "apiKey",
+                    "demoProjectTemplate": data["demoProjectTemplate"],
+                }
+            )
+    if not templates:
+        raise errors.non_retryable_error(
+            "No operator-canary templates found in the canary_templates package.",
+            error_type=errors.CONFIGURATION_ERROR,
+        )
+    return templates
 
 
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"

@@ -478,34 +478,50 @@ def test_temporal_search_attribute_status_tracks_owned_creates_and_deletes():
     assert by_name["RemovedManaged"]["managed"] is False
 
 
-def test_registry_operator_canary_branch_request_splits_auth_modes():
+def test_registry_operator_canary_branch_request_uses_per_template_auth():
+    # Each branch is built from a self-contained external template ({name, authMode,
+    # demoProjectTemplate}); the template carries its own auth, no shared template.
     request = RegistryOperatorCanaryRequest(
         projectNamePrefix="operator-canary",
         projectName="manual-canary",
-        demoProjectTemplate={"metadata": {"name": "template"}, "spec": {}},
     )
 
     api_key = registry_operator_canary_branch_request(
         request,
-        auth_mode="apiKey",
+        template={
+            "name": "api-key",
+            "authMode": "apiKey",
+            "demoProjectTemplate": {"metadata": {"name": "t"}, "spec": {}},
+        },
         workflow_id="gate/run",
         run_id="run-1",
     )
     mtls = registry_operator_canary_branch_request(
         request,
-        auth_mode="mtls",
+        template={
+            "name": "mtls",
+            "authMode": "mtls",
+            "demoProjectTemplate": {
+                "metadata": {"name": "t"},
+                "spec": {"temporal": {"auth": {"mode": "mtls"}}},
+            },
+        },
         workflow_id="gate/run",
         run_id="run-1",
     )
 
     assert api_key.authMode == "apiKey"
-    assert api_key.workflowID == "gate/run/apiKey"
+    assert api_key.workflowID == "gate/run/api-key"
     assert api_key.projectNamePrefix == "operator-canary-api-key"
     assert api_key.projectName == "manual-canary-api-key"
+    assert api_key.demoProjectTemplate["spec"] == {}
     assert mtls.authMode == "mtls"
     assert mtls.workflowID == "gate/run/mtls"
     assert mtls.projectNamePrefix == "operator-canary-mtls"
     assert mtls.projectName == "manual-canary-mtls"
+    assert (
+        mtls.demoProjectTemplate["spec"]["temporal"]["auth"]["mode"] == "mtls"
+    )
 
 
 def test_registry_operator_canary_parent_uses_branch_dataclass_fields():
@@ -623,3 +639,162 @@ def test_temporal_cloud_reconcile_delegates_to_named_steps():
     assert "_delete_temporal_candidate_secret" in compensation_source
     assert "_compensate_temporal_service_account" in compensation_source
     assert "_compensate_temporal_namespace" in compensation_source
+
+
+# --- Task 4.0: first-failure-safe delete-target helper + guard ---
+
+
+def test_compute_delete_targets_never_deletes_active():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision="rev-active",
+        candidate_revision="rev-active",  # candidate == active
+        promoted=False,
+        previous_active_revision=None,
+    )
+    assert decision["delete"] == []
+    assert decision["refused"] == ["rev-active"]
+
+
+def test_compute_delete_targets_failed_first_rollout_deletes_candidate():
+    # No active revision yet (first rollout) -> still clean up the failed candidate.
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision=None,
+        candidate_revision="rev-cand",
+        promoted=False,
+        previous_active_revision=None,
+    )
+    assert decision["delete"] == ["rev-cand"]
+    assert decision["refused"] == []
+
+
+def test_compute_delete_targets_promotion_refuses_until_active_recorded():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision=None,  # new active not yet recorded
+        candidate_revision="rev-new",
+        promoted=True,
+        previous_active_revision="rev-old",
+    )
+    assert decision["delete"] == []
+    assert decision.get("reason") == "active-not-recorded"
+
+
+def test_compute_delete_targets_promotion_deletes_previous_when_active_recorded():
+    decision = kubernetes_runtime_workflow.compute_delete_targets(
+        active_revision="rev-new",
+        candidate_revision="rev-new",
+        promoted=True,
+        previous_active_revision="rev-old",
+    )
+    assert decision["delete"] == ["rev-old"]
+    assert decision["refused"] == []
+
+
+def test_require_allowed_revision_delete_passes_allowed_target():
+    decision = {"delete": ["rev-old"], "refused": []}
+    assert (
+        kubernetes_runtime_workflow.require_allowed_revision_delete("rev-old", decision)
+        == "rev-old"
+    )
+
+
+def test_require_allowed_revision_delete_raises_on_unexpected_target():
+    decision = {"delete": ["rev-old"], "refused": []}
+    import pytest
+
+    with pytest.raises(RuntimeError, match="not in computed delete targets"):
+        kubernetes_runtime_workflow.require_allowed_revision_delete(
+            "rev-active", decision
+        )
+
+
+# --- Task 4.1-4.3: revision lifecycle helpers ---
+
+from demo_registry_operator.activities.revision import RevisionRef  # noqa: E402
+
+
+def _revref():
+    return RevisionRef(
+        name="rev-1",
+        uid="uid-9",
+        rollout_version="git-v1",
+        runtime_namespace="ns-x",
+        runtime_namespace_enabled=True,
+    )
+
+
+def test_revision_owner_reference_from_ref():
+    owner = kubernetes_runtime_workflow.revision_owner_reference_from_ref(_revref())
+    assert owner["kind"] == "DemoProjectRevision"
+    assert owner["apiVersion"] == "registry.tmprl-demo.cloud/v1alpha1"
+    assert owner["name"] == "rev-1"
+    assert owner["uid"] == "uid-9"
+    assert owner["controller"] is True
+    assert owner["blockOwnerDeletion"] is True
+
+
+def test_revision_ref_summary():
+    assert kubernetes_runtime_workflow.revision_ref_summary(_revref()) == {
+        "name": "rev-1",
+        "uid": "uid-9",
+        "rolloutVersion": "git-v1",
+        "runtimeNamespace": "ns-x",
+        "runtimeNamespaceEnabled": True,
+    }
+
+
+def test_revision_cleanup_mode():
+    assert (
+        kubernetes_runtime_workflow.revision_cleanup_mode(
+            {"runtimeNamespaceEnabled": True}
+        )
+        == "runtime-namespace"
+    )
+    assert (
+        kubernetes_runtime_workflow.revision_cleanup_mode(
+            {"runtimeNamespaceEnabled": False}
+        )
+        == "control-plane"
+    )
+    assert kubernetes_runtime_workflow.revision_cleanup_mode(None) == "control-plane"
+
+
+def test_revision_phase_for_reconcile():
+    assert (
+        kubernetes_runtime_workflow._revision_phase_for_reconcile(
+            {"phase": "WorkerRolloutPending"}
+        )
+        == "WorkerRolloutPending"
+    )
+    assert (
+        kubernetes_runtime_workflow._revision_phase_for_reconcile(
+            {"phase": "SmokeCheckPending"}
+        )
+        == "Applied"
+    )
+
+
+def test_revision_name_of():
+    assert kubernetes_runtime_workflow._revision_name_of({"name": "rev-1"}) == "rev-1"
+    assert kubernetes_runtime_workflow._revision_name_of(None) is None
+    assert kubernetes_runtime_workflow._revision_name_of({}) is None
+
+
+# --- Task 5.1: entity dedupe settles a terminal failure; force_reconcile retries ---
+
+
+def test_smoke_check_failed_settles_then_force_reconcile_retries():
+    demo_project = project()
+    identity = reconcile_identity(demo_project)
+    wf = workflow_instance()
+    wf._current_reconcile_identity = identity
+    wf._status = {"phase": "SmokeCheckFailed"}
+    wf._complete_current_reconcile()
+    # 0.2: terminal rollout failure is settled (remembered)
+    assert wf._completed_reconcile_identity == identity
+    # 5.1: re-signalling the SAME identity does not queue a new attempt
+    wf.reconcile(reconcile_signal(deepcopy(demo_project)))
+    assert wf._pending_spec is None
+    assert wf._pending_reconcile_identity is None
+    # 5.1: force_reconcile queues exactly one new attempt
+    wf.force_reconcile(ForceReconcileSignal(token="retry-1", reason="manual"))
+    assert wf._pending_force_reconcile == {"token": "retry-1", "reason": "manual"}

@@ -203,3 +203,47 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
     assert calls["workflow"]["rpc_timeout"] == timedelta(seconds=3)
     assert status["connectTimeoutSeconds"] == 2
     assert status["workflowRpcTimeoutSeconds"] == 3
+
+
+# --- External canary templates + mTLS env-var mapping (operator-canary gate) ---
+
+from demo_registry_operator import resources as _resources  # noqa: E402
+from demo_registry_operator.activities import canary as _canary  # noqa: E402
+
+
+def _canary_template(name: str) -> dict:
+    return {t["name"]: t for t in _canary.load_canary_templates()}[name]
+
+
+def test_load_canary_templates_returns_external_self_contained_templates():
+    templates = _canary.load_canary_templates()
+    names = {t["name"] for t in templates}
+    assert {"api-key", "mtls"} <= names
+    for t in templates:
+        assert t["authMode"] in ("apiKey", "mtls")
+        assert t["demoProjectTemplate"]["kind"] == "DemoProject"
+
+
+def test_mtls_canary_template_worker_exposes_app_cert_env_and_no_api_key():
+    # The fix: the mtls worker must expose TEMPORAL_CERT_PATH / TEMPORAL_KEY_PATH
+    # (the names the banking app reads) pointing at the mounted cert, and NO API key
+    # (else the app prefers api-key auth and never uses mTLS).
+    mtls = _canary_template("mtls")["demoProjectTemplate"]
+    worker = mtls["spec"]["components"]["worker"]
+    spec = _resources.workload_pod_spec(
+        mtls, "worker", worker, "ex.com/worker:git-x",
+        image_overrides={"worker": "ex.com/worker:git-x"},
+    )
+    env = {e["name"]: e.get("value") for e in spec["containers"][0].get("env", [])}
+    assert _resources.temporal_auth_mode(mtls) == "mtls"
+    assert _resources.mounts_temporal_mtls_cert_files(mtls, worker)
+    assert env.get("TEMPORAL_CERT_PATH", "").endswith("/tls.crt")
+    assert env.get("TEMPORAL_KEY_PATH", "").endswith("/tls.key")
+    assert "TEMPORAL_API_KEY" not in env
+
+
+def test_api_key_canary_template_worker_has_no_cert_mount():
+    apikey = _canary_template("api-key")["demoProjectTemplate"]
+    worker = apikey["spec"]["components"]["worker"]
+    assert _resources.temporal_auth_mode(apikey) != "mtls"
+    assert not _resources.mounts_temporal_mtls_cert_files(apikey, worker)

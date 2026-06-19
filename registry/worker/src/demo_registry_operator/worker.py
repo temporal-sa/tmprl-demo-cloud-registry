@@ -21,6 +21,7 @@ from temporalio.worker.workflow_sandbox import (
 from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
     delete_registry_operator_canary_project,
+    load_canary_templates,
     prepare_registry_operator_canary_plan,
     rotate_registry_operator_canary_credentials,
     signal_registry_operator_canary_finalize,
@@ -105,9 +106,19 @@ from demo_registry_operator.activities.reconcile import (
     record_demo_project_status,
     remove_project_finalizer,
     restore_active_runtime_routes,
+    rollback_worker_deployments,
     run_smoke_check,
     wait_for_candidate_readiness,
     wait_for_worker_deployment_rollouts,
+)
+from demo_registry_operator.activities.revision import (
+    adopt_active_revision_resources,
+    delete_revision,
+    ensure_revision,
+    patch_demo_project_revision_refs,
+    plan_candidate_revision,
+    set_revision_phase,
+    wait_for_revision_cleanup,
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
@@ -199,6 +210,7 @@ async def main() -> None:
                     RegistryOperatorAuthCanaryWorkflow,
                 ],
                 activities=[
+                    load_canary_templates,
                     prepare_registry_operator_canary_plan,
                     apply_registry_operator_canary_project,
                     signal_registry_operator_canary_reconcile,
@@ -270,7 +282,15 @@ async def main() -> None:
                     run_smoke_check,
                     promote_candidate_routes,
                     restore_active_runtime_routes,
+                    rollback_worker_deployments,
                     prune_stale_runtime_candidates,
+                    plan_candidate_revision,
+                    ensure_revision,
+                    set_revision_phase,
+                    delete_revision,
+                    patch_demo_project_revision_refs,
+                    wait_for_revision_cleanup,
+                    adopt_active_revision_resources,
                     delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,

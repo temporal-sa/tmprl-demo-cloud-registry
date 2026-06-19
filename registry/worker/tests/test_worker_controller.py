@@ -1311,7 +1311,8 @@ def test_registry_operator_rbac_can_manage_canary_and_prune_resources():
         rule
         for rule in cluster_role["rules"]
         if rule["apiGroups"] == ["registry.tmprl-demo.cloud"]
-        and set(rule["resources"]) == {"demoprojects", "instruqtcourses"}
+        and set(rule["resources"])
+        == {"demoprojects", "demoprojectrevisions", "instruqtcourses"}
     )
 
     assert set(registry_resource_rule["verbs"]) >= {

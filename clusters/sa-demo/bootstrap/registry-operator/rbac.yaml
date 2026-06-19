@@ -19,6 +19,7 @@ rules:
       - registry.tmprl-demo.cloud
     resources:
       - demoprojects
+      - demoprojectrevisions
       - instruqtcourses
     verbs:
       - create
@@ -32,11 +33,19 @@ rules:
       - registry.tmprl-demo.cloud
     resources:
       - demoprojects/status
+      - demoprojectrevisions/status
       - instruqtcourses/status
     verbs:
       - get
       - patch
       - update
+  - apiGroups:
+      - registry.tmprl-demo.cloud
+    resources:
+      - demoprojectrevisions/finalizers
+    verbs:
+      - update
+      - patch
   - apiGroups:
       - ""
     resources:

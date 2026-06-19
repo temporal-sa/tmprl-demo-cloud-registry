@@ -117,54 +117,19 @@ spec:
             strategy: AllAtOnce
             gate:
               workflowType: RegistryOperatorCanaryWorkflow
+              # Canary project templates are external, self-contained YAML files
+              # under demo_registry_operator.canary_templates (api-key.yaml,
+              # mtls.yaml, ...). RegistryOperatorCanaryWorkflow loads them via the
+              # load_canary_templates activity and launches one branch per template
+              # in parallel. Add a new canary type by dropping in a new template
+              # file — no change needed here. The gate input below only carries the
+              # shared run policy (naming, timeouts, cleanup).
               input:
                 projectNamePrefix: operator-canary
                 timeoutSeconds: 1800
                 cleanupTimeoutSeconds: 900
                 pollSeconds: 10
                 cleanupPolicy: Always
-                demoProjectTemplate:
-                  apiVersion: registry.tmprl-demo.cloud/v1alpha1
-                  kind: DemoProject
-                  metadata:
-                    name: operator-canary-template
-                  spec:
-                    source:
-                      repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
-                    builds:
-                      frontend:
-                        context: .
-                        dockerfile: docker/frontend.Dockerfile
-                      backend:
-                        context: .
-                        dockerfile: docker/backend.Dockerfile
-                      worker:
-                        context: .
-                        dockerfile: docker/worker-python.Dockerfile
-                    components:
-                      frontend:
-                        build: frontend
-                        ports:
-                          - containerPort: 5173
-                            servicePort: 80
-                      backend:
-                        build: backend
-                        temporalAccess: true
-                        ports:
-                          - containerPort: 8000
-                            servicePort: 8000
-                      worker:
-                        build: worker
-                        worker: true
-                        env:
-                          - name: BANKING_BACKEND_URL
-                            value: http://backend:8000
-                    ingress:
-                      subdomain: operator-canary
-                      temporalAuthRequired: false
-                    smokeCheck:
-                      path: /api/health
-                      expectedStatus: 200
           sunset:
             scaledownDelay: 1m
             deleteDelay: 5m
