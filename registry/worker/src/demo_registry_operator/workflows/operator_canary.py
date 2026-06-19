@@ -1,17 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
+from demo_registry_operator import errors
+from demo_registry_operator.activities import canary as canary_activities
 from demo_registry_operator.workflows import messages
 from demo_registry_operator.workflows import operator_auth_canary as auth_canary_workflow
+
+LOAD_CANARY_TEMPLATES_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    maximum_attempts=5,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
+)
 
 
 @workflow.defn
 class RegistryOperatorCanaryWorkflow:
-    """End-to-end gate workflow for registry-operator WorkerDeployment rollouts."""
+    """End-to-end gate workflow for registry-operator WorkerDeployment rollouts.
+
+    Loads the external canary templates (one self-contained YAML per type, e.g.
+    api-key / mtls) and launches one branch per template in parallel. Adding a new
+    canary type is just a new template file — no change here or in registry.yaml.
+    """
 
     @workflow.run
     async def run(
@@ -19,19 +34,19 @@ class RegistryOperatorCanaryWorkflow:
         request: messages.RegistryOperatorCanaryRequest,
     ) -> messages.RegistryOperatorCanaryResult:
         workflow_info = workflow.info()
+        templates = await workflow.execute_activity(
+            canary_activities.load_canary_templates,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=LOAD_CANARY_TEMPLATES_RETRY_POLICY,
+        )
         branch_requests = [
             registry_operator_canary_branch_request(
                 request,
-                auth_mode="apiKey",
+                template=template,
                 workflow_id=workflow_info.workflow_id,
                 run_id=workflow_info.run_id,
-            ),
-            registry_operator_canary_branch_request(
-                request,
-                auth_mode="mtls",
-                workflow_id=workflow_info.workflow_id,
-                run_id=workflow_info.run_id,
-            ),
+            )
+            for template in templates
         ]
         canary_results = await asyncio.gather(
             *(
@@ -65,23 +80,25 @@ class RegistryOperatorCanaryWorkflow:
 def registry_operator_canary_branch_request(
     request: messages.RegistryOperatorCanaryRequest,
     *,
-    auth_mode: str,
+    template: dict,
     workflow_id: str,
     run_id: str,
 ) -> messages.RegistryOperatorAuthCanaryRequest:
-    suffix = "api-key" if auth_mode == "apiKey" else auth_mode
+    name = template.get("name") or "canary"
+    auth_mode = template.get("authMode") or "apiKey"
+    demo_project_template = template.get("demoProjectTemplate")
     prefix = request.projectNamePrefix
     prefix = prefix if isinstance(prefix, str) and prefix else "operator-canary"
     project_name = request.projectName
     if isinstance(project_name, str) and project_name:
-        project_name = f"{project_name}-{suffix}"
+        project_name = f"{project_name}-{name}"
     return messages.RegistryOperatorAuthCanaryRequest(
-        workflowID=f"{workflow_id}/{auth_mode}",
+        workflowID=f"{workflow_id}/{name}",
         runID=run_id,
         authMode=auth_mode,
-        projectNamePrefix=f"{prefix}-{suffix}",
+        projectNamePrefix=f"{prefix}-{name}",
         projectName=project_name,
-        demoProjectTemplate=request.demoProjectTemplate,
+        demoProjectTemplate=demo_project_template,
         demoProject=request.demoProject,
         expectedSourceCommitSha=request.expectedSourceCommitSha,
         expectedImages=request.expectedImages,

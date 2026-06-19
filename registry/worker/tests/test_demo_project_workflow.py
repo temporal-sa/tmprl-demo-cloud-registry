@@ -478,34 +478,50 @@ def test_temporal_search_attribute_status_tracks_owned_creates_and_deletes():
     assert by_name["RemovedManaged"]["managed"] is False
 
 
-def test_registry_operator_canary_branch_request_splits_auth_modes():
+def test_registry_operator_canary_branch_request_uses_per_template_auth():
+    # Each branch is built from a self-contained external template ({name, authMode,
+    # demoProjectTemplate}); the template carries its own auth, no shared template.
     request = RegistryOperatorCanaryRequest(
         projectNamePrefix="operator-canary",
         projectName="manual-canary",
-        demoProjectTemplate={"metadata": {"name": "template"}, "spec": {}},
     )
 
     api_key = registry_operator_canary_branch_request(
         request,
-        auth_mode="apiKey",
+        template={
+            "name": "api-key",
+            "authMode": "apiKey",
+            "demoProjectTemplate": {"metadata": {"name": "t"}, "spec": {}},
+        },
         workflow_id="gate/run",
         run_id="run-1",
     )
     mtls = registry_operator_canary_branch_request(
         request,
-        auth_mode="mtls",
+        template={
+            "name": "mtls",
+            "authMode": "mtls",
+            "demoProjectTemplate": {
+                "metadata": {"name": "t"},
+                "spec": {"temporal": {"auth": {"mode": "mtls"}}},
+            },
+        },
         workflow_id="gate/run",
         run_id="run-1",
     )
 
     assert api_key.authMode == "apiKey"
-    assert api_key.workflowID == "gate/run/apiKey"
+    assert api_key.workflowID == "gate/run/api-key"
     assert api_key.projectNamePrefix == "operator-canary-api-key"
     assert api_key.projectName == "manual-canary-api-key"
+    assert api_key.demoProjectTemplate["spec"] == {}
     assert mtls.authMode == "mtls"
     assert mtls.workflowID == "gate/run/mtls"
     assert mtls.projectNamePrefix == "operator-canary-mtls"
     assert mtls.projectName == "manual-canary-mtls"
+    assert (
+        mtls.demoProjectTemplate["spec"]["temporal"]["auth"]["mode"] == "mtls"
+    )
 
 
 def test_registry_operator_canary_parent_uses_branch_dataclass_fields():

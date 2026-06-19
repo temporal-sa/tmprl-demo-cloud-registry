@@ -1,0 +1,48 @@
+# Operator-canary project template: API-key auth (the operator's own auth mode).
+name: api-key
+authMode: apiKey
+demoProjectTemplate:
+  apiVersion: registry.tmprl-demo.cloud/v1alpha1
+  kind: DemoProject
+  metadata:
+    name: operator-canary-template
+  spec:
+    temporal:
+      auth:
+        mode: apiKey
+    builds:
+      backend:
+        context: .
+        dockerfile: docker/backend.Dockerfile
+      frontend:
+        context: .
+        dockerfile: docker/frontend.Dockerfile
+      worker:
+        context: .
+        dockerfile: docker/worker-python.Dockerfile
+    components:
+      backend:
+        build: backend
+        ports:
+          - containerPort: 8000
+            servicePort: 8000
+        temporalAccess: true
+      frontend:
+        build: frontend
+        ports:
+          - containerPort: 5173
+            servicePort: 80
+      worker:
+        build: worker
+        env:
+          - name: BANKING_BACKEND_URL
+            value: http://backend:8000
+        worker: true
+    ingress:
+      subdomain: operator-canary
+      temporalAuthRequired: false
+    smokeCheck:
+      expectedStatus: 200
+      path: /api/health
+    source:
+      repo: https://github.com/temporal-sa/demo-banking-app-money-transfer

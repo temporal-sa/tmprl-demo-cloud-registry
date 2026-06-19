@@ -21,6 +21,7 @@ from temporalio.worker.workflow_sandbox import (
 from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
     delete_registry_operator_canary_project,
+    load_canary_templates,
     prepare_registry_operator_canary_plan,
     rotate_registry_operator_canary_credentials,
     signal_registry_operator_canary_finalize,
@@ -209,6 +210,7 @@ async def main() -> None:
                     RegistryOperatorAuthCanaryWorkflow,
                 ],
                 activities=[
+                    load_canary_templates,
                     prepare_registry_operator_canary_plan,
                     apply_registry_operator_canary_project,
                     signal_registry_operator_canary_reconcile,

@@ -913,7 +913,7 @@ def test_finalization_policy_couples_control_plane_and_runtime_namespace():
     assert resources.runtime_namespace_rollout_enabled(ordinary) is True
 
 
-# --- Task 6.2: canary shape unchanged (registry.yaml uses the banking template) ---
+# --- Task 6.2: canary shape preserved via external, self-contained templates ---
 
 REGISTRY_PROJECT = ROOT / "projects" / "demo" / "registry.yaml"
 
@@ -933,18 +933,36 @@ def _operator_canary_gate() -> dict:
     raise AssertionError("no worker rollout gate found in registry.yaml")
 
 
-def test_operator_canary_uses_full_banking_template_unchanged():
+def test_operator_canary_gate_input_carries_policy_only_not_template():
+    # The canary project templates are now external YAML files loaded by the
+    # workflow; the gate input must NOT inline a demoProjectTemplate, only the
+    # shared run policy (naming, timeouts, cleanup).
     gate = _operator_canary_gate()
     assert gate["workflowType"] == "RegistryOperatorCanaryWorkflow"
-    template = gate["input"]["demoProjectTemplate"]["spec"]
-    assert (
-        template["source"]["repo"]
-        == "https://github.com/temporal-sa/demo-banking-app-money-transfer"
-    )
-    assert set(template["builds"]) == {"frontend", "backend", "worker"}
-    assert set(template["components"]) == {"frontend", "backend", "worker"}
-    assert template["smokeCheck"]["path"] == "/api/health"
-    assert template["smokeCheck"]["expectedStatus"] == 200
+    gate_input = gate["input"]
+    assert "demoProjectTemplate" not in gate_input
+    assert gate_input["projectNamePrefix"] == "operator-canary"
+    assert gate_input["cleanupPolicy"] == "Always"
+    assert {"timeoutSeconds", "cleanupTimeoutSeconds", "pollSeconds"} <= set(gate_input)
+
+
+def test_operator_canary_external_templates_preserve_banking_shape():
+    # Moving the template out to files must not change what the canary exercises:
+    # both auth-mode templates still build/run the full banking app end-to-end.
+    from demo_registry_operator.activities import canary as canary_activities
+
+    templates = {t["name"]: t for t in canary_activities.load_canary_templates()}
+    assert {"api-key", "mtls"} <= set(templates)
+    for name in ("api-key", "mtls"):
+        spec = templates[name]["demoProjectTemplate"]["spec"]
+        assert (
+            spec["source"]["repo"]
+            == "https://github.com/temporal-sa/demo-banking-app-money-transfer"
+        )
+        assert set(spec["builds"]) == {"frontend", "backend", "worker"}
+        assert set(spec["components"]) == {"frontend", "backend", "worker"}
+        assert spec["smokeCheck"]["path"] == "/api/health"
+        assert spec["smokeCheck"]["expectedStatus"] == 200
 
 
 # --- Task 6.1: operator self-rollout behaviors are separate ---
