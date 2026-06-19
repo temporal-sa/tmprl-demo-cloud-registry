@@ -850,3 +850,13 @@ def test_smoke_check_uses_unverified_tls_for_https(monkeypatch):
     assert isinstance(context, ssl.SSLContext)
     assert context.verify_mode == ssl.CERT_NONE
     assert context.check_hostname is False
+
+
+def test_run_smoke_check_is_a_registered_temporal_activity():
+    # Regression: a helper added next to run_smoke_check must not steal its
+    # @activity.defn decorator. The worker validates this at startup; unit tests
+    # that call the function directly do NOT, so assert the decoration explicitly.
+    assert hasattr(reconcile.run_smoke_check, "__temporal_activity_definition")
+    assert not hasattr(
+        reconcile._smoke_check_tls_context, "__temporal_activity_definition"
+    )

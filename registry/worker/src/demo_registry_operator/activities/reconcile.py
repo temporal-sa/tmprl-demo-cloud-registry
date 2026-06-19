@@ -449,7 +449,6 @@ def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@activity.defn
 def _smoke_check_tls_context() -> ssl.SSLContext:
     """Unverified TLS context for smoke probes.
 
@@ -464,6 +463,7 @@ def _smoke_check_tls_context() -> ssl.SSLContext:
     return context
 
 
+@activity.defn
 def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
     smoke_check = request.smoke_check
     if not smoke_check:
