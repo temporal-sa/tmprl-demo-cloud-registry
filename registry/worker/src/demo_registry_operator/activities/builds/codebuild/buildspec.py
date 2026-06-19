@@ -5,20 +5,9 @@ import json
 import shlex
 from typing import Any
 
+from demo_registry_operator import resources
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.resources import builds, project_name
-
-from demo_registry_operator.activities.builds.definitions import (
-    BUILDPACK_BUILD_STRATEGY,
-    DOCKERFILE_BUILD_STRATEGY,
-    PACK_VERSION,
-    build_strategy,
-    buildpack_env,
-    buildpack_process_buildpack_command,
-    buildpack_process_buildpack_path,
-    image_version_suffix,
-    required_build_string,
-)
+from demo_registry_operator.activities.builds import definitions as build_definitions
 
 
 def codebuild_start_build_args(
@@ -37,7 +26,7 @@ def codebuild_start_build_args(
     environment_variables = [
         {
             "name": "DEMO_PROJECT_NAME",
-            "value": project_name(demo_project),
+            "value": resources.project_name(demo_project),
             "type": "PLAINTEXT",
         },
         {
@@ -125,7 +114,7 @@ def codebuild_buildspec(
         [
             'SOURCE_SHA=$(printf "%.12s" "$SOURCE_SHA")',
             'test -n "$SOURCE_SHA"',
-            f'IMAGE_VERSION="git-${{SOURCE_SHA}}{image_version_suffix(demo_project)}"',
+            f'IMAGE_VERSION="git-${{SOURCE_SHA}}{build_definitions.image_version_suffix(demo_project)}"',
         ]
     )
     prefetch_command = dockerhub_official_base_prefetch_command(
@@ -135,8 +124,8 @@ def codebuild_buildspec(
     if prefetch_command:
         pre_build_commands.append(prefetch_command)
     if any(
-        build_strategy(build) == BUILDPACK_BUILD_STRATEGY
-        for build in builds(demo_project).values()
+        build_definitions.build_strategy(build) == build_definitions.BUILDPACK_BUILD_STRATEGY
+        for build in resources.builds(demo_project).values()
     ):
         pre_build_commands.append(pack_install_command())
     pre_build_commands.extend(
@@ -151,11 +140,11 @@ def codebuild_buildspec(
 
     build_commands = []
     source_prefix = "cd /tmp/source && " if manual_source_checkout else ""
-    for build_name, build in sorted(builds(demo_project).items()):
+    for build_name, build in sorted(resources.builds(demo_project).items()):
         image = image_templates[build_name]
         shell_image = shell_quote_image_template(image)
-        strategy = build_strategy(build)
-        if strategy == DOCKERFILE_BUILD_STRATEGY:
+        strategy = build_definitions.build_strategy(build)
+        if strategy == build_definitions.DOCKERFILE_BUILD_STRATEGY:
             build_commands.append(
                 source_prefix
                 + " ".join(
@@ -163,22 +152,22 @@ def codebuild_buildspec(
                         "docker",
                         "build",
                         "-f",
-                        shlex.quote(required_build_string(build, "dockerfile")),
+                        shlex.quote(build_definitions.required_build_string(build, "dockerfile")),
                         "-t",
                         shell_image,
-                        shlex.quote(required_build_string(build, "context")),
+                        shlex.quote(build_definitions.required_build_string(build, "context")),
                     ]
                 )
             )
             build_commands.append("docker push " + shell_image)
             continue
 
-        if strategy == BUILDPACK_BUILD_STRATEGY:
-            process_buildpack_command = buildpack_process_buildpack_command(
+        if strategy == build_definitions.BUILDPACK_BUILD_STRATEGY:
+            process_buildpack_command = build_definitions.buildpack_process_buildpack_command(
                 build_name,
                 build,
             )
-            process_buildpack_path = buildpack_process_buildpack_path(build_name)
+            process_buildpack_path = build_definitions.buildpack_process_buildpack_path(build_name)
             if process_buildpack_command:
                 build_commands.append(source_prefix + process_buildpack_command)
             command = [
@@ -186,11 +175,11 @@ def codebuild_buildspec(
                 "build",
                 shell_image,
                 "--builder",
-                shlex.quote(required_build_string(build, "builder")),
+                shlex.quote(build_definitions.required_build_string(build, "builder")),
                 "--path",
-                shlex.quote(required_build_string(build, "context")),
+                shlex.quote(build_definitions.required_build_string(build, "context")),
             ]
-            for name, value in sorted(buildpack_env(build).items()):
+            for name, value in sorted(build_definitions.buildpack_env(build).items()):
                 command.extend(["--env", shlex.quote(f"{name}={value}")])
             if process_buildpack_command:
                 command.extend(
@@ -229,8 +218,8 @@ def pack_install_command() -> str:
         '*) echo "unsupported architecture for pack: $arch" >&2; exit 1 ;; '
         "esac; "
         "curl -sSL "
-        f"https://github.com/buildpacks/pack/releases/download/v{PACK_VERSION}/"
-        f"pack-v{PACK_VERSION}-${{pack_arch}}.tgz "
+        f"https://github.com/buildpacks/pack/releases/download/v{build_definitions.PACK_VERSION}/"
+        f"pack-v{build_definitions.PACK_VERSION}-${{pack_arch}}.tgz "
         "| tar -xz -C /usr/local/bin pack"
     )
 
@@ -243,7 +232,7 @@ def dockerhub_official_base_prefetch_command(
     dockerfiles = sorted(
         {
             str(build.get("dockerfile"))
-            for build in builds(demo_project).values()
+            for build in resources.builds(demo_project).values()
             if isinstance(build, dict)
             and isinstance(build.get("dockerfile"), str)
             and build.get("dockerfile")
@@ -345,13 +334,13 @@ def codebuild_idempotency_token(
 ) -> str:
     encoded = json.dumps(
         {
-            "project": project_name(demo_project),
+            "project": resources.project_name(demo_project),
             "sourceRepo": source_repo,
             "sourceVersion": source_version,
             "sourceAuthSecretPath": source_auth_secret_path,
             "idempotencyTokenSalt": idempotency_token_salt,
             "images": image_templates,
-            "builds": builds(demo_project),
+            "builds": resources.builds(demo_project),
         },
         sort_keys=True,
         separators=(",", ":"),

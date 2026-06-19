@@ -43,6 +43,7 @@ class DemoProjectKubernetesRuntimeRequest:
     demoProject: dict[str, Any]
     externalResources: dict[str, Any]
     buildStatus: dict[str, Any]
+    previousStatus: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

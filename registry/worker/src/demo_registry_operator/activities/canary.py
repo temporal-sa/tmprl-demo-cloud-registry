@@ -17,50 +17,11 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 from temporalio.service import RPCError, RPCStatusCode
 
-from demo_registry_operator.activities.builds.definitions import looks_like_commit_sha
+from demo_registry_operator import errors, kube, resources
+from demo_registry_operator.activities.builds import definitions as build_definitions
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    VALIDATION_ERROR,
-    non_retryable_error,
-)
-from demo_registry_operator.kube import (
-    apply_demo_project,
-    delete_demo_project,
-    demo_project_finalizers,
-    ensure_demo_project_finalizer,
-    read_demo_project,
-    read_config_map,
-    read_deployment_status,
-    read_git_repository,
-    read_namespace,
-    read_secret_data,
-    read_service,
-)
-from demo_registry_operator.resources import (
-    CANARY_KIND_LABEL,
-    CANARY_LABEL,
-    IMAGE_OVERRIDES_ANNOTATION,
-    OPERATOR_ROLLOUT_CANARY_KIND,
-    SOURCE_COMMIT_ANNOTATION,
-    builds as demo_project_builds,
-    dns_label,
-    metadata_annotations,
-    project_namespace,
-    project_name as demo_project_name,
-    source_branch,
-    source_git_repository_secret_ref,
-    source_git_repository_url,
-    source_git_repository_name,
-    temporal_auth_mode,
-)
 from demo_registry_operator.temporal_client import connect
-from demo_registry_operator.workflows.messages import (
-    DemoProjectFinalizeSignal,
-    DemoProjectReconcileSignal,
-    DemoProjectRunRequest,
-    ForceReconcileSignal,
-)
+from demo_registry_operator.workflows import messages
 
 
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
@@ -214,9 +175,9 @@ def prepare_registry_operator_canary_plan(
 ) -> RegistryOperatorCanaryPlan:
     template = request.demo_project_template
     if not isinstance(template, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "RegistryOperatorCanaryWorkflow requires demoProjectTemplate",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     workflow_id = request.workflow_id
@@ -252,12 +213,12 @@ def prepare_registry_operator_canary_plan(
         and expected_operator_image
         and actual_operator_image != expected_operator_image
     ):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 "Registry operator canary is running on unexpected image "
                 f"{actual_operator_image!r}; expected {expected_operator_image!r}"
             ),
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     expected_operator_source_sha = request.expected_operator_source_sha
@@ -267,30 +228,30 @@ def prepare_registry_operator_canary_plan(
         and expected_operator_source_sha
         and actual_operator_source_sha != expected_operator_source_sha
     ):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 "Registry operator canary is running unexpected source SHA "
                 f"{actual_operator_source_sha!r}; expected {expected_operator_source_sha!r}"
             ),
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     target_deployment_name = os.getenv("TEMPORAL_DEPLOYMENT_NAME")
     target_build_id = os.getenv("TEMPORAL_WORKER_BUILD_ID")
     if not target_deployment_name or not target_build_id:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 "Registry operator canary requires TEMPORAL_DEPLOYMENT_NAME and "
                 "TEMPORAL_WORKER_BUILD_ID so project reconciliation can be pinned "
                 "to the target WorkerDeployment version"
             ),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     return RegistryOperatorCanaryPlan({
         "project": project_name,
-        "namespace": project_namespace(demo_project),
+        "namespace": resources.project_namespace(demo_project),
         "demoProject": demo_project,
-        "authMode": temporal_auth_mode(demo_project),
+        "authMode": resources.temporal_auth_mode(demo_project),
         "expectedOperatorImage": expected_operator_image,
         "actualOperatorImage": actual_operator_image,
         "expectedOperatorSourceSha": expected_operator_source_sha,
@@ -305,7 +266,7 @@ def prepare_registry_operator_canary_plan(
         "cleanupTimeoutSeconds": int(request.cleanup_timeout_seconds),
         "cleanupPolicy": request.cleanup_policy,
         "sourceWatchNamespace": config.source_watch_namespace,
-        "gitRepository": source_git_repository_name(demo_project),
+        "gitRepository": resources.source_git_repository_name(demo_project),
         "catalogStatusNamespace": config.catalog_status_namespace,
         "catalogStatusMirrorNamespace": config.catalog_status_mirror_namespace,
         "catalogStatusConfigMap": config.catalog_status_configmap,
@@ -319,15 +280,15 @@ def apply_registry_operator_canary_project(
 ) -> RegistryOperatorCanaryActivityResult:
     demo_project = request.demo_project
     try:
-        action = apply_demo_project(
+        action = kube.apply_demo_project(
             demo_project,
             dry_run=False,
         )
-        finalizer_added = ensure_demo_project_finalizer(request.project)
+        finalizer_added = kube.ensure_demo_project_finalizer(request.project)
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.VALIDATION_ERROR) from error
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
 
     return RegistryOperatorCanaryActivityResult({
         "project": request.project,
@@ -358,8 +319,8 @@ def canary_source_resolution(
         }
 
     annotated_source_sha = commit_sha_or_error(
-        metadata_annotations(template).get(SOURCE_COMMIT_ANNOTATION),
-        SOURCE_COMMIT_ANNOTATION,
+        resources.metadata_annotations(template).get(resources.SOURCE_COMMIT_ANNOTATION),
+        resources.SOURCE_COMMIT_ANNOTATION,
     )
     if annotated_source_sha:
         return {
@@ -382,10 +343,10 @@ def commit_sha_or_error(value: Any, field: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     commit_sha = value.strip()
-    if not looks_like_commit_sha(commit_sha):
-        raise non_retryable_error(
+    if not build_definitions.looks_like_commit_sha(commit_sha):
+        raise errors.non_retryable_error(
             f"Canary {field} must be a git commit SHA.",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
     return commit_sha
 
@@ -394,7 +355,7 @@ def canary_builds_require_source(
     template: dict[str, Any],
     expected_images: Any,
 ) -> bool:
-    build_names = set(demo_project_builds(template))
+    build_names = set(resources.builds(template))
     if not build_names:
         return False
     if not isinstance(expected_images, dict):
@@ -411,19 +372,19 @@ def resolve_canary_github_source_commit(
     template: dict[str, Any],
     config: WorkerConfig,
 ) -> dict[str, Any]:
-    repo_url = source_git_repository_url(template)
+    repo_url = resources.source_git_repository_url(template)
     repo = github_repo_from_url(repo_url)
     if repo is None:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 "Registry operator canary must use a GitHub HTTPS source repo "
                 "or provide expectedSourceCommitSha."
             ),
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
-    branch = source_branch(template)
-    if looks_like_commit_sha(branch):
+    branch = resources.source_branch(template)
+    if build_definitions.looks_like_commit_sha(branch):
         return {
             "phase": "Resolved",
             "source": "source.branch",
@@ -450,20 +411,20 @@ def resolve_canary_github_source_commit(
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         if error.code == 404:
-            raise non_retryable_error(
+            raise errors.non_retryable_error(
                 (
                     f"Canary source branch {branch!r} was not found or is not "
                     f"accessible in {owner}/{name}."
                 ),
-                error_type=VALIDATION_ERROR,
+                error_type=errors.VALIDATION_ERROR,
             ) from error
         if error.code in {401, 403}:
-            raise non_retryable_error(
+            raise errors.non_retryable_error(
                 (
                     f"Canary source branch lookup for {owner}/{name}@{branch} "
                     f"failed with HTTP {error.code}; verify source GitHub auth."
                 ),
-                error_type=CONFIGURATION_ERROR,
+                error_type=errors.CONFIGURATION_ERROR,
             ) from error
         raise RuntimeError(
             f"Canary source branch lookup failed with HTTP {error.code}."
@@ -479,7 +440,7 @@ def resolve_canary_github_source_commit(
 
     commit = payload.get("commit") if isinstance(payload, dict) else None
     source_sha = commit.get("sha") if isinstance(commit, dict) else None
-    if not isinstance(source_sha, str) or not looks_like_commit_sha(source_sha):
+    if not isinstance(source_sha, str) or not build_definitions.looks_like_commit_sha(source_sha):
         raise RuntimeError(
             f"Canary source branch lookup for {owner}/{name}@{branch} did not return a commit SHA."
         )
@@ -512,14 +473,14 @@ def github_token_for_canary_source(
     template: dict[str, Any],
     config: WorkerConfig,
 ) -> str | None:
-    secret_ref = source_git_repository_secret_ref(template)
+    secret_ref = resources.source_git_repository_secret_ref(template)
     if not isinstance(secret_ref, dict):
         return None
     secret_name = secret_ref.get("name")
     if not isinstance(secret_name, str) or not secret_name:
         return None
     try:
-        data = read_secret_data(config.source_watch_namespace, secret_name)
+        data = kube.read_secret_data(config.source_watch_namespace, secret_name)
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -540,12 +501,12 @@ def wait_for_registry_operator_canary_promotion(
     poll_seconds = int(plan.get("pollSeconds", 10))
     last_status: dict[str, Any] | None = None
     while True:
-        resource = read_demo_project(string_field(plan, "project"))
+        resource = kube.read_demo_project(string_field(plan, "project"))
         last_status = (
             resource.get("status", {}) if isinstance(resource, dict) else None
         )
         if isinstance(last_status, dict) and canary_promoted(plan, last_status):
-            namespace_status = read_namespace(string_field(plan, "namespace"))
+            namespace_status = kube.read_namespace(string_field(plan, "namespace"))
             if namespace_status is None:
                 return RegistryOperatorCanaryActivityResult({
                     "project": string_field(plan, "project"),
@@ -651,7 +612,7 @@ def wait_for_registry_operator_canary_rotation(
     token = string_field(plan, "rotationToken")
     last_status: dict[str, Any] | None = None
     while True:
-        resource = read_demo_project(string_field(plan, "project"))
+        resource = kube.read_demo_project(string_field(plan, "project"))
         last_status = (
             resource.get("status", {}) if isinstance(resource, dict) else None
         )
@@ -742,7 +703,7 @@ async def signal_registry_operator_canary_force_reconcile_async(
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(
         "force_reconcile",
-        ForceReconcileSignal(token=token, reason=reason),
+        messages.ForceReconcileSignal(token=token, reason=reason),
     )
     return {
         "phase": "Signaled",
@@ -896,7 +857,7 @@ def delete_registry_operator_canary_project(
             "checkedAt": datetime.now(UTC).isoformat(),
         })
 
-    action = delete_demo_project(string_field(plan, "project"))
+    action = kube.delete_demo_project(string_field(plan, "project"))
     return RegistryOperatorCanaryActivityResult({
         "project": string_field(plan, "project"),
         "phase": "DeleteRequested",
@@ -926,7 +887,7 @@ async def signal_registry_operator_canary_finalize_async(
     try:
         await handle.signal(
             "finalize",
-            DemoProjectFinalizeSignal(demoProject=request.demo_project),
+            messages.DemoProjectFinalizeSignal(demoProject=request.demo_project),
         )
     except RPCError as error:
         if error.status == RPCStatusCode.NOT_FOUND:
@@ -994,13 +955,13 @@ def canary_cleanup_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     namespace = string_field(plan, "namespace")
     git_repository = string_field(plan, "gitRepository")
     source_watch_namespace = string_field(plan, "sourceWatchNamespace")
-    last_namespace = read_namespace(namespace)
-    last_source = read_git_repository(source_watch_namespace, git_repository)
-    last_project = read_demo_project(string_field(plan, "project"))
+    last_namespace = kube.read_namespace(namespace)
+    last_source = kube.read_git_repository(source_watch_namespace, git_repository)
+    last_project = kube.read_demo_project(string_field(plan, "project"))
     last_catalog = catalog_cleanup_status(plan)
     project_finalizer_removed = (
         last_project is None
-        or not demo_project_finalizers(last_project)
+        or not kube.demo_project_finalizers(last_project)
     )
     waiting_on = []
     if last_namespace is not None:
@@ -1055,11 +1016,11 @@ def render_canary_demo_project(
     if not isinstance(labels, dict):
         labels = {}
     if isinstance(expected_source_sha, str) and expected_source_sha:
-        annotations[SOURCE_COMMIT_ANNOTATION] = expected_source_sha
+        annotations[resources.SOURCE_COMMIT_ANNOTATION] = expected_source_sha
     if isinstance(expected_images, dict) and expected_images:
-        annotations[IMAGE_OVERRIDES_ANNOTATION] = json_dumps(expected_images)
-    labels[CANARY_LABEL] = "true"
-    labels[CANARY_KIND_LABEL] = OPERATOR_ROLLOUT_CANARY_KIND
+        annotations[resources.IMAGE_OVERRIDES_ANNOTATION] = json_dumps(expected_images)
+    labels[resources.CANARY_LABEL] = "true"
+    labels[resources.CANARY_KIND_LABEL] = resources.OPERATOR_ROLLOUT_CANARY_KIND
     metadata["name"] = project_name
     metadata["annotations"] = annotations
     metadata["labels"] = labels
@@ -1100,17 +1061,17 @@ async def signal_registry_operator_canary_reconcile_async(
     deployment_name = request.target_deployment_name
     build_id = request.target_build_id
     demo_project = request.demo_project
-    name = demo_project_name(demo_project)
+    name = resources.project_name(demo_project)
     workflow_id = f"demo-project/{name}"
     client = await connect(config)
     handle = await client.start_workflow(
         "DemoProjectWorkflow",
-        args=[DemoProjectRunRequest(project_name=name)],
+        args=[messages.DemoProjectRunRequest(project_name=name)],
         id=workflow_id,
         task_queue=config.task_queue,
         start_signal="reconcile",
         start_signal_args=[
-            DemoProjectReconcileSignal(demoProject=demo_project),
+            messages.DemoProjectReconcileSignal(demoProject=demo_project),
         ],
         versioning_override=PinnedVersioningOverride(
             WorkerDeploymentVersion(
@@ -1168,7 +1129,7 @@ def verify_promoted_workload_resources(
         if not isinstance(component, str) or not isinstance(name, str):
             continue
         try:
-            deployment_statuses[component] = read_deployment_status(namespace, name)
+            deployment_statuses[component] = kube.read_deployment_status(namespace, name)
         except Exception as error:
             missing.append(
                 {
@@ -1184,7 +1145,7 @@ def verify_promoted_workload_resources(
         if not isinstance(component, str) or not isinstance(name, str):
             continue
         try:
-            service = read_service(namespace, name)
+            service = kube.read_service(namespace, name)
         except Exception as error:
             service = None
             missing.append(
@@ -1229,7 +1190,7 @@ def catalog_cleanup_status(plan: dict[str, Any]) -> dict[str, Any]:
     key = f"{string_field(plan, 'project')}.json"
     entries = []
     for namespace in sorted(set(namespaces)):
-        configmap = read_config_map(namespace, configmap_name)
+        configmap = kube.read_config_map(namespace, configmap_name)
         entry = catalog_entry_from_configmap(configmap, key)
         entries.append(
             {
@@ -1282,15 +1243,15 @@ def catalog_entry_finalized_or_absent(entry: dict[str, Any] | None) -> bool:
 
 def canary_project_name(prefix: str, workflow_id: str, run_id: str) -> str:
     digest = hashlib.sha256(f"{workflow_id}:{run_id}".encode("utf-8")).hexdigest()[:8]
-    return dns_label(f"{prefix}-{digest}")
+    return resources.dns_label(f"{prefix}-{digest}")
 
 
 def demo_project_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
     demo_project = plan.get("demoProject")
     if not isinstance(demo_project, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "Canary plan is missing demoProject",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
     return demo_project
 
@@ -1299,9 +1260,9 @@ def string_field(value: dict[str, Any], key: str) -> str:
     field = value.get(key)
     if isinstance(field, str) and field:
         return field
-    raise non_retryable_error(
+    raise errors.non_retryable_error(
         f"Canary request is missing {key}",
-        error_type=VALIDATION_ERROR,
+        error_type=errors.VALIDATION_ERROR,
     )
 
 

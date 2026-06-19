@@ -677,7 +677,7 @@ def test_failed_gate_workflow_marks_worker_deployment_rollout_failed(monkeypatch
             },
         }
 
-    monkeypatch.setattr(reconcile, "read_worker_deployment_status", fake_status)
+    monkeypatch.setattr(reconcile.kube, "read_worker_deployment_status", fake_status)
 
     status = reconcile.worker_deployment_sync_status(
         [
@@ -1019,9 +1019,7 @@ def test_operator_canary_plan_resolves_unannotated_source_branch(monkeypatch):
         calls.append(request.full_url)
         return FakeHTTPResponse()
 
-    monkeypatch.setattr(
-        canary,
-        "read_secret_data",
+    monkeypatch.setattr(canary.kube, "read_secret_data",
         lambda namespace, name: {"password": "github_pat_test"},
     )
     monkeypatch.setattr(canary, "urlopen", fake_urlopen)
@@ -1079,7 +1077,7 @@ def test_operator_canary_plan_resolves_public_source_when_secret_unreadable(monk
     def forbidden_secret(namespace, name):
         raise RuntimeError("forbidden")
 
-    monkeypatch.setattr(canary, "read_secret_data", forbidden_secret)
+    monkeypatch.setattr(canary.kube, "read_secret_data", forbidden_secret)
     monkeypatch.setattr(canary, "urlopen", fake_urlopen)
 
     plan = plan_registry_operator_canary(
@@ -1146,8 +1144,8 @@ def test_apply_operator_canary_project_applies_demo_project(monkeypatch):
         "targetBuildID": "git-test-1234",
     }
 
-    monkeypatch.setattr(canary, "apply_demo_project", lambda resource, dry_run: "created")
-    monkeypatch.setattr(canary, "ensure_demo_project_finalizer", lambda name: True)
+    monkeypatch.setattr(canary.kube, "apply_demo_project", lambda resource, dry_run: "created")
+    monkeypatch.setattr(canary.kube, "ensure_demo_project_finalizer", lambda name: True)
 
     result = canary.apply_registry_operator_canary_project(
         canary.ApplyRegistryOperatorCanaryProjectRequest(
@@ -1245,7 +1243,7 @@ def test_finalized_demo_project_status_ignores_missing_cr(monkeypatch):
         raise MissingDemoProjectError("missing")
 
     demo_project = {"metadata": {"name": "operator-canary-abc123"}}
-    monkeypatch.setattr(reconcile, "patch_demo_project_status", missing_status_patch)
+    monkeypatch.setattr(reconcile.kube, "patch_demo_project_status", missing_status_patch)
 
     result = reconcile.record_demo_project_status(
         reconcile.RecordDemoProjectStatusRequest(
@@ -1266,7 +1264,7 @@ def test_non_final_demo_project_status_does_not_ignore_missing_cr(monkeypatch):
         raise MissingDemoProjectError("missing")
 
     demo_project = {"metadata": {"name": "operator-canary-abc123"}}
-    monkeypatch.setattr(reconcile, "patch_demo_project_status", missing_status_patch)
+    monkeypatch.setattr(reconcile.kube, "patch_demo_project_status", missing_status_patch)
 
     with pytest.raises(MissingDemoProjectError):
         reconcile.record_demo_project_status(
@@ -1405,9 +1403,7 @@ def cleanup_wait_request(plan: dict):
 
 def test_canary_delete_requests_demo_project_deletion(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        canary,
-        "delete_demo_project",
+    monkeypatch.setattr(canary.kube, "delete_demo_project",
         lambda name: calls.append(name) or "deleting",
     )
 
@@ -1422,9 +1418,7 @@ def test_canary_delete_requests_demo_project_deletion(monkeypatch):
 
 
 def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
-    monkeypatch.setattr(
-        canary,
-        "read_demo_project",
+    monkeypatch.setattr(canary.kube, "read_demo_project",
         lambda name: {
             "status": {
                 "phase": "Error",
@@ -1447,7 +1441,7 @@ def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
 
 
 def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
-    monkeypatch.setattr(canary, "read_demo_project", lambda name: {"status": {}})
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: {"status": {}})
     monkeypatch.setattr(
         canary,
         "canary_workflow_terminal_failure",
@@ -1473,12 +1467,10 @@ def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
 
 
 def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
-    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
-    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
-    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
-    monkeypatch.setattr(
-        canary,
-        "read_config_map",
+    monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_config_map",
         lambda namespace, name: {
             "data": {
                 "operator-canary-abc123.json": json.dumps(
@@ -1497,12 +1489,10 @@ def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
 
 
 def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
-    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
-    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
-    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
-    monkeypatch.setattr(
-        canary,
-        "read_config_map",
+    monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_config_map",
         lambda namespace, name: {
             "data": {
                 "operator-canary-abc123.json": json.dumps(
@@ -1524,12 +1514,10 @@ def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
 
 
 def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
-    monkeypatch.setattr(canary, "read_namespace", lambda name: None)
-    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
-    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
-    monkeypatch.setattr(
-        canary,
-        "read_config_map",
+    monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_config_map",
         lambda namespace, name: {
             "data": {
                 "operator-canary-abc123.json": json.dumps(
@@ -1554,12 +1542,10 @@ def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
 
 
 def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
-    monkeypatch.setattr(canary, "read_namespace", lambda name: {"phase": "Active"})
-    monkeypatch.setattr(canary, "read_git_repository", lambda namespace, name: None)
-    monkeypatch.setattr(canary, "read_demo_project", lambda name: None)
-    monkeypatch.setattr(
-        canary,
-        "read_config_map",
+    monkeypatch.setattr(canary.kube, "read_namespace", lambda name: {"phase": "Active"})
+    monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_config_map",
         lambda namespace, name: {
             "data": {
                 "operator-canary-abc123.json": json.dumps(

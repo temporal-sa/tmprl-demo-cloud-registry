@@ -6,13 +6,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from demo_registry_operator import errors
-from demo_registry_operator.activities.builds import (
-    planning as build_planning,
-    status as build_statuses,
-)
-from demo_registry_operator.activities.builds.codebuild import (
-    execution as build_execution,
-)
+from demo_registry_operator.activities import builds as build_activities
 from demo_registry_operator.workflows import messages
 
 
@@ -42,8 +36,8 @@ class DemoProjectArtifactBuildWorkflow:
         request: messages.DemoProjectArtifactBuildRequest,
     ) -> messages.DemoProjectArtifactBuildResult:
         build_plan_result = await workflow.execute_activity(
-            build_planning.resolve_project_image_build_plan,
-            build_planning.ResolveProjectImageBuildRequest(
+            build_activities.resolve_project_image_build_plan,
+            build_activities.ResolveProjectImageBuildRequest(
                 demo_project=request.demoProject,
                 external_resources=request.externalResources,
                 previous_build_status=request.previousBuildStatus,
@@ -52,21 +46,21 @@ class DemoProjectArtifactBuildWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         build_plan = build_plan_result.plan
-        build_status = build_statuses.completed_build_status(build_plan)
+        build_status = build_activities.completed_build_status(build_plan)
         if build_status is None:
             started_build_result = await workflow.execute_activity(
-                build_execution.start_project_image_build,
-                build_execution.StartProjectImageBuildRequest(build_plan),
+                build_activities.start_project_image_build,
+                build_activities.StartProjectImageBuildRequest(build_plan),
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
             )
             started_build = started_build_result.plan
-            build_status = build_statuses.completed_build_status(started_build)
+            build_status = build_activities.completed_build_status(started_build)
             if build_status is None:
                 build_status_result = await workflow.execute_activity(
-                    build_execution.wait_for_project_image_build,
-                    build_execution.WaitForProjectImageBuildRequest(started_build),
+                    build_activities.wait_for_project_image_build,
+                    build_activities.WaitForProjectImageBuildRequest(started_build),
                     start_to_close_timeout=timedelta(hours=1),
                     heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=BUILD_WAIT_RETRY_POLICY,

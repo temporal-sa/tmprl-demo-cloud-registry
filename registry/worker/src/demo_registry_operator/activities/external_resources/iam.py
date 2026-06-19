@@ -6,19 +6,9 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator.activities.external_resources.common import error_code
-from demo_registry_operator.activities.external_resources.models import (
-    EnsureLambdaExecutionRoleRequest,
-    EnsureLambdaExecutionRoleResult,
-    EnsureTemporalLambdaInvokeRoleRequest,
-    EnsureTemporalLambdaInvokeRoleResult,
-)
+from demo_registry_operator import errors
+from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    aws_application_error,
-    non_retryable_error,
-)
 
 
 LAMBDA_EXECUTION_TRUST_POLICY = {
@@ -53,8 +43,8 @@ DEFAULT_SERVERLESS_PERMISSIONS_BOUNDARY_NAME = (
 
 @activity.defn
 def ensure_lambda_execution_role(
-    request: EnsureLambdaExecutionRoleRequest,
-) -> EnsureLambdaExecutionRoleResult:
+    request: models.EnsureLambdaExecutionRoleRequest,
+) -> models.EnsureLambdaExecutionRoleResult:
     config = WorkerConfig.from_env()
     iam = iam_client(config)
     try:
@@ -76,7 +66,7 @@ def ensure_lambda_execution_role(
             policy_document=lambda_logs_policy(config),
         )
     except Exception as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation=f"Create or verify Lambda execution role {request.role_name}",
         ) from error
@@ -88,7 +78,7 @@ def ensure_lambda_execution_role(
         "roleArn": result["arn"],
         "policy": LAMBDA_LOGS_POLICY_NAME,
     }
-    return EnsureLambdaExecutionRoleResult(
+    return models.EnsureLambdaExecutionRoleResult(
         status=status,
         role_name=request.role_name,
         role_arn=str(result["arn"]),
@@ -97,8 +87,8 @@ def ensure_lambda_execution_role(
 
 @activity.defn
 def ensure_temporal_lambda_invoke_role(
-    request: EnsureTemporalLambdaInvokeRoleRequest,
-) -> EnsureTemporalLambdaInvokeRoleResult:
+    request: models.EnsureTemporalLambdaInvokeRoleRequest,
+) -> models.EnsureTemporalLambdaInvokeRoleResult:
     config = WorkerConfig.from_env()
     iam = iam_client(config)
     principals = temporal_cloud_lambda_invoke_principals()
@@ -129,7 +119,7 @@ def ensure_temporal_lambda_invoke_role(
             policy_document=policy_document,
         )
     except Exception as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation=f"Create or verify Temporal Lambda invoke role {request.role_name}",
         ) from error
@@ -145,7 +135,7 @@ def ensure_temporal_lambda_invoke_role(
         "functionArn": request.function_arn,
         "functionVersionArn": request.function_version_arn,
     }
-    return EnsureTemporalLambdaInvokeRoleResult(
+    return models.EnsureTemporalLambdaInvokeRoleResult(
         status=status,
         role_name=request.role_name,
         role_arn=str(result["arn"]),
@@ -157,9 +147,9 @@ def iam_client(config: WorkerConfig) -> Any:
     try:
         import boto3
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for aws external resource mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     return boto3.session.Session(region_name=config.aws_region).client("iam")
@@ -179,7 +169,7 @@ def ensure_role(
         role = response["Role"]
         action = "verified"
     except Exception as error:
-        if error_code(error) != "NoSuchEntity":
+        if common.error_code(error) != "NoSuchEntity":
             raise
         response = iam.create_role(
             RoleName=role_name,
@@ -200,12 +190,12 @@ def ensure_role(
         else None
     )
     if current_boundary_arn != permissions_boundary:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 f"IAM role {role_name} is missing the required permissions "
                 f"boundary {permissions_boundary}"
             ),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
 
     if normalize_policy(role.get("AssumeRolePolicyDocument")) != normalize_policy(
@@ -236,7 +226,7 @@ def ensure_inline_policy(
             return action
         action = "updated"
     except Exception as error:
-        if error_code(error) != "NoSuchEntity":
+        if common.error_code(error) != "NoSuchEntity":
             raise
         action = "created"
 
@@ -340,12 +330,12 @@ def serverless_permissions_boundary_arn(config: WorkerConfig) -> str:
     if configured:
         return configured
     if not config.aws_account_id:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             (
                 "DEMO_REGISTRY_AWS_ACCOUNT_ID is required to derive the "
                 "serverless worker permissions boundary ARN"
             ),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     return (
         f"arn:aws:iam::{config.aws_account_id}:policy/"

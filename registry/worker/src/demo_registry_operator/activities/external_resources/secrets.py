@@ -3,45 +3,31 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator.activities.external_resources.common import (
-    error_code,
-    isoformat_datetime,
-)
-from demo_registry_operator.activities.external_resources.models import (
-    SecretRequirement,
-    SecretsManagerVerificationResult,
-    VerifySecretsManagerResourcesRequest,
-)
-from demo_registry_operator.activities.external_resources.planning import (
-    aggregate_secret_phase,
-)
+from demo_registry_operator import errors
+from demo_registry_operator.activities.external_resources import common, models
+from demo_registry_operator.activities.external_resources import planning
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    aws_application_error,
-    non_retryable_error,
-)
 
 
 @activity.defn
 def verify_secrets_manager_resources(
-    request: VerifySecretsManagerResourcesRequest,
-) -> SecretsManagerVerificationResult:
+    request: models.VerifySecretsManagerResourcesRequest,
+) -> models.SecretsManagerVerificationResult:
     config = WorkerConfig.from_env()
 
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for aws external resource mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     secretsmanager = boto3.session.Session(region_name=config.aws_region).client(
         "secretsmanager"
     )
-    bootstrap = SecretRequirement(
+    bootstrap = models.SecretRequirement(
         path=config.temporal_cloud_bootstrap_secret_path,
         required=request.temporal_bootstrap.required,
         managed_by=request.temporal_bootstrap.managed_by,
@@ -49,7 +35,7 @@ def verify_secrets_manager_resources(
         components=request.temporal_bootstrap.components,
     )
     try:
-        return SecretsManagerVerificationResult(
+        return models.SecretsManagerVerificationResult(
             verify_secrets_manager_paths(
                 secretsmanager,
                 request,
@@ -57,7 +43,7 @@ def verify_secrets_manager_resources(
             )
         )
     except (BotoCoreError, ClientError) as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation="Verify Secrets Manager paths",
         ) from error
@@ -65,9 +51,9 @@ def verify_secrets_manager_resources(
 
 def verify_secrets_manager_paths(
     secretsmanager: Any,
-    request: VerifySecretsManagerResourcesRequest,
+    request: models.VerifySecretsManagerResourcesRequest,
     *,
-    temporal_bootstrap: SecretRequirement,
+    temporal_bootstrap: models.SecretRequirement,
 ) -> dict[str, Any]:
     bootstrap_status = secret_status(secretsmanager, temporal_bootstrap)
     temporal_secret = secret_status(secretsmanager, request.temporal_credentials)
@@ -83,7 +69,7 @@ def verify_secrets_manager_paths(
         *user_managed,
     ]
     return {
-        "phase": aggregate_secret_phase(all_secret_statuses),
+        "phase": planning.aggregate_secret_phase(all_secret_statuses),
         "checkedAt": request.checked_at,
         "secretPrefix": request.secret_prefix,
         "temporalBootstrap": bootstrap_status,
@@ -95,7 +81,7 @@ def verify_secrets_manager_paths(
 
 def secret_status(
     secretsmanager: Any,
-    requirement: SecretRequirement,
+    requirement: models.SecretRequirement,
 ) -> dict[str, Any]:
     status: dict[str, Any] = {
         "path": requirement.path,
@@ -117,13 +103,13 @@ def secret_status(
     try:
         response = secretsmanager.describe_secret(SecretId=requirement.path)
     except Exception as error:
-        if error_code(error) == "ResourceNotFoundException":
+        if common.error_code(error) == "ResourceNotFoundException":
             return {
                 **status,
                 "phase": "MissingValue",
                 "message": "Secret value must be created outside git before ExternalSecret can sync it.",
             }
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation=f"Describe Secrets Manager secret {requirement.path}",
         ) from error
@@ -132,7 +118,7 @@ def secret_status(
         **status,
         "phase": "Ready",
         "arn": response.get("ARN"),
-        "lastChangedDate": isoformat_datetime(response.get("LastChangedDate")),
+        "lastChangedDate": common.isoformat_datetime(response.get("LastChangedDate")),
     }
     if requirement.required_properties:
         rendered.update(
@@ -154,7 +140,7 @@ def verify_secret_properties(
     try:
         response = secretsmanager.get_secret_value(SecretId=path)
     except Exception as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation=f"Read Secrets Manager secret {path}",
         ) from error

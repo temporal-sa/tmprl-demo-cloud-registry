@@ -13,40 +13,28 @@ from temporalio.client import Client, TLSConfig
 from temporalio.converter import default
 from temporalio.service import RPCError, RPCStatusCode
 
-from demo_registry_operator.activities.external_resources.aws_lambda import (
-    read_json_secret,
-)
-from demo_registry_operator.activities.external_resources.models import (
-    ReconcileServerlessWorkerDeploymentRequest,
-    ReconcileServerlessWorkerDeploymentResult,
-)
+from demo_registry_operator import errors
+from demo_registry_operator.activities.external_resources import aws_lambda, models
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    PROVIDER_AUTHENTICATION_ERROR,
-    PROVIDER_CONFIGURATION_ERROR,
-    non_retryable_error,
-    retryable_provider_error,
-)
 
 
 @activity.defn
 async def reconcile_serverless_worker_deployment(
-    request: ReconcileServerlessWorkerDeploymentRequest,
-) -> ReconcileServerlessWorkerDeploymentResult:
+    request: models.ReconcileServerlessWorkerDeploymentRequest,
+) -> models.ReconcileServerlessWorkerDeploymentResult:
     config = WorkerConfig.from_env()
     try:
         import boto3
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for aws external resource mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     secretsmanager = boto3.session.Session(region_name=config.aws_region).client(
         "secretsmanager"
     )
-    temporal_secret = read_json_secret(secretsmanager, request.temporal_secret_path)
+    temporal_secret = aws_lambda.read_json_secret(secretsmanager, request.temporal_secret_path)
     client = await connect_to_project_namespace(temporal_secret)
     namespace = str(temporal_secret["namespace"])
     identity = "tmprl-demo-cloud-registry"
@@ -115,7 +103,7 @@ async def reconcile_serverless_worker_deployment(
         },
         **version_status,
     }
-    return ReconcileServerlessWorkerDeploymentResult(status=status)
+    return models.ReconcileServerlessWorkerDeploymentResult(status=status)
 
 
 async def ensure_worker_deployment(
@@ -266,7 +254,7 @@ async def describe_worker_deployment_version_status(
 
 
 def compute_scaling_group(
-    request: ReconcileServerlessWorkerDeploymentRequest,
+    request: models.ReconcileServerlessWorkerDeploymentRequest,
 ) -> config_pb2.ComputeConfigScalingGroup:
     return config_pb2.ComputeConfigScalingGroup(
         provider=provider_pb2.ComputeProvider(
@@ -287,7 +275,7 @@ def compute_scaling_group_update(
 
 
 def aws_lambda_provider_details_payload(
-    request: ReconcileServerlessWorkerDeploymentRequest,
+    request: models.ReconcileServerlessWorkerDeploymentRequest,
 ) -> Any:
     details = {
         "arn": request.function_version_arn,
@@ -302,10 +290,10 @@ async def connect_to_project_namespace(secret: dict[str, Any]) -> Client:
     required = ("address", "namespace", "tls")
     missing = [key for key in required if key not in secret]
     if missing:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "Temporal runtime secret is missing required properties: "
             + ", ".join(missing),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
 
     rpc_metadata: Mapping[str, str] | None = None
@@ -315,10 +303,10 @@ async def connect_to_project_namespace(secret: dict[str, Any]) -> Client:
     else:
         mtls_missing = [key for key in ("clientCert", "clientKey") if not secret.get(key)]
         if mtls_missing:
-            raise non_retryable_error(
+            raise errors.non_retryable_error(
                 "Temporal mTLS runtime secret is missing required properties: "
                 + ", ".join(mtls_missing),
-                error_type=CONFIGURATION_ERROR,
+                error_type=errors.CONFIGURATION_ERROR,
             )
         tls = TLSConfig(
             client_cert=str(secret["clientCert"]).encode("utf-8"),
@@ -363,9 +351,9 @@ def temporal_service_application_error(
         RPCStatusCode.UNAUTHENTICATED,
         RPCStatusCode.PERMISSION_DENIED,
     }:
-        return non_retryable_error(
+        return errors.non_retryable_error(
             message,
-            error_type=PROVIDER_AUTHENTICATION_ERROR,
+            error_type=errors.PROVIDER_AUTHENTICATION_ERROR,
         )
     if error.status in {
         RPCStatusCode.INVALID_ARGUMENT,
@@ -373,9 +361,9 @@ def temporal_service_application_error(
         RPCStatusCode.NOT_FOUND,
         RPCStatusCode.UNIMPLEMENTED,
     }:
-        return non_retryable_error(
+        return errors.non_retryable_error(
             message,
-            error_type=PROVIDER_CONFIGURATION_ERROR,
+            error_type=errors.PROVIDER_CONFIGURATION_ERROR,
         )
     if error.status in {
         RPCStatusCode.DEADLINE_EXCEEDED,
@@ -383,9 +371,9 @@ def temporal_service_application_error(
         RPCStatusCode.ABORTED,
         RPCStatusCode.UNAVAILABLE,
     }:
-        return retryable_provider_error(message)
-    return non_retryable_error(
+        return errors.retryable_provider_error(message)
+    return errors.non_retryable_error(
         message,
-        error_type=PROVIDER_CONFIGURATION_ERROR,
+        error_type=errors.PROVIDER_CONFIGURATION_ERROR,
         details=json.dumps({"status": str(error.status)}),
     )

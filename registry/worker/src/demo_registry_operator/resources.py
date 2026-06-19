@@ -1074,7 +1074,13 @@ def runtime_workload_resources(
     external_resources: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
-    resources.extend(service_resources(demo_project, image_overrides))
+    resources.extend(
+        service_resources(
+            demo_project,
+            image_overrides,
+            promote_base=False,
+        )
+    )
     resources.extend(deployment_resources(demo_project, image_overrides))
     resources.extend(
         worker_controller_resources(
@@ -1098,6 +1104,7 @@ def promotion_resources(
     demo_project: dict[str, Any],
     *,
     image_overrides: dict[str, str] | None = None,
+    rollout_version: str | None = None,
 ) -> list[dict[str, Any]]:
     resources = []
     resolved_images = (
@@ -1105,13 +1112,28 @@ def promotion_resources(
         if image_overrides is not None
         else parse_image_overrides(demo_project)
     )
+    resources.extend(
+        service_resources(
+            demo_project,
+            resolved_images,
+            promote_base=True,
+            include_candidates=False,
+            rollout_version=rollout_version,
+        )
+    )
     if ingress_routes(demo_project):
         resources.append(certificate_resource(demo_project))
         resources.append(https_redirect_middleware(demo_project))
     if auth_required(demo_project):
         resources.append(auth_header_strip_middleware(demo_project))
         resources.append(auth_middleware(demo_project))
-    resources.extend(ingress_resources(demo_project, image_overrides=resolved_images))
+    resources.extend(
+        ingress_resources(
+            demo_project,
+            image_overrides=resolved_images,
+            rollout_version=rollout_version,
+        )
+    )
     return resources
 
 
@@ -1211,10 +1233,17 @@ def platform_metadata_configmap(demo_project: dict[str, Any]) -> dict[str, Any]:
 def service_resources(
     demo_project: dict[str, Any],
     image_overrides: dict[str, str] | None = None,
+    *,
+    promote_base: bool = True,
+    include_candidates: bool = True,
+    rollout_version: str | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     namespace = project_namespace(demo_project)
-    version = candidate_version(demo_project, image_overrides or {})
+    version = rollout_version or candidate_version(
+        demo_project,
+        image_overrides or {},
+    )
     for component_name, component in sorted(
         kubernetes_components(demo_project).items()
     ):
@@ -1224,43 +1253,57 @@ def service_resources(
 
         base_name = effective_service_name(component_name, component)
         versioned_worker = worker_versioning_enabled(component)
-        selector = selector_labels(demo_project, component_name)
-        if version:
-            selector = rollout_selector_labels(demo_project, component_name, version)
-        annotations = {
+        base_annotations = {
             "platform.temporal.io/component": component_name,
         }
-        labels = component_labels(demo_project, component_name)
-        if version:
-            annotations["platform.temporal.io/rollout-version"] = version
-            labels = rollout_labels(demo_project, component_name, version)
+        base_labels = component_labels(demo_project, component_name)
+        if promote_base or versioned_worker:
+            selector = selector_labels(demo_project, component_name)
+            if version:
+                selector = rollout_selector_labels(
+                    demo_project,
+                    component_name,
+                    version,
+                )
+                base_annotations["platform.temporal.io/rollout-version"] = version
+                base_labels = {
+                    **base_labels,
+                    "platform.temporal.io/rollout-version": version,
+                }
 
-        resources.append(
-            {
-                "apiVersion": "v1",
-                "kind": "Service",
-                "metadata": {
-                    "name": base_name,
-                    "namespace": namespace,
-                    "labels": labels,
-                    "annotations": annotations,
-                },
-                "spec": {
-                    "type": "ClusterIP",
-                    "selector": selector,
-                    "ports": [
-                        {
-                            "name": port["name"],
-                            "port": port["servicePort"],
-                            "targetPort": port["containerPort"],
-                        }
-                        for port in ports
-                    ],
-                },
+            resources.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "metadata": {
+                        "name": base_name,
+                        "namespace": namespace,
+                        "labels": base_labels,
+                        "annotations": base_annotations,
+                    },
+                    "spec": {
+                        "type": "ClusterIP",
+                        "selector": selector,
+                        "ports": [
+                            {
+                                "name": port["name"],
+                                "port": port["servicePort"],
+                                "targetPort": port["containerPort"],
+                            }
+                            for port in ports
+                        ],
+                    },
+                }
+            )
+
+        if version and include_candidates and not versioned_worker:
+            candidate_annotations = {
+                **base_annotations,
+                "platform.temporal.io/rollout-version": version,
+                "platform.temporal.io/stable-service": base_name,
             }
-        )
-
-        if version and not versioned_worker:
+            candidate_labels = rollout_labels(demo_project, component_name, version)
+            selector = rollout_selector_labels(demo_project, component_name, version)
             resources.append(
                 {
                     "apiVersion": "v1",
@@ -1273,11 +1316,8 @@ def service_resources(
                             version,
                         ),
                         "namespace": namespace,
-                        "labels": labels,
-                        "annotations": {
-                            **annotations,
-                            "platform.temporal.io/stable-service": base_name,
-                        },
+                        "labels": candidate_labels,
+                        "annotations": candidate_annotations,
                     },
                     "spec": {
                         "type": "ClusterIP",
@@ -2197,17 +2237,22 @@ def ingress_resources(
     demo_project: dict[str, Any],
     *,
     image_overrides: dict[str, str] | None = None,
+    rollout_version: str | None = None,
 ) -> list[dict[str, Any]]:
     route_specs = ingress_routes(demo_project)
     if not route_specs:
         return []
 
-    version = candidate_version(demo_project, image_overrides or {})
+    version = rollout_version or candidate_version(
+        demo_project,
+        image_overrides or {},
+    )
     routes = [
         ingress_route(
             demo_project,
             route_spec,
             image_overrides=image_overrides or {},
+            rollout_version=rollout_version,
         )
         for route_spec in route_specs
     ]
@@ -2217,6 +2262,7 @@ def ingress_resources(
                 demo_project,
                 route_specs,
                 image_overrides=image_overrides or {},
+                rollout_version=rollout_version,
             ),
             *routes,
         ]
@@ -2288,6 +2334,7 @@ def registry_auth_bypass_routes(
     route_specs: list[dict[str, Any]],
     *,
     image_overrides: dict[str, str],
+    rollout_version: str | None = None,
 ) -> list[dict[str, Any]]:
     routes = []
     for route_spec in route_specs:
@@ -2300,6 +2347,7 @@ def registry_auth_bypass_routes(
                         "pathPrefix": path_prefix,
                     },
                     image_overrides=image_overrides,
+                    rollout_version=rollout_version,
                     use_auth=False,
                     priority=2000,
                 )
@@ -2337,6 +2385,7 @@ def ingress_route(
     route_spec: dict[str, Any],
     *,
     image_overrides: dict[str, str] | None = None,
+    rollout_version: str | None = None,
     use_auth: bool | None = None,
     priority: int = 1000,
 ) -> dict[str, Any]:
@@ -2347,7 +2396,10 @@ def ingress_route(
 
     component_name = route_spec["component"]
     component = components(demo_project)[component_name]
-    version = candidate_version(demo_project, image_overrides or {})
+    version = rollout_version or candidate_version(
+        demo_project,
+        image_overrides or {},
+    )
     service_name = effective_service_name(component_name, component)
     if version and not worker_versioning_enabled(component):
         service_name = candidate_service_name(

@@ -2,36 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from demo_registry_operator import derive
-from demo_registry_operator.activities.external_resources.common import string_field
-from demo_registry_operator.activities.external_resources.models import (
-    EcrRepositoryRequest,
-    EcrRepositoryResult,
-    ExternalResourcesPlan,
-    SecretRequirement,
-    TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
-    TemporalCloudProject,
-    VerifySecretsManagerResourcesRequest,
-)
-from demo_registry_operator.resources import (
-    TEMPORAL_AUTH_MODE_MTLS,
-    TEMPORAL_MTLS_CA_SECRET_PROPERTIES,
-    builds,
-    components_for_user_secret,
-    project_name,
-    project_namespace,
-    project_secret_prefix,
-    project_temporal_namespace,
-    spec_of,
-    temporal_auth_mode,
-    temporal_components,
-    temporal_mtls_ca_secret_remote_path,
-    temporal_runtime_secret_properties,
-    temporal_secret_remote_path,
-    user_secret_names,
-    user_secret_remote_path,
-    user_secret_required_properties,
-)
+from demo_registry_operator import derive, resources
+from demo_registry_operator.activities.external_resources import common, models
 
 
 def plan_external_resources(
@@ -39,43 +11,43 @@ def plan_external_resources(
     *,
     checked_at: str,
     force_temporal_auth_rotation: bool = False,
-) -> ExternalResourcesPlan:
+) -> models.ExternalResourcesPlan:
     """Return a deterministic, side-effect-free external-resource plan."""
 
-    return ExternalResourcesPlan(
+    return models.ExternalResourcesPlan(
         demo_project=demo_project,
         checked_at=checked_at,
         mode="aws",
-        kubernetes_namespace=project_namespace(demo_project),
+        kubernetes_namespace=resources.project_namespace(demo_project),
         force_temporal_auth_rotation=force_temporal_auth_rotation,
         ecr_repositories=tuple(
             repository_request(demo_project, build_name)
-            for build_name in sorted(builds(demo_project))
+            for build_name in sorted(resources.builds(demo_project))
         ),
         temporal_project=temporal_cloud_project(demo_project),
         secrets_manager=secrets_manager_request(demo_project, checked_at=checked_at),
     )
 
 
-def temporal_cloud_project(demo_project: dict[str, Any]) -> TemporalCloudProject:
-    return TemporalCloudProject(
-        name=project_name(demo_project),
-        namespace=project_temporal_namespace(demo_project),
-        kubernetes_namespace=project_namespace(demo_project),
-        auth_mode=temporal_auth_mode(demo_project),
-        components=temporal_components(demo_project),
-        runtime_secret_path=temporal_secret_remote_path(demo_project),
-        mtls_ca_secret_path=temporal_mtls_ca_secret_remote_path(demo_project),
+def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloudProject:
+    return models.TemporalCloudProject(
+        name=resources.project_name(demo_project),
+        namespace=resources.project_temporal_namespace(demo_project),
+        kubernetes_namespace=resources.project_namespace(demo_project),
+        auth_mode=resources.temporal_auth_mode(demo_project),
+        components=resources.temporal_components(demo_project),
+        runtime_secret_path=resources.temporal_secret_remote_path(demo_project),
+        mtls_ca_secret_path=resources.temporal_mtls_ca_secret_remote_path(demo_project),
     )
 
 
 def repository_request(
     demo_project: dict[str, Any],
     build_name: str,
-) -> EcrRepositoryRequest:
-    return EcrRepositoryRequest(
+) -> models.EcrRepositoryRequest:
+    return models.EcrRepositoryRequest(
         name=image_repository_name(demo_project, build_name),
-        project=project_name(demo_project),
+        project=resources.project_name(demo_project),
         build=build_name,
         components=tuple(components_for_build(demo_project, build_name)),
     )
@@ -85,48 +57,48 @@ def secrets_manager_request(
     demo_project: dict[str, Any],
     *,
     checked_at: str,
-) -> VerifySecretsManagerResourcesRequest:
-    temporal_required = bool(temporal_components(demo_project))
-    auth_mode = temporal_auth_mode(demo_project)
-    return VerifySecretsManagerResourcesRequest(
+) -> models.VerifySecretsManagerResourcesRequest:
+    temporal_required = bool(resources.temporal_components(demo_project))
+    auth_mode = resources.temporal_auth_mode(demo_project)
+    return models.VerifySecretsManagerResourcesRequest(
         checked_at=checked_at,
-        secret_prefix=project_secret_prefix(demo_project),
-        temporal_bootstrap=SecretRequirement(
+        secret_prefix=resources.project_secret_prefix(demo_project),
+        temporal_bootstrap=models.SecretRequirement(
             path="",  # Filled from platform config inside the activity.
             required=temporal_required,
             managed_by="platform",
-            required_properties=TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
+            required_properties=models.TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
         ),
-        temporal_credentials=SecretRequirement(
-            path=temporal_secret_remote_path(demo_project),
+        temporal_credentials=models.SecretRequirement(
+            path=resources.temporal_secret_remote_path(demo_project),
             required=temporal_required,
             managed_by="platform",
-            required_properties=tuple(temporal_runtime_secret_properties(demo_project)),
+            required_properties=tuple(resources.temporal_runtime_secret_properties(demo_project)),
         ),
-        temporal_mtls_ca=SecretRequirement(
-            path=temporal_mtls_ca_secret_remote_path(demo_project),
-            required=temporal_required and auth_mode == TEMPORAL_AUTH_MODE_MTLS,
+        temporal_mtls_ca=models.SecretRequirement(
+            path=resources.temporal_mtls_ca_secret_remote_path(demo_project),
+            required=temporal_required and auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS,
             managed_by="platform",
-            required_properties=tuple(TEMPORAL_MTLS_CA_SECRET_PROPERTIES),
+            required_properties=tuple(resources.TEMPORAL_MTLS_CA_SECRET_PROPERTIES),
         ),
         user_managed=tuple(
-            SecretRequirement(
-                path=user_secret_remote_path(demo_project, secret_name),
+            models.SecretRequirement(
+                path=resources.user_secret_remote_path(demo_project, secret_name),
                 required=True,
                 managed_by="project-owner",
                 required_properties=tuple(
-                    user_secret_required_properties(demo_project, secret_name)
+                    resources.user_secret_required_properties(demo_project, secret_name)
                 ),
-                components=tuple(components_for_user_secret(demo_project, secret_name)),
+                components=tuple(resources.components_for_user_secret(demo_project, secret_name)),
             )
-            for secret_name in user_secret_names(demo_project)
+            for secret_name in resources.user_secret_names(demo_project)
         ),
     )
 
 
 def ecr_repositories_status(
-    plan: ExternalResourcesPlan,
-    repositories: list[EcrRepositoryResult],
+    plan: models.ExternalResourcesPlan,
+    repositories: list[models.EcrRepositoryResult],
 ) -> dict[str, Any]:
     statuses = [repository.as_status() for repository in repositories]
     first = statuses[0] if statuses else {}
@@ -140,7 +112,7 @@ def ecr_repositories_status(
 
 
 def external_resources_status(
-    plan: ExternalResourcesPlan,
+    plan: models.ExternalResourcesPlan,
     *,
     ecr_status: dict[str, Any],
     temporal_status: dict[str, Any],
@@ -183,7 +155,7 @@ def external_resource_finalization_status(
         phase = "Skipped"
     status = {
         "phase": phase,
-        "checkedAt": string_field(finalization_plan, "checkedAt"),
+        "checkedAt": common.string_field(finalization_plan, "checkedAt"),
         "temporalCloud": temporal_status,
         "ecr": ecr_status,
     }
@@ -232,7 +204,7 @@ def temporal_cloud_finalization_status(
         "phase": phase,
         "provider": "temporal-cloud",
         "mode": "cloud-api",
-        "checkedAt": string_field(finalization_plan, "checkedAt"),
+        "checkedAt": common.string_field(finalization_plan, "checkedAt"),
         "namespace": namespace,
         "deleted": deleted,
         "steps": {
@@ -249,7 +221,7 @@ def temporal_cloud_finalization_status(
 
 
 def image_repository_name(demo_project: dict[str, Any], build_name: str) -> str:
-    return f"{derive.image_repository_prefix()}/{project_name(demo_project)}/{build_name}"
+    return f"{derive.image_repository_prefix()}/{resources.project_name(demo_project)}/{build_name}"
 
 
 def components_for_build(demo_project: dict[str, Any], build_name: str) -> list[str]:
@@ -261,7 +233,7 @@ def components_for_build(demo_project: dict[str, Any], build_name: str) -> list[
 
 
 def spec_components(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    value = spec_of(demo_project).get("components")
+    value = resources.spec_of(demo_project).get("components")
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(item, dict)}

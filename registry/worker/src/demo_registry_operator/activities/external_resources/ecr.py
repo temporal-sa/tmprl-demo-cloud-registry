@@ -2,57 +2,43 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator.activities.external_resources.common import (
-    error_code,
-    string_field,
-    string_optional,
-)
-from demo_registry_operator.activities.external_resources.models import (
-    DeleteEcrRepositoriesRequest,
-    DeleteEcrRepositoriesResult,
-    EcrRepositoryRequest,
-    EcrRepositoryResult,
-)
+from demo_registry_operator import errors
+from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    aws_application_error,
-    non_retryable_error,
-)
 
 
 @activity.defn
 def create_or_verify_ecr_repository(
-    request: EcrRepositoryRequest,
-) -> EcrRepositoryResult:
+    request: models.EcrRepositoryRequest,
+) -> models.EcrRepositoryResult:
     config = WorkerConfig.from_env()
 
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for aws external resource mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     ecr = boto3.session.Session(region_name=config.aws_region).client("ecr")
     try:
         status = ensure_ecr_repository(ecr, request)
     except (BotoCoreError, ClientError) as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation=f"Create or verify ECR repository {request.name}",
         ) from error
 
-    return EcrRepositoryResult(
+    return models.EcrRepositoryResult(
         name=request.name,
         project=request.project,
         build=request.build,
         components=request.components,
-        phase=string_field(status, "phase"),
-        action=string_field(status, "action"),
-        repository_uri=string_optional(status.get("repositoryUri")),
+        phase=common.string_field(status, "phase"),
+        action=common.string_field(status, "action"),
+        repository_uri=common.string_optional(status.get("repositoryUri")),
         region=config.aws_region,
         account_id=config.aws_account_id,
     )
@@ -60,11 +46,11 @@ def create_or_verify_ecr_repository(
 
 @activity.defn
 def delete_ecr_repositories(
-    request: DeleteEcrRepositoriesRequest,
-) -> DeleteEcrRepositoriesResult:
+    request: models.DeleteEcrRepositoriesRequest,
+) -> models.DeleteEcrRepositoriesResult:
     config = WorkerConfig.from_env()
     if config.external_resource_mode != "aws":
-        return DeleteEcrRepositoriesResult(
+        return models.DeleteEcrRepositoriesResult(
             {"phase": "Skipped", "mode": config.external_resource_mode}
         )
 
@@ -72,7 +58,7 @@ def delete_ecr_repositories(
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return DeleteEcrRepositoriesResult(
+        return models.DeleteEcrRepositoriesResult(
             {"phase": "Error", "message": f"boto3 is required: {error}"}
         )
 
@@ -83,7 +69,7 @@ def delete_ecr_repositories(
             ecr.delete_repository(repositoryName=repository.name, force=True)
             repositories.append({"name": repository.name, "action": "deleted"})
         except (BotoCoreError, ClientError) as error:
-            if error_code(error) == "RepositoryNotFoundException":
+            if common.error_code(error) == "RepositoryNotFoundException":
                 repositories.append({"name": repository.name, "action": "not-found"})
             else:
                 repositories.append(
@@ -93,7 +79,7 @@ def delete_ecr_repositories(
                         "message": str(error),
                     }
                 )
-    return DeleteEcrRepositoriesResult(
+    return models.DeleteEcrRepositoriesResult(
         {
             "phase": "Deleted",
             "checkedAt": request.checked_at,
@@ -104,7 +90,7 @@ def delete_ecr_repositories(
 
 def ensure_ecr_repository(
     ecr: Any,
-    repository: EcrRepositoryRequest,
+    repository: models.EcrRepositoryRequest,
 ) -> dict[str, Any]:
     try:
         response = ecr.describe_repositories(repositoryNames=[repository.name])
@@ -116,7 +102,7 @@ def ensure_ecr_repository(
             "repositoryUri": existing.get("repositoryUri"),
         }
     except Exception as error:
-        if error_code(error) != "RepositoryNotFoundException":
+        if common.error_code(error) != "RepositoryNotFoundException":
             raise
 
     response = ecr.create_repository(

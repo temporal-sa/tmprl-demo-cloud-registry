@@ -5,10 +5,8 @@ import asyncio
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
-from demo_registry_operator.workflows import (
-    messages,
-    operator_auth_canary as auth_canary_workflow,
-)
+from demo_registry_operator.workflows import messages
+from demo_registry_operator.workflows import operator_auth_canary as auth_canary_workflow
 
 
 @workflow.defn

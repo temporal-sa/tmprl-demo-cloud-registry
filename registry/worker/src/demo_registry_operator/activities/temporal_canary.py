@@ -12,10 +12,7 @@ from temporalio import activity, workflow
 from temporalio.client import Client, TLSConfig
 from temporalio.worker import Worker
 
-from demo_registry_operator.workflows.messages import (
-    TemporalRuntimeCredentialCanaryRequest,
-    TemporalRuntimeCredentialCanaryResult,
-)
+from demo_registry_operator.workflows import messages
 
 
 DEFAULT_RUNTIME_CANARY_TIMEOUT_SECONDS = 60.0
@@ -33,9 +30,9 @@ class TemporalRuntimeCredentialCanary:
     @workflow.run
     async def run(
         self,
-        request: TemporalRuntimeCredentialCanaryRequest,
-    ) -> TemporalRuntimeCredentialCanaryResult:
-        return TemporalRuntimeCredentialCanaryResult(
+        request: messages.TemporalRuntimeCredentialCanaryRequest,
+    ) -> messages.TemporalRuntimeCredentialCanaryResult:
+        return messages.TemporalRuntimeCredentialCanaryResult(
             ok=True,
             nonce=request.nonce,
             checkedAt=workflow.now().isoformat(),
@@ -176,7 +173,7 @@ async def run_temporal_runtime_canary_attempt(
                 result = await asyncio.wait_for(
                     client.execute_workflow(
                         TemporalRuntimeCredentialCanary.run,
-                        TemporalRuntimeCredentialCanaryRequest(
+                        messages.TemporalRuntimeCredentialCanaryRequest(
                             nonce=nonce,
                             authMode=auth_mode,
                         ),

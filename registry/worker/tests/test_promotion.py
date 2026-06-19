@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from demo_registry_operator import resources
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.resources import HTTPS_REDIRECT_MIDDLEWARE_NAME
 
@@ -41,6 +42,14 @@ def banking_project():
     )
 
 
+def banking_images(version: str = "git-e12b0ed9d450") -> dict[str, str]:
+    return {
+        "backend": f"example.com/backend:{version}",
+        "frontend": f"example.com/frontend:{version}",
+        "worker": f"example.com/worker:{version}",
+    }
+
+
 def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_SOURCE_WATCH_NAMESPACE", "source-watch")
 
@@ -63,6 +72,78 @@ def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
         "sourceAuthSecret",
         "checkedAt",
     }
+
+
+def test_candidate_runtime_apply_does_not_promote_stable_services():
+    demo_project = banking_project()
+    images = banking_images()
+    version = resources.candidate_version(demo_project, images)
+
+    rendered = resources.runtime_workload_resources(
+        demo_project,
+        images,
+        include_routes=False,
+    )
+
+    services = [
+        resource
+        for resource in rendered
+        if resource["kind"] == "Service"
+    ]
+    service_names = {service["metadata"]["name"] for service in services}
+
+    assert "backend" not in service_names
+    assert "frontend" not in service_names
+    assert f"backend-{version}" in service_names
+    assert f"frontend-{version}" in service_names
+
+
+def test_promotion_resources_promote_stable_services_to_requested_version():
+    demo_project = banking_project()
+    images = banking_images()
+
+    rendered = resources.promotion_resources(
+        demo_project,
+        image_overrides=images,
+        rollout_version="git-active",
+    )
+
+    services = [
+        resource
+        for resource in rendered
+        if resource["kind"] == "Service"
+    ]
+    service_names = {service["metadata"]["name"] for service in services}
+    backend = next(
+        service
+        for service in services
+        if service["metadata"]["name"] == "backend"
+    )
+    ingress_route = next(
+        resource
+        for resource in rendered
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == "banking-money-transfer"
+    )
+
+    assert "backend-git-active" not in service_names
+    assert backend["metadata"]["labels"] == {
+        **resources.component_labels(demo_project, "backend"),
+        "platform.temporal.io/rollout-version": "git-active",
+    }
+    assert "platform.temporal.io/rollout-role" not in backend["metadata"]["labels"]
+    assert backend["metadata"]["annotations"][
+        "platform.temporal.io/rollout-version"
+    ] == "git-active"
+    assert backend["spec"]["selector"] == resources.rollout_selector_labels(
+        demo_project,
+        "backend",
+        "git-active",
+    )
+    assert (
+        ingress_route["spec"]["routes"][0]["services"][0]["name"]
+        == "frontend-git-active"
+    )
 
 
 def test_external_resource_blocker_blocks_temporal_cloud_errors():
@@ -109,9 +190,9 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
             for resource in resources
         ]
 
-    monkeypatch.setattr(reconcile, "apply_resources", capture_apply)
-    monkeypatch.setattr(reconcile, "list_deployments", lambda *args, **kwargs: [])
-    monkeypatch.setattr(reconcile, "list_services", lambda *args, **kwargs: [])
+    monkeypatch.setattr(reconcile.kube, "apply_resources", capture_apply)
+    monkeypatch.setattr(reconcile.kube, "list_deployments", lambda *args, **kwargs: [])
+    monkeypatch.setattr(reconcile.kube, "list_services", lambda *args, **kwargs: [])
 
     images = {
         "backend": "example.com/backend:git-e12b0ed9d450",
@@ -183,14 +264,10 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
 def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
     deleted = []
 
-    monkeypatch.setattr(
-        reconcile,
-        "apply_resources",
+    monkeypatch.setattr(reconcile.kube, "apply_resources",
         lambda resources, *, dry_run: [],
     )
-    monkeypatch.setattr(
-        reconcile,
-        "list_deployments",
+    monkeypatch.setattr(reconcile.kube, "list_deployments",
         lambda namespace, *, label_selector: [
             {
                 "name": "backend-git-old",
@@ -218,9 +295,7 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
             },
         ],
     )
-    monkeypatch.setattr(
-        reconcile,
-        "list_services",
+    monkeypatch.setattr(reconcile.kube, "list_services",
         lambda namespace, *, label_selector: [
             {
                 "name": "backend-git-old",
@@ -261,8 +336,8 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
         deleted.append(("Service", namespace, name, dry_run))
         return "deleting"
 
-    monkeypatch.setattr(reconcile, "delete_deployment", delete_deployment)
-    monkeypatch.setattr(reconcile, "delete_service", delete_service)
+    monkeypatch.setattr(reconcile.kube, "delete_deployment", delete_deployment)
+    monkeypatch.setattr(reconcile.kube, "delete_service", delete_service)
 
     demo_project = banking_project()
     demo_project["spec"]["components"]["versioned-worker"] = {
@@ -305,4 +380,145 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
     assert [resource["name"] for resource in result["resources"]] == [
         "backend-git-old",
         "backend-git-old",
+    ]
+
+
+def test_restore_active_runtime_routes_uses_explicit_active_version(monkeypatch):
+    applied = []
+
+    def capture_apply(rendered, *, dry_run):
+        applied.extend(rendered)
+        assert dry_run is False
+        return []
+
+    monkeypatch.setattr(reconcile.kube, "apply_resources", capture_apply)
+
+    demo_project = banking_project()
+    demo_project["metadata"] = {
+        **demo_project["metadata"],
+        "annotations": {
+            resources.SOURCE_COMMIT_ANNOTATION: "f" * 40,
+        }
+    }
+
+    result = reconcile.restore_active_runtime_routes(
+        reconcile.RestoreActiveRuntimeRoutesRequest(
+            project="banking-money-transfer",
+            demo_project=demo_project,
+            active_images=banking_images("git-old"),
+            active_version="git-old",
+        )
+    ).status
+
+    backend = next(
+        resource
+        for resource in applied
+        if resource["kind"] == "Service"
+        and resource["metadata"]["name"] == "backend"
+    )
+    ingress_route = next(
+        resource
+        for resource in applied
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == "banking-money-transfer"
+    )
+
+    assert result["phase"] == "Restored"
+    assert backend["spec"]["selector"][
+        "platform.temporal.io/rollout-version"
+    ] == "git-old"
+    assert (
+        ingress_route["spec"]["routes"][0]["services"][0]["name"]
+        == "frontend-git-old"
+    )
+
+
+def test_delete_runtime_candidate_resources_deletes_only_failed_candidate(
+    monkeypatch,
+):
+    deleted = []
+
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_deployments",
+        lambda namespace, *, label_selector: [
+            {
+                "name": "backend-git-failed",
+                "labels": {
+                    "app.kubernetes.io/component": "backend",
+                    "platform.temporal.io/rollout-version": "git-failed",
+                },
+                "annotations": {},
+            },
+            {
+                "name": "backend-git-active",
+                "labels": {
+                    "app.kubernetes.io/component": "backend",
+                    "platform.temporal.io/rollout-version": "git-active",
+                },
+                "annotations": {},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_services",
+        lambda namespace, *, label_selector: [
+            {
+                "name": "backend-git-failed",
+                "labels": {
+                    "app.kubernetes.io/component": "backend",
+                    "platform.temporal.io/rollout-version": "git-failed",
+                },
+                "annotations": {
+                    "platform.temporal.io/stable-service": "backend",
+                },
+            },
+            {
+                "name": "backend",
+                "labels": {
+                    "app.kubernetes.io/component": "backend",
+                    "platform.temporal.io/rollout-version": "git-failed",
+                },
+                "annotations": {},
+            },
+        ],
+    )
+
+    def delete_deployment(namespace, name, *, dry_run):
+        deleted.append(("Deployment", namespace, name, dry_run))
+        return "deleting"
+
+    def delete_service(namespace, name, *, dry_run):
+        deleted.append(("Service", namespace, name, dry_run))
+        return "deleting"
+
+    monkeypatch.setattr(reconcile.kube, "delete_deployment", delete_deployment)
+    monkeypatch.setattr(reconcile.kube, "delete_service", delete_service)
+
+    result = reconcile.delete_runtime_candidate_resources(
+        reconcile.DeleteRuntimeCandidateResourcesRequest(
+            demo_project=banking_project(),
+            candidate_version="git-failed",
+        )
+    ).status
+
+    assert deleted == [
+        (
+            "Deployment",
+            "tmprl-dem-cld-banking-money-transfer",
+            "backend-git-failed",
+            False,
+        ),
+        (
+            "Service",
+            "tmprl-dem-cld-banking-money-transfer",
+            "backend-git-failed",
+            False,
+        ),
+    ]
+    assert result["phase"] == "Deleted"
+    assert [resource["name"] for resource in result["resources"]] == [
+        "backend-git-failed",
+        "backend-git-failed",
     ]

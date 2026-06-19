@@ -7,50 +7,8 @@ from urllib.request import Request, urlopen
 
 from temporalio import activity
 
+from demo_registry_operator import errors, kube, resources
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    VALIDATION_ERROR,
-    non_retryable_error,
-)
-from demo_registry_operator.kube import (
-    apply_resources,
-    delete_deployment,
-    delete_external_secret,
-    delete_git_repository,
-    delete_namespace,
-    delete_service,
-    list_deployments,
-    list_services,
-    patch_demo_project_status,
-    read_deployment_status,
-    read_external_secret_status,
-    read_worker_deployment_status,
-    remove_demo_project_finalizer,
-)
-from demo_registry_operator.resources import (
-    SOURCE_COMMIT_ANNOTATION,
-    base_resources,
-    build_reconcile_status,
-    catalog_status_configmap,
-    components,
-    demo_project_reconcile_key,
-    is_control_plane_project,
-    missing_image_overrides,
-    parse_image_overrides,
-    promotion_resources,
-    project_host,
-    project_name,
-    project_namespace,
-    runtime_secret_resources,
-    runtime_workload_resources,
-    source_auth_kubernetes_secret_name,
-    source_git_repository_name,
-    spec_of,
-    worker_deployment_rollout_wait_seconds,
-    worker_versioning_enabled,
-    versioned_worker_components,
-)
 
 
 @dataclass(frozen=True)
@@ -130,9 +88,23 @@ class PromoteCandidateRoutesRequest:
 
 
 @dataclass(frozen=True)
+class RestoreActiveRuntimeRoutesRequest:
+    project: str
+    demo_project: dict[str, Any]
+    active_images: dict[str, str]
+    active_version: str
+
+
+@dataclass(frozen=True)
 class PruneStaleRuntimeCandidatesRequest:
     demo_project: dict[str, Any]
     active_version: str
+
+
+@dataclass(frozen=True)
+class DeleteRuntimeCandidateResourcesRequest:
+    demo_project: dict[str, Any]
+    candidate_version: str
 
 
 @dataclass(frozen=True)
@@ -160,20 +132,20 @@ def apply_demo_project_resources(
     external_resources = request.external_resources
     build_status = request.build_status
     demo_project = demo_project_with_build_source(demo_project, build_status)
-    name = project_name(demo_project)
-    image_overrides = images_from_build_status(build_status) or parse_image_overrides(demo_project)
-    missing_images = missing_image_overrides(demo_project, image_overrides)
+    name = resources.project_name(demo_project)
+    image_overrides = images_from_build_status(build_status) or resources.parse_image_overrides(demo_project)
+    missing_images = resources.missing_image_overrides(demo_project, image_overrides)
     build_failed = bool(build_status and build_status.get("phase") == "Error")
     external_resource_block = external_resource_blocker(external_resources)
 
-    resources = base_resources(demo_project)
-    resources.extend(runtime_secret_resources(demo_project))
-    smoke_check = spec_of(demo_project).get("smokeCheck")
-    has_versioned_workers = bool(versioned_worker_components(demo_project))
+    rendered_resources = resources.base_resources(demo_project)
+    rendered_resources.extend(resources.runtime_secret_resources(demo_project))
+    smoke_check = resources.spec_of(demo_project).get("smokeCheck")
+    has_versioned_workers = bool(resources.versioned_worker_components(demo_project))
     defer_route_promotion = bool(smoke_check) or has_versioned_workers
     if not missing_images and not build_failed and external_resource_block is None:
-        resources.extend(
-            runtime_workload_resources(
+        rendered_resources.extend(
+            resources.runtime_workload_resources(
                 demo_project,
                 image_overrides,
                 include_routes=not defer_route_promotion,
@@ -184,18 +156,18 @@ def apply_demo_project_resources(
     activity.logger.info(
         "Reconciling DemoProject project=%s resources=%s missing_images=%s",
         name,
-        len(resources),
+        len(rendered_resources),
         missing_images,
     )
 
     try:
-        applied = apply_resources(resources, dry_run=False)
+        applied = kube.apply_resources(rendered_resources, dry_run=False)
         external_secret_status = external_secret_sync_status(applied)
         worker_deployments_status = worker_deployment_sync_status(applied)
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.VALIDATION_ERROR) from error
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
 
     if build_failed:
         phase = "Error"
@@ -209,14 +181,14 @@ def apply_demo_project_resources(
     elif has_versioned_workers:
         phase = "WorkerRolloutPending"
         message = "WorkerDeployment resources reconciled; waiting for Worker Controller rollout."
-    elif spec_of(demo_project).get("smokeCheck"):
+    elif resources.spec_of(demo_project).get("smokeCheck"):
         phase = "SmokeCheckPending"
         message = "Runtime resources reconciled; smoke check is ready to run."
     else:
         phase = "Ready"
         message = "Runtime resources reconciled."
 
-    status = build_reconcile_status(
+    status = resources.build_reconcile_status(
         demo_project,
         phase=phase,
         message=message,
@@ -239,11 +211,11 @@ def load_project_finalization_plan(
 ) -> ProjectFinalizationPlan:
     demo_project = request.demo_project
     config = WorkerConfig.from_env()
-    name = project_name(demo_project)
-    namespace = project_namespace(demo_project)
+    name = resources.project_name(demo_project)
+    namespace = resources.project_namespace(demo_project)
 
     # Never tear down the control plane, even if a finalize somehow reached it.
-    if is_control_plane_project(demo_project):
+    if resources.is_control_plane_project(demo_project):
         activity.logger.warning(
             "Refusing to finalize control-plane project=%s", name
         )
@@ -262,8 +234,8 @@ def load_project_finalization_plan(
         "project": name,
         "namespace": namespace,
         "sourceWatchNamespace": config.source_watch_namespace,
-        "gitRepository": source_git_repository_name(demo_project),
-        "sourceAuthSecret": source_auth_kubernetes_secret_name(demo_project),
+        "gitRepository": resources.source_git_repository_name(demo_project),
+        "sourceAuthSecret": resources.source_auth_kubernetes_secret_name(demo_project),
         "checkedAt": datetime.now(UTC).isoformat(),
     })
 
@@ -273,12 +245,12 @@ def delete_project_namespace_resource(
     request: ProjectNamespaceDeleteRequest,
 ) -> ActivityActionResult:
     try:
-        return ActivityActionResult(delete_namespace(
+        return ActivityActionResult(kube.delete_namespace(
             required_string(request.namespace, "namespace"),
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -286,13 +258,13 @@ def delete_project_source_repository(
     request: ResourceDeleteRequest,
 ) -> ActivityActionResult:
     try:
-        return ActivityActionResult(delete_git_repository(
+        return ActivityActionResult(kube.delete_git_repository(
             required_string(request.namespace, "namespace"),
             required_string(request.name, "name"),
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -303,13 +275,13 @@ def delete_project_source_auth_secret(
     if not isinstance(name, str) or not name:
         return ActivityActionResult("not-required")
     try:
-        return ActivityActionResult(delete_external_secret(
+        return ActivityActionResult(kube.delete_external_secret(
             required_string(request.namespace, "namespace"),
             name,
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -317,12 +289,12 @@ def remove_project_finalizer(
     request: ProjectFinalizerRemovalRequest,
 ) -> ActivityActionResult:
     try:
-        remove_demo_project_finalizer(
+        kube.remove_demo_project_finalizer(
             required_string(request.project, "project"),
             dry_run=False,
         )
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
     return ActivityActionResult("removed")
 
 
@@ -371,9 +343,9 @@ def string_field(value: dict[str, Any], key: str) -> str:
 def required_string(field: Any, key: str) -> str:
     if isinstance(field, str) and field:
         return field
-    raise non_retryable_error(
+    raise errors.non_retryable_error(
         f"Activity request is missing {key}",
-        error_type=VALIDATION_ERROR,
+        error_type=errors.VALIDATION_ERROR,
     )
 
 
@@ -388,7 +360,7 @@ def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
     )
     host = request.get("host")
     if not isinstance(host, str) and isinstance(demo_project, dict):
-        host = project_host(demo_project)
+        host = resources.project_host(demo_project)
 
     return {
         "project": project_name,
@@ -491,9 +463,9 @@ def wait_for_candidate_readiness(
     demo_project = request.demo_project
     candidate = request.candidate
     if not isinstance(demo_project, dict) or not isinstance(candidate, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "wait_for_candidate_readiness requires demoProject and candidate",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     deployments = candidate.get("deployments")
@@ -506,7 +478,7 @@ def wait_for_candidate_readiness(
             "deployments": {},
         })
 
-    namespace = project_namespace(demo_project)
+    namespace = resources.project_namespace(demo_project)
     deadline = time.monotonic() + config.readiness_timeout_seconds
     last_status: dict[str, Any] = {}
     while True:
@@ -531,7 +503,7 @@ def wait_for_candidate_readiness(
 
         activity.heartbeat(
             {
-                "project": project_name(demo_project),
+                "project": resources.project_name(demo_project),
                 "namespace": namespace,
                 "deployments": last_status,
             }
@@ -556,8 +528,8 @@ def promote_candidate_routes(
         promotion_project = demo_project_with_build_source(demo_project, candidate)
     applied = []
     if isinstance(promotion_project, dict):
-        applied = apply_resources(
-            promotion_resources(
+        applied = kube.apply_resources(
+            resources.promotion_resources(
                 promotion_project,
                 image_overrides=candidate_images,
             ),
@@ -574,6 +546,41 @@ def promote_candidate_routes(
 
 
 @activity.defn
+def restore_active_runtime_routes(
+    request: RestoreActiveRuntimeRoutesRequest,
+) -> ActivityStatusResult:
+    project_name = request.project
+    demo_project = request.demo_project
+    active_images = request.active_images
+    active_version = required_string(request.active_version, "active_version")
+    if not active_images:
+        return ActivityStatusResult({
+            "project": project_name,
+            "phase": "Skipped",
+            "message": "Previous active images were not available.",
+            "activeVersion": active_version,
+            "appliedResources": [],
+        })
+
+    applied = kube.apply_resources(
+        resources.promotion_resources(
+            demo_project,
+            image_overrides=active_images,
+            rollout_version=active_version,
+        ),
+        dry_run=False,
+    )
+    return ActivityStatusResult({
+        "project": project_name,
+        "phase": "Restored",
+        "message": "Previous active route resources were restored.",
+        "activeVersion": active_version,
+        "activeImages": active_images,
+        "appliedResources": applied,
+    })
+
+
+@activity.defn
 def prune_stale_runtime_candidates(
     request: PruneStaleRuntimeCandidatesRequest,
 ) -> ActivityStatusResult:
@@ -585,17 +592,32 @@ def prune_stale_runtime_candidates(
     )
 
 
+@activity.defn
+def delete_runtime_candidate_resources(
+    request: DeleteRuntimeCandidateResourcesRequest,
+) -> ActivityStatusResult:
+    return ActivityStatusResult(
+        delete_runtime_candidate_resources_impl(
+            request.demo_project,
+            candidate_version=required_string(
+                request.candidate_version,
+                "candidate_version",
+            ),
+        )
+    )
+
+
 def prune_stale_runtime_candidates_impl(
     demo_project: dict[str, Any],
     *,
     active_version: str,
 ) -> dict[str, Any]:
-    namespace = project_namespace(demo_project)
-    project = project_name(demo_project)
+    namespace = resources.project_namespace(demo_project)
+    project = resources.project_name(demo_project)
     non_worker_deployment_components = {
         component_name
-        for component_name, component in components(demo_project).items()
-        if not worker_versioning_enabled(component)
+        for component_name, component in resources.components(demo_project).items()
+        if not resources.worker_versioning_enabled(component)
     }
     if not non_worker_deployment_components:
         return {
@@ -612,7 +634,7 @@ def prune_stale_runtime_candidates_impl(
             "platform.temporal.io/rollout-role=candidate",
         ]
     )
-    resources = [
+    pruned_resources = [
         *prune_stale_deployments(
             namespace,
             active_version=active_version,
@@ -627,14 +649,56 @@ def prune_stale_runtime_candidates_impl(
         ),
     ]
     return {
-        "phase": "Pruned" if resources else "Skipped",
+        "phase": "Pruned" if pruned_resources else "Skipped",
         "message": (
-            f"Deleted {len(resources)} stale runtime candidate resource(s)."
-            if resources
+            f"Deleted {len(pruned_resources)} stale runtime candidate resource(s)."
+            if pruned_resources
             else "No stale runtime candidate resources found."
         ),
         "activeVersion": active_version,
-        "resources": resources,
+        "resources": pruned_resources,
+    }
+
+
+def delete_runtime_candidate_resources_impl(
+    demo_project: dict[str, Any],
+    *,
+    candidate_version: str,
+) -> dict[str, Any]:
+    namespace = resources.project_namespace(demo_project)
+    project = resources.project_name(demo_project)
+    component_names = set(resources.components(demo_project))
+    label_selector = ",".join(
+        [
+            f"app.kubernetes.io/name={project}",
+            "app.kubernetes.io/managed-by=demo-registry",
+            "platform.temporal.io/rollout-role=candidate",
+            f"platform.temporal.io/rollout-version={candidate_version}",
+        ]
+    )
+    deleted_resources = [
+        *delete_candidate_deployments(
+            namespace,
+            candidate_version=candidate_version,
+            component_names=component_names,
+            label_selector=label_selector,
+        ),
+        *delete_candidate_services(
+            namespace,
+            candidate_version=candidate_version,
+            component_names=component_names,
+            label_selector=label_selector,
+        ),
+    ]
+    return {
+        "phase": "Deleted" if deleted_resources else "Skipped",
+        "message": (
+            f"Deleted {len(deleted_resources)} failed runtime candidate resource(s)."
+            if deleted_resources
+            else "No failed runtime candidate resources found."
+        ),
+        "candidateVersion": candidate_version,
+        "resources": deleted_resources,
     }
 
 
@@ -646,7 +710,7 @@ def prune_stale_deployments(
     label_selector: str,
 ) -> list[dict[str, Any]]:
     deleted = []
-    for deployment in list_deployments(namespace, label_selector=label_selector):
+    for deployment in kube.list_deployments(namespace, label_selector=label_selector):
         labels = deployment.get("labels", {})
         component = labels.get("app.kubernetes.io/component")
         version = labels.get("platform.temporal.io/rollout-version")
@@ -657,7 +721,41 @@ def prune_stale_deployments(
             or version == active_version
         ):
             continue
-        action = delete_deployment(namespace, name, dry_run=False)
+        action = kube.delete_deployment(namespace, name, dry_run=False)
+        deleted.append(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "namespace": namespace,
+                "name": name,
+                "component": component,
+                "rolloutVersion": version,
+                "action": action,
+            }
+        )
+    return deleted
+
+
+def delete_candidate_deployments(
+    namespace: str,
+    *,
+    candidate_version: str,
+    component_names: set[str],
+    label_selector: str,
+) -> list[dict[str, Any]]:
+    deleted = []
+    for deployment in kube.list_deployments(namespace, label_selector=label_selector):
+        labels = deployment.get("labels", {})
+        component = labels.get("app.kubernetes.io/component")
+        version = labels.get("platform.temporal.io/rollout-version")
+        name = deployment.get("name")
+        if (
+            not isinstance(name, str)
+            or component not in component_names
+            or version != candidate_version
+        ):
+            continue
+        action = kube.delete_deployment(namespace, name, dry_run=False)
         deleted.append(
             {
                 "apiVersion": "apps/v1",
@@ -680,7 +778,7 @@ def prune_stale_services(
     label_selector: str,
 ) -> list[dict[str, Any]]:
     deleted = []
-    for service in list_services(namespace, label_selector=label_selector):
+    for service in kube.list_services(namespace, label_selector=label_selector):
         labels = service.get("labels", {})
         annotations = service.get("annotations", {})
         component = labels.get("app.kubernetes.io/component")
@@ -693,7 +791,43 @@ def prune_stale_services(
             or "platform.temporal.io/stable-service" not in annotations
         ):
             continue
-        action = delete_service(namespace, name, dry_run=False)
+        action = kube.delete_service(namespace, name, dry_run=False)
+        deleted.append(
+            {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "namespace": namespace,
+                "name": name,
+                "component": component,
+                "rolloutVersion": version,
+                "action": action,
+            }
+        )
+    return deleted
+
+
+def delete_candidate_services(
+    namespace: str,
+    *,
+    candidate_version: str,
+    component_names: set[str],
+    label_selector: str,
+) -> list[dict[str, Any]]:
+    deleted = []
+    for service in kube.list_services(namespace, label_selector=label_selector):
+        labels = service.get("labels", {})
+        annotations = service.get("annotations", {})
+        component = labels.get("app.kubernetes.io/component")
+        version = labels.get("platform.temporal.io/rollout-version")
+        name = service.get("name")
+        if (
+            not isinstance(name, str)
+            or component not in component_names
+            or version != candidate_version
+            or "platform.temporal.io/stable-service" not in annotations
+        ):
+            continue
+        action = kube.delete_service(namespace, name, dry_run=False)
         deleted.append(
             {
                 "apiVersion": "v1",
@@ -717,7 +851,7 @@ def read_candidate_deployments(
         if not isinstance(component, str) or not isinstance(deployment_name, str):
             continue
         try:
-            status = read_deployment_status(namespace, deployment_name)
+            status = kube.read_deployment_status(namespace, deployment_name)
         except Exception as error:
             statuses[component] = {
                 "name": deployment_name,
@@ -758,9 +892,9 @@ def wait_for_worker_deployment_rollouts(
     demo_project = request.demo_project
     worker_deployments = request.worker_deployments
     if not isinstance(demo_project, dict) or not isinstance(worker_deployments, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "wait_for_worker_deployment_rollouts requires demoProject and workerDeployments",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     if not worker_deployments:
@@ -772,7 +906,7 @@ def wait_for_worker_deployment_rollouts(
             "resources": [],
         })
 
-    wait_seconds = positive_timeout_seconds(request.timeout_seconds) or worker_deployment_rollout_wait_seconds(
+    wait_seconds = positive_timeout_seconds(request.timeout_seconds) or resources.worker_deployment_rollout_wait_seconds(
         demo_project,
         base_timeout_seconds=config.readiness_timeout_seconds,
     )
@@ -780,7 +914,7 @@ def wait_for_worker_deployment_rollouts(
     last_status: dict[str, Any] = {}
     while True:
         last_status = read_worker_deployments(
-            project_namespace(demo_project),
+            resources.project_namespace(demo_project),
             worker_deployments,
         )
         aggregate = aggregate_worker_deployment_status(last_status)
@@ -814,8 +948,8 @@ def wait_for_worker_deployment_rollouts(
 
         activity.heartbeat(
             {
-                "project": project_name(demo_project),
-                "namespace": project_namespace(demo_project),
+                "project": resources.project_name(demo_project),
+                "namespace": resources.project_namespace(demo_project),
                 "workerDeployments": last_status,
             }
         )
@@ -852,7 +986,7 @@ def worker_deployment_sync_status(
         name = resource["name"]
         namespace = resource["namespace"]
         try:
-            status = read_worker_deployment_status(namespace, name)
+            status = kube.read_worker_deployment_status(namespace, name)
         except Exception as error:
             status = {
                 "name": name,
@@ -881,7 +1015,7 @@ def read_worker_deployments(
         if not isinstance(component, str) or not isinstance(name, str):
             continue
         try:
-            status = read_worker_deployment_status(namespace, name)
+            status = kube.read_worker_deployment_status(namespace, name)
         except Exception as error:
             status = {
                 "name": name,
@@ -1086,14 +1220,14 @@ def external_secret_sync_status(
         return None
 
     checked_at = datetime.now(UTC).isoformat()
-    resources = []
+    sync_resources = []
     for resource in external_secrets:
         name = resource["name"]
         namespace = resource["namespace"]
         try:
-            resources.append(read_external_secret_status(namespace, name))
+            sync_resources.append(kube.read_external_secret_status(namespace, name))
         except Exception as error:
-            resources.append(
+            sync_resources.append(
                 {
                     "name": name,
                     "namespace": namespace,
@@ -1108,9 +1242,9 @@ def external_secret_sync_status(
             )
 
     return {
-        "phase": aggregate_external_secret_phase(resources),
+        "phase": aggregate_external_secret_phase(sync_resources),
         "checkedAt": checked_at,
-        "resources": resources,
+        "resources": sync_resources,
     }
 
 
@@ -1132,20 +1266,20 @@ def record_demo_project_status(
     demo_project = request.demo_project
     status = request.status
     if not isinstance(demo_project, dict) or not isinstance(status, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "record_demo_project_status requires demoProject and status objects",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     config = WorkerConfig.from_env()
-    name = project_name(demo_project)
+    name = resources.project_name(demo_project)
     status = status_with_reconcile_key(demo_project, status)
     try:
         patch_status(name, status, raise_errors=True)
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.VALIDATION_ERROR) from error
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
     return DemoProjectStatusResult(status)
 
 
@@ -1156,9 +1290,9 @@ def record_catalog_project_status(
     demo_project = request.demo_project
     status = request.status
     if not isinstance(demo_project, dict) or not isinstance(status, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "record_catalog_project_status requires demoProject and status objects",
-            error_type=VALIDATION_ERROR,
+            error_type=errors.VALIDATION_ERROR,
         )
 
     config = WorkerConfig.from_env()
@@ -1166,9 +1300,9 @@ def record_catalog_project_status(
     try:
         patch_catalog_status(demo_project, status, config, raise_errors=True)
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.VALIDATION_ERROR) from error
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
     return DemoProjectStatusResult(status)
 
 
@@ -1178,7 +1312,7 @@ def status_with_reconcile_key(
 ) -> dict[str, Any]:
     return {
         **status,
-        "reconcileKey": demo_project_reconcile_key(demo_project),
+        "reconcileKey": resources.demo_project_reconcile_key(demo_project),
     }
 
 
@@ -1192,7 +1326,7 @@ def smoke_check_url(request: SmokeCheckRequest, smoke_check: dict[str, Any]) -> 
 
     host = request.host
     if not isinstance(host, str) and isinstance(request.demo_project, dict):
-        host = project_host(request.demo_project)
+        host = resources.project_host(request.demo_project)
     if not isinstance(host, str):
         host = f"{request.project}.tmprl-demo.cloud"
 
@@ -1207,7 +1341,7 @@ def patch_status(
     raise_errors: bool = False,
 ) -> None:
     try:
-        patch_demo_project_status(name, status, dry_run=False)
+        kube.patch_demo_project_status(name, status, dry_run=False)
     except Exception as error:
         if missing_demo_project_status_patch_can_be_ignored(error, status):
             activity.logger.info(
@@ -1236,18 +1370,18 @@ def patch_catalog_status(
     *,
     raise_errors: bool = False,
 ) -> None:
-    primary = catalog_status_configmap(
+    primary = resources.catalog_status_configmap(
         demo_project,
         status,
         namespace=config.catalog_status_namespace,
         name=config.catalog_status_configmap,
     )
     try:
-        apply_resources([primary], dry_run=False)
+        kube.apply_resources([primary], dry_run=False)
     except Exception:
         activity.logger.exception(
             "Catalog status patch failed project=%s",
-            project_name(demo_project),
+            resources.project_name(demo_project),
         )
         if raise_errors:
             raise
@@ -1255,18 +1389,18 @@ def patch_catalog_status(
     if config.catalog_status_mirror_namespace == config.catalog_status_namespace:
         return
 
-    mirror = catalog_status_configmap(
+    mirror = resources.catalog_status_configmap(
         demo_project,
         status,
         namespace=config.catalog_status_mirror_namespace,
         name=config.catalog_status_configmap,
     )
     try:
-        apply_resources([mirror], dry_run=False)
+        kube.apply_resources([mirror], dry_run=False)
     except Exception:
         activity.logger.exception(
             "Catalog status mirror patch failed project=%s namespace=%s",
-            project_name(demo_project),
+            resources.project_name(demo_project),
             config.catalog_status_mirror_namespace,
         )
         if raise_errors:
@@ -1319,13 +1453,13 @@ def demo_project_with_build_source(
 
     metadata = demo_project.get("metadata", {})
     annotations = metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
-    if isinstance(annotations, dict) and annotations.get(SOURCE_COMMIT_ANNOTATION):
+    if isinstance(annotations, dict) and annotations.get(resources.SOURCE_COMMIT_ANNOTATION):
         return demo_project
 
     rendered = {**demo_project}
     rendered_metadata = {**metadata} if isinstance(metadata, dict) else {}
     rendered_annotations = {**annotations} if isinstance(annotations, dict) else {}
-    rendered_annotations[SOURCE_COMMIT_ANNOTATION] = source_commit
+    rendered_annotations[resources.SOURCE_COMMIT_ANNOTATION] = source_commit
     rendered_metadata["annotations"] = rendered_annotations
     rendered["metadata"] = rendered_metadata
     return rendered

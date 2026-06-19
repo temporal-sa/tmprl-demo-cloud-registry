@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import demo_registry_operator.workflows.demo_project as demo_project_workflow
+import demo_registry_operator.workflows.demo_project_kubernetes_runtime as kubernetes_runtime_workflow
 import demo_registry_operator.workflows.operator_canary as operator_canary_workflow
 from demo_registry_operator.resources import (
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
@@ -161,6 +162,55 @@ def test_failed_status_is_not_a_rememberable_completed_identity():
         remember_completed_reconcile_identity({"phase": "SmokeCheckFailed"}) is False
     )
     assert remember_completed_reconcile_identity({"phase": "Promoted"}) is True
+
+
+def test_kubernetes_runtime_failed_status_includes_compensation_status():
+    workflow = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
+
+    status = workflow._candidate_not_ready_status(
+        {
+            "candidateRolloutStatus": {
+                "imageVersion": "git-failed",
+            },
+        },
+        {
+            "phase": "TimedOut",
+            "ok": False,
+        },
+        {
+            "rollbackStatus": {
+                "phase": "Restored",
+                "appliedResources": [],
+            },
+            "pruneStatus": {
+                "phase": "Deleted",
+                "resources": [
+                    {
+                        "kind": "Deployment",
+                        "name": "backend-git-failed",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert status["phase"] == "CandidateNotReady"
+    assert status["rollbackStatus"]["phase"] == "Restored"
+    assert status["pruneStatus"]["phase"] == "Deleted"
+    assert status["prunedResources"] == [
+        {
+            "kind": "Deployment",
+            "name": "backend-git-failed",
+        }
+    ]
+
+
+def test_kubernetes_runtime_failure_paths_cleanup_failed_candidate():
+    source = inspect.getsource(
+        kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow.run
+    )
+
+    assert source.count("_cleanup_failed_candidate(") == 3
 
 
 def test_reconcile_signal_accepts_same_digest_with_different_sha():
@@ -421,11 +471,20 @@ def test_child_workflow_id_is_scoped_to_reconcile_sequence(monkeypatch):
 
 
 def test_demo_project_reconcile_delegates_runtime_paths_to_child_workflows():
-    source = inspect.getsource(DemoProjectWorkflow.run)
+    run_source = inspect.getsource(DemoProjectWorkflow.run)
+    build_source = inspect.getsource(DemoProjectWorkflow._build_project_artifact)
+    runtime_source = inspect.getsource(DemoProjectWorkflow._reconcile_kubernetes_runtime)
+    serverless_source = inspect.getsource(
+        DemoProjectWorkflow._reconcile_serverless_lambda_if_needed
+    )
 
-    assert "DemoProjectArtifactBuildWorkflow.run" in source
-    assert "DemoProjectKubernetesRuntimeWorkflow.run" in source
-    assert "workflow.execute_child_workflow" in source
+    assert "_run_demo_project_reconcile" in run_source
+    assert "DemoProjectArtifactBuildWorkflow.run" in build_source
+    assert "DemoProjectKubernetesRuntimeWorkflow.run" in runtime_source
+    assert "DemoProjectServerlessLambdaWorkflow.run" in serverless_source
+    assert "workflow.execute_child_workflow" in (
+        build_source + runtime_source + serverless_source
+    )
 
 
 def test_temporal_cloud_reconcile_delegates_to_named_steps():

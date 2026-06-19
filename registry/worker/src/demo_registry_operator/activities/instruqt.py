@@ -15,73 +15,12 @@ from urllib.parse import quote, urlparse, urlunparse
 import yaml
 from temporalio import activity
 
-from demo_registry_operator import derive
+from demo_registry_operator import derive, kube, resources
+from demo_registry_operator import errors as operator_errors
+from demo_registry_operator.activities import external_resources as external_resource_helpers
+from demo_registry_operator.activities.builds import definitions as build_definitions
+from demo_registry_operator.activities.builds.codebuild import execution as build_execution
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    IMAGE_BUILD_TIMEOUT,
-    NON_RETRYABLE_AWS_ERROR_CODES,
-    VALIDATION_ERROR,
-    aws_application_error,
-    aws_error_code,
-    non_retryable_error,
-)
-from demo_registry_operator.activities.builds.codebuild.execution import (
-    CODEBUILD_API_TIMEOUT_SECONDS,
-    codebuild_build_id_from_heartbeat,
-    codebuild_error_message,
-    codebuild_status_summary,
-)
-from demo_registry_operator.activities.builds.definitions import looks_like_commit_sha
-from demo_registry_operator.activities.external_resources import (
-    aggregate_phase,
-    error_code,
-)
-from demo_registry_operator.kube import (
-    delete_external_secret,
-    delete_git_repository,
-    patch_instruqt_course_status,
-    read_secret_data,
-    remove_instruqt_course_finalizer,
-)
-from demo_registry_operator.resources import (
-    CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-    CONTENT_SOURCE_COMMIT_ANNOTATION,
-    SOURCE_ARTIFACT_DIGEST_ANNOTATION,
-    SOURCE_COMMIT_ANNOTATION,
-    content_source_artifact_digest,
-    content_source_commit_sha,
-    content_source_config,
-    content_source_repo,
-    content_source_revision,
-    instruqt_course_reconcile_key,
-    instruqt_course_testing_content_branch,
-    instruqt_course_testing_source_branch,
-    project_name,
-    source_artifact_digest,
-    source_auth_kubernetes_secret_name,
-    source_branch,
-    source_commit_sha,
-    source_git_repository_name,
-    source_git_repository_secret_ref,
-    source_git_repository_url,
-    source_repo,
-    source_revision,
-    source_config_block,
-    source_testing_branch,
-    spec_of,
-    testing_branch_message,
-    testing_branch_reason,
-    testing_branch_state,
-    testing_content_source_artifact_digest,
-    testing_content_source_commit_sha,
-    testing_content_source_revision,
-    testing_source_artifact_digest,
-    testing_source_commit_sha,
-    testing_source_revision,
-    dns_label,
-    source_auth_secret_path,
-)
 
 
 INSTRUQT_PRODUCTION_CHANNEL = "production"
@@ -188,10 +127,10 @@ def reconcile_instruqt_course(
     errors = validate_instruqt_course(course)
     now = checked_at or datetime.now(UTC).isoformat()
     generation = resource_generation(course)
-    resolved_source = bool(source_commit_sha(course) and source_artifact_digest(course))
-    has_content = bool(content_source_config(course))
+    resolved_source = bool(resources.source_commit_sha(course) and resources.source_artifact_digest(course))
+    has_content = bool(resources.content_source_config(course))
     resolved_content = not has_content or bool(
-        content_source_commit_sha(course) and content_source_artifact_digest(course)
+        resources.content_source_commit_sha(course) and resources.content_source_artifact_digest(course)
     )
     testing = testing_status(course)
     cli = instruqt_cli_status()
@@ -204,7 +143,7 @@ def reconcile_instruqt_course(
 
     status: dict[str, Any] = {
         "observedGeneration": generation,
-        "reconcileKey": instruqt_course_reconcile_key(course),
+        "reconcileKey": resources.instruqt_course_reconcile_key(course),
         "phase": phase,
         "message": message,
         "track": track_status(course),
@@ -288,16 +227,16 @@ def render_instruqt_course_config(request: dict[str, Any]) -> dict[str, Any]:
     config = request.get("config")
     resolved_images = request.get("images")
     if not isinstance(instruqt_course, dict) or not isinstance(config, str):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "render_instruqt_course_config requires instruqtCourse and config",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     if resolved_images is None:
         resolved_images = {}
     if not isinstance(resolved_images, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "render_instruqt_course_config images must be an object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
 
     try:
@@ -311,7 +250,7 @@ def render_instruqt_course_config(request: dict[str, Any]) -> dict[str, Any]:
             },
         )
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.VALIDATION_ERROR) from error
 
 
 @activity.defn
@@ -322,16 +261,16 @@ def prepare_instruqt_course_artifact(
     resolved_images = request.images
     channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "prepare_instruqt_course_artifact requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     if resolved_images is None:
         resolved_images = {}
     if not isinstance(resolved_images, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "prepare_instruqt_course_artifact images must be an object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
 
     images = {
@@ -379,9 +318,9 @@ def reconcile_instruqt_course_ecr_repositories(
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             f"boto3 is required for Instruqt image repositories: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=operator_errors.CONFIGURATION_ERROR,
         ) from error
 
     ecr_public = boto3.session.Session(region_name=config.public_ecr_region).client(
@@ -393,13 +332,13 @@ def reconcile_instruqt_course_ecr_repositories(
         try:
             repositories.append(ensure_public_ecr_repository(ecr_public, repository))
         except (BotoCoreError, ClientError) as error:
-            raise aws_application_error(
+            raise operator_errors.aws_application_error(
                 error,
                 operation=f"Reconcile public ECR repository {repository['name']}",
             ) from error
 
     return InstruqtActivityResult({
-        "phase": aggregate_phase(repositories),
+        "phase": external_resource_helpers.aggregate_phase(repositories),
         "region": config.public_ecr_region,
         "accountId": config.aws_account_id,
         "registryType": "public",
@@ -415,9 +354,9 @@ def delete_instruqt_course_ecr_repositories(
     plan = request.plan
     instruqt_course = plan.get("instruqtCourse")
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "delete_instruqt_course_ecr_repositories requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     config = WorkerConfig.from_env()
     checked_at = string_value(plan.get("checkedAt"), datetime.now(UTC).isoformat())
@@ -448,7 +387,7 @@ def delete_instruqt_course_ecr_repositories(
             ecr_public.delete_repository(repositoryName=name, force=True)
             repositories.append({"name": name, "image": image_name, "action": "deleted"})
         except (BotoCoreError, ClientError) as error:
-            if error_code(error) == "RepositoryNotFoundException":
+            if external_resource_helpers.error_code(error) == "RepositoryNotFoundException":
                 repositories.append(
                     {"name": name, "image": image_name, "action": "not-found"}
                 )
@@ -488,7 +427,7 @@ def ensure_public_ecr_repository(
             "repositoryUri": existing.get("repositoryUri"),
         }
     except Exception as error:
-        if error_code(error) != "RepositoryNotFoundException":
+        if external_resource_helpers.error_code(error) != "RepositoryNotFoundException":
             raise
 
     response = ecr_public.create_repository(
@@ -515,17 +454,17 @@ def resolve_instruqt_course_image_build_plan(
 ) -> InstruqtImageBuildPlan:
     instruqt_course = request.instruqt_course
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "resolve_instruqt_course_image_build_plan requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     external_resources = request.external_resources or {}
     previous_build_status = request.previous_build_status
     channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if channel not in INSTRUQT_CHANNELS:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             f"unsupported Instruqt image channel {channel!r}",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
 
     config = WorkerConfig.from_env()
@@ -643,16 +582,16 @@ def start_instruqt_course_image_build(
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
         config=Config(
-            connect_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
-            read_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
+            connect_timeout=build_execution.CODEBUILD_API_TIMEOUT_SECONDS,
+            read_timeout=build_execution.CODEBUILD_API_TIMEOUT_SECONDS,
             retries={"max_attempts": 3, "mode": "standard"},
         ),
     )
-    build_id = codebuild_build_id_from_heartbeat()
+    build_id = build_execution.codebuild_build_id_from_heartbeat()
     if build_id:
         activity.heartbeat(
             {
-                "course": project_name(instruqt_course),
+                "course": resources.project_name(instruqt_course),
                 "channel": channel,
                 "codebuildProject": config.codebuild_project,
                 "codebuildBuildId": build_id,
@@ -671,7 +610,7 @@ def start_instruqt_course_image_build(
     )
     activity.heartbeat(
         {
-            "course": project_name(instruqt_course),
+            "course": resources.project_name(instruqt_course),
             "channel": channel,
             "codebuildProject": config.codebuild_project,
             "phase": "Starting",
@@ -680,7 +619,7 @@ def start_instruqt_course_image_build(
     try:
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
-        if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
+        if operator_errors.aws_error_code(error) in operator_errors.NON_RETRYABLE_AWS_ERROR_CODES:
             return InstruqtImageBuildPlan(completed_instruqt_image_plan(
                 instruqt_image_build_status(
                     instruqt_course,
@@ -692,25 +631,25 @@ def start_instruqt_course_image_build(
                     message="AWS CodeBuild image build failed.",
                     build_entries=[],
                     error=str(error),
-                    codebuild_status=codebuild_status_summary(
+                    codebuild_status=build_execution.codebuild_status_summary(
                         codebuild_build,
                         project_name=config.codebuild_project,
                     ),
                 )
             ))
-        raise aws_application_error(error, operation="Start CodeBuild build") from error
+        raise operator_errors.aws_application_error(error, operation="Start CodeBuild build") from error
 
     build = response.get("build", {})
     codebuild_build = build if isinstance(build, dict) else None
     build_id = build.get("id") if isinstance(build, dict) else None
     if not isinstance(build_id, str):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "CodeBuild start_build response did not include build.id",
-            error_type=CONFIGURATION_ERROR,
+            error_type=operator_errors.CONFIGURATION_ERROR,
         )
     activity.heartbeat(
         {
-            "course": project_name(instruqt_course),
+            "course": resources.project_name(instruqt_course),
             "channel": channel,
             "codebuildProject": config.codebuild_project,
             "codebuildBuildId": build_id,
@@ -720,7 +659,7 @@ def start_instruqt_course_image_build(
     return InstruqtImageBuildPlan({
         **plan,
         "codebuildBuildId": build_id,
-        "codebuild": codebuild_status_summary(
+        "codebuild": build_execution.codebuild_status_summary(
             codebuild_build,
             project_name=config.codebuild_project,
         ),
@@ -761,8 +700,8 @@ def wait_for_instruqt_course_image_build(
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
         config=Config(
-            connect_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
-            read_timeout=CODEBUILD_API_TIMEOUT_SECONDS,
+            connect_timeout=build_execution.CODEBUILD_API_TIMEOUT_SECONDS,
+            read_timeout=build_execution.CODEBUILD_API_TIMEOUT_SECONDS,
             retries={"max_attempts": 3, "mode": "standard"},
         ),
     )
@@ -775,9 +714,9 @@ def wait_for_instruqt_course_image_build(
             channel=channel,
         )
     except TimeoutError as error:
-        raise non_retryable_error(str(error), error_type=IMAGE_BUILD_TIMEOUT) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.IMAGE_BUILD_TIMEOUT) from error
     except (BotoCoreError, ClientError) as error:
-        if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
+        if operator_errors.aws_error_code(error) in operator_errors.NON_RETRYABLE_AWS_ERROR_CODES:
             return InstruqtActivityResult(instruqt_image_build_status(
                 instruqt_course,
                 channel=channel,
@@ -789,9 +728,9 @@ def wait_for_instruqt_course_image_build(
                 build_entries=[],
                 error=str(error),
             ))
-        raise aws_application_error(error, operation="Poll CodeBuild build") from error
+        raise operator_errors.aws_application_error(error, operation="Poll CodeBuild build") from error
 
-    codebuild_status = codebuild_status_summary(
+    codebuild_status = build_execution.codebuild_status_summary(
         codebuild_build,
         project_name=config.codebuild_project,
     )
@@ -812,12 +751,12 @@ def wait_for_instruqt_course_image_build(
                 phase="Failed",
                 source="aws-codebuild",
             ),
-            error=codebuild_error_message(codebuild_build),
+            error=build_execution.codebuild_error_message(codebuild_build),
             codebuild_status=codebuild_status,
         ))
 
     source_commit = instruqt_channel_source_commit_sha(instruqt_course, channel)
-    if not source_commit or not looks_like_commit_sha(source_commit):
+    if not source_commit or not build_definitions.looks_like_commit_sha(source_commit):
         return InstruqtActivityResult(instruqt_image_build_status(
             instruqt_course,
             channel=channel,
@@ -989,14 +928,14 @@ def run_instruqt_track_operation(
     resolved_images = request.images or {}
     channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt track operation requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     if not isinstance(resolved_images, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt track operation images must be an object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     images = {
         str(name): str(image)
@@ -1050,9 +989,9 @@ def delete_instruqt_course_track(
     instruqt_course = request.instruqt_course
     channel = string_value(request.channel, INSTRUQT_PRODUCTION_CHANNEL)
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "delete_instruqt_course_track requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     target = instruqt_track_target(instruqt_course, channel)
     with tempfile.TemporaryDirectory(prefix="instruqt-delete-") as workspace:
@@ -1096,19 +1035,19 @@ def record_instruqt_course_status(
     instruqt_course = request.instruqt_course
     status = request.status
     if not isinstance(instruqt_course, dict) or not isinstance(status, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "record_instruqt_course_status requires instruqtCourse and status objects",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
 
-    name = project_name(instruqt_course)
+    name = resources.project_name(instruqt_course)
     status = status_with_reconcile_key(instruqt_course, status)
     try:
-        patch_instruqt_course_status(name, status, dry_run=False)
+        kube.patch_instruqt_course_status(name, status, dry_run=False)
     except ValueError as error:
-        raise non_retryable_error(str(error), error_type=VALIDATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.VALIDATION_ERROR) from error
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
     return InstruqtActivityResult(status)
 
 
@@ -1118,31 +1057,31 @@ def load_instruqt_course_finalization_plan(
 ) -> InstruqtCourseFinalizationPlan:
     instruqt_course = request.instruqt_course
     if not isinstance(instruqt_course, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "load_instruqt_course_finalization_plan requires an instruqtCourse object",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     config = WorkerConfig.from_env()
-    name = project_name(instruqt_course)
+    name = resources.project_name(instruqt_course)
     return InstruqtCourseFinalizationPlan({
         "action": "finalize",
         "course": name,
         "instruqtCourse": instruqt_course,
         "sourceWatchNamespace": config.source_watch_namespace,
-        "gitRepository": source_git_repository_name(instruqt_course),
-        "sourceAuthSecret": source_auth_kubernetes_secret_name(instruqt_course),
+        "gitRepository": resources.source_git_repository_name(instruqt_course),
+        "sourceAuthSecret": resources.source_auth_kubernetes_secret_name(instruqt_course),
         **(
             {
-                "contentGitRepository": source_git_repository_name(
+                "contentGitRepository": resources.source_git_repository_name(
                     instruqt_course,
                     "content",
                 ),
-                "contentSourceAuthSecret": source_auth_kubernetes_secret_name(
+                "contentSourceAuthSecret": resources.source_auth_kubernetes_secret_name(
                     instruqt_course,
                     "content",
                 ),
             }
-            if content_source_config(instruqt_course)
+            if resources.content_source_config(instruqt_course)
             else {}
         ),
         "checkedAt": datetime.now(UTC).isoformat(),
@@ -1154,13 +1093,13 @@ def delete_instruqt_course_source_repository(
     request: InstruqtKubernetesResourceDeleteRequest,
 ) -> InstruqtActivityActionResult:
     try:
-        return InstruqtActivityActionResult(delete_git_repository(
+        return InstruqtActivityActionResult(kube.delete_git_repository(
             string_field({"namespace": request.namespace}, "namespace"),
             string_field({"name": request.name}, "name"),
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -1171,13 +1110,13 @@ def delete_instruqt_course_source_auth_secret(
     if not isinstance(name, str) or not name:
         return InstruqtActivityActionResult("not-required")
     try:
-        return InstruqtActivityActionResult(delete_external_secret(
+        return InstruqtActivityActionResult(kube.delete_external_secret(
             string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -1188,13 +1127,13 @@ def delete_instruqt_course_content_repository(
     if not isinstance(name, str) or not name:
         return InstruqtActivityActionResult("not-required")
     try:
-        return InstruqtActivityActionResult(delete_git_repository(
+        return InstruqtActivityActionResult(kube.delete_git_repository(
             string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -1205,13 +1144,13 @@ def delete_instruqt_course_content_auth_secret(
     if not isinstance(name, str) or not name:
         return InstruqtActivityActionResult("not-required")
     try:
-        return InstruqtActivityActionResult(delete_external_secret(
+        return InstruqtActivityActionResult(kube.delete_external_secret(
             string_field({"namespace": request.namespace}, "namespace"),
             name,
             dry_run=False,
         ))
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
 
 
 @activity.defn
@@ -1219,12 +1158,12 @@ def remove_instruqt_course_finalizer_resource(
     request: InstruqtFinalizerRemovalRequest,
 ) -> InstruqtActivityActionResult:
     try:
-        remove_instruqt_course_finalizer(
+        kube.remove_instruqt_course_finalizer(
             string_field({"course": request.course}, "course"),
             dry_run=False,
         )
     except RuntimeError as error:
-        raise non_retryable_error(str(error), error_type=CONFIGURATION_ERROR) from error
+        raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.CONFIGURATION_ERROR) from error
     return InstruqtActivityActionResult("removed")
 
 
@@ -1277,22 +1216,22 @@ def status_with_reconcile_key(
 ) -> dict[str, Any]:
     return {
         **status,
-        "reconcileKey": instruqt_course_reconcile_key(instruqt_course),
+        "reconcileKey": resources.instruqt_course_reconcile_key(instruqt_course),
     }
 
 
 def validate_instruqt_course(instruqt_course: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if not source_repo(instruqt_course):
+    if not resources.source_repo(instruqt_course):
         errors.append("spec.source.repo is required")
 
     errors.extend(validate_relative_source_path(instruqt_course, "source"))
-    if content_source_config(instruqt_course):
-        if not content_source_repo(instruqt_course):
+    if resources.content_source_config(instruqt_course):
+        if not resources.content_source_repo(instruqt_course):
             errors.append("spec.content.repo is required when spec.content is set")
         errors.extend(validate_relative_source_path(instruqt_course, "content"))
 
-    track = spec_of(instruqt_course).get("track")
+    track = resources.spec_of(instruqt_course).get("track")
     if not isinstance(track, dict):
         errors.append("spec.track is required")
     else:
@@ -1303,7 +1242,7 @@ def validate_instruqt_course(instruqt_course: dict[str, Any]) -> list[str]:
         if not isinstance(organization, str) or not organization.strip():
             errors.append("spec.track.organization is required")
 
-    testing_track = spec_of(instruqt_course).get("testingTrack")
+    testing_track = resources.spec_of(instruqt_course).get("testingTrack")
     if testing_track is not None:
         if not isinstance(testing_track, dict):
             errors.append("spec.testingTrack must be an object")
@@ -1319,21 +1258,21 @@ def validate_instruqt_course(instruqt_course: dict[str, Any]) -> list[str]:
                     "spec.testingTrack.titlePrefix must be a non-empty string"
                 )
 
-    if source_testing_branch(instruqt_course, "content") and not (
-        instruqt_course_testing_source_branch(instruqt_course)
+    if resources.source_testing_branch(instruqt_course, "content") and not (
+        resources.instruqt_course_testing_source_branch(instruqt_course)
     ):
         errors.append("spec.content.testingBranch requires spec.source.testingBranch")
 
-    if not source_commit_sha(instruqt_course):
-        errors.append(f"missing {SOURCE_COMMIT_ANNOTATION} annotation")
-    if not source_artifact_digest(instruqt_course):
-        errors.append(f"missing {SOURCE_ARTIFACT_DIGEST_ANNOTATION} annotation")
-    if content_source_config(instruqt_course):
-        if not content_source_commit_sha(instruqt_course):
-            errors.append(f"missing {CONTENT_SOURCE_COMMIT_ANNOTATION} annotation")
-        if not content_source_artifact_digest(instruqt_course):
+    if not resources.source_commit_sha(instruqt_course):
+        errors.append(f"missing {resources.SOURCE_COMMIT_ANNOTATION} annotation")
+    if not resources.source_artifact_digest(instruqt_course):
+        errors.append(f"missing {resources.SOURCE_ARTIFACT_DIGEST_ANNOTATION} annotation")
+    if resources.content_source_config(instruqt_course):
+        if not resources.content_source_commit_sha(instruqt_course):
+            errors.append(f"missing {resources.CONTENT_SOURCE_COMMIT_ANNOTATION} annotation")
+        if not resources.content_source_artifact_digest(instruqt_course):
             errors.append(
-                f"missing {CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION} annotation"
+                f"missing {resources.CONTENT_SOURCE_ARTIFACT_DIGEST_ANNOTATION} annotation"
             )
     errors.extend(validate_image_bindings(instruqt_course))
     return errors
@@ -1343,7 +1282,7 @@ def validate_relative_source_path(
     instruqt_course: dict[str, Any],
     source_key: str,
 ) -> list[str]:
-    source = source_config_block(instruqt_course, source_key)
+    source = resources.source_config_block(instruqt_course, source_key)
     path = source.get("path", ".")
     if not isinstance(path, str) or not path.strip():
         return [f"spec.{source_key}.path must be a non-empty relative path"]
@@ -1354,7 +1293,7 @@ def validate_relative_source_path(
 
 def validate_image_bindings(instruqt_course: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    content_configured = bool(content_source_config(instruqt_course))
+    content_configured = bool(resources.content_source_config(instruqt_course))
     for image_name, image in image_bindings(instruqt_course).items():
         container = image.get("container")
         if not isinstance(container, str) or not container.strip():
@@ -1523,45 +1462,45 @@ def render_managed_instruqt_config(
 
 
 def source_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
-    source = source_config_block(instruqt_course, "source")
+    source = resources.source_config_block(instruqt_course, "source")
     status: dict[str, Any] = {
-        "repo": source_repo(instruqt_course),
-        "branch": source_branch(instruqt_course),
+        "repo": resources.source_repo(instruqt_course),
+        "branch": resources.source_branch(instruqt_course),
         "path": source.get("path", "."),
     }
-    revision = source_revision(instruqt_course)
+    revision = resources.source_revision(instruqt_course)
     if revision:
         status["revision"] = revision
-    commit_sha = source_commit_sha(instruqt_course)
+    commit_sha = resources.source_commit_sha(instruqt_course)
     if commit_sha:
         status["commitSha"] = commit_sha
-    artifact_digest = source_artifact_digest(instruqt_course)
+    artifact_digest = resources.source_artifact_digest(instruqt_course)
     if artifact_digest:
         status["artifactDigest"] = artifact_digest
     return status
 
 
 def content_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
-    content = content_source_config(instruqt_course)
+    content = resources.content_source_config(instruqt_course)
     status: dict[str, Any] = {
-        "repo": content_source_repo(instruqt_course),
-        "branch": source_branch(instruqt_course, "content"),
+        "repo": resources.content_source_repo(instruqt_course),
+        "branch": resources.source_branch(instruqt_course, "content"),
         "path": content.get("path", "."),
     }
-    revision = content_source_revision(instruqt_course)
+    revision = resources.content_source_revision(instruqt_course)
     if revision:
         status["revision"] = revision
-    commit_sha = content_source_commit_sha(instruqt_course)
+    commit_sha = resources.content_source_commit_sha(instruqt_course)
     if commit_sha:
         status["commitSha"] = commit_sha
-    artifact_digest = content_source_artifact_digest(instruqt_course)
+    artifact_digest = resources.content_source_artifact_digest(instruqt_course)
     if artifact_digest:
         status["artifactDigest"] = artifact_digest
     return status
 
 
 def testing_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
-    branch = instruqt_course_testing_source_branch(instruqt_course)
+    branch = resources.instruqt_course_testing_source_branch(instruqt_course)
     if not branch:
         return {
             "phase": "Disabled",
@@ -1570,9 +1509,9 @@ def testing_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
             "resolved": True,
         }
 
-    state = testing_branch_state(instruqt_course)
-    reason = testing_branch_reason(instruqt_course)
-    message = testing_branch_message(instruqt_course)
+    state = resources.testing_branch_state(instruqt_course)
+    reason = resources.testing_branch_reason(instruqt_course)
+    message = resources.testing_branch_message(instruqt_course)
     source = testing_source_status(instruqt_course, branch)
     content = testing_content_status(instruqt_course)
     source_resolved = bool(source.get("commitSha") and source.get("artifactDigest"))
@@ -1637,47 +1576,47 @@ def testing_source_status(
     instruqt_course: dict[str, Any],
     branch: str,
 ) -> dict[str, Any]:
-    source = source_config_block(instruqt_course, "source")
+    source = resources.source_config_block(instruqt_course, "source")
     status: dict[str, Any] = {
-        "repo": source_repo(instruqt_course),
+        "repo": resources.source_repo(instruqt_course),
         "branch": branch,
         "path": source.get("path", "."),
     }
-    revision = testing_source_revision(instruqt_course)
+    revision = resources.testing_source_revision(instruqt_course)
     if revision:
         status["revision"] = revision
-    commit_sha = testing_source_commit_sha(instruqt_course)
+    commit_sha = resources.testing_source_commit_sha(instruqt_course)
     if commit_sha:
         status["commitSha"] = commit_sha
-    artifact_digest = testing_source_artifact_digest(instruqt_course)
+    artifact_digest = resources.testing_source_artifact_digest(instruqt_course)
     if artifact_digest:
         status["artifactDigest"] = artifact_digest
     return status
 
 
 def testing_content_status(instruqt_course: dict[str, Any]) -> dict[str, Any] | None:
-    if not content_source_config(instruqt_course):
+    if not resources.content_source_config(instruqt_course):
         return None
-    content = content_source_config(instruqt_course)
+    content = resources.content_source_config(instruqt_course)
     status: dict[str, Any] = {
-        "repo": content_source_repo(instruqt_course),
-        "branch": instruqt_course_testing_content_branch(instruqt_course),
+        "repo": resources.content_source_repo(instruqt_course),
+        "branch": resources.instruqt_course_testing_content_branch(instruqt_course),
         "path": content.get("path", "."),
     }
-    revision = testing_content_source_revision(instruqt_course)
+    revision = resources.testing_content_source_revision(instruqt_course)
     if revision:
         status["revision"] = revision
-    commit_sha = testing_content_source_commit_sha(instruqt_course)
+    commit_sha = resources.testing_content_source_commit_sha(instruqt_course)
     if commit_sha:
         status["commitSha"] = commit_sha
-    artifact_digest = testing_content_source_artifact_digest(instruqt_course)
+    artifact_digest = resources.testing_content_source_artifact_digest(instruqt_course)
     if artifact_digest:
         status["artifactDigest"] = artifact_digest
     return status
 
 
 def testing_track_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
-    spec = spec_of(instruqt_course)
+    spec = resources.spec_of(instruqt_course)
     track = spec.get("track")
     track = track if isinstance(track, dict) else {}
     testing_track = spec.get("testingTrack")
@@ -1697,7 +1636,7 @@ def testing_track_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
 
     production_slug = track.get("slug")
     if isinstance(production_slug, str) and production_slug.strip():
-        status["slug"] = dns_label(f"testing-{production_slug.strip()}")
+        status["slug"] = resources.dns_label(f"testing-{production_slug.strip()}")
     return status
 
 
@@ -1835,7 +1774,7 @@ def render_instruqt_track_directory(
     *,
     channel: str = INSTRUQT_PRODUCTION_CHANNEL,
 ) -> dict[str, Any]:
-    source = source_config_block(instruqt_course, "source")
+    source = resources.source_config_block(instruqt_course, "source")
     track_source = safe_relative_path(source_checkout, str(source.get("path", ".")))
     if not track_source.is_dir():
         raise ValueError(f"Instruqt source path {source.get('path', '.')} was not found")
@@ -1877,11 +1816,11 @@ def clone_course_source(
     commit_sha: str | None,
     branch: str | None = None,
 ) -> None:
-    url = source_git_repository_url(instruqt_course, source_key)
+    url = resources.source_git_repository_url(instruqt_course, source_key)
     if not url:
         raise ValueError(f"spec.{source_key}.repo is required")
     clone_url = authenticated_git_url(instruqt_course, source_key, url)
-    branch = branch or source_branch(instruqt_course, source_key)
+    branch = branch or resources.source_branch(instruqt_course, source_key)
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
@@ -1913,14 +1852,14 @@ def authenticated_git_url(
     parsed = urlparse(url)
     if parsed.scheme != "https":
         return url
-    secret_ref = source_git_repository_secret_ref(instruqt_course, source_key)
+    secret_ref = resources.source_git_repository_secret_ref(instruqt_course, source_key)
     if not isinstance(secret_ref, dict):
         return url
     secret_name = secret_ref.get("name")
     if not isinstance(secret_name, str) or not secret_name:
         return url
     try:
-        data = read_secret_data(
+        data = kube.read_secret_data(
             WorkerConfig.from_env().source_watch_namespace,
             secret_name,
         )
@@ -2137,14 +2076,14 @@ def instruqt_track_target(instruqt_course: dict[str, Any], channel: str) -> str:
     organization = status.get("organization")
     slug = status.get("slug")
     if not isinstance(organization, str) or not organization:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "spec.track.organization is required for Instruqt deployment",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     if not isinstance(slug, str) or not slug:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "spec.track.slug is required for Instruqt deployment",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     return f"{organization}/{slug}"
 
@@ -2338,17 +2277,17 @@ def instruqt_codebuild_source_plan(
             "branch": instruqt_channel_source_branch(instruqt_course, channel),
         }
     }
-    auth_path = source_auth_secret_path(instruqt_course, "source")
+    auth_path = resources.source_auth_secret_path(instruqt_course, "source")
     if auth_path:
         sources["source"]["authSecretPath"] = auth_path
 
-    if content_source_config(instruqt_course):
+    if resources.content_source_config(instruqt_course):
         sources["content"] = {
             "repo": required_source_repo(instruqt_course, "content"),
             "version": required_channel_commit(instruqt_course, channel, "content"),
             "branch": instruqt_channel_content_branch(instruqt_course, channel),
         }
-        auth_path = source_auth_secret_path(instruqt_course, "content")
+        auth_path = resources.source_auth_secret_path(instruqt_course, "content")
         if auth_path:
             sources["content"]["authSecretPath"] = auth_path
     return sources
@@ -2385,7 +2324,7 @@ def instruqt_codebuild_start_build_args(
     environment_variables = [
         {
             "name": "INSTRUQT_COURSE_NAME",
-            "value": project_name(instruqt_course),
+            "value": resources.project_name(instruqt_course),
             "type": "PLAINTEXT",
         },
         {
@@ -2620,7 +2559,7 @@ def instruqt_codebuild_idempotency_token(
 ) -> str:
     encoded = json.dumps(
         {
-            "course": project_name(instruqt_course),
+            "course": resources.project_name(instruqt_course),
             "channel": channel,
             "startedAt": started_at,
             "imageTemplates": image_templates,
@@ -2636,9 +2575,9 @@ def instruqt_codebuild_idempotency_token(
 def instruqt_image_templates_from_plan(plan: dict[str, Any]) -> dict[str, str]:
     image_templates = plan.get("imageTemplates")
     if not isinstance(image_templates, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt CodeBuild image plan is missing imageTemplates",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     rendered = {
         str(name): str(template)
@@ -2646,9 +2585,9 @@ def instruqt_image_templates_from_plan(plan: dict[str, Any]) -> dict[str, str]:
         if isinstance(name, str) and isinstance(template, str) and template
     }
     if not rendered:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt CodeBuild image plan has no image templates",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     return rendered
 
@@ -2656,9 +2595,9 @@ def instruqt_image_templates_from_plan(plan: dict[str, Any]) -> dict[str, str]:
 def instruqt_sources_from_plan(plan: dict[str, Any]) -> dict[str, dict[str, str]]:
     sources = plan.get("sources")
     if not isinstance(sources, dict):
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt CodeBuild image plan is missing sources",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     rendered: dict[str, dict[str, str]] = {}
     for source_key, source in sources.items():
@@ -2670,9 +2609,9 @@ def instruqt_sources_from_plan(plan: dict[str, Any]) -> dict[str, dict[str, str]
             if isinstance(key, str) and isinstance(value, str) and value
         }
     if "source" not in rendered:
-        raise non_retryable_error(
+        raise operator_errors.non_retryable_error(
             "Instruqt CodeBuild image plan is missing source checkout",
-            error_type=VALIDATION_ERROR,
+            error_type=operator_errors.VALIDATION_ERROR,
         )
     return rendered
 
@@ -2693,7 +2632,7 @@ def wait_for_instruqt_codebuild_build(
         status = build.get("buildStatus")
         activity.heartbeat(
             {
-                "course": project_name(instruqt_course),
+                "course": resources.project_name(instruqt_course),
                 "channel": channel,
                 "codebuildBuildId": build_id,
                 "status": status,
@@ -2763,8 +2702,8 @@ def instruqt_channel_source_commit_sha(
     channel: str,
 ) -> str | None:
     if channel == INSTRUQT_TESTING_CHANNEL:
-        return testing_source_commit_sha(instruqt_course)
-    return source_commit_sha(instruqt_course)
+        return resources.testing_source_commit_sha(instruqt_course)
+    return resources.source_commit_sha(instruqt_course)
 
 
 def instruqt_channel_source_artifact_digest(
@@ -2772,46 +2711,46 @@ def instruqt_channel_source_artifact_digest(
     channel: str,
 ) -> str | None:
     if channel == INSTRUQT_TESTING_CHANNEL:
-        return testing_source_artifact_digest(instruqt_course)
-    return source_artifact_digest(instruqt_course)
+        return resources.testing_source_artifact_digest(instruqt_course)
+    return resources.source_artifact_digest(instruqt_course)
 
 
 def instruqt_channel_content_commit_sha(
     instruqt_course: dict[str, Any],
     channel: str,
 ) -> str | None:
-    if not content_source_config(instruqt_course):
+    if not resources.content_source_config(instruqt_course):
         return None
     if channel == INSTRUQT_TESTING_CHANNEL:
-        return testing_content_source_commit_sha(instruqt_course)
-    return content_source_commit_sha(instruqt_course)
+        return resources.testing_content_source_commit_sha(instruqt_course)
+    return resources.content_source_commit_sha(instruqt_course)
 
 
 def instruqt_channel_content_artifact_digest(
     instruqt_course: dict[str, Any],
     channel: str,
 ) -> str | None:
-    if not content_source_config(instruqt_course):
+    if not resources.content_source_config(instruqt_course):
         return None
     if channel == INSTRUQT_TESTING_CHANNEL:
-        return testing_content_source_artifact_digest(instruqt_course)
-    return content_source_artifact_digest(instruqt_course)
+        return resources.testing_content_source_artifact_digest(instruqt_course)
+    return resources.content_source_artifact_digest(instruqt_course)
 
 
 def instruqt_channel_source_branch(instruqt_course: dict[str, Any], channel: str) -> str:
     if channel == INSTRUQT_TESTING_CHANNEL:
-        branch = instruqt_course_testing_source_branch(instruqt_course)
+        branch = resources.instruqt_course_testing_source_branch(instruqt_course)
         if branch:
             return branch
-    return source_branch(instruqt_course)
+    return resources.source_branch(instruqt_course)
 
 
 def instruqt_channel_content_branch(instruqt_course: dict[str, Any], channel: str) -> str:
     if channel == INSTRUQT_TESTING_CHANNEL:
-        branch = instruqt_course_testing_content_branch(instruqt_course)
+        branch = resources.instruqt_course_testing_content_branch(instruqt_course)
         if branch:
             return branch
-    return source_branch(instruqt_course, "content")
+    return resources.source_branch(instruqt_course, "content")
 
 
 def required_channel_commit(
@@ -2830,7 +2769,7 @@ def required_channel_commit(
 
 
 def required_source_repo(instruqt_course: dict[str, Any], source_key: str) -> str:
-    repo = source_git_repository_url(instruqt_course, source_key)
+    repo = resources.source_git_repository_url(instruqt_course, source_key)
     if not isinstance(repo, str) or not repo:
         raise ValueError(f"spec.{source_key}.repo is required")
     return repo
@@ -2842,7 +2781,7 @@ def instruqt_image_repository_plan_entry(
 ) -> dict[str, Any]:
     return {
         "name": instruqt_image_repository_name(instruqt_course, image_name),
-        "project": project_name(instruqt_course),
+        "project": resources.project_name(instruqt_course),
         "build": image_name,
         "components": [str(image_bindings(instruqt_course).get(image_name, {}).get("container") or image_name)],
     }
@@ -2852,7 +2791,7 @@ def instruqt_image_repository_name(
     instruqt_course: dict[str, Any],
     image_name: str,
 ) -> str:
-    return f"{derive.image_repository_prefix()}/{project_name(instruqt_course)}/{image_name}"
+    return f"{derive.image_repository_prefix()}/{resources.project_name(instruqt_course)}/{image_name}"
 
 
 def instruqt_repository_uri_for_image(
@@ -2904,14 +2843,14 @@ def image_bindings_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
 
 
 def image_bindings(instruqt_course: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    images = spec_of(instruqt_course).get("images")
+    images = resources.spec_of(instruqt_course).get("images")
     if not isinstance(images, dict):
         return {}
     return {key: image for key, image in images.items() if isinstance(image, dict)}
 
 
 def track_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
-    track = spec_of(instruqt_course).get("track")
+    track = resources.spec_of(instruqt_course).get("track")
     track = track if isinstance(track, dict) else {}
     status: dict[str, Any] = {}
     organization = track.get("organization")
@@ -2952,9 +2891,9 @@ def instruqt_course_from_request(request: dict[str, Any]) -> dict[str, Any]:
         return request["instruqtCourse"]
     if isinstance(request.get("metadata"), dict) and isinstance(request.get("spec"), dict):
         return request
-    raise non_retryable_error(
+    raise operator_errors.non_retryable_error(
         "InstruqtCourse request must include an instruqtCourse object",
-        error_type=VALIDATION_ERROR,
+        error_type=operator_errors.VALIDATION_ERROR,
     )
 
 
@@ -2962,7 +2901,7 @@ def string_field(data: dict[str, Any], key: str) -> str:
     value = data.get(key)
     if isinstance(value, str) and value:
         return value
-    raise non_retryable_error(
+    raise operator_errors.non_retryable_error(
         f"required field {key!r} is missing",
-        error_type=VALIDATION_ERROR,
+        error_type=operator_errors.VALIDATION_ERROR,
     )

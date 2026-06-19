@@ -25,41 +25,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from demo_registry_operator import derive
-from demo_registry_operator.activities.temporal_auth import (
-    ApiKeyResult,
-    MTLS_CA_OVERLAP_DAYS,
-    MANUAL_ROTATION_REASON,
-    accepted_client_ca_bundle,
-    generate_mtls_ca_certificate,
-    generate_mtls_client_certificate,
-    mirror_runtime_kubernetes_secrets,
-    parse_datetime,
-    prepare_mtls_ca_material,
-    reconcile_api_key_auth,
-    reconcile_mtls_auth,
-    temporal_api_key_rotation_decision,
-    temporal_mtls_ca_cleanup_decision,
-    temporal_mtls_ca_rotation_decision,
-    temporal_mtls_client_common_name,
-    temporal_mtls_client_rotation_decision,
-    mtls_rotate_at,
-    run_runtime_canary,
-)
-from demo_registry_operator.resources import (
-    TEMPORAL_AUTH_MODE_API_KEY,
-    TEMPORAL_AUTH_MODE_MTLS,
-    TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
-    TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
-    project_name,
-    temporal_auth_mode,
-    temporal_auth_runtime_status,
-    temporal_auth_status,
-    temporal_components,
-    temporal_mtls_ca_secret_remote_path,
-    temporal_mtls_status,
-    temporal_secret_remote_path,
-)
+from demo_registry_operator import derive, resources
+from demo_registry_operator.activities import temporal_auth
 
 
 # Minted runtime keys are short-lived (Temporal's default is 30 days). The entity
@@ -91,6 +58,8 @@ ASYNC_OPERATION_TIMEOUT_SECONDS = 300.0
 TEMPORAL_RUNTIME_CANDIDATE_SECRET_SUFFIX = "candidate"
 TEMPORAL_MTLS_CA_CANDIDATE_SECRET_SUFFIX = "ca-candidate"
 
+ApiKeyResult = temporal_auth.ApiKeyResult
+
 
 @dataclass
 class NamespaceInfo:
@@ -120,7 +89,7 @@ class TemporalCloudReconciler(Protocol):
         name: str,
         region: str,
         retention_days: int,
-        auth_mode: str = TEMPORAL_AUTH_MODE_API_KEY,
+        auth_mode: str = resources.TEMPORAL_AUTH_MODE_API_KEY,
         accepted_client_ca: str | None = None,
         certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
@@ -141,7 +110,7 @@ class TemporalCloudReconciler(Protocol):
 
     async def create_api_key(
         self, service_account_id: str, display_name: str, description: str, ttl_days: int
-    ) -> ApiKeyResult: ...
+    ) -> temporal_auth.ApiKeyResult: ...
 
 
 class SecretStore(Protocol):
@@ -155,7 +124,7 @@ class SecretStore(Protocol):
 
 
 def desired_namespace_name(demo_project: dict[str, Any]) -> str:
-    return derive.temporal_namespace(project_name(demo_project))
+    return derive.temporal_namespace(resources.project_name(demo_project))
 
 
 async def reconcile_temporal_cloud(
@@ -186,7 +155,7 @@ async def reconcile_temporal_cloud(
       runtime secret is treated as the source of truth for an active key.
     """
 
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return {
             "phase": "NotRequired",
             "provider": "temporal-cloud",
@@ -194,18 +163,18 @@ async def reconcile_temporal_cloud(
             "message": "No component currently requires Temporal credentials.",
         }
 
-    auth_mode = temporal_auth_mode(demo_project)
+    auth_mode = resources.temporal_auth_mode(demo_project)
     short_name = desired_namespace_name(demo_project)
     mtls_ca_material: dict[str, Any] | None = None
     mtls_ca_rotation: dict[str, Any] | None = None
     mtls_common_name: str | None = None
-    if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-        mtls_ca_material, mtls_ca_rotation = prepare_mtls_ca_material(
+    if auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
+        mtls_ca_material, mtls_ca_rotation = temporal_auth.prepare_mtls_ca_material(
             demo_project=demo_project,
             secret_store=secret_store,
             checked_at=checked_at,
         )
-        mtls_common_name = temporal_mtls_client_common_name(demo_project)
+        mtls_common_name = temporal_auth.temporal_mtls_client_common_name(demo_project)
 
     namespace = await reconciler.find_namespace(short_name)
     # A deleted namespace has freed its name; treat it as absent so we recreate.
@@ -241,13 +210,13 @@ async def reconcile_temporal_cloud(
                 "at the same time. Finalize this project to delete the existing "
                 "namespace, then deploy it again with the new auth mode."
             ),
-            "auth": temporal_auth_status(demo_project),
+            "auth": resources.temporal_auth_status(demo_project),
             "namespace": {
                 "name": namespace.qualified_name,
                 "state": namespace.state,
                 "authMode": namespace.auth_mode,
             },
-            **temporal_auth_runtime_status(demo_project),
+            **resources.temporal_auth_runtime_status(demo_project),
         }
 
     namespace_created = False
@@ -276,7 +245,7 @@ async def reconcile_temporal_cloud(
             retention_days,
             auth_mode=auth_mode,
             accepted_client_ca=(
-                accepted_client_ca_bundle(mtls_ca_material)
+                temporal_auth.accepted_client_ca_bundle(mtls_ca_material)
                 if isinstance(mtls_ca_material, dict)
                 else None
             ),
@@ -285,8 +254,8 @@ async def reconcile_temporal_cloud(
         )
         namespace_created = True
 
-    if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
-        auth_status = await reconcile_mtls_auth(
+    if auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
+        auth_status = await temporal_auth.reconcile_mtls_auth(
             demo_project,
             namespace=namespace,
             reconciler=reconciler,
@@ -299,7 +268,7 @@ async def reconcile_temporal_cloud(
             ca_rotation=mtls_ca_rotation,
         )
     else:
-        auth_status = await reconcile_api_key_auth(
+        auth_status = await temporal_auth.reconcile_api_key_auth(
             demo_project,
             namespace=namespace,
             reconciler=reconciler,
@@ -319,7 +288,7 @@ async def reconcile_temporal_cloud(
         "checkedAt": checked_at,
         "accountId": account_id,
         "region": region,
-        "auth": temporal_auth_status(demo_project),
+        "auth": resources.temporal_auth_status(demo_project),
         "namespace": {
             "name": namespace.qualified_name,
             "action": "created" if namespace_created else "verified",
@@ -343,7 +312,7 @@ def temporal_runtime_candidate_secret_path(
     if token:
         suffix = f"{suffix}-{token}"
     return (
-        f"{temporal_secret_remote_path(demo_project)}/"
+        f"{resources.temporal_secret_remote_path(demo_project)}/"
         f"{suffix}"
     )
 
@@ -357,7 +326,7 @@ def temporal_mtls_ca_candidate_secret_path(
     if token:
         suffix = f"{suffix}-{token}"
     return (
-        f"{temporal_secret_remote_path(demo_project)}/"
+        f"{resources.temporal_secret_remote_path(demo_project)}/"
         f"{suffix}"
     )
 
@@ -388,10 +357,10 @@ async def ensure_temporal_cloud_namespace(
     candidate_ca_secret_path: str | None = None,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
 
-    auth_mode = temporal_auth_mode(demo_project)
+    auth_mode = resources.temporal_auth_mode(demo_project)
     short_name = desired_namespace_name(demo_project)
     namespace = await reconciler.find_namespace(short_name)
     if namespace is not None and namespace.state in DELETED_NAMESPACE_STATES:
@@ -435,7 +404,7 @@ async def ensure_temporal_cloud_namespace(
                 "state": namespace.state,
                 "authMode": namespace.auth_mode,
             },
-            **temporal_auth_runtime_status(demo_project),
+            **resources.temporal_auth_runtime_status(demo_project),
         }
 
     namespace_created = False
@@ -459,7 +428,7 @@ async def ensure_temporal_cloud_namespace(
             }
         accepted_client_ca = None
         certificate_common_name = None
-        if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+        if auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
             ca_candidate_path = candidate_ca_secret_path
             if not ca_candidate_path:
                 ca_candidate_path = temporal_mtls_ca_candidate_secret_path(
@@ -472,8 +441,8 @@ async def ensure_temporal_cloud_namespace(
                 allow_candidate=True,
                 candidate_ca_secret_path=ca_candidate_path,
             )
-            accepted_client_ca = accepted_client_ca_bundle(ca_material)
-            certificate_common_name = temporal_mtls_client_common_name(demo_project)
+            accepted_client_ca = temporal_auth.accepted_client_ca_bundle(ca_material)
+            certificate_common_name = temporal_auth.temporal_mtls_client_common_name(demo_project)
         namespace = await reconciler.create_namespace(
             short_name,
             region,
@@ -504,26 +473,26 @@ def stage_temporal_mtls_ca(
     checked_at: str,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_MTLS:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_MTLS:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
-    ca_path = temporal_mtls_ca_secret_remote_path(demo_project)
+    ca_path = resources.temporal_mtls_ca_secret_remote_path(demo_project)
     candidate_path = temporal_mtls_ca_candidate_secret_path(
         demo_project,
         candidate_secret_token,
     )
     token = normalized_candidate_secret_token(candidate_secret_token)
     existing = secret_store.read_json(ca_path)
-    rotation = temporal_mtls_ca_rotation_decision(
+    rotation = temporal_auth.temporal_mtls_ca_rotation_decision(
         existing,
         checked_at=checked_at,
-        rotate_every_days=TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+        rotate_every_days=resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
     )
     promote_required = False
     if isinstance(existing, dict) and existing.get("caCert") and not rotation["rotate"]:
-        cleanup = temporal_mtls_ca_cleanup_decision(existing, checked_at=checked_at)
+        cleanup = temporal_auth.temporal_mtls_ca_cleanup_decision(existing, checked_at=checked_at)
         if cleanup["cleanup"]:
             material = {
                 key: value
@@ -543,21 +512,21 @@ def stage_temporal_mtls_ca(
             secret_store.write_json(
                 candidate_path,
                 material,
-                f"Temporal Cloud mTLS candidate CA for {project_name(demo_project)}",
+                f"Temporal Cloud mTLS candidate CA for {resources.project_name(demo_project)}",
             )
         else:
             material = existing
             action = "verified"
     else:
-        material = generate_mtls_ca_certificate(checked_at=checked_at)
+        material = temporal_auth.generate_mtls_ca_certificate(checked_at=checked_at)
         if isinstance(existing, dict) and existing.get("caCert"):
-            checked = parse_datetime(checked_at) or datetime.now(UTC)
+            checked = temporal_auth.parse_datetime(checked_at) or datetime.now(UTC)
             material.update(
                 {
                     "previousCaCert": existing["caCert"],
                     "previousCaSerialNumber": existing.get("serialNumber"),
                     "previousCaRemoveAt": (
-                        checked + timedelta(days=MTLS_CA_OVERLAP_DAYS)
+                        checked + timedelta(days=temporal_auth.MTLS_CA_OVERLAP_DAYS)
                     ).isoformat(),
                 }
             )
@@ -570,7 +539,7 @@ def stage_temporal_mtls_ca(
         secret_store.write_json(
             candidate_path,
             material,
-            f"Temporal Cloud mTLS candidate CA for {project_name(demo_project)}",
+            f"Temporal Cloud mTLS candidate CA for {resources.project_name(demo_project)}",
         )
 
     ca_status = mtls_ca_certificate_status(
@@ -586,10 +555,10 @@ def stage_temporal_mtls_ca(
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "authMode": TEMPORAL_AUTH_MODE_MTLS,
+        "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
         "promoteRequired": promote_required,
         "mtls": {
-            **temporal_mtls_status(demo_project),
+            **resources.temporal_mtls_status(demo_project),
             "action": "created" if action == "created" else action,
             "caCertificate": ca_status,
         },
@@ -609,9 +578,9 @@ async def configure_temporal_cloud_namespace_mtls(
     candidate_ca_secret_path: str | None = None,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_MTLS:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_MTLS:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     namespace = namespace_info_from_status(namespace_status_value)
@@ -627,10 +596,10 @@ async def configure_temporal_cloud_namespace_mtls(
         allow_candidate=True,
         candidate_ca_secret_path=ca_candidate_path,
     )
-    common_name = temporal_mtls_client_common_name(demo_project)
+    common_name = temporal_auth.temporal_mtls_client_common_name(demo_project)
     action = await reconciler.configure_namespace_mtls(
         namespace.qualified_name,
-        accepted_client_ca_bundle(ca_material),
+        temporal_auth.accepted_client_ca_bundle(ca_material),
         common_name,
     )
     return {
@@ -638,11 +607,11 @@ async def configure_temporal_cloud_namespace_mtls(
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "authMode": TEMPORAL_AUTH_MODE_MTLS,
+        "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
         "namespace": {
             "name": namespace.qualified_name,
             "grpcAddress": namespace.grpc_address,
-            "authMode": TEMPORAL_AUTH_MODE_MTLS,
+            "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
         },
         "mtls": {
             "namespace": namespace.qualified_name,
@@ -661,13 +630,13 @@ async def ensure_temporal_cloud_service_account(
     reconciler: TemporalCloudReconciler,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_API_KEY:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_API_KEY:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     namespace = namespace_info_from_status(namespace_status_value)
-    project = project_name(demo_project)
+    project = resources.project_name(demo_project)
     name = f"{project}-runtime"
     service_account_id = await reconciler.find_service_account(name)
     created = False
@@ -683,7 +652,7 @@ async def ensure_temporal_cloud_service_account(
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "authMode": TEMPORAL_AUTH_MODE_API_KEY,
+        "authMode": resources.TEMPORAL_AUTH_MODE_API_KEY,
         "serviceAccount": {
             "id": service_account_id,
             "name": name,
@@ -705,9 +674,9 @@ async def stage_temporal_api_key_candidate(
     force_rotation: bool = False,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_API_KEY:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_API_KEY:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     namespace = namespace_info_from_status(namespace_status_value)
@@ -715,9 +684,9 @@ async def stage_temporal_api_key_candidate(
     service_account = service_account if isinstance(service_account, dict) else {}
     service_account_id = string_value(service_account, "id")
     service_account_name = string_value(service_account, "name")
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
-    rotation = temporal_api_key_rotation_decision(
+    rotation = temporal_auth.temporal_api_key_rotation_decision(
         existing,
         checked_at=checked_at,
         rotate_before_days=rotate_before_days,
@@ -727,7 +696,7 @@ async def stage_temporal_api_key_candidate(
         and isinstance(existing, dict)
         and existing.get("apiKey")
     ):
-        rotation = {"rotate": True, "reason": MANUAL_ROTATION_REASON}
+        rotation = {"rotate": True, "reason": temporal_auth.MANUAL_ROTATION_REASON}
 
     if isinstance(existing, dict) and existing.get("apiKey") and not rotation["rotate"]:
         key_id = string_optional(existing.get("keyId"))
@@ -737,7 +706,7 @@ async def stage_temporal_api_key_candidate(
             "provider": "temporal-cloud",
             "mode": "cloud-api",
             "checkedAt": checked_at,
-            "authMode": TEMPORAL_AUTH_MODE_API_KEY,
+            "authMode": resources.TEMPORAL_AUTH_MODE_API_KEY,
             "promoteRequired": False,
             "apiKey": api_key_candidate_status(
                 demo_project,
@@ -756,7 +725,7 @@ async def stage_temporal_api_key_candidate(
     result = await reconciler.create_api_key(
         service_account_id,
         service_account_name,
-        f"tmprl-demo.cloud runtime key for {project_name(demo_project)}",
+        f"tmprl-demo.cloud runtime key for {resources.project_name(demo_project)}",
         api_key_ttl_days,
     )
     previous_key_id = existing.get("keyId") if isinstance(existing, dict) else None
@@ -789,14 +758,14 @@ async def stage_temporal_api_key_candidate(
     secret_store.write_json(
         candidate_path,
         secret_value,
-        f"Temporal Cloud candidate runtime credentials for {project_name(demo_project)}",
+        f"Temporal Cloud candidate runtime credentials for {resources.project_name(demo_project)}",
     )
     status = {
         "phase": "Ready",
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "authMode": TEMPORAL_AUTH_MODE_API_KEY,
+        "authMode": resources.TEMPORAL_AUTH_MODE_API_KEY,
         "promoteRequired": True,
         "candidateSecretRemotePath": candidate_path,
         "candidateApiKeyId": result.key_id,
@@ -828,13 +797,13 @@ def stage_temporal_mtls_client_certificate(
     force_client_rotation: bool = False,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_MTLS:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_MTLS:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
     namespace = namespace_info_from_status(namespace_status_value)
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     candidate_path = temporal_runtime_candidate_secret_path(
         demo_project,
         candidate_secret_token,
@@ -848,19 +817,19 @@ def stage_temporal_mtls_client_certificate(
         candidate_ca_secret_path=ca_status_candidate_path(ca_certificate),
     )
     ca_promote_required = bool(ca_status.get("promoteRequired"))
-    common_name = temporal_mtls_client_common_name(demo_project)
-    client_rotation = temporal_mtls_client_rotation_decision(
+    common_name = temporal_auth.temporal_mtls_client_common_name(demo_project)
+    client_rotation = temporal_auth.temporal_mtls_client_rotation_decision(
         existing,
         checked_at=checked_at,
         ca_serial_number=str(ca_material["serialNumber"]),
-        rotate_every_days=TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+        rotate_every_days=resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
     )
     if (
         force_client_rotation
         and isinstance(existing, dict)
         and existing.get("clientCert")
     ):
-        client_rotation = {"rotate": True, "reason": MANUAL_ROTATION_REASON}
+        client_rotation = {"rotate": True, "reason": temporal_auth.MANUAL_ROTATION_REASON}
 
     if (
         isinstance(existing, dict)
@@ -881,7 +850,7 @@ def stage_temporal_mtls_client_certificate(
             "rotateAt": client_rotation.get("rotateAt"),
             "rotation": {
                 "strategy": "staggered",
-                "rotateEveryDays": TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+                "rotateEveryDays": resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
             },
             "rotationReason": client_rotation.get("reason"),
         }
@@ -892,11 +861,11 @@ def stage_temporal_mtls_client_certificate(
             "provider": "temporal-cloud",
             "mode": "cloud-api",
             "checkedAt": checked_at,
-            "authMode": TEMPORAL_AUTH_MODE_MTLS,
+            "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
             "promoteRequired": ca_promote_required,
             "candidateCaSecretRemotePath": ca_status_candidate_path(ca_certificate),
             "mtls": {
-                **temporal_mtls_status(demo_project),
+                **resources.temporal_mtls_status(demo_project),
                 "action": (
                     "rotated" if ca_certificate.get("action") == "rotated"
                     else "created" if ca_certificate.get("action") == "created"
@@ -908,7 +877,7 @@ def stage_temporal_mtls_client_certificate(
             },
         }
 
-    client_cert = generate_mtls_client_certificate(
+    client_cert = temporal_auth.generate_mtls_client_certificate(
         ca_material,
         common_name=common_name,
         checked_at=checked_at,
@@ -918,7 +887,7 @@ def stage_temporal_mtls_client_certificate(
     )
     token = normalized_candidate_secret_token(candidate_secret_token)
     secret_value: dict[str, Any] = {
-        "authMode": TEMPORAL_AUTH_MODE_MTLS,
+        "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
         "address": namespace.grpc_address,
         "namespace": namespace.qualified_name,
         "tls": "true",
@@ -930,9 +899,9 @@ def stage_temporal_mtls_client_certificate(
         "clientCertCommonName": common_name,
         "clientCertNotBefore": client_cert["notBefore"],
         "clientCertNotAfter": client_cert["notAfter"],
-        "clientCertRotateAt": mtls_rotate_at(
+        "clientCertRotateAt": temporal_auth.mtls_rotate_at(
             client_cert["notBefore"],
-            TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+            resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
         ),
         "createdAt": checked_at,
         "rotationReason": client_rotation["reason"],
@@ -944,7 +913,7 @@ def stage_temporal_mtls_client_certificate(
     secret_store.write_json(
         candidate_path,
         secret_value,
-        f"Temporal Cloud candidate mTLS credentials for {project_name(demo_project)}",
+        f"Temporal Cloud candidate mTLS credentials for {resources.project_name(demo_project)}",
     )
     client_status = {
         "action": (
@@ -959,13 +928,13 @@ def stage_temporal_mtls_client_certificate(
         "notBefore": client_cert.get("notBefore"),
         "notAfter": client_cert.get("notAfter"),
         "createdAt": checked_at,
-        "rotateAt": mtls_rotate_at(
+        "rotateAt": temporal_auth.mtls_rotate_at(
             str(client_cert.get("notBefore", checked_at)),
-            TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+            resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
         ),
         "rotation": {
             "strategy": "staggered",
-            "rotateEveryDays": TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+            "rotateEveryDays": resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
         },
         "rotationReason": client_rotation.get("reason"),
     }
@@ -976,12 +945,12 @@ def stage_temporal_mtls_client_certificate(
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "authMode": TEMPORAL_AUTH_MODE_MTLS,
+        "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
         "promoteRequired": True,
         "candidateSecretRemotePath": candidate_path,
         "candidateCaSecretRemotePath": ca_status_candidate_path(ca_certificate),
         "mtls": {
-            **temporal_mtls_status(demo_project),
+            **resources.temporal_mtls_status(demo_project),
             "action": (
                 "rotated"
                 if client_status["action"] == "rotated"
@@ -1005,7 +974,7 @@ async def run_temporal_runtime_candidate_canary(
     secret_store: SecretStore,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
     if not stage_status.get("promoteRequired"):
         return {
@@ -1020,10 +989,10 @@ async def run_temporal_runtime_candidate_canary(
     if isinstance(candidate_path, str) and candidate_path:
         credential = secret_store.read_json(candidate_path)
     else:
-        credential = secret_store.read_json(temporal_secret_remote_path(demo_project))
+        credential = secret_store.read_json(resources.temporal_secret_remote_path(demo_project))
     if not isinstance(credential, dict):
         raise ValueError("Temporal runtime canary credential secret is missing.")
-    return await run_runtime_canary(credential, None)
+    return await temporal_auth.run_runtime_canary(credential, None)
 
 
 def promote_temporal_runtime_secret(
@@ -1034,11 +1003,11 @@ def promote_temporal_runtime_secret(
     secret_store: SecretStore,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
 
     promoted_runtime = False
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     candidate_path = stage_status.get("candidateSecretRemotePath")
     if isinstance(candidate_path, str) and candidate_path:
         credential = secret_store.read_json(candidate_path)
@@ -1049,7 +1018,7 @@ def promote_temporal_runtime_secret(
         secret_store.write_json(
             runtime_path,
             credential,
-            f"Temporal Cloud runtime credentials for {project_name(demo_project)}",
+            f"Temporal Cloud runtime credentials for {resources.project_name(demo_project)}",
         )
         promoted_runtime = True
 
@@ -1072,7 +1041,7 @@ def promote_temporal_mtls_ca_secret(
     secret_store: SecretStore,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
 
     promoted_ca = False
@@ -1082,9 +1051,9 @@ def promote_temporal_mtls_ca_secret(
         if not isinstance(ca_material, dict):
             raise ValueError("Temporal mTLS CA candidate secret is missing.")
         secret_store.write_json(
-            temporal_mtls_ca_secret_remote_path(demo_project),
+            resources.temporal_mtls_ca_secret_remote_path(demo_project),
             ca_material,
-            f"Temporal Cloud mTLS CA for {project_name(demo_project)}",
+            f"Temporal Cloud mTLS CA for {resources.project_name(demo_project)}",
         )
         promoted_ca = True
 
@@ -1105,12 +1074,12 @@ def mirror_temporal_runtime_secret(
     secret_store: SecretStore,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    credential = secret_store.read_json(temporal_secret_remote_path(demo_project))
+    credential = secret_store.read_json(resources.temporal_secret_remote_path(demo_project))
     if not isinstance(credential, dict):
         raise ValueError("Temporal runtime secret is missing; cannot mirror.")
-    actions = mirror_runtime_kubernetes_secrets(demo_project, credential)
+    actions = temporal_auth.mirror_runtime_kubernetes_secrets(demo_project, credential)
     return {
         "phase": "Ready",
         "provider": "temporal-cloud",
@@ -1168,11 +1137,11 @@ def delete_temporal_cloud_mtls_ca_secret(
     secret_store: SecretStore,
     checked_at: str,
 ) -> dict[str, Any]:
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return temporal_cloud_not_required_status(checked_at)
-    if temporal_auth_mode(demo_project) != TEMPORAL_AUTH_MODE_MTLS:
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_MTLS:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
-    action = secret_store.delete(temporal_mtls_ca_secret_remote_path(demo_project))
+    action = secret_store.delete(resources.temporal_mtls_ca_secret_remote_path(demo_project))
     return {
         "phase": "Deleted",
         "provider": "temporal-cloud",
@@ -1263,7 +1232,7 @@ def temporal_cloud_base_status(
         "checkedAt": checked_at,
         "accountId": account_id,
         "region": region,
-        "auth": temporal_auth_status(demo_project),
+        "auth": resources.temporal_auth_status(demo_project),
     }
 
 
@@ -1286,7 +1255,7 @@ def temporal_cloud_auth_skipped_status(
         "provider": "temporal-cloud",
         "mode": "cloud-api",
         "checkedAt": checked_at,
-        "auth": temporal_auth_status(demo_project),
+        "auth": resources.temporal_auth_status(demo_project),
     }
 
 
@@ -1331,7 +1300,7 @@ def read_mtls_ca_material_for_reconcile(
                 temporal_mtls_ca_candidate_secret_path(demo_project)
             )
     if not isinstance(material, dict):
-        material = secret_store.read_json(temporal_mtls_ca_secret_remote_path(demo_project))
+        material = secret_store.read_json(resources.temporal_mtls_ca_secret_remote_path(demo_project))
     if not isinstance(material, dict) or not material.get("caCert"):
         raise ValueError("Temporal mTLS CA material is missing.")
     return material
@@ -1350,13 +1319,13 @@ def mtls_ca_certificate_status(
         "action": action,
         "scope": "namespace",
         "serialNumber": str(material.get("serialNumber", "")),
-        "secretRemotePath": temporal_mtls_ca_secret_remote_path(demo_project),
+        "secretRemotePath": resources.temporal_mtls_ca_secret_remote_path(demo_project),
         "notBefore": material.get("notBefore"),
         "notAfter": material.get("notAfter"),
         "rotateAt": rotation.get("rotateAt"),
         "rotation": {
             "strategy": "staggered",
-            "rotateEveryDays": TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+            "rotateEveryDays": resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
         },
     }
     if promote_required:
@@ -1369,7 +1338,7 @@ def mtls_ca_certificate_status(
     if isinstance(previous_ca_remove_at, str) and previous_ca_remove_at:
         status["previousCaRemoveAt"] = previous_ca_remove_at
         status["previousCaSerialNumber"] = material.get("previousCaSerialNumber")
-        status["overlapDays"] = MTLS_CA_OVERLAP_DAYS
+        status["overlapDays"] = temporal_auth.MTLS_CA_OVERLAP_DAYS
     return status
 
 
@@ -1394,10 +1363,10 @@ def api_key_candidate_status(
         "namespace": namespace.qualified_name,
         "ttlDays": ttl_days,
         "rotateBeforeExpiryDays": rotate_before_days,
-        "secretRemotePath": temporal_secret_remote_path(demo_project),
+        "secretRemotePath": resources.temporal_secret_remote_path(demo_project),
         "expiryTime": expiry_time,
         "createdAt": created_at,
-        "components": sorted(temporal_components(demo_project)),
+        "components": sorted(resources.temporal_components(demo_project)),
     }
     if previous_key_id:
         status["previousKeyId"] = previous_key_id
@@ -1462,7 +1431,7 @@ async def finalize_temporal_cloud(
     Driven by project removal from git (the explicit deletion approval), so this
     is allowed to destroy the namespace (disabling delete protection first)."""
 
-    if not temporal_components(demo_project):
+    if not resources.temporal_components(demo_project):
         return {
             "phase": "NotRequired",
             "provider": "temporal-cloud",
@@ -1471,7 +1440,7 @@ async def finalize_temporal_cloud(
             "message": "No Temporal Cloud resources to delete.",
         }
 
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
     existing = existing if isinstance(existing, dict) else {}
     key_id = existing.get("keyId")
@@ -1622,7 +1591,7 @@ def delete_temporal_cloud_runtime_secret(
     if base is not None:
         return base
 
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     action = secret_store.delete(runtime_path)
     return temporal_cloud_step_status(
         checked_at,
@@ -1634,7 +1603,7 @@ def finalization_step_base(
     demo_project: dict[str, Any],
     checked_at: str,
 ) -> dict[str, Any] | None:
-    if temporal_components(demo_project):
+    if resources.temporal_components(demo_project):
         return None
     return {
         "phase": "NotRequired",
@@ -1649,7 +1618,7 @@ def temporal_cloud_runtime_secret(
     demo_project: dict[str, Any],
     secret_store: SecretStore,
 ) -> dict[str, Any]:
-    existing = secret_store.read_json(temporal_secret_remote_path(demo_project))
+    existing = secret_store.read_json(resources.temporal_secret_remote_path(demo_project))
     return existing if isinstance(existing, dict) else {}
 
 
@@ -1739,7 +1708,7 @@ class CloudApiReconciler:
         name: str,
         region: str,
         retention_days: int,
-        auth_mode: str = TEMPORAL_AUTH_MODE_API_KEY,
+        auth_mode: str = resources.TEMPORAL_AUTH_MODE_API_KEY,
         accepted_client_ca: str | None = None,
         certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
@@ -1758,7 +1727,7 @@ class CloudApiReconciler:
         )
 
         auth_spec: dict[str, Any]
-        if auth_mode == TEMPORAL_AUTH_MODE_MTLS:
+        if auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
             if not accepted_client_ca or not certificate_common_name:
                 raise ValueError(
                     "mTLS namespace creation requires accepted_client_ca and "
@@ -1891,7 +1860,7 @@ class CloudApiReconciler:
 
     async def create_api_key(
         self, service_account_id: str, display_name: str, description: str, ttl_days: int
-    ) -> ApiKeyResult:
+    ) -> temporal_auth.ApiKeyResult:
         from google.protobuf.timestamp_pb2 import Timestamp
 
         from temporalio.api.cloud.cloudservice.v1 import CreateApiKeyRequest
@@ -1912,7 +1881,7 @@ class CloudApiReconciler:
         await self._await_operation(
             response.async_operation, label="create-api-key"
         )
-        return ApiKeyResult(
+        return temporal_auth.ApiKeyResult(
             key_id=response.key_id,
             token=response.token,
             expiry_time=expiry.isoformat(),
@@ -2411,8 +2380,8 @@ def namespace_auth_mode(namespace: Any) -> str | None:
         return None
     mtls_auth = getattr(spec, "mtls_auth", None)
     if mtls_auth is not None and getattr(mtls_auth, "enabled", False):
-        return TEMPORAL_AUTH_MODE_MTLS
+        return resources.TEMPORAL_AUTH_MODE_MTLS
     api_key_auth = getattr(spec, "api_key_auth", None)
     if api_key_auth is not None and getattr(api_key_auth, "enabled", False):
-        return TEMPORAL_AUTH_MODE_API_KEY
+        return resources.TEMPORAL_AUTH_MODE_API_KEY
     return None

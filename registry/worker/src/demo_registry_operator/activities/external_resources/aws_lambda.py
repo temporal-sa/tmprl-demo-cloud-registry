@@ -5,43 +5,24 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator.activities.external_resources.common import error_code
-from demo_registry_operator.activities.external_resources.models import (
-    DeleteServerlessLambdaResourcesRequest,
-    DeleteServerlessLambdaResourcesResult,
-    EnsureLambdaFunctionRequest,
-    EnsureLambdaFunctionResult,
-)
-from demo_registry_operator.activities.external_resources.serverless_names import (
-    lambda_execution_role_name,
-    lambda_function_name,
-    temporal_lambda_invoke_role_name,
-)
+from demo_registry_operator import errors, resources
+from demo_registry_operator.activities.external_resources import common, models
+from demo_registry_operator.activities.external_resources import serverless_names
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    aws_application_error,
-    non_retryable_error,
-    retryable_provider_error,
-)
-from demo_registry_operator.resources import (
-    project_name,
-    serverless_lambda_components,
-)
 
 
 @activity.defn
 def ensure_lambda_function(
-    request: EnsureLambdaFunctionRequest,
-) -> EnsureLambdaFunctionResult:
+    request: models.EnsureLambdaFunctionRequest,
+) -> models.EnsureLambdaFunctionResult:
     config = WorkerConfig.from_env()
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for aws external resource mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     session = boto3.session.Session(region_name=config.aws_region)
@@ -72,7 +53,7 @@ def ensure_lambda_function(
         "buildId": request.build_id,
         "temporalAuthMode": "apiKey" if temporal_secret.get("apiKey") else "mtls",
     }
-    return EnsureLambdaFunctionResult(
+    return models.EnsureLambdaFunctionResult(
         status=status,
         function_name=request.function_name,
         function_arn=str(result["functionArn"]),
@@ -83,22 +64,22 @@ def ensure_lambda_function(
 
 @activity.defn
 def delete_serverless_lambda_resources(
-    request: DeleteServerlessLambdaResourcesRequest,
-) -> DeleteServerlessLambdaResourcesResult:
+    request: models.DeleteServerlessLambdaResourcesRequest,
+) -> models.DeleteServerlessLambdaResourcesResult:
     config = WorkerConfig.from_env()
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return DeleteServerlessLambdaResourcesResult(
+        return models.DeleteServerlessLambdaResourcesResult(
             {"phase": "Error", "message": f"boto3 is required: {error}"}
         )
 
     session = boto3.session.Session(region_name=config.aws_region)
     lambda_client = session.client("lambda")
     iam = session.client("iam")
-    project = project_name(request.demo_project)
-    components = serverless_lambda_components(request.demo_project)
+    project = resources.project_name(request.demo_project)
+    components = resources.serverless_lambda_components(request.demo_project)
     statuses: dict[str, Any] = {}
     for component_name in sorted(components):
         try:
@@ -120,7 +101,7 @@ def delete_serverless_lambda_resources(
         phase = "Error"
     else:
         phase = "Deleted"
-    return DeleteServerlessLambdaResourcesResult(
+    return models.DeleteServerlessLambdaResourcesResult(
         {
             "phase": phase,
             "checkedAt": request.checked_at,
@@ -138,15 +119,15 @@ def delete_component_lambda_resources(
 ) -> dict[str, Any]:
     function = delete_lambda_function(
         lambda_client,
-        lambda_function_name(project, component),
+        serverless_names.lambda_function_name(project, component),
     )
     execution_role = delete_iam_role(
         iam,
-        lambda_execution_role_name(project, component),
+        serverless_names.lambda_execution_role_name(project, component),
     )
     invoke_role = delete_iam_role(
         iam,
-        temporal_lambda_invoke_role_name(project, component),
+        serverless_names.temporal_lambda_invoke_role_name(project, component),
     )
     phase = (
         "Error"
@@ -171,7 +152,7 @@ def delete_lambda_function(lambda_client: Any, function_name: str) -> dict[str, 
         lambda_client.delete_function(FunctionName=function_name)
         return {"name": function_name, "action": "deleted"}
     except Exception as error:
-        if error_code(error) == "ResourceNotFoundException":
+        if common.error_code(error) == "ResourceNotFoundException":
             return {"name": function_name, "action": "not-found"}
         return {
             "name": function_name,
@@ -187,7 +168,7 @@ def delete_iam_role(iam: Any, role_name: str) -> dict[str, Any]:
         iam.delete_role(RoleName=role_name)
         return {"name": role_name, "action": "deleted"}
     except Exception as error:
-        if error_code(error) == "NoSuchEntity":
+        if common.error_code(error) == "NoSuchEntity":
             return {"name": role_name, "action": "not-found"}
         return {
             "name": role_name,
@@ -210,7 +191,7 @@ def inline_role_policy_names(iam: Any, role_name: str) -> list[str]:
 
 def ensure_image_lambda(
     lambda_client: Any,
-    request: EnsureLambdaFunctionRequest,
+    request: models.EnsureLambdaFunctionRequest,
     environment: dict[str, str],
 ) -> dict[str, str]:
     action = "verified"
@@ -280,7 +261,7 @@ def get_function(lambda_client: Any, function_name: str) -> dict[str, Any] | Non
     try:
         return lambda_client.get_function(FunctionName=function_name)
     except Exception as error:
-        if error_code(error) == "ResourceNotFoundException":
+        if common.error_code(error) == "ResourceNotFoundException":
             return None
         raise
 
@@ -294,7 +275,7 @@ def get_function_configuration(
 
 def lambda_configuration_needs_update(
     configuration: dict[str, Any],
-    request: EnsureLambdaFunctionRequest,
+    request: models.EnsureLambdaFunctionRequest,
     environment: dict[str, str],
 ) -> bool:
     return any(
@@ -360,44 +341,44 @@ def read_json_secret(secretsmanager: Any, secret_id: str) -> dict[str, Any]:
     try:
         response = secretsmanager.get_secret_value(SecretId=secret_id)
     except Exception as error:
-        if error_code(error) == "ResourceNotFoundException":
-            raise non_retryable_error(
+        if common.error_code(error) == "ResourceNotFoundException":
+            raise errors.non_retryable_error(
                 f"Temporal runtime secret {secret_id!r} does not exist",
-                error_type=CONFIGURATION_ERROR,
+                error_type=errors.CONFIGURATION_ERROR,
             ) from error
         raise
     secret_string = response.get("SecretString")
     if not isinstance(secret_string, str):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"Temporal runtime secret {secret_id!r} must be a JSON object",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     try:
         decoded = json.loads(secret_string)
     except json.JSONDecodeError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"Temporal runtime secret {secret_id!r} is not valid JSON: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
     if not isinstance(decoded, dict):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"Temporal runtime secret {secret_id!r} must be a JSON object",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     return decoded
 
 
 def lambda_environment(
-    request: EnsureLambdaFunctionRequest,
+    request: models.EnsureLambdaFunctionRequest,
     temporal_secret: dict[str, Any],
 ) -> dict[str, str]:
     required = ("address", "namespace", "tls")
     missing = [key for key in required if key not in temporal_secret]
     if missing:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "Temporal runtime secret is missing required properties: "
             + ", ".join(missing),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
 
     environment = {key: str(value) for key, value in sorted(request.env.items())}
@@ -422,10 +403,10 @@ def lambda_environment(
         key for key in ("clientCert", "clientKey") if not temporal_secret.get(key)
     ]
     if mtls_missing:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "Temporal mTLS runtime secret is missing required properties: "
             + ", ".join(mtls_missing),
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     environment.pop("TEMPORAL_API_KEY", None)
     environment["TEMPORAL_TLS_CLIENT_CERT_DATA"] = str(temporal_secret["clientCert"])
@@ -445,7 +426,7 @@ def normalized_bool(value: Any) -> str:
     return "true"
 
 
-def lambda_description(request: EnsureLambdaFunctionRequest) -> str:
+def lambda_description(request: models.EnsureLambdaFunctionRequest) -> str:
     return (
         "tmprl-demo.cloud Temporal Serverless Worker "
         f"{request.project}/{request.component} {request.build_id}"
@@ -464,5 +445,5 @@ def unqualified_function_arn(function_arn: str) -> str:
 def lambda_application_error(error: Exception, *, operation: str) -> Exception:
     message = str(error)
     if "cannot be assumed by Lambda" in message or "ResourceConflictException" in message:
-        return retryable_provider_error(f"{operation} failed: {error}")
-    return aws_application_error(error, operation=operation)
+        return errors.retryable_provider_error(f"{operation} failed: {error}")
+    return errors.aws_application_error(error, operation=operation)

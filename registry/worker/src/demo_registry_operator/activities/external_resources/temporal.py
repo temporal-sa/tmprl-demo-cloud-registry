@@ -3,49 +3,16 @@ from typing import Any
 
 from temporalio import activity
 
+from demo_registry_operator import errors
 from demo_registry_operator.activities import temporal_cloud
-from demo_registry_operator.activities.external_resources.common import (
-    authentication_error_message,
-)
-from demo_registry_operator.activities.external_resources.models import (
-    CreateOrVerifyTemporalCloudNamespaceRequest,
-    CreateOrVerifyTemporalCloudServiceAccountRequest,
-    ConfigureTemporalCloudNamespaceMtlsRequest,
-    DeleteTemporalCloudApiKeyRequest,
-    DeleteTemporalCloudMtlsCaSecretRequest,
-    DeleteTemporalCloudServiceAccountRequest,
-    DeleteTemporalRuntimeCandidateSecretRequest,
-    MirrorTemporalRuntimeSecretRequest,
-    PromoteTemporalMtlsCaRequest,
-    PromoteTemporalRuntimeCredentialRequest,
-    RunTemporalRuntimeCandidateCanaryRequest,
-    StageTemporalApiKeyCandidateRequest,
-    StageTemporalMtlsCaRequest,
-    StageTemporalMtlsClientCertificateRequest,
-    TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES,
-    TemporalCloudCredentialStageResult,
-    TemporalCloudNamespaceRequest,
-    TemporalCloudNamespaceResult,
-    TemporalCloudProject,
-    TemporalCloudPromotionResult,
-    TemporalCloudServiceAccountResult,
-    TemporalCloudStatusResult,
-)
+from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    PROVIDER_AUTHENTICATION_ERROR,
-    PROVIDER_CONFIGURATION_ERROR,
-    aws_application_error,
-    non_retryable_error,
-    retryable_provider_error,
-)
 
 
 @activity.defn
 def stage_temporal_mtls_ca(
-    request: StageTemporalMtlsCaRequest,
-) -> TemporalCloudCredentialStageResult:
+    request: models.StageTemporalMtlsCaRequest,
+) -> models.TemporalCloudCredentialStageResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return stage_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -63,8 +30,8 @@ def stage_temporal_mtls_ca(
 
 @activity.defn
 def create_or_verify_temporal_cloud_namespace(
-    request: CreateOrVerifyTemporalCloudNamespaceRequest,
-) -> TemporalCloudNamespaceResult:
+    request: models.CreateOrVerifyTemporalCloudNamespaceRequest,
+) -> models.TemporalCloudNamespaceResult:
     if not request.project.temporal_required:
         return namespace_result(
             temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
@@ -110,8 +77,8 @@ def create_or_verify_temporal_cloud_namespace(
 
 @activity.defn
 def configure_temporal_cloud_namespace_mtls(
-    request: ConfigureTemporalCloudNamespaceMtlsRequest,
-) -> TemporalCloudStatusResult:
+    request: models.ConfigureTemporalCloudNamespaceMtlsRequest,
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -146,8 +113,8 @@ def configure_temporal_cloud_namespace_mtls(
 
 @activity.defn
 def create_or_verify_temporal_cloud_service_account(
-    request: CreateOrVerifyTemporalCloudServiceAccountRequest,
-) -> TemporalCloudServiceAccountResult:
+    request: models.CreateOrVerifyTemporalCloudServiceAccountRequest,
+) -> models.TemporalCloudServiceAccountResult:
     if not request.project.temporal_required:
         return service_account_result(
             temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
@@ -182,8 +149,8 @@ def create_or_verify_temporal_cloud_service_account(
 
 @activity.defn
 def stage_temporal_api_key_candidate(
-    request: StageTemporalApiKeyCandidateRequest,
-) -> TemporalCloudCredentialStageResult:
+    request: models.StageTemporalApiKeyCandidateRequest,
+) -> models.TemporalCloudCredentialStageResult:
     if not request.project.temporal_required:
         return stage_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -219,8 +186,8 @@ def stage_temporal_api_key_candidate(
 
 @activity.defn
 def stage_temporal_mtls_client_certificate(
-    request: StageTemporalMtlsClientCertificateRequest,
-) -> TemporalCloudCredentialStageResult:
+    request: models.StageTemporalMtlsClientCertificateRequest,
+) -> models.TemporalCloudCredentialStageResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return stage_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -241,8 +208,8 @@ def stage_temporal_mtls_client_certificate(
 
 @activity.defn
 def run_temporal_runtime_candidate_canary(
-    request: RunTemporalRuntimeCandidateCanaryRequest,
-) -> TemporalCloudStatusResult:
+    request: models.RunTemporalRuntimeCandidateCanaryRequest,
+) -> models.TemporalCloudStatusResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -269,8 +236,8 @@ def run_temporal_runtime_candidate_canary(
 
 @activity.defn
 def promote_temporal_mtls_ca(
-    request: PromoteTemporalMtlsCaRequest,
-) -> TemporalCloudPromotionResult:
+    request: models.PromoteTemporalMtlsCaRequest,
+) -> models.TemporalCloudPromotionResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return promotion_result(
@@ -290,8 +257,8 @@ def promote_temporal_mtls_ca(
 
 @activity.defn
 def promote_temporal_runtime_credential(
-    request: PromoteTemporalRuntimeCredentialRequest,
-) -> TemporalCloudPromotionResult:
+    request: models.PromoteTemporalRuntimeCredentialRequest,
+) -> models.TemporalCloudPromotionResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return promotion_result(
@@ -312,8 +279,8 @@ def promote_temporal_runtime_credential(
 
 @activity.defn
 def mirror_temporal_runtime_secret(
-    request: MirrorTemporalRuntimeSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.MirrorTemporalRuntimeSecretRequest,
+) -> models.TemporalCloudStatusResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -330,8 +297,8 @@ def mirror_temporal_runtime_secret(
 
 @activity.defn
 def delete_temporal_runtime_candidate_secret(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -351,8 +318,8 @@ def delete_temporal_runtime_candidate_secret(
 
 @activity.defn
 def delete_temporal_cloud_mtls_ca_secret(
-    request: DeleteTemporalCloudMtlsCaSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalCloudMtlsCaSecretRequest,
+) -> models.TemporalCloudStatusResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -369,8 +336,8 @@ def delete_temporal_cloud_mtls_ca_secret(
 
 @activity.defn
 def delete_temporal_cloud_api_key_by_id(
-    request: DeleteTemporalCloudApiKeyRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalCloudApiKeyRequest,
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -400,8 +367,8 @@ def delete_temporal_cloud_api_key_by_id(
 
 @activity.defn
 def delete_temporal_cloud_service_account_by_id(
-    request: DeleteTemporalCloudServiceAccountRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalCloudServiceAccountRequest,
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -431,8 +398,8 @@ def delete_temporal_cloud_service_account_by_id(
 
 @activity.defn
 def disable_temporal_cloud_namespace_delete_protection_by_name(
-    request: TemporalCloudNamespaceRequest,
-) -> TemporalCloudStatusResult:
+    request: models.TemporalCloudNamespaceRequest,
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -462,8 +429,8 @@ def disable_temporal_cloud_namespace_delete_protection_by_name(
 
 @activity.defn
 def delete_temporal_cloud_namespace_by_name(
-    request: TemporalCloudNamespaceRequest,
-) -> TemporalCloudStatusResult:
+    request: models.TemporalCloudNamespaceRequest,
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -493,8 +460,8 @@ def delete_temporal_cloud_namespace_by_name(
 
 @activity.defn
 def delete_temporal_cloud_api_key(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     return run_project_temporal_delete(
         request,
         temporal_cloud.delete_temporal_cloud_api_key,
@@ -504,8 +471,8 @@ def delete_temporal_cloud_api_key(
 
 @activity.defn
 def delete_temporal_cloud_service_account(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     return run_project_temporal_delete(
         request,
         temporal_cloud.delete_temporal_cloud_service_account,
@@ -515,8 +482,8 @@ def delete_temporal_cloud_service_account(
 
 @activity.defn
 def disable_temporal_cloud_namespace_delete_protection(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     return run_project_temporal_delete(
         request,
         temporal_cloud.disable_temporal_cloud_namespace_delete_protection,
@@ -526,8 +493,8 @@ def disable_temporal_cloud_namespace_delete_protection(
 
 @activity.defn
 def delete_temporal_cloud_namespace(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     return run_project_temporal_delete(
         request,
         temporal_cloud.delete_temporal_cloud_namespace,
@@ -537,8 +504,8 @@ def delete_temporal_cloud_namespace(
 
 @activity.defn
 def delete_temporal_cloud_runtime_secret(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
-) -> TemporalCloudStatusResult:
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
+) -> models.TemporalCloudStatusResult:
     store = temporal_secret_store()
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
@@ -561,11 +528,11 @@ def delete_temporal_cloud_runtime_secret(
 
 
 def run_project_temporal_delete(
-    request: DeleteTemporalRuntimeCandidateSecretRequest,
+    request: models.DeleteTemporalRuntimeCandidateSecretRequest,
     delete_fn: Any,
     *,
     operation: str,
-) -> TemporalCloudStatusResult:
+) -> models.TemporalCloudStatusResult:
     if not request.project.temporal_required:
         return status_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
     if platform_manual_setup_required(request.project):
@@ -597,9 +564,9 @@ def temporal_secret_store() -> Any:
     try:
         import boto3
     except ImportError as error:
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             f"boto3 is required for cloud-api Temporal Cloud mode: {error}",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         ) from error
 
     return temporal_cloud.SecretsManagerStore(
@@ -615,7 +582,7 @@ def temporal_bootstrap_secret(
     try:
         bootstrap = store.read_json(config.temporal_cloud_bootstrap_secret_path)
     except Exception as error:
-        raise aws_application_error(
+        raise errors.aws_application_error(
             error,
             operation="Read Temporal Cloud bootstrap secret",
         ) from error
@@ -632,7 +599,7 @@ def temporal_bootstrap_secret(
         ),
         "bootstrapCredential": {
             "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
-            "requiredProperties": list(TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES),
+            "requiredProperties": list(models.TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES),
         },
     }
 
@@ -664,13 +631,13 @@ def activity_heartbeat(detail: Any) -> None:
         pass
 
 
-def platform_manual_setup_required(project: TemporalCloudProject) -> bool:
+def platform_manual_setup_required(project: models.TemporalCloudProject) -> bool:
     config = WorkerConfig.from_env()
     return config.temporal_cloud_mode != "cloud-api" or config.external_resource_mode != "aws"
 
 
 def manual_setup_required_status(
-    project: TemporalCloudProject,
+    project: models.TemporalCloudProject,
     checked_at: str,
 ) -> dict[str, Any]:
     config = WorkerConfig.from_env()
@@ -699,15 +666,15 @@ def manual_setup_required_status(
         "bootstrapCredential": {
             "secretRemotePath": config.temporal_cloud_bootstrap_secret_path,
             "kubernetesSecret": "temporal-cloud-bootstrap",
-            "requiredProperties": list(TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES),
+            "requiredProperties": list(models.TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES),
         },
     }
 
 
-def namespace_result(status: dict[str, Any]) -> TemporalCloudNamespaceResult:
+def namespace_result(status: dict[str, Any]) -> models.TemporalCloudNamespaceResult:
     namespace = status.get("namespace")
     namespace = namespace if isinstance(namespace, dict) else {}
-    return TemporalCloudNamespaceResult(
+    return models.TemporalCloudNamespaceResult(
         status=status,
         namespace=string_value(namespace.get("name")),
         grpc_address=string_value(namespace.get("grpcAddress")),
@@ -716,10 +683,10 @@ def namespace_result(status: dict[str, Any]) -> TemporalCloudNamespaceResult:
     )
 
 
-def service_account_result(status: dict[str, Any]) -> TemporalCloudServiceAccountResult:
+def service_account_result(status: dict[str, Any]) -> models.TemporalCloudServiceAccountResult:
     service_account = status.get("serviceAccount")
     service_account = service_account if isinstance(service_account, dict) else {}
-    return TemporalCloudServiceAccountResult(
+    return models.TemporalCloudServiceAccountResult(
         status=status,
         service_account_id=string_value(service_account.get("id")),
         service_account_name=string_value(service_account.get("name")),
@@ -727,8 +694,8 @@ def service_account_result(status: dict[str, Any]) -> TemporalCloudServiceAccoun
     )
 
 
-def stage_result(status: dict[str, Any]) -> TemporalCloudCredentialStageResult:
-    return TemporalCloudCredentialStageResult(
+def stage_result(status: dict[str, Any]) -> models.TemporalCloudCredentialStageResult:
+    return models.TemporalCloudCredentialStageResult(
         status=status,
         promote_required=bool(status.get("promoteRequired")),
         candidate_api_key_id=string_value(status.get("candidateApiKeyId")),
@@ -740,18 +707,18 @@ def stage_result(status: dict[str, Any]) -> TemporalCloudCredentialStageResult:
     )
 
 
-def promotion_result(status: dict[str, Any]) -> TemporalCloudPromotionResult:
+def promotion_result(status: dict[str, Any]) -> models.TemporalCloudPromotionResult:
     promoted = status.get("promoted")
     promoted = promoted if isinstance(promoted, dict) else {}
-    return TemporalCloudPromotionResult(
+    return models.TemporalCloudPromotionResult(
         status=status,
         promoted=bool(promoted.get("runtimeSecret")),
         ca_promoted=bool(promoted.get("caSecret")),
     )
 
 
-def status_result(status: dict[str, Any]) -> TemporalCloudStatusResult:
-    return TemporalCloudStatusResult(status=status)
+def status_result(status: dict[str, Any]) -> models.TemporalCloudStatusResult:
+    return models.TemporalCloudStatusResult(status=status)
 
 
 def string_value(value: Any) -> str | None:
@@ -764,18 +731,18 @@ def temporal_cloud_application_error(
     operation: str,
 ) -> Exception:
     message = f"{operation} failed: {error}"
-    if authentication_error_message(str(error)):
-        return non_retryable_error(
+    if common.authentication_error_message(str(error)):
+        return errors.non_retryable_error(
             message,
-            error_type=PROVIDER_AUTHENTICATION_ERROR,
+            error_type=errors.PROVIDER_AUTHENTICATION_ERROR,
         )
     if isinstance(error, TimeoutError):
-        return retryable_provider_error(message)
+        return errors.retryable_provider_error(message)
     if temporal_cloud_transient_error_message(str(error)):
-        return retryable_provider_error(message)
-    return non_retryable_error(
+        return errors.retryable_provider_error(message)
+    return errors.non_retryable_error(
         message,
-        error_type=PROVIDER_CONFIGURATION_ERROR,
+        error_type=errors.PROVIDER_CONFIGURATION_ERROR,
     )
 
 

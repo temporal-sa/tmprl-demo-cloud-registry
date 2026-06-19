@@ -10,17 +10,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from demo_registry_operator import errors, resources
-from demo_registry_operator.activities import (
-    external_resources,
-    force_reconcile as force_reconcile_activities,
-    reconcile as reconcile_activities,
-)
-from demo_registry_operator.workflows import (
-    demo_project_artifact_build as artifact_build_workflow,
-    demo_project_kubernetes_runtime as kubernetes_runtime_workflow,
-    demo_project_serverless_lambda as serverless_lambda_workflow,
-    messages,
-)
+from demo_registry_operator.activities import external_resources
+from demo_registry_operator.activities import force_reconcile as force_reconcile_activities
+from demo_registry_operator.activities import reconcile as reconcile_activities
+from demo_registry_operator.workflows import demo_project_artifact_build as artifact_build_workflow
+from demo_registry_operator.workflows import demo_project_kubernetes_runtime as kubernetes_runtime_workflow
+from demo_registry_operator.workflows import demo_project_serverless_lambda as serverless_lambda_workflow
+from demo_registry_operator.workflows import messages
 
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
@@ -89,6 +85,35 @@ class TemporalCloudReconcileState:
             credential_status=credential.status if credential else None,
             mirror_status=self.mirror.status if self.mirror else None,
         )
+
+
+@dataclass
+class DemoProjectReconcileInput:
+    demo_project: dict[str, Any] | None
+    force_reconcile: dict[str, str] | None
+    force_reconcile_requested: bool
+    rotation_due: bool
+
+    @property
+    def force_temporal_auth_rotation(self) -> bool:
+        return (
+            self.force_reconcile_requested
+            and isinstance(self.force_reconcile, dict)
+            and self.force_reconcile.get("reason") == FORCE_TEMPORAL_AUTH_ROTATION_REASON
+        )
+
+
+@dataclass
+class DemoProjectExternalResources:
+    demo_project: dict[str, Any]
+    status: dict[str, Any]
+
+
+@dataclass
+class DemoProjectFinalizationDeletes:
+    namespace_action: str
+    source_action: str
+    source_auth_action: str
 
 
 def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
@@ -350,12 +375,47 @@ class DemoProjectWorkflow:
     ) -> None:
         project_name = request.project_name
         self._project_name = project_name
+        self._apply_carried_state(request, project_name)
+
+        while not self._shutdown:
+            await self._wait_for_next_action()
+            if self._shutdown:
+                break
+
+            if self._finalize:
+                await self._run_finalize(project_name)
+                return
+
+            if self._continue_as_new_for_worker_version:
+                self._continue_as_new_if_needed(project_name)
+                continue
+
+            reconcile_input = await self._select_demo_project_for_reconcile(
+                project_name
+            )
+            reconciled = await self._run_demo_project_reconcile(
+                project_name,
+                reconcile_input,
+            )
+            if reconciled:
+                self._complete_current_reconcile()
+            self._continue_as_new_if_needed(project_name)
+
+        self._status = {
+            "project": project_name,
+            "phase": "Stopped",
+            "message": "Workflow received shutdown signal.",
+        }
+
+    def _apply_carried_state(
+        self,
+        request: messages.DemoProjectRunRequest,
+        project_name: str,
+    ) -> None:
         # Do NOT clobber a pending spec set by a start signal. With
         # SignalWithStart the reconcile signal is delivered on the first workflow
         # task and its handler sets self._pending_spec before/around run()'s body;
-        # unconditionally assigning carried_pending_spec (None on a fresh start)
-        # would wipe it, leaving wait_condition permanently false. Only adopt a
-        # spec actually carried over from continue-as-new.
+        # only adopt a spec actually carried over from continue-as-new.
         if request.carried_pending_spec is not None:
             self._pending_spec = request.carried_pending_spec
             self._pending_reconcile_identity = reconcile_identity(
@@ -395,181 +455,248 @@ class DemoProjectWorkflow:
                 self._completed_reconcile_identity = status_reconcile_identity(
                     request.carried_status
                 )
-        else:
-            self._status = {
-                "project": project_name,
-                "phase": "Waiting",
-                "message": "Waiting for DemoProject reconcile signal.",
-            }
-
-        while not self._shutdown:
-            await self._wait_for_next_action()
-            if self._shutdown:
-                break
-
-            if self._finalize:
-                await self._run_finalize(project_name)
-                return
-
-            if self._continue_as_new_for_worker_version:
-                self._continue_as_new_if_needed(project_name)
-                continue
-
-            force_reconcile = self._pending_force_reconcile
-            force_reconcile_requested = force_reconcile is not None
-            rotation_due = (
-                not force_reconcile_requested
-                and self._pending_spec is None
-                and self._temporal_api_key_rotation_due()
-                and self._last_demo_project is not None
-            )
-            if force_reconcile_requested:
-                assert force_reconcile is not None
-                self._pending_force_reconcile = None
-                self._pending_spec = None
-                self._pending_reconcile_identity = None
-                demo_project = await workflow.execute_activity(
-                    force_reconcile_activities.load_current_demo_project_for_reconcile,
-                    force_reconcile_activities.LoadCurrentDemoProjectForReconcileRequest(
-                        name=project_name,
-                        token=force_reconcile["token"],
-                        reason=force_reconcile.get("reason"),
-                    ),
-                    start_to_close_timeout=timedelta(minutes=3),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                demo_project = demo_project.resource
-                self._current_force_reconcile_token = force_reconcile["token"]
-                self._current_reconcile_identity = reconcile_identity(demo_project)
-            elif rotation_due:
-                demo_project = self._last_demo_project
-                self._current_reconcile_identity = rotation_reconcile_identity(
-                    demo_project,
-                    self._temporal_api_key_rotation,
-                )
-            else:
-                demo_project = self._pending_spec
-                self._pending_spec = None
-                self._current_reconcile_identity = (
-                    self._pending_reconcile_identity
-                    if self._pending_reconcile_identity is not None
-                    else reconcile_identity(demo_project)
-                )
-                self._pending_reconcile_identity = None
-
-            if demo_project is None:
-                self._temporal_api_key_rotation = None
-                continue
-
-            self._reconcile_sequence += 1
-            self._status = {
-                "project": project_name,
-                "phase": (
-                    "RotatingTemporalAuth" if rotation_due else "Reconciling"
-                ),
-            }
-            force_temporal_auth_rotation = (
-                force_reconcile_requested
-                and isinstance(force_reconcile, dict)
-                and force_reconcile.get("reason")
-                == FORCE_TEMPORAL_AUTH_ROTATION_REASON
-            )
-            external_plan = external_resources.plan_external_resources(
-                demo_project,
-                checked_at=workflow.now().astimezone(UTC).isoformat(),
-                force_temporal_auth_rotation=force_temporal_auth_rotation,
-            )
-            ecr_repository_activities = [
-                workflow.execute_activity(
-                    external_resources.create_or_verify_ecr_repository,
-                    repository,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=COMMON_RETRY_POLICY,
-                )
-                for repository in external_plan.ecr_repositories
-            ]
-            ecr_repositories = list(
-                await asyncio.gather(*ecr_repository_activities)
-            )
-            ecr_status = external_resources.ecr_repositories_status(
-                external_plan,
-                ecr_repositories,
-            )
-            temporal_status = await self._reconcile_temporal_cloud(external_plan)
-            demo_project = demo_project_with_temporal_api_key(
-                demo_project,
-                temporal_status,
-            )
-            self._last_demo_project = demo_project
-            self._temporal_api_key_rotation = temporal_auth_rotation_state(
-                temporal_status
-            )
-            secrets_status = await workflow.execute_activity(
-                external_resources.verify_secrets_manager_resources,
-                external_plan.secrets_manager,
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            external_resource_status = external_resources.external_resources_status(
-                external_plan,
-                ecr_status=ecr_status,
-                temporal_status=temporal_status,
-                secrets_status=secrets_status.status,
-            )
-            artifact_build = await workflow.execute_child_workflow(
-                artifact_build_workflow.DemoProjectArtifactBuildWorkflow.run,
-                messages.DemoProjectArtifactBuildRequest(
-                    demoProject=demo_project,
-                    externalResources=external_resource_status,
-                    previousBuildStatus=(
-                        None
-                        if resources.force_reconcile_token(demo_project)
-                        else self._last_build_status
-                    ),
-                ),
-                id=self._child_workflow_id("artifact-build"),
-            )
-            build_status = artifact_build.status
-            remembered_build_status = rememberable_build_status(build_status)
-            if remembered_build_status is not None:
-                self._last_build_status = remembered_build_status
-            serverless_status = None
-            if resources.has_serverless_lambda_components(demo_project):
-                serverless_result = await workflow.execute_child_workflow(
-                    serverless_lambda_workflow.DemoProjectServerlessLambdaWorkflow.run,
-                    messages.DemoProjectServerlessLambdaRequest(
-                        project=project_name,
-                        demoProject=demo_project,
-                        externalResources=external_resource_status,
-                        buildStatus=build_status,
-                    ),
-                    id=self._child_workflow_id("serverless-lambda"),
-                )
-                serverless_status = serverless_result.status
-            runtime_result = await workflow.execute_child_workflow(
-                kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow.run,
-                messages.DemoProjectKubernetesRuntimeRequest(
-                    project=project_name,
-                    demoProject=demo_project,
-                    externalResources=external_resource_status,
-                    buildStatus=build_status,
-                ),
-                id=self._child_workflow_id("kubernetes-runtime"),
-            )
-            self._status = status_with_serverless_lambda(
-                runtime_result.status,
-                serverless_status,
-            )
-            await self._record_status(demo_project, self._status)
-
-            self._complete_current_reconcile()
-            self._continue_as_new_if_needed(project_name)
+            return
 
         self._status = {
             "project": project_name,
-            "phase": "Stopped",
-            "message": "Workflow received shutdown signal.",
+            "phase": "Waiting",
+            "message": "Waiting for DemoProject reconcile signal.",
         }
+
+    async def _select_demo_project_for_reconcile(
+        self,
+        project_name: str,
+    ) -> DemoProjectReconcileInput:
+        force_reconcile = self._pending_force_reconcile
+        force_reconcile_requested = force_reconcile is not None
+        rotation_due = (
+            not force_reconcile_requested
+            and self._pending_spec is None
+            and self._temporal_api_key_rotation_due()
+            and self._last_demo_project is not None
+        )
+
+        if force_reconcile_requested:
+            assert force_reconcile is not None
+            demo_project = await self._load_forced_demo_project_reconcile(
+                project_name,
+                force_reconcile,
+            )
+        elif rotation_due:
+            demo_project = self._last_demo_project
+            self._current_reconcile_identity = rotation_reconcile_identity(
+                demo_project,
+                self._temporal_api_key_rotation,
+            )
+        else:
+            demo_project = self._pending_spec
+            self._pending_spec = None
+            self._current_reconcile_identity = (
+                self._pending_reconcile_identity
+                if self._pending_reconcile_identity is not None
+                else reconcile_identity(demo_project)
+            )
+            self._pending_reconcile_identity = None
+
+        return DemoProjectReconcileInput(
+            demo_project=demo_project,
+            force_reconcile=force_reconcile,
+            force_reconcile_requested=force_reconcile_requested,
+            rotation_due=rotation_due,
+        )
+
+    async def _load_forced_demo_project_reconcile(
+        self,
+        project_name: str,
+        force_reconcile: dict[str, str],
+    ) -> dict[str, Any]:
+        self._pending_force_reconcile = None
+        self._pending_spec = None
+        self._pending_reconcile_identity = None
+        result = await workflow.execute_activity(
+            force_reconcile_activities.load_current_demo_project_for_reconcile,
+            force_reconcile_activities.LoadCurrentDemoProjectForReconcileRequest(
+                name=project_name,
+                token=force_reconcile["token"],
+                reason=force_reconcile.get("reason"),
+            ),
+            start_to_close_timeout=timedelta(minutes=3),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        demo_project = result.resource
+        self._current_force_reconcile_token = force_reconcile["token"]
+        self._current_reconcile_identity = reconcile_identity(demo_project)
+        return demo_project
+
+    async def _run_demo_project_reconcile(
+        self,
+        project_name: str,
+        reconcile_input: DemoProjectReconcileInput,
+    ) -> bool:
+        demo_project = reconcile_input.demo_project
+        if demo_project is None:
+            self._temporal_api_key_rotation = None
+            return False
+
+        self._reconcile_sequence += 1
+        previous_status = self._status
+        self._status = {
+            "project": project_name,
+            "phase": (
+                "RotatingTemporalAuth" if reconcile_input.rotation_due else "Reconciling"
+            ),
+        }
+
+        external = await self._reconcile_external_resources(
+            demo_project,
+            force_temporal_auth_rotation=(
+                reconcile_input.force_temporal_auth_rotation
+            ),
+        )
+        build_status = await self._build_project_artifact(
+            external.demo_project,
+            external.status,
+        )
+        serverless_status = await self._reconcile_serverless_lambda_if_needed(
+            project_name,
+            external.demo_project,
+            external.status,
+            build_status,
+        )
+        runtime_status = await self._reconcile_kubernetes_runtime(
+            project_name,
+            external.demo_project,
+            external.status,
+            build_status,
+            previous_status,
+        )
+        self._status = status_with_serverless_lambda(
+            runtime_status,
+            serverless_status,
+        )
+        await self._record_status(external.demo_project, self._status)
+        return True
+
+    async def _reconcile_external_resources(
+        self,
+        demo_project: dict[str, Any],
+        *,
+        force_temporal_auth_rotation: bool,
+    ) -> DemoProjectExternalResources:
+        external_plan = external_resources.plan_external_resources(
+            demo_project,
+            checked_at=workflow.now().astimezone(UTC).isoformat(),
+            force_temporal_auth_rotation=force_temporal_auth_rotation,
+        )
+        ecr_status = await self._reconcile_ecr_repositories(external_plan)
+        temporal_status = await self._reconcile_temporal_cloud(external_plan)
+        demo_project = demo_project_with_temporal_api_key(
+            demo_project,
+            temporal_status,
+        )
+        self._last_demo_project = demo_project
+        self._temporal_api_key_rotation = temporal_auth_rotation_state(
+            temporal_status
+        )
+        secrets_status = await workflow.execute_activity(
+            external_resources.verify_secrets_manager_resources,
+            external_plan.secrets_manager,
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        status = external_resources.external_resources_status(
+            external_plan,
+            ecr_status=ecr_status,
+            temporal_status=temporal_status,
+            secrets_status=secrets_status.status,
+        )
+        return DemoProjectExternalResources(demo_project=demo_project, status=status)
+
+    async def _reconcile_ecr_repositories(
+        self,
+        external_plan: Any,
+    ) -> dict[str, Any]:
+        ecr_repository_activities = [
+            workflow.execute_activity(
+                external_resources.create_or_verify_ecr_repository,
+                repository,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            for repository in external_plan.ecr_repositories
+        ]
+        ecr_repositories = list(await asyncio.gather(*ecr_repository_activities))
+        return external_resources.ecr_repositories_status(
+            external_plan,
+            ecr_repositories,
+        )
+
+    async def _build_project_artifact(
+        self,
+        demo_project: dict[str, Any],
+        external_resource_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        artifact_build = await workflow.execute_child_workflow(
+            artifact_build_workflow.DemoProjectArtifactBuildWorkflow.run,
+            messages.DemoProjectArtifactBuildRequest(
+                demoProject=demo_project,
+                externalResources=external_resource_status,
+                previousBuildStatus=(
+                    None
+                    if resources.force_reconcile_token(demo_project)
+                    else self._last_build_status
+                ),
+            ),
+            id=self._child_workflow_id("artifact-build"),
+        )
+        build_status = artifact_build.status
+        remembered_build_status = rememberable_build_status(build_status)
+        if remembered_build_status is not None:
+            self._last_build_status = remembered_build_status
+        return build_status
+
+    async def _reconcile_serverless_lambda_if_needed(
+        self,
+        project_name: str,
+        demo_project: dict[str, Any],
+        external_resource_status: dict[str, Any],
+        build_status: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not resources.has_serverless_lambda_components(demo_project):
+            return None
+
+        serverless_result = await workflow.execute_child_workflow(
+            serverless_lambda_workflow.DemoProjectServerlessLambdaWorkflow.run,
+            messages.DemoProjectServerlessLambdaRequest(
+                project=project_name,
+                demoProject=demo_project,
+                externalResources=external_resource_status,
+                buildStatus=build_status,
+            ),
+            id=self._child_workflow_id("serverless-lambda"),
+        )
+        return serverless_result.status
+
+    async def _reconcile_kubernetes_runtime(
+        self,
+        project_name: str,
+        demo_project: dict[str, Any],
+        external_resource_status: dict[str, Any],
+        build_status: dict[str, Any],
+        previous_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        runtime_result = await workflow.execute_child_workflow(
+            kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow.run,
+            messages.DemoProjectKubernetesRuntimeRequest(
+                project=project_name,
+                demoProject=demo_project,
+                externalResources=external_resource_status,
+                buildStatus=build_status,
+                previousStatus=previous_status,
+            ),
+            id=self._child_workflow_id("kubernetes-runtime"),
+        )
+        return runtime_result.status
 
     @workflow.signal
     def reconcile(self, request: messages.DemoProjectReconcileSignal) -> None:
@@ -1035,155 +1162,199 @@ class DemoProjectWorkflow:
             or self._pending_spec
             or {"metadata": {"name": project_name}}
         )
+        finalize_plan = await self._load_project_finalization_plan(demo_project)
+        result = reconcile_activities.completed_activity_status(finalize_plan)
+        if result is None:
+            delete_actions = await self._delete_project_owned_resources(finalize_plan)
+            external = await self._delete_project_external_resources(
+                demo_project,
+                finalize_plan,
+            )
+            result = reconcile_activities.project_finalization_status(
+                finalize_plan,
+                namespace_action=delete_actions.namespace_action,
+                source_action=delete_actions.source_action,
+                source_auth_action=delete_actions.source_auth_action,
+                external=external,
+            )
+            self._status = finalized_project_status(project_name, result)
+            await self._record_status(demo_project, self._status)
+            await self._remove_project_finalizer(finalize_plan)
+        self._status = finalized_project_status(project_name, result)
+
+    async def _load_project_finalization_plan(
+        self,
+        demo_project: dict[str, Any],
+    ) -> dict[str, Any]:
         finalize_plan_result = await workflow.execute_activity(
             reconcile_activities.load_project_finalization_plan,
             reconcile_activities.ProjectFinalizationRequest(demo_project),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        finalize_plan = finalize_plan_result.plan
-        result = reconcile_activities.completed_activity_status(finalize_plan)
-        if result is None:
-            finalize_checked_at = finalize_plan.get("checkedAt")
-            if not isinstance(finalize_checked_at, str) or not finalize_checked_at:
-                finalize_checked_at = workflow.now().astimezone(UTC).isoformat()
-            finalize_external_plan = external_resources.plan_external_resources(
-                demo_project,
-                checked_at=finalize_checked_at,
-            )
-            temporal_delete_request = external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
+        return finalize_plan_result.plan
+
+    async def _delete_project_owned_resources(
+        self,
+        finalize_plan: dict[str, Any],
+    ) -> DemoProjectFinalizationDeletes:
+        namespace_action = await workflow.execute_activity(
+            reconcile_activities.delete_project_namespace_resource,
+            reconcile_activities.ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        source_action = await workflow.execute_activity(
+            reconcile_activities.delete_project_source_repository,
+            reconcile_activities.ResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan["gitRepository"],
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        source_auth_action = await workflow.execute_activity(
+            reconcile_activities.delete_project_source_auth_secret,
+            reconcile_activities.OptionalResourceDeleteRequest(
+                namespace=finalize_plan["sourceWatchNamespace"],
+                name=finalize_plan.get("sourceAuthSecret"),
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        return DemoProjectFinalizationDeletes(
+            namespace_action=namespace_action.action,
+            source_action=source_action.action,
+            source_auth_action=source_auth_action.action,
+        )
+
+    async def _delete_project_external_resources(
+        self,
+        demo_project: dict[str, Any],
+        finalize_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        finalize_external_plan = self._project_finalization_external_plan(
+            demo_project,
+            finalize_plan,
+        )
+        temporal_delete_request = external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
+            checked_at=finalize_external_plan.checked_at,
+            project=finalize_external_plan.temporal_project,
+        )
+        serverless_lambda_teardown = await workflow.execute_activity(
+            external_resources.delete_serverless_lambda_resources,
+            external_resources.DeleteServerlessLambdaResourcesRequest(
+                checked_at=finalize_external_plan.checked_at,
+                demo_project=demo_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_teardown = await self._delete_project_temporal_cloud_resources(
+            finalize_plan,
+            finalize_external_plan,
+            temporal_delete_request,
+        )
+        ecr_teardown = await workflow.execute_activity(
+            external_resources.delete_ecr_repositories,
+            external_resources.DeleteEcrRepositoriesRequest(
+                checked_at=finalize_external_plan.checked_at,
+                repositories=finalize_external_plan.ecr_repositories,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        return external_resources.external_resource_finalization_status(
+            finalize_plan,
+            temporal_status=temporal_teardown,
+            ecr_status=ecr_teardown.status,
+            serverless_lambda_status=serverless_lambda_teardown.status,
+        )
+
+    def _project_finalization_external_plan(
+        self,
+        demo_project: dict[str, Any],
+        finalize_plan: dict[str, Any],
+    ) -> Any:
+        finalize_checked_at = finalize_plan.get("checkedAt")
+        if not isinstance(finalize_checked_at, str) or not finalize_checked_at:
+            finalize_checked_at = workflow.now().astimezone(UTC).isoformat()
+        return external_resources.plan_external_resources(
+            demo_project,
+            checked_at=finalize_checked_at,
+        )
+
+    async def _delete_project_temporal_cloud_resources(
+        self,
+        finalize_plan: dict[str, Any],
+        finalize_external_plan: Any,
+        temporal_delete_request: external_resources.DeleteTemporalRuntimeCandidateSecretRequest,
+    ) -> dict[str, Any]:
+        temporal_api_key_teardown = await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_api_key,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_service_account_teardown = await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_service_account,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_namespace_protection_teardown = await workflow.execute_activity(
+            external_resources.disable_temporal_cloud_namespace_delete_protection,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_namespace_teardown = await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_namespace,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_secret_teardown = await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_runtime_secret,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        temporal_mtls_ca_teardown = await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_mtls_ca_secret,
+            external_resources.DeleteTemporalCloudMtlsCaSecretRequest(
                 checked_at=finalize_external_plan.checked_at,
                 project=finalize_external_plan.temporal_project,
-            )
-            namespace_action = await workflow.execute_activity(
-                reconcile_activities.delete_project_namespace_resource,
-                reconcile_activities.ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            namespace_action = namespace_action.action
-            source_action = await workflow.execute_activity(
-                reconcile_activities.delete_project_source_repository,
-                reconcile_activities.ResourceDeleteRequest(
-                    namespace=finalize_plan["sourceWatchNamespace"],
-                    name=finalize_plan["gitRepository"],
-                ),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            source_action = source_action.action
-            source_auth_action = await workflow.execute_activity(
-                reconcile_activities.delete_project_source_auth_secret,
-                reconcile_activities.OptionalResourceDeleteRequest(
-                    namespace=finalize_plan["sourceWatchNamespace"],
-                    name=finalize_plan.get("sourceAuthSecret"),
-                ),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            source_auth_action = source_auth_action.action
-            serverless_lambda_teardown = await workflow.execute_activity(
-                external_resources.delete_serverless_lambda_resources,
-                external_resources.DeleteServerlessLambdaResourcesRequest(
-                    checked_at=finalize_external_plan.checked_at,
-                    demo_project=demo_project,
-                ),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_api_key_teardown = await workflow.execute_activity(
-                external_resources.delete_temporal_cloud_api_key,
-                temporal_delete_request,
-                start_to_close_timeout=timedelta(minutes=5),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_service_account_teardown = await workflow.execute_activity(
-                external_resources.delete_temporal_cloud_service_account,
-                temporal_delete_request,
-                start_to_close_timeout=timedelta(minutes=5),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_namespace_protection_teardown = await workflow.execute_activity(
-                external_resources.disable_temporal_cloud_namespace_delete_protection,
-                temporal_delete_request,
-                start_to_close_timeout=timedelta(minutes=5),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_namespace_teardown = await workflow.execute_activity(
-                external_resources.delete_temporal_cloud_namespace,
-                temporal_delete_request,
-                start_to_close_timeout=timedelta(minutes=5),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_secret_teardown = await workflow.execute_activity(
-                external_resources.delete_temporal_cloud_runtime_secret,
-                temporal_delete_request,
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_mtls_ca_teardown = await workflow.execute_activity(
-                external_resources.delete_temporal_cloud_mtls_ca_secret,
-                external_resources.DeleteTemporalCloudMtlsCaSecretRequest(
-                    checked_at=finalize_external_plan.checked_at,
-                    project=finalize_external_plan.temporal_project,
-                ),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            temporal_teardown = external_resources.temporal_cloud_finalization_status(
-                finalize_plan,
-                api_key_status=temporal_api_key_teardown.status,
-                service_account_status=temporal_service_account_teardown.status,
-                namespace_protection_status=temporal_namespace_protection_teardown.status,
-                namespace_status=temporal_namespace_teardown.status,
-                runtime_secret_status=temporal_secret_teardown.status,
-                mtls_ca_secret_status=temporal_mtls_ca_teardown.status,
-            )
-            ecr_teardown = await workflow.execute_activity(
-                external_resources.delete_ecr_repositories,
-                external_resources.DeleteEcrRepositoriesRequest(
-                    checked_at=finalize_external_plan.checked_at,
-                    repositories=finalize_external_plan.ecr_repositories,
-                ),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            external = external_resources.external_resource_finalization_status(
-                finalize_plan,
-                temporal_status=temporal_teardown,
-                ecr_status=ecr_teardown.status,
-                serverless_lambda_status=serverless_lambda_teardown.status,
-            )
-            result = reconcile_activities.project_finalization_status(
-                finalize_plan,
-                namespace_action=namespace_action,
-                source_action=source_action,
-                source_auth_action=source_auth_action,
-                external=external,
-            )
-            self._status = {
-                "project": project_name,
-                "phase": "Finalized",
-                "message": "Project removed from git; resources torn down and workflow completed.",
-                "finalizeStatus": result,
-            }
-            await self._record_status(demo_project, self._status)
-            await workflow.execute_activity(
-                reconcile_activities.remove_project_finalizer,
-                reconcile_activities.ProjectFinalizerRemovalRequest(project=finalize_plan["project"]),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=STATUS_RETRY_POLICY,
-            )
-        self._status = {
-            "project": project_name,
-            "phase": "Finalized",
-            "message": "Project removed from git; resources torn down and workflow completed.",
-            "finalizeStatus": result,
-        }
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        return external_resources.temporal_cloud_finalization_status(
+            finalize_plan,
+            api_key_status=temporal_api_key_teardown.status,
+            service_account_status=temporal_service_account_teardown.status,
+            namespace_protection_status=temporal_namespace_protection_teardown.status,
+            namespace_status=temporal_namespace_teardown.status,
+            runtime_secret_status=temporal_secret_teardown.status,
+            mtls_ca_secret_status=temporal_mtls_ca_teardown.status,
+        )
+
+    async def _remove_project_finalizer(
+        self,
+        finalize_plan: dict[str, Any],
+    ) -> None:
+        await workflow.execute_activity(
+            reconcile_activities.remove_project_finalizer,
+            reconcile_activities.ProjectFinalizerRemovalRequest(
+                project=finalize_plan["project"]
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=STATUS_RETRY_POLICY,
+        )
 
     async def _record_status(
         self,
@@ -1364,6 +1535,18 @@ def status_with_force_reconcile(
             resources.resource_without_force_reconcile(resource)
         ),
         "forceReconcile": force_status,
+    }
+
+
+def finalized_project_status(
+    project_name: str,
+    finalize_status: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "project": project_name,
+        "phase": "Finalized",
+        "message": "Project removed from git; resources torn down and workflow completed.",
+        "finalizeStatus": finalize_status,
     }
 
 

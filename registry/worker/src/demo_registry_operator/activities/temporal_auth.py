@@ -10,26 +10,7 @@ from typing import Any, Protocol
 
 from temporalio import activity
 
-from demo_registry_operator.kube import read_namespace, upsert_secret_data
-from demo_registry_operator.resources import (
-    STANDARD_TEMPORAL_ENV,
-    TEMPORAL_AUTH_MODE_MTLS,
-    TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
-    TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
-    TEMPORAL_MTLS_INPUT_REF_ENV,
-    TEMPORAL_SECRET_NAME,
-    TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
-    common_labels,
-    project_name,
-    project_namespace,
-    project_temporal_namespace,
-    temporal_components,
-    temporal_credentials_secret_needed,
-    temporal_mtls_ca_secret_remote_path,
-    temporal_mtls_status,
-    temporal_secret_remote_path,
-    temporal_worker_runtime_secret_needed,
-)
+from demo_registry_operator import kube, resources
 
 
 MTLS_CA_CERT_VALIDITY_DAYS = 180
@@ -111,7 +92,7 @@ async def reconcile_api_key_auth(
     secret projected into project workloads.
     """
 
-    project = project_name(demo_project)
+    project = resources.project_name(demo_project)
     service_account_name = f"{project}-runtime"
     service_account_id = await reconciler.find_service_account(service_account_name)
     service_account_created = False
@@ -123,7 +104,7 @@ async def reconcile_api_key_auth(
         )
         service_account_created = True
 
-    runtime_path = temporal_secret_remote_path(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
     rotation = temporal_api_key_rotation_decision(
         existing,
@@ -208,7 +189,7 @@ async def reconcile_api_key_auth(
         "secretRemotePath": runtime_path,
         "expiryTime": expiry_time,
         "createdAt": created_at,
-        "components": sorted(temporal_components(demo_project)),
+        "components": sorted(resources.temporal_components(demo_project)),
     }
     if previous_key_id:
         api_key_status["previousKeyId"] = previous_key_id
@@ -232,11 +213,9 @@ async def run_runtime_canary(
     runtime_canary: RuntimeCanary | None,
 ) -> dict[str, Any]:
     if runtime_canary is None:
-        from demo_registry_operator.activities.temporal_canary import (
-            run_temporal_runtime_canary,
-        )
+        from demo_registry_operator.activities import temporal_canary
 
-        runtime_canary = run_temporal_runtime_canary
+        runtime_canary = temporal_canary.run_temporal_runtime_canary
 
     heartbeat_task = asyncio.create_task(heartbeat_runtime_canary(credential))
     try:
@@ -334,12 +313,12 @@ def prepare_mtls_ca_material(
     secret_store: SecretStore,
     checked_at: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    ca_secret_path = temporal_mtls_ca_secret_remote_path(demo_project)
+    ca_secret_path = resources.temporal_mtls_ca_secret_remote_path(demo_project)
     existing = secret_store.read_json(ca_secret_path)
     rotation = temporal_mtls_ca_rotation_decision(
         existing,
         checked_at=checked_at,
-        rotate_every_days=TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+        rotate_every_days=resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
     )
     if isinstance(existing, dict) and existing.get("caCert") and not rotation["rotate"]:
         cleanup = temporal_mtls_ca_cleanup_decision(existing, checked_at=checked_at)
@@ -401,7 +380,7 @@ def claim_initial_mtls_ca_material(
             "reason": "ExistingCertificateAuthorityClaimedByPeer",
             "rotateAt": mtls_rotate_at(
                 str(existing.get("notBefore", "")),
-                TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+                resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
             ),
         }
     return None
@@ -422,10 +401,10 @@ async def reconcile_mtls_auth(
 ) -> dict[str, Any]:
     """Create-or-verify mTLS runtime auth for one Temporal Cloud namespace."""
 
-    project = project_name(demo_project)
-    runtime_path = temporal_secret_remote_path(demo_project)
+    project = resources.project_name(demo_project)
+    runtime_path = resources.temporal_secret_remote_path(demo_project)
     existing = secret_store.read_json(runtime_path)
-    ca_secret_path = temporal_mtls_ca_secret_remote_path(demo_project)
+    ca_secret_path = resources.temporal_mtls_ca_secret_remote_path(demo_project)
     previous_ca = secret_store.read_json(ca_secret_path)
     if ca_material is None or ca_rotation is None:
         ca_material, ca_rotation = prepare_mtls_ca_material(
@@ -445,7 +424,7 @@ async def reconcile_mtls_auth(
         existing,
         checked_at=checked_at,
         ca_serial_number=str(ca_material["serialNumber"]),
-        rotate_every_days=TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+        rotate_every_days=resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
     )
     if (
         force_client_rotation
@@ -489,7 +468,7 @@ async def reconcile_mtls_auth(
             else None
         )
         secret_value: dict[str, Any] = {
-            "authMode": TEMPORAL_AUTH_MODE_MTLS,
+            "authMode": resources.TEMPORAL_AUTH_MODE_MTLS,
             "address": namespace.grpc_address,
             "namespace": namespace.qualified_name,
             "tls": "true",
@@ -503,7 +482,7 @@ async def reconcile_mtls_auth(
             "clientCertNotAfter": client_cert["notAfter"],
             "clientCertRotateAt": mtls_rotate_at(
                 client_cert["notBefore"],
-                TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+                resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
             ),
             "createdAt": checked_at,
             "rotationReason": client_rotation["reason"],
@@ -592,7 +571,7 @@ async def reconcile_mtls_auth(
         "rotateAt": ca_rotation.get("rotateAt"),
         "rotation": {
             "strategy": "staggered",
-            "rotateEveryDays": TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+            "rotateEveryDays": resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
         },
     }
     if ca_rotation.get("reason"):
@@ -618,12 +597,12 @@ async def reconcile_mtls_auth(
             client_cert.get("rotateAt")
             or mtls_rotate_at(
                 str(client_cert.get("notBefore", checked_at)),
-                TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+                resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
             )
         ),
         "rotation": {
             "strategy": "staggered",
-            "rotateEveryDays": TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
+            "rotateEveryDays": resources.TEMPORAL_MTLS_CLIENT_CERT_ROTATE_EVERY_DAYS,
         },
     }
     if client_rotation.get("reason"):
@@ -632,7 +611,7 @@ async def reconcile_mtls_auth(
         client_status["canary"] = canary_status
 
     mtls_status = {
-        **temporal_mtls_status(demo_project),
+        **resources.temporal_mtls_status(demo_project),
         "action": (
             "rotated"
             if ca_status["action"] == "rotated" or client_action == "rotated"
@@ -713,7 +692,7 @@ def temporal_mtls_ca_cleanup_decision(
             "reason": "RemovePreviousCertificateAuthority",
             "rotateAt": mtls_rotate_at(
                 str(existing.get("notBefore", checked_at)),
-                TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+                resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
             ),
             "removeAt": parsed_remove_at.isoformat(),
         }
@@ -723,7 +702,7 @@ def temporal_mtls_ca_cleanup_decision(
         "reason": "PreviousCertificateAuthorityOverlapActive",
         "rotateAt": mtls_rotate_at(
             str(existing.get("notBefore", checked_at)),
-            TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+            resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
         ),
         "removeAt": parsed_remove_at.isoformat(),
     }
@@ -809,7 +788,7 @@ def generate_mtls_ca_certificate(*, checked_at: str) -> dict[str, Any]:
         "notBefore": not_before.isoformat(),
         "notAfter": not_after.isoformat(),
         "createdAt": checked_at,
-        "rotateEveryDays": TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
+        "rotateEveryDays": resources.TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS,
     }
 
 
@@ -884,7 +863,7 @@ def generate_mtls_client_certificate(
 
 
 def temporal_mtls_client_common_name(demo_project: dict[str, Any]) -> str:
-    return f"temporal-namespace:{project_temporal_namespace(demo_project)}"
+    return f"temporal-namespace:{resources.project_temporal_namespace(demo_project)}"
 
 
 def accepted_client_ca_bundle(ca_material: dict[str, Any]) -> str:
@@ -965,13 +944,13 @@ def mirror_runtime_kubernetes_secrets(
     demo_project: dict[str, Any],
     secret_value: dict[str, Any],
 ) -> dict[str, str]:
-    namespace = project_namespace(demo_project)
-    if read_namespace(namespace) is None:
+    namespace = resources.project_namespace(demo_project)
+    if kube.read_namespace(namespace) is None:
         return {"phase": "Skipped", "reason": "NamespaceMissing"}
 
-    labels = common_labels(demo_project)
+    labels = resources.common_labels(demo_project)
     annotations = {
-        "platform.temporal.io/secret-source": temporal_secret_remote_path(demo_project),
+        "platform.temporal.io/secret-source": resources.temporal_secret_remote_path(demo_project),
         "platform.temporal.io/temporal-auth-mode": (
             "apiKey" if secret_value.get("apiKey") else "mtls"
         ),
@@ -987,18 +966,18 @@ def mirror_runtime_kubernetes_secrets(
     credential_data = runtime_secret_data(secret_value)
     worker_runtime_data = worker_runtime_secret_data(secret_value)
     actions: dict[str, str] = {}
-    if temporal_credentials_secret_needed(demo_project):
-        actions[TEMPORAL_SECRET_NAME] = upsert_secret_data(
+    if resources.temporal_credentials_secret_needed(demo_project):
+        actions[resources.TEMPORAL_SECRET_NAME] = kube.upsert_secret_data(
             namespace,
-            TEMPORAL_SECRET_NAME,
+            resources.TEMPORAL_SECRET_NAME,
             credential_data,
             labels=labels,
             annotations=annotations,
         )
-    if temporal_worker_runtime_secret_needed(demo_project):
-        actions[TEMPORAL_WORKER_RUNTIME_SECRET_NAME] = upsert_secret_data(
+    if resources.temporal_worker_runtime_secret_needed(demo_project):
+        actions[resources.TEMPORAL_WORKER_RUNTIME_SECRET_NAME] = kube.upsert_secret_data(
             namespace,
-            TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+            resources.TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
             worker_runtime_data,
             labels=labels,
             annotations=annotations,
@@ -1008,35 +987,35 @@ def mirror_runtime_kubernetes_secrets(
 
 def runtime_secret_data(secret_value: dict[str, Any]) -> dict[str, str]:
     base = {
-        STANDARD_TEMPORAL_ENV["endpoint"]: str(secret_value["address"]),
-        STANDARD_TEMPORAL_ENV["namespace"]: str(secret_value["namespace"]),
-        STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
+        resources.STANDARD_TEMPORAL_ENV["endpoint"]: str(secret_value["address"]),
+        resources.STANDARD_TEMPORAL_ENV["namespace"]: str(secret_value["namespace"]),
+        resources.STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
     }
     if secret_value.get("apiKey"):
         return {
             **base,
-            STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
+            resources.STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
         }
     return {
         **base,
-        TEMPORAL_MTLS_INPUT_REF_ENV["temporal.caCert"]: str(secret_value["caCert"]),
-        TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientCert"]: str(
+        resources.TEMPORAL_MTLS_INPUT_REF_ENV["temporal.caCert"]: str(secret_value["caCert"]),
+        resources.TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientCert"]: str(
             secret_value["clientCert"]
         ),
-        TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientKey"]: str(secret_value["clientKey"]),
+        resources.TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientKey"]: str(secret_value["clientKey"]),
     }
 
 
 def worker_runtime_secret_data(secret_value: dict[str, Any]) -> dict[str, str]:
     if secret_value.get("apiKey"):
         return {
-            STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
-            STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
+            resources.STANDARD_TEMPORAL_ENV["api_key"]: str(secret_value["apiKey"]),
+            resources.STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
         }
     return {
-        STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
-        TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientCert"]: str(
+        resources.STANDARD_TEMPORAL_ENV["tls"]: str(secret_value["tls"]),
+        resources.TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientCert"]: str(
             secret_value["clientCert"]
         ),
-        TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientKey"]: str(secret_value["clientKey"]),
+        resources.TEMPORAL_MTLS_INPUT_REF_ENV["temporal.clientKey"]: str(secret_value["clientKey"]),
     }

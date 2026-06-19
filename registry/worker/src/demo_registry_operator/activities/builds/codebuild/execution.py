@@ -4,39 +4,12 @@ from typing import Any
 
 from temporalio import activity
 
+from demo_registry_operator import errors, resources
 from demo_registry_operator.config import WorkerConfig
-from demo_registry_operator.errors import (
-    CONFIGURATION_ERROR,
-    IMAGE_BUILD_TIMEOUT,
-    NON_RETRYABLE_AWS_ERROR_CODES,
-    VALIDATION_ERROR,
-    aws_application_error,
-    aws_error_code,
-    non_retryable_error,
-)
-from demo_registry_operator.resources import builds, project_name, source_commit_sha
-
-from demo_registry_operator.activities.builds.definitions import (
-    looks_like_commit_sha,
-    render_image_templates,
-)
-from demo_registry_operator.activities.builds.source import (
-    demo_project_from_request,
-    external_resources_from_request,
-)
-from demo_registry_operator.activities.builds.status import (
-    build_entry,
-    build_status,
-    codebuild_build_entries,
-    completed_build_plan,
-    completed_build_status,
-    image_templates_from_plan,
-    optional_string_field,
-    string_field,
-)
-from demo_registry_operator.activities.builds.codebuild.buildspec import (
-    codebuild_start_build_args,
-)
+from demo_registry_operator.activities.builds import definitions as build_definitions
+from demo_registry_operator.activities.builds import source as build_source
+from demo_registry_operator.activities.builds import status as build_statuses
+from demo_registry_operator.activities.builds.codebuild import buildspec as codebuild_buildspec
 
 
 CODEBUILD_API_TIMEOUT_SECONDS = 10
@@ -69,14 +42,14 @@ def start_project_image_build(
     """Start CodeBuild or reattach to a build ID heartbeated by a prior attempt."""
 
     plan = request.plan
-    demo_project = demo_project_from_request(plan)
-    external_resources = external_resources_from_request(plan)
+    demo_project = build_source.demo_project_from_request(plan)
+    external_resources = build_source.external_resources_from_request(plan)
     config = WorkerConfig.from_env()
-    started_at = string_field(plan, "startedAt")
-    image_templates = image_templates_from_plan(plan)
-    source_repo = string_field(plan, "sourceRepo")
-    source_version = string_field(plan, "sourceVersion")
-    source_auth_secret_path = optional_string_field(plan, "sourceAuthSecretPath")
+    started_at = build_statuses.string_field(plan, "startedAt")
+    image_templates = build_statuses.image_templates_from_plan(plan)
+    source_repo = build_statuses.string_field(plan, "sourceRepo")
+    source_version = build_statuses.string_field(plan, "sourceVersion")
+    source_auth_secret_path = build_statuses.optional_string_field(plan, "sourceAuthSecretPath")
     codebuild_build: dict[str, Any] | None = None
 
     try:
@@ -84,14 +57,14 @@ def start_project_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return ProjectImageBuildStartResult(completed_build_plan(
-            build_status(
+        return ProjectImageBuildStartResult(build_statuses.completed_build_plan(
+            build_statuses.build_status(
                 demo_project,
                 phase="Error",
                 mode=config.build_mode,
                 started_at=started_at,
                 images={},
-                source_commit_sha=source_commit_sha(demo_project),
+                source_commit_sha=resources.source_commit_sha(demo_project),
                 message="AWS CodeBuild image build failed.",
                 build_entries=[],
                 error=f"boto3 is required for aws-codebuild mode: {error}",
@@ -110,7 +83,7 @@ def start_project_image_build(
     if build_id:
         activity.heartbeat(
             {
-                "project": project_name(demo_project),
+                "project": resources.project_name(demo_project),
                 "codebuildProject": config.codebuild_project,
                 "codebuildBuildId": build_id,
                 "phase": "Reattaching",
@@ -118,7 +91,7 @@ def start_project_image_build(
         )
         return ProjectImageBuildStartResult({**plan, "codebuildBuildId": build_id})
 
-    start_args = codebuild_start_build_args(
+    start_args = codebuild_buildspec.codebuild_start_build_args(
         demo_project,
         config,
         image_templates=image_templates,
@@ -129,7 +102,7 @@ def start_project_image_build(
     )
     activity.heartbeat(
         {
-            "project": project_name(demo_project),
+            "project": resources.project_name(demo_project),
             "codebuildProject": config.codebuild_project,
             "phase": "Starting",
         }
@@ -137,7 +110,7 @@ def start_project_image_build(
     try:
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
-        if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
+        if errors.aws_error_code(error) in errors.NON_RETRYABLE_AWS_ERROR_CODES:
             return ProjectImageBuildStartResult(codebuild_api_error_status(
                 plan,
                 message="AWS CodeBuild image build failed.",
@@ -147,19 +120,19 @@ def start_project_image_build(
                     project_name=config.codebuild_project,
                 ),
             ))
-        raise aws_application_error(error, operation="Start CodeBuild build") from error
+        raise errors.aws_application_error(error, operation="Start CodeBuild build") from error
 
     build = response.get("build", {})
     codebuild_build = build if isinstance(build, dict) else None
     build_id = build.get("id") if isinstance(build, dict) else None
     if not isinstance(build_id, str):
-        raise non_retryable_error(
+        raise errors.non_retryable_error(
             "CodeBuild start_build response did not include build.id",
-            error_type=CONFIGURATION_ERROR,
+            error_type=errors.CONFIGURATION_ERROR,
         )
     activity.heartbeat(
         {
-            "project": project_name(demo_project),
+            "project": resources.project_name(demo_project),
             "codebuildProject": config.codebuild_project,
             "codebuildBuildId": build_id,
             "phase": "Started",
@@ -182,13 +155,13 @@ def wait_for_project_image_build(
     """Wait for a specific CodeBuild build and render the immutable image status."""
 
     started = request.started
-    demo_project = demo_project_from_request(started)
-    external_resources = external_resources_from_request(started)
+    demo_project = build_source.demo_project_from_request(started)
+    external_resources = build_source.external_resources_from_request(started)
     config = WorkerConfig.from_env()
-    started_at = string_field(started, "startedAt")
-    image_templates = image_templates_from_plan(started)
-    build_id = string_field(started, "codebuildBuildId")
-    requested_version = string_field(started, "sourceVersion")
+    started_at = build_statuses.string_field(started, "startedAt")
+    image_templates = build_statuses.image_templates_from_plan(started)
+    build_id = build_statuses.string_field(started, "codebuildBuildId")
+    requested_version = build_statuses.string_field(started, "sourceVersion")
     codebuild_build: dict[str, Any] | None = None
 
     try:
@@ -196,13 +169,13 @@ def wait_for_project_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return ProjectImageBuildStatusResult(build_status(
+        return ProjectImageBuildStatusResult(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
             started_at=started_at,
             images={},
-            source_commit_sha=source_commit_sha(demo_project),
+            source_commit_sha=resources.source_commit_sha(demo_project),
             message="AWS CodeBuild image build failed.",
             build_entries=[],
             error=f"boto3 is required for aws-codebuild mode: {error}",
@@ -224,10 +197,10 @@ def wait_for_project_image_build(
             demo_project=demo_project,
         )
     except TimeoutError as error:
-        raise non_retryable_error(str(error), error_type=IMAGE_BUILD_TIMEOUT) from error
+        raise errors.non_retryable_error(str(error), error_type=errors.IMAGE_BUILD_TIMEOUT) from error
     except (BotoCoreError, ClientError) as error:
-        if aws_error_code(error) in NON_RETRYABLE_AWS_ERROR_CODES:
-            status = completed_build_status(
+        if errors.aws_error_code(error) in errors.NON_RETRYABLE_AWS_ERROR_CODES:
+            status = build_statuses.completed_build_status(
                 codebuild_api_error_status(
                     started,
                     message="AWS CodeBuild image build failed.",
@@ -240,18 +213,18 @@ def wait_for_project_image_build(
             )
             if status is not None:
                 return ProjectImageBuildStatusResult(status)
-            return ProjectImageBuildStatusResult(build_status(
+            return ProjectImageBuildStatusResult(build_statuses.build_status(
                 demo_project,
                 phase="Error",
                 mode=config.build_mode,
                 started_at=started_at,
                 images={},
-                source_commit_sha=source_commit_sha(demo_project),
+                source_commit_sha=resources.source_commit_sha(demo_project),
                 message="AWS CodeBuild image build failed.",
                 build_entries=[],
                 error=str(error),
             ))
-        raise aws_application_error(error, operation="Poll CodeBuild build") from error
+        raise errors.aws_application_error(error, operation="Poll CodeBuild build") from error
 
     status = codebuild_build.get("buildStatus")
     resolved_commit = resolved_codebuild_source_version(
@@ -263,7 +236,7 @@ def wait_for_project_image_build(
         project_name=config.codebuild_project,
     )
     if status != "SUCCEEDED":
-        return ProjectImageBuildStatusResult(build_status(
+        return ProjectImageBuildStatusResult(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -271,7 +244,7 @@ def wait_for_project_image_build(
             images={},
             source_commit_sha=resolved_commit,
             message="AWS CodeBuild image build failed.",
-            build_entries=codebuild_build_entries(
+            build_entries=build_statuses.codebuild_build_entries(
                 demo_project,
                 image_templates,
                 source_commit_sha=resolved_commit,
@@ -282,8 +255,8 @@ def wait_for_project_image_build(
             codebuild_status=codebuild_status,
         ))
 
-    if not resolved_commit or not looks_like_commit_sha(resolved_commit):
-        return ProjectImageBuildStatusResult(build_status(
+    if not resolved_commit or not build_definitions.looks_like_commit_sha(resolved_commit):
+        return ProjectImageBuildStatusResult(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -300,8 +273,8 @@ def wait_for_project_image_build(
             codebuild_status=codebuild_status,
         ))
 
-    images = render_image_templates(demo_project, image_templates, resolved_commit)
-    return ProjectImageBuildStatusResult(build_status(
+    images = build_definitions.render_image_templates(demo_project, image_templates, resolved_commit)
+    return ProjectImageBuildStatusResult(build_statuses.build_status(
         demo_project,
         phase="Pushed",
         mode=config.build_mode,
@@ -310,7 +283,7 @@ def wait_for_project_image_build(
         source_commit_sha=resolved_commit,
         message="AWS CodeBuild built and pushed immutable images for every build.",
         build_entries=[
-            build_entry(
+            build_statuses.build_entry(
                 demo_project,
                 build_name,
                 image=images[build_name],
@@ -318,7 +291,7 @@ def wait_for_project_image_build(
                 source="aws-codebuild",
                 external_resources=external_resources,
             )
-            for build_name in sorted(builds(demo_project))
+            for build_name in sorted(resources.builds(demo_project))
         ],
         codebuild_status=codebuild_status,
     ))
@@ -331,16 +304,16 @@ def codebuild_api_error_status(
     error: str,
     codebuild_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    demo_project = demo_project_from_request(plan)
+    demo_project = build_source.demo_project_from_request(plan)
     config = WorkerConfig.from_env()
-    return completed_build_plan(
-        build_status(
+    return build_statuses.completed_build_plan(
+        build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=str(plan.get("mode") or config.build_mode),
-            started_at=string_field(plan, "startedAt"),
+            started_at=build_statuses.string_field(plan, "startedAt"),
             images={},
-            source_commit_sha=source_commit_sha(demo_project),
+            source_commit_sha=resources.source_commit_sha(demo_project),
             message=message,
             build_entries=[],
             error=error,
@@ -419,7 +392,7 @@ def wait_for_codebuild_build(
         status = build.get("buildStatus")
         activity.heartbeat(
             {
-                "project": project_name(demo_project),
+                "project": resources.project_name(demo_project),
                 "codebuildBuildId": build_id,
                 "status": status,
             }
@@ -436,9 +409,9 @@ def resolved_codebuild_source_version(
     fallback: str | None,
 ) -> str | None:
     resolved = build.get("resolvedSourceVersion")
-    if isinstance(resolved, str) and looks_like_commit_sha(resolved):
+    if isinstance(resolved, str) and build_definitions.looks_like_commit_sha(resolved):
         return resolved
-    if fallback and looks_like_commit_sha(fallback):
+    if fallback and build_definitions.looks_like_commit_sha(fallback):
         return fallback
     if isinstance(resolved, str) and resolved:
         return resolved

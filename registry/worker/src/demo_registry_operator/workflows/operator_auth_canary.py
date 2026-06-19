@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -27,6 +28,30 @@ CHECK_RETRY_POLICY = RetryPolicy(
 )
 
 
+def not_started_status() -> dict[str, Any]:
+    return {
+        "phase": "NotStarted",
+        "ok": False,
+    }
+
+
+@dataclass
+class RegistryOperatorAuthCanaryState:
+    plan: dict[str, Any]
+    auth_mode: str
+    apply_result: dict[str, Any]
+    signal_result: dict[str, Any]
+    workflow_id: str
+    run_id: str
+    promotion_result: dict[str, Any] = field(default_factory=not_started_status)
+    cleanup_result: dict[str, Any] = field(default_factory=not_started_status)
+    finalize_signal_result: dict[str, Any] = field(default_factory=not_started_status)
+    rotation_signal_result: dict[str, Any] = field(default_factory=not_started_status)
+    rotation_result: dict[str, Any] = field(default_factory=not_started_status)
+    promotion_ok: bool = False
+    rotation_ok: bool = False
+
+
 @workflow.defn
 class RegistryOperatorAuthCanaryWorkflow:
     """Single auth-mode branch for a registry-operator rollout canary."""
@@ -44,6 +69,30 @@ async def _run_registry_operator_auth_canary(
     branch_request: messages.RegistryOperatorAuthCanaryRequest,
     auth_mode: str,
 ) -> messages.RegistryOperatorAuthCanaryResult:
+    plan = await _prepare_registry_operator_canary_plan(branch_request)
+    apply_result = await _apply_registry_operator_canary_project(plan)
+    signal_result = await _signal_registry_operator_canary_reconcile(plan)
+    state = RegistryOperatorAuthCanaryState(
+        plan=plan,
+        auth_mode=auth_mode,
+        apply_result=apply_result,
+        signal_result=signal_result,
+        workflow_id=str(signal_result.get("workflowID") or ""),
+        run_id=str(signal_result.get("runID") or ""),
+    )
+    try:
+        await _wait_for_registry_operator_canary_promotion(state)
+        if state.promotion_ok:
+            await _run_registry_operator_canary_rotation(state)
+    finally:
+        await _cleanup_registry_operator_canary(state)
+
+    return _registry_operator_auth_canary_result(state)
+
+
+async def _prepare_registry_operator_canary_plan(
+    branch_request: messages.RegistryOperatorAuthCanaryRequest,
+) -> dict[str, Any]:
     plan_result = await workflow.execute_activity(
         canary_activities.prepare_registry_operator_canary_plan,
         canary_activities.RegistryOperatorCanaryPlanRequest(
@@ -69,7 +118,12 @@ async def _run_registry_operator_auth_canary(
         start_to_close_timeout=timedelta(minutes=2),
         retry_policy=COMMON_RETRY_POLICY,
     )
-    plan = plan_result.plan
+    return plan_result.plan
+
+
+async def _apply_registry_operator_canary_project(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
     apply_activity = await workflow.execute_activity(
         canary_activities.apply_registry_operator_canary_project,
         canary_activities.ApplyRegistryOperatorCanaryProjectRequest(
@@ -80,7 +134,12 @@ async def _run_registry_operator_auth_canary(
         start_to_close_timeout=timedelta(minutes=2),
         retry_policy=COMMON_RETRY_POLICY,
     )
-    apply_result = apply_activity.status
+    return apply_activity.status
+
+
+async def _signal_registry_operator_canary_reconcile(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
     signal_activity = await workflow.execute_activity(
         canary_activities.signal_registry_operator_canary_reconcile,
         canary_activities.SignalRegistryOperatorCanaryReconcileRequest(
@@ -92,143 +151,143 @@ async def _run_registry_operator_auth_canary(
         start_to_close_timeout=timedelta(minutes=2),
         retry_policy=COMMON_RETRY_POLICY,
     )
-    signal_result = signal_activity.status
-    workflow_id = str(signal_result.get("workflowID") or "")
-    run_id = str(signal_result.get("runID") or "")
-    promotion_result: dict[str, Any] = {
-        "phase": "NotStarted",
-        "ok": False,
-    }
-    cleanup_result: dict[str, Any] = {
-        "phase": "NotStarted",
-        "ok": False,
-    }
-    finalize_signal_result: dict[str, Any] = {
-        "phase": "NotStarted",
-        "ok": False,
-    }
-    rotation_signal_result: dict[str, Any] = {
-        "phase": "NotStarted",
-        "ok": False,
-    }
-    rotation_result: dict[str, Any] = {
-        "phase": "NotStarted",
-        "ok": False,
-    }
-    promotion_ok = False
-    rotation_ok = False
-    try:
-        timeout_seconds = max(1, int(plan.get("timeoutSeconds", 900)))
-        promotion_activity = await workflow.execute_activity(
-            canary_activities.wait_for_registry_operator_canary_promotion,
-            canary_activities.RegistryOperatorCanaryPromotionWaitRequest(
-                project=plan["project"],
-                namespace=plan["namespace"],
-                expected_source_commit_sha=plan.get("expectedSourceCommitSha"),
-                expected_images=plan.get("expectedImages", {}),
-                workflow_id=workflow_id or None,
-                run_id=run_id or None,
-                timeout_seconds=timeout_seconds,
-                poll_seconds=int(plan.get("pollSeconds", 10)),
-            ),
-            start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        promotion_result = promotion_activity.status
-        promotion_ok = bool(promotion_result.get("ok"))
-        if promotion_ok:
-            rotation_signal_activity = await workflow.execute_activity(
-                canary_activities.rotate_registry_operator_canary_credentials,
-                canary_activities.RotateRegistryOperatorCanaryCredentialsRequest(
-                    project=plan["project"],
-                ),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            rotation_signal_result = rotation_signal_activity.status
-            rotation_activity = await workflow.execute_activity(
-                canary_activities.wait_for_registry_operator_canary_rotation,
-                canary_activities.RegistryOperatorCanaryRotationWaitRequest(
-                    project=plan["project"],
-                    auth_mode=plan["authMode"],
-                    rotation_token=str(rotation_signal_result.get("token") or ""),
-                    workflow_id=workflow_id or None,
-                    run_id=run_id or None,
-                    timeout_seconds=timeout_seconds,
-                    poll_seconds=int(plan.get("pollSeconds", 10)),
-                ),
-                start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=CHECK_RETRY_POLICY,
-            )
-            rotation_result = rotation_activity.status
-            rotation_ok = bool(rotation_result.get("ok"))
-    finally:
-        delete_activity = await workflow.execute_activity(
-            canary_activities.delete_registry_operator_canary_project,
-            canary_activities.DeleteRegistryOperatorCanaryProjectRequest(
-                project=plan["project"],
-                cleanup_policy=str(plan.get("cleanupPolicy", "Always")),
-            ),
-            start_to_close_timeout=timedelta(minutes=2),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        delete_result = delete_activity.status
-        cleanup_result = delete_result
-        if delete_result.get("phase") != "Skipped":
-            finalize_signal_activity = await workflow.execute_activity(
-                canary_activities.signal_registry_operator_canary_finalize,
-                canary_activities.SignalRegistryOperatorCanaryFinalizeRequest(
-                    project=plan["project"],
-                    demo_project=plan["demoProject"],
-                ),
-                start_to_close_timeout=timedelta(minutes=2),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=CHECK_RETRY_POLICY,
-            )
-            finalize_signal_result = finalize_signal_activity.status
-            cleanup_timeout_seconds = max(
-                1,
-                int(plan.get("cleanupTimeoutSeconds", 600)),
-            )
-            cleanup_activity = await workflow.execute_activity(
-                canary_activities.wait_registry_operator_canary_cleanup,
-                canary_activities.WaitRegistryOperatorCanaryCleanupRequest(
-                    project=plan["project"],
-                    namespace=plan["namespace"],
-                    git_repository=plan["gitRepository"],
-                    source_watch_namespace=plan["sourceWatchNamespace"],
-                    catalog_status_namespace=plan["catalogStatusNamespace"],
-                    catalog_status_mirror_namespace=plan[
-                        "catalogStatusMirrorNamespace"
-                    ],
-                    catalog_status_config_map=plan["catalogStatusConfigMap"],
-                    cleanup_policy=str(plan.get("cleanupPolicy", "Always")),
-                    cleanup_timeout_seconds=cleanup_timeout_seconds,
-                    poll_seconds=int(plan.get("pollSeconds", 10)),
-                    delete_action=delete_result.get("deleteAction"),
-                ),
-                start_to_close_timeout=timedelta(
-                    seconds=cleanup_timeout_seconds + 60
-                ),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=CHECK_RETRY_POLICY,
-            )
-            cleanup_result = cleanup_activity.status
+    return signal_activity.status
 
-    succeeded = promotion_ok and rotation_ok and bool(cleanup_result.get("ok"))
+
+async def _wait_for_registry_operator_canary_promotion(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
+    plan = state.plan
+    timeout_seconds = max(1, int(plan.get("timeoutSeconds", 900)))
+    promotion_activity = await workflow.execute_activity(
+        canary_activities.wait_for_registry_operator_canary_promotion,
+        canary_activities.RegistryOperatorCanaryPromotionWaitRequest(
+            project=plan["project"],
+            namespace=plan["namespace"],
+            expected_source_commit_sha=plan.get("expectedSourceCommitSha"),
+            expected_images=plan.get("expectedImages", {}),
+            workflow_id=state.workflow_id or None,
+            run_id=state.run_id or None,
+            timeout_seconds=timeout_seconds,
+            poll_seconds=int(plan.get("pollSeconds", 10)),
+        ),
+        start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+    )
+    state.promotion_result = promotion_activity.status
+    state.promotion_ok = bool(state.promotion_result.get("ok"))
+
+
+async def _run_registry_operator_canary_rotation(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
+    plan = state.plan
+    timeout_seconds = max(1, int(plan.get("timeoutSeconds", 900)))
+    rotation_signal_activity = await workflow.execute_activity(
+        canary_activities.rotate_registry_operator_canary_credentials,
+        canary_activities.RotateRegistryOperatorCanaryCredentialsRequest(
+            project=plan["project"],
+        ),
+        start_to_close_timeout=timedelta(minutes=2),
+        retry_policy=COMMON_RETRY_POLICY,
+    )
+    state.rotation_signal_result = rotation_signal_activity.status
+    rotation_activity = await workflow.execute_activity(
+        canary_activities.wait_for_registry_operator_canary_rotation,
+        canary_activities.RegistryOperatorCanaryRotationWaitRequest(
+            project=plan["project"],
+            auth_mode=plan["authMode"],
+            rotation_token=str(state.rotation_signal_result.get("token") or ""),
+            workflow_id=state.workflow_id or None,
+            run_id=state.run_id or None,
+            timeout_seconds=timeout_seconds,
+            poll_seconds=int(plan.get("pollSeconds", 10)),
+        ),
+        start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+    )
+    state.rotation_result = rotation_activity.status
+    state.rotation_ok = bool(state.rotation_result.get("ok"))
+
+
+async def _cleanup_registry_operator_canary(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
+    plan = state.plan
+    delete_activity = await workflow.execute_activity(
+        canary_activities.delete_registry_operator_canary_project,
+        canary_activities.DeleteRegistryOperatorCanaryProjectRequest(
+            project=plan["project"],
+            cleanup_policy=str(plan.get("cleanupPolicy", "Always")),
+        ),
+        start_to_close_timeout=timedelta(minutes=2),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+    )
+    delete_result = delete_activity.status
+    state.cleanup_result = delete_result
+    if delete_result.get("phase") == "Skipped":
+        return
+
+    finalize_signal_activity = await workflow.execute_activity(
+        canary_activities.signal_registry_operator_canary_finalize,
+        canary_activities.SignalRegistryOperatorCanaryFinalizeRequest(
+            project=plan["project"],
+            demo_project=plan["demoProject"],
+        ),
+        start_to_close_timeout=timedelta(minutes=2),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+    )
+    state.finalize_signal_result = finalize_signal_activity.status
+    cleanup_timeout_seconds = max(
+        1,
+        int(plan.get("cleanupTimeoutSeconds", 600)),
+    )
+    cleanup_activity = await workflow.execute_activity(
+        canary_activities.wait_registry_operator_canary_cleanup,
+        canary_activities.WaitRegistryOperatorCanaryCleanupRequest(
+            project=plan["project"],
+            namespace=plan["namespace"],
+            git_repository=plan["gitRepository"],
+            source_watch_namespace=plan["sourceWatchNamespace"],
+            catalog_status_namespace=plan["catalogStatusNamespace"],
+            catalog_status_mirror_namespace=plan[
+                "catalogStatusMirrorNamespace"
+            ],
+            catalog_status_config_map=plan["catalogStatusConfigMap"],
+            cleanup_policy=str(plan.get("cleanupPolicy", "Always")),
+            cleanup_timeout_seconds=cleanup_timeout_seconds,
+            poll_seconds=int(plan.get("pollSeconds", 10)),
+            delete_action=delete_result.get("deleteAction"),
+        ),
+        start_to_close_timeout=timedelta(seconds=cleanup_timeout_seconds + 60),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+    )
+    state.cleanup_result = cleanup_activity.status
+
+
+def _registry_operator_auth_canary_result(
+    state: RegistryOperatorAuthCanaryState,
+) -> messages.RegistryOperatorAuthCanaryResult:
+    succeeded = (
+        state.promotion_ok
+        and state.rotation_ok
+        and bool(state.cleanup_result.get("ok"))
+    )
     return messages.RegistryOperatorAuthCanaryResult(
-        project=plan.get("project"),
-        authMode=auth_mode,
+        project=state.plan.get("project"),
+        authMode=state.auth_mode,
         phase="Succeeded" if succeeded else "Failed",
-        plan=plan,
-        apply=apply_result,
-        workflow=signal_result,
-        promotion=promotion_result,
-        rotationSignal=rotation_signal_result,
-        rotation=rotation_result,
-        finalizeSignal=finalize_signal_result,
-        cleanup=cleanup_result,
+        plan=state.plan,
+        apply=state.apply_result,
+        workflow=state.signal_result,
+        promotion=state.promotion_result,
+        rotationSignal=state.rotation_signal_result,
+        rotation=state.rotation_result,
+        finalizeSignal=state.finalize_signal_result,
+        cleanup=state.cleanup_result,
     )

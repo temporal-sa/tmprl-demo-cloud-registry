@@ -92,6 +92,7 @@ from demo_registry_operator.activities.instruqt import (
 )
 from demo_registry_operator.activities.reconcile import (
     apply_demo_project_resources,
+    delete_runtime_candidate_resources,
     delete_project_namespace_resource,
     delete_project_source_auth_secret,
     delete_project_source_repository,
@@ -101,6 +102,7 @@ from demo_registry_operator.activities.reconcile import (
     record_catalog_project_status,
     record_demo_project_status,
     remove_project_finalizer,
+    restore_active_runtime_routes,
     run_smoke_check,
     wait_for_candidate_readiness,
     wait_for_worker_deployment_rollouts,
@@ -263,7 +265,9 @@ async def main() -> None:
                     remove_project_finalizer,
                     run_smoke_check,
                     promote_candidate_routes,
+                    restore_active_runtime_routes,
                     prune_stale_runtime_candidates,
+                    delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,
                     wait_for_candidate_readiness,
