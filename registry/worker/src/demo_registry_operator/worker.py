@@ -111,7 +111,11 @@ from demo_registry_operator.activities.reconcile import (
     wait_for_worker_deployment_rollouts,
 )
 from demo_registry_operator.activities.revision import (
+    delete_revision,
+    ensure_revision,
+    patch_demo_project_revision_refs,
     plan_candidate_revision,
+    set_revision_phase,
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
@@ -277,6 +281,10 @@ async def main() -> None:
                     rollback_worker_deployments,
                     prune_stale_runtime_candidates,
                     plan_candidate_revision,
+                    ensure_revision,
+                    set_revision_phase,
+                    delete_revision,
+                    patch_demo_project_revision_refs,
                     delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,

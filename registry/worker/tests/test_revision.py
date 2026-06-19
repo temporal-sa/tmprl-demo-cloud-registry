@@ -541,3 +541,88 @@ def test_revision_activities_do_not_import_reconcile():
     source = Path(revision_activities.__file__).read_text()
     assert "activities.reconcile" not in source
     assert "import reconcile" not in source
+
+
+# --- Task 3.2: revision lifecycle activities ---
+
+
+def test_ensure_revision_applies_and_returns_ref(monkeypatch):
+    applied = {}
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "apply_demo_project_revision",
+        lambda resource, dry_run: applied.update(resource=resource) or "applied",
+    )
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "read_demo_project_revision",
+        lambda name: {"metadata": {"uid": "uid-42"}},
+    )
+    dp = _ordinary_project()
+    ref = revision_activities.ensure_revision(
+        revision_activities.EnsureRevisionRequest(
+            demo_project=dp,
+            rollout_version="git-v1",
+            images={"backend": "x", "worker": "y"},
+            reconcile_key="rk",
+        )
+    )
+    assert ref.name == resources.revision_name(dp, "git-v1")
+    assert ref.uid == "uid-42"
+    assert ref.rollout_version == "git-v1"
+    assert ref.runtime_namespace_enabled is True
+    assert applied["resource"]["kind"] == "DemoProjectRevision"
+    assert applied["resource"]["spec"]["reconcileKey"] == "rk"
+
+
+def test_set_revision_phase_patches_status(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "patch_demo_project_revision_status",
+        lambda name, status, dry_run: sent.update(name=name, status=status),
+    )
+    revision_activities.set_revision_phase(
+        revision_activities.SetRevisionPhaseRequest(
+            name="r", phase="Applied", message="ok"
+        )
+    )
+    assert sent["name"] == "r"
+    assert sent["status"] == {"phase": "Applied", "message": "ok"}
+
+
+def test_delete_revision_uses_foreground_propagation(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "delete_demo_project_revision",
+        lambda name, propagation_policy, dry_run: captured.update(
+            name=name, policy=propagation_policy
+        )
+        or "deleting",
+    )
+    result = revision_activities.delete_revision(
+        revision_activities.DeleteRevisionRequest(name="r")
+    )
+    assert captured["policy"] == "Foreground"
+    assert result["action"] == "deleting"
+
+
+def test_patch_revision_refs_only_patches_ref_keys(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "patch_demo_project_status",
+        lambda project, status, dry_run: sent.update(project=project, status=status),
+    )
+    revision_activities.patch_demo_project_revision_refs(
+        revision_activities.PatchRevisionRefsRequest(
+            project="p",
+            refs={
+                "candidateRevision": {"name": "x"},
+                "phase": "Promoted",  # not a ref key -> dropped
+                "bogus": 1,
+            },
+        )
+    )
+    assert sent["status"] == {"candidateRevision": {"name": "x"}}
