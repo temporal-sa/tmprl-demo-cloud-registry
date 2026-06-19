@@ -15,6 +15,8 @@ spec:
   interval: 30m
   releaseName: cluster-autoscaler
   targetNamespace: kube-system
+  driftDetection:
+    mode: enabled
   values:
     autoDiscovery:
       clusterName: sa-demo

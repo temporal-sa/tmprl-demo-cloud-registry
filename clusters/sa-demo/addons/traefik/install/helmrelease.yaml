@@ -16,6 +16,8 @@ spec:
   releaseName: traefik
   storageNamespace: traefik
   targetNamespace: traefik
+  driftDetection:
+    mode: enabled
   values:
     autoscaling:
       behavior:
