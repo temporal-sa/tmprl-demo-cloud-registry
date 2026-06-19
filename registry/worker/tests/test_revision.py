@@ -302,3 +302,111 @@ def test_revision_resource_control_plane_disables_runtime_namespace():
     spec = rev["spec"]
     assert spec["runtimeNamespaceEnabled"] is False
     assert spec.get("runtimeNamespace") in (None, "")
+
+
+# --- Task 2.2: runtime-namespace mode owns the Namespace ---
+
+
+def test_namespace_resource_carries_revision_owner_reference():
+    owner = kube.revision_owner_reference("rev-x", "uid-x")
+    ns = resources.namespace_resource(
+        {"metadata": {"name": "banking-money-transfer"}},
+        namespace="tmprl-dem-cld-banking-money-transfer-abcde",
+        rollout_version="git-v1",
+        owner_references=[owner],
+    )
+    assert ns["kind"] == "Namespace"
+    assert ns["metadata"]["ownerReferences"] == [owner]
+    assert ns["metadata"]["labels"][resources.RUNTIME_NAMESPACE_LABEL] == "true"
+
+
+def test_runtime_resources_owns_only_the_namespace():
+    dp = {
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "a" * 40},
+        },
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    images = {"backend": "example.com/backend:git-v1"}
+    owner = kube.revision_owner_reference("rev-x", "uid-x")
+    res = resources.runtime_resources(dp, images, owner_references=[owner])
+
+    namespace = next(r for r in res if r["kind"] == "Namespace")
+    assert namespace["metadata"]["ownerReferences"] == [owner]
+    assert namespace["metadata"]["name"] == resources.candidate_runtime_namespace(
+        dp, images
+    )
+    # The Namespace is the cleanup boundary; nothing inside it carries an ownerRef.
+    for resource in res:
+        if resource["kind"] != "Namespace":
+            assert "ownerReferences" not in resource.get("metadata", {})
+
+
+# --- Task 2.3: no-runtime-namespace mode owns candidate Deploy/Svc only ---
+
+
+def _control_plane_web_project() -> dict:
+    return {
+        "metadata": {
+            "name": "registry-operator",
+            "annotations": {
+                resources.FINALIZATION_POLICY_ANNOTATION: resources.FINALIZATION_POLICY_RETAIN,
+                resources.SOURCE_COMMIT_ANNOTATION: "b" * 40,
+            },
+        },
+        "spec": {
+            "components": {
+                "web": {
+                    "build": "web",
+                    "ports": [{"containerPort": 80, "servicePort": 80}],
+                },
+                "registry-operator": {
+                    "build": "worker",
+                    "worker": {
+                        "versioning": {
+                            "enabled": True,
+                            "deploymentName": "registry-operator",
+                        }
+                    },
+                },
+            },
+        },
+    }
+
+
+def test_control_plane_owns_candidate_deploy_and_service_not_worker_or_stable():
+    dp = _control_plane_web_project()
+    images = {
+        "web": "example.com/web:git-v1",
+        "worker": "example.com/worker:git-v1",
+    }
+    owner = kube.revision_owner_reference("rev-op", "uid-op")
+    res = resources.runtime_resources(dp, images, owner_references=[owner])
+
+    # Control-plane renders no runtime Namespace.
+    assert not any(r["kind"] == "Namespace" for r in res)
+
+    web_deploy = next(r for r in res if r["kind"] == "Deployment")
+    assert web_deploy["metadata"]["name"].startswith("web-git-")
+    assert web_deploy["metadata"]["ownerReferences"] == [owner]
+
+    web_svc = next(r for r in res if r["kind"] == "Service")
+    assert web_svc["metadata"]["ownerReferences"] == [owner]
+
+    # WorkerDeployment is reconciled by the Worker Controller; never owned by a Revision.
+    for resource in res:
+        if resource["kind"] == "WorkerDeployment":
+            assert "ownerReferences" not in resource["metadata"]
+
+
+def test_promotion_stable_service_is_never_owned():
+    dp = _control_plane_web_project()
+    promoted = resources.promotion_resources(
+        dp,
+        image_overrides={"web": "example.com/web:git-v1"},
+        rollout_version="git-v1",
+    )
+    for resource in promoted:
+        if resource["kind"] == "Service":
+            assert "ownerReferences" not in resource["metadata"]
