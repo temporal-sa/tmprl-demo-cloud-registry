@@ -956,6 +956,7 @@ def canary_cleanup_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     git_repository = string_field(plan, "gitRepository")
     source_watch_namespace = string_field(plan, "sourceWatchNamespace")
     last_namespace = kube.read_namespace(namespace)
+    last_runtime_namespaces = canary_runtime_namespaces(plan)
     last_source = kube.read_git_repository(source_watch_namespace, git_repository)
     last_project = kube.read_demo_project(string_field(plan, "project"))
     last_catalog = catalog_cleanup_status(plan)
@@ -966,6 +967,8 @@ def canary_cleanup_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     waiting_on = []
     if last_namespace is not None:
         waiting_on.append("namespace")
+    if last_runtime_namespaces:
+        waiting_on.append("runtimeNamespaces")
     if last_source is not None:
         waiting_on.append("source")
     if not project_finalizer_removed:
@@ -978,7 +981,7 @@ def canary_cleanup_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
             "project": string_field(plan, "project"),
             "phase": "Deleted",
             "ok": True,
-            "message": "Canary namespace, source watch, finalizer, and catalog status were cleaned up.",
+            "message": "Canary namespaces, source watch, finalizer, and catalog status were cleaned up.",
             "catalog": last_catalog,
             "checkedAt": datetime.now(UTC).isoformat(),
         }
@@ -990,11 +993,30 @@ def canary_cleanup_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
         "message": "Canary cleanup is still waiting for resources to clear.",
         "waitingOn": waiting_on,
         "namespace": last_namespace,
+        "runtimeNamespaces": last_runtime_namespaces,
         "demoProject": last_project,
         "source": last_source,
         "catalog": last_catalog,
         "checkedAt": datetime.now(UTC).isoformat(),
     }
+
+
+def canary_runtime_namespaces(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    project = string_field(plan, "project")
+    control_namespace = string_field(plan, "namespace")
+    label_selector = ",".join(
+        [
+            f"app.kubernetes.io/name={project}",
+            "app.kubernetes.io/managed-by=demo-registry",
+            f"{resources.RUNTIME_NAMESPACE_LABEL}=true",
+        ]
+    )
+    namespaces = []
+    for namespace in kube.list_namespaces(label_selector=label_selector):
+        name = namespace.get("name")
+        if isinstance(name, str) and name and name != control_namespace:
+            namespaces.append(namespace)
+    return sorted(namespaces, key=lambda namespace: namespace.get("name", ""))
 
 
 def render_canary_demo_project(
@@ -1115,9 +1137,13 @@ def verify_promoted_workload_resources(
     plan: dict[str, Any],
     status: dict[str, Any],
 ) -> dict[str, Any]:
-    namespace = string_field(plan, "namespace")
     candidate = status.get("candidateRolloutStatus")
     candidate = candidate if isinstance(candidate, dict) else {}
+    namespace = status.get("activeRuntimeNamespace") or candidate.get("runtimeNamespace")
+    namespace = namespace if isinstance(namespace, str) and namespace else string_field(
+        plan,
+        "namespace",
+    )
     deployments = candidate.get("deployments")
     services = status.get("activeRouteServices") or candidate.get("services")
     deployments = deployments if isinstance(deployments, dict) else {}

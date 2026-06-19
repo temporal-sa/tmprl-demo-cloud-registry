@@ -67,6 +67,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     base_timeout_seconds=300,
                 )
             ),
+            "runtimeNamespace": reconcile_status.get(
+                "candidateRolloutStatus",
+                {},
+            ).get("runtimeNamespace"),
         }
 
         if reconcile_status.get("phase") == "WorkerRolloutPending":
@@ -105,6 +109,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     demo_project,
                     reconcile_status,
                     smoke_plan,
+                    previous_status,
                     completed_at=worker_rollout_result.get("checkedAt"),
                     message=(
                         "WorkerDeployment rollout passed and active route "
@@ -114,6 +119,22 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 return messages.DemoProjectKubernetesRuntimeResult(
                     status=promoted_status
                 )
+
+        if reconcile_status.get("phase") == "Ready":
+            candidate_status = reconcile_status.get("candidateRolloutStatus", {})
+            candidate_status = (
+                candidate_status if isinstance(candidate_status, dict) else {}
+            )
+            prune_status = await self._prune_promoted_candidate(
+                demo_project,
+                candidate_status,
+                previous_status,
+            )
+            reconcile_status = {
+                **reconcile_status,
+                "pruneStatus": prune_status,
+                "prunedResources": prune_status.get("resources", []),
+            }
 
         if reconcile_status.get("phase") != "SmokeCheckPending":
             return messages.DemoProjectKubernetesRuntimeResult(
@@ -165,6 +186,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             readiness_result,
             smoke_result,
             smoke_plan,
+            previous_status,
         )
         return messages.DemoProjectKubernetesRuntimeResult(status=promoted_status)
 
@@ -233,6 +255,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         readiness_result: dict[str, Any],
         smoke_result: dict[str, Any],
         smoke_plan: dict[str, Any],
+        previous_status: dict[str, Any],
     ) -> dict[str, Any]:
         promotion = await self._promote_candidate(project, demo_project, smoke_plan)
         candidate_status = promotion.get(
@@ -242,6 +265,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         prune_status = await self._prune_promoted_candidate(
             demo_project,
             candidate_status,
+            previous_status,
         )
         promoted_status = {
             **reconcile_status,
@@ -249,6 +273,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             "message": promotion.get("message"),
             "activeImages": candidate_status.get("images", {}),
             "activeRouteServices": candidate_status.get("services", {}),
+            "activeRuntimeNamespace": candidate_status.get("runtimeNamespace"),
             "readinessStatus": readiness_result,
             "candidateRolloutStatus": {
                 **candidate_status,
@@ -282,6 +307,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         demo_project: dict[str, Any],
         reconcile_status: dict[str, Any],
         smoke_plan: dict[str, Any],
+        previous_status: dict[str, Any],
         *,
         completed_at: Any,
         message: str,
@@ -294,6 +320,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         prune_status = await self._prune_promoted_candidate(
             demo_project,
             candidate_status,
+            previous_status,
         )
         promoted_status = {
             **reconcile_status,
@@ -301,6 +328,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             "message": promotion.get("message"),
             "activeImages": candidate_status.get("images", {}),
             "activeRouteServices": candidate_status.get("services", {}),
+            "activeRuntimeNamespace": candidate_status.get("runtimeNamespace"),
             "candidateRolloutStatus": {
                 **candidate_status,
                 "phase": "Promoted",
@@ -341,6 +369,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         self,
         demo_project: dict[str, Any],
         candidate_status: dict[str, Any],
+        previous_status: dict[str, Any],
     ) -> dict[str, Any]:
         active_version = candidate_status.get("imageVersion")
         if not isinstance(active_version, str) or not active_version:
@@ -354,6 +383,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
             reconcile_activities.PruneStaleRuntimeCandidatesRequest(
                 demo_project=demo_project,
                 active_version=active_version,
+                active_runtime_namespace=candidate_status.get("runtimeNamespace"),
+                previous_runtime_namespace=previous_status.get(
+                    "activeRuntimeNamespace"
+                ),
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
@@ -403,6 +436,9 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 demo_project=demo_project,
                 active_images=active_images,
                 active_version=active_version,
+                active_runtime_namespace=previous_status.get(
+                    "activeRuntimeNamespace"
+                ),
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
@@ -432,6 +468,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             reconcile_activities.DeleteRuntimeCandidateResourcesRequest(
                 demo_project=demo_project,
                 candidate_version=candidate_version,
+                candidate_runtime_namespace=candidate_status.get("runtimeNamespace"),
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,

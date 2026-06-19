@@ -104,6 +104,7 @@ CATALOG_STATUS_FIELDS = [
     "smokeCheck",
     "prune",
     "activeImageVersion",
+    "activeRuntimeNamespace",
     "finalizeStatus",
     "lastError",
 ]
@@ -118,6 +119,8 @@ REGISTRY_CATALOG_ANNOTATION = "registry.tmprl-demo.cloud/catalog"
 REGISTRY_SHARED_AUTH_SECRET_NAME = "shared-auth"
 REGISTRY_SHARED_AUTH_SECRET_PATH = "tmprl-dem-cld/platform/shared-auth"
 SOURCE_AUTH_SECRET_SUFFIX = "auth"
+RUNTIME_NAMESPACE_LABEL = "platform.temporal.io/runtime-namespace"
+RUNTIME_NAMESPACE_SUFFIX_LENGTH = 5
 REGISTRY_AUTH_PUBLIC_PATH_PREFIXES = [
     "/auth",
     "/oauth/google",
@@ -268,6 +271,29 @@ def registry_operator_component_enabled(demo_project: dict[str, Any]) -> bool:
 
 def project_namespace(demo_project: dict[str, Any]) -> str:
     return derive.kubernetes_namespace(project_name(demo_project))
+
+
+def runtime_namespace(demo_project: dict[str, Any], rollout_version: str) -> str:
+    digest = hashlib.sha256(rollout_version.encode("utf-8")).hexdigest()[
+        :RUNTIME_NAMESPACE_SUFFIX_LENGTH
+    ]
+    return suffixed_dns_name(project_namespace(demo_project), digest)
+
+
+def runtime_namespace_rollout_enabled(demo_project: dict[str, Any]) -> bool:
+    return not is_control_plane_project(demo_project)
+
+
+def candidate_runtime_namespace(
+    demo_project: dict[str, Any],
+    image_overrides: dict[str, str],
+) -> str | None:
+    if not runtime_namespace_rollout_enabled(demo_project):
+        return None
+    version = candidate_version(demo_project, image_overrides)
+    if not version:
+        return None
+    return runtime_namespace(demo_project, version)
 
 
 def project_temporal_namespace(demo_project: dict[str, Any]) -> str:
@@ -1065,6 +1091,23 @@ def base_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def runtime_base_resources(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str,
+    rollout_version: str,
+) -> list[dict[str, Any]]:
+    return [
+        namespace_resource(
+            demo_project,
+            namespace=namespace,
+            rollout_version=rollout_version,
+        ),
+        *rbac_resources(demo_project, namespace=namespace),
+        platform_metadata_configmap(demo_project, namespace=namespace),
+    ]
+
+
 def runtime_resources(
     demo_project: dict[str, Any],
     image_overrides: dict[str, str],
@@ -1072,28 +1115,44 @@ def runtime_resources(
     include_routes: bool = True,
     external_resources: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    version = candidate_version(demo_project, image_overrides)
+    runtime_ns = candidate_runtime_namespace(demo_project, image_overrides)
     return [
-        *runtime_secret_resources(demo_project),
+        *(
+            runtime_base_resources(
+                demo_project,
+                namespace=runtime_ns,
+                rollout_version=version,
+            )
+            if runtime_ns and version
+            else []
+        ),
+        *runtime_secret_resources(demo_project, namespace=runtime_ns),
         *runtime_workload_resources(
             demo_project,
             image_overrides,
             include_routes=include_routes,
             external_resources=external_resources,
+            namespace=runtime_ns,
         ),
     ]
 
 
-def runtime_secret_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+def runtime_secret_resources(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     if temporal_credentials_secret_needed(demo_project):
-        resources.append(external_secret(demo_project))
+        resources.append(external_secret(demo_project, namespace=namespace))
     if temporal_worker_runtime_secret_needed(demo_project):
-        resources.append(worker_runtime_external_secret(demo_project))
+        resources.append(worker_runtime_external_secret(demo_project, namespace=namespace))
     if is_registry_catalog_project(demo_project):
-        resources.append(registry_shared_auth_external_secret(demo_project))
+        resources.append(registry_shared_auth_external_secret(demo_project, namespace=namespace))
     if registry_operator_component_enabled(demo_project):
-        resources.append(instruqt_cli_external_secret(demo_project))
-    resources.extend(user_external_secrets(demo_project))
+        resources.append(instruqt_cli_external_secret(demo_project, namespace=namespace))
+    resources.extend(user_external_secrets(demo_project, namespace=namespace))
     return resources
 
 
@@ -1103,16 +1162,20 @@ def runtime_workload_resources(
     *,
     include_routes: bool = True,
     external_resources: dict[str, Any] | None = None,
+    namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
+    runtime_ns = namespace or candidate_runtime_namespace(demo_project, image_overrides)
     resources.extend(
         service_resources(
             demo_project,
             image_overrides,
-            promote_base=False,
+            promote_base=bool(runtime_ns),
+            include_candidates=not bool(runtime_ns),
+            namespace=runtime_ns,
         )
     )
-    resources.extend(deployment_resources(demo_project, image_overrides))
+    resources.extend(deployment_resources(demo_project, image_overrides, namespace=runtime_ns))
     resources.extend(
         worker_controller_resources(
             demo_project,
@@ -1126,6 +1189,7 @@ def runtime_workload_resources(
             promotion_resources(
                 demo_project,
                 image_overrides=image_overrides,
+                service_namespace=runtime_ns,
             )
         )
     return resources
@@ -1136,6 +1200,7 @@ def promotion_resources(
     *,
     image_overrides: dict[str, str] | None = None,
     rollout_version: str | None = None,
+    service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     resources = []
     resolved_images = (
@@ -1143,15 +1208,16 @@ def promotion_resources(
         if image_overrides is not None
         else parse_image_overrides(demo_project)
     )
-    resources.extend(
-        service_resources(
-            demo_project,
-            resolved_images,
-            promote_base=True,
-            include_candidates=False,
-            rollout_version=rollout_version,
+    if service_namespace is None:
+        resources.extend(
+            service_resources(
+                demo_project,
+                resolved_images,
+                promote_base=True,
+                include_candidates=False,
+                rollout_version=rollout_version,
+            )
         )
-    )
     if ingress_routes(demo_project):
         resources.append(certificate_resource(demo_project))
         resources.append(https_redirect_middleware(demo_project))
@@ -1163,28 +1229,47 @@ def promotion_resources(
             demo_project,
             image_overrides=resolved_images,
             rollout_version=rollout_version,
+            service_namespace=service_namespace,
         )
     )
     return resources
 
 
-def namespace_resource(demo_project: dict[str, Any]) -> dict[str, Any]:
+def namespace_resource(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+    rollout_version: str | None = None,
+) -> dict[str, Any]:
     name = project_name(demo_project)
+    labels = common_labels(demo_project)
+    annotations = {
+        "platform.temporal.io/project": name,
+    }
+    if rollout_version:
+        labels = {
+            **labels,
+            RUNTIME_NAMESPACE_LABEL: "true",
+            "platform.temporal.io/rollout-version": rollout_version,
+        }
+        annotations["platform.temporal.io/rollout-version"] = rollout_version
     return {
         "apiVersion": "v1",
         "kind": "Namespace",
         "metadata": {
-            "name": project_namespace(demo_project),
-            "labels": common_labels(demo_project),
-            "annotations": {
-                "platform.temporal.io/project": name,
-            },
+            "name": namespace or project_namespace(demo_project),
+            "labels": labels,
+            "annotations": annotations,
         },
     }
 
 
-def rbac_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
-    namespace = project_namespace(demo_project)
+def rbac_resources(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> list[dict[str, Any]]:
+    namespace = namespace or project_namespace(demo_project)
     role = {
         "apiVersion": "rbac.authorization.k8s.io/v1",
         "kind": "Role",
@@ -1245,13 +1330,17 @@ def rbac_resources(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     return resources
 
 
-def platform_metadata_configmap(demo_project: dict[str, Any]) -> dict[str, Any]:
+def platform_metadata_configmap(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": {
             "name": "platform-project-metadata",
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
         },
         "data": {
@@ -1268,9 +1357,10 @@ def service_resources(
     promote_base: bool = True,
     include_candidates: bool = True,
     rollout_version: str | None = None,
+    namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
-    namespace = project_namespace(demo_project)
+    namespace = namespace or project_namespace(demo_project)
     version = rollout_version or candidate_version(
         demo_project,
         image_overrides or {},
@@ -1370,9 +1460,11 @@ def service_resources(
 def deployment_resources(
     demo_project: dict[str, Any],
     image_overrides: dict[str, str],
+    *,
+    namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
-    namespace = project_namespace(demo_project)
+    namespace = namespace or project_namespace(demo_project)
     version = candidate_version(demo_project, image_overrides)
     for component_name, component in sorted(
         kubernetes_components(demo_project).items()
@@ -1475,12 +1567,19 @@ def worker_controller_resources(
     image_overrides: dict[str, str],
     *,
     external_resources: dict[str, Any] | None = None,
+    namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     workers = kubernetes_versioned_worker_components(demo_project)
     if not workers:
         return []
 
-    resources = [worker_connection_resource(demo_project, external_resources)]
+    resources = [
+        worker_connection_resource(
+            demo_project,
+            external_resources,
+            namespace=namespace,
+        )
+    ]
     version = candidate_version(demo_project, image_overrides)
     for component_name, component in sorted(workers.items()):
         build_name = component.get("build")
@@ -1499,6 +1598,7 @@ def worker_controller_resources(
                 version=version,
                 external_resources=external_resources,
                 image_overrides=image_overrides,
+                namespace=namespace,
             )
         )
     return resources
@@ -1507,6 +1607,8 @@ def worker_controller_resources(
 def worker_connection_resource(
     demo_project: dict[str, Any],
     external_resources: dict[str, Any] | None,
+    *,
+    namespace: str | None = None,
 ) -> dict[str, Any]:
     if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
         raise ValueError(
@@ -1518,7 +1620,7 @@ def worker_connection_resource(
         "kind": "Connection",
         "metadata": {
             "name": TEMPORAL_CONNECTION_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
@@ -1547,6 +1649,7 @@ def worker_deployment_resource(
     version: str,
     external_resources: dict[str, Any] | None,
     image_overrides: dict[str, str] | None = None,
+    namespace: str | None = None,
 ) -> dict[str, Any]:
     versioning = worker_versioning(component)
     if versioning is None:
@@ -1565,7 +1668,7 @@ def worker_deployment_resource(
         "kind": "WorkerDeployment",
         "metadata": {
             "name": name,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": component_labels(demo_project, component_name),
             "annotations": {
                 "platform.temporal.io/build": str(component.get("build")),
@@ -2269,6 +2372,7 @@ def ingress_resources(
     *,
     image_overrides: dict[str, str] | None = None,
     rollout_version: str | None = None,
+    service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     route_specs = ingress_routes(demo_project)
     if not route_specs:
@@ -2284,6 +2388,7 @@ def ingress_resources(
             route_spec,
             image_overrides=image_overrides or {},
             rollout_version=rollout_version,
+            service_namespace=service_namespace,
         )
         for route_spec in route_specs
     ]
@@ -2294,6 +2399,7 @@ def ingress_resources(
                 route_specs,
                 image_overrides=image_overrides or {},
                 rollout_version=rollout_version,
+                service_namespace=service_namespace,
             ),
             *routes,
         ]
@@ -2366,6 +2472,7 @@ def registry_auth_bypass_routes(
     *,
     image_overrides: dict[str, str],
     rollout_version: str | None = None,
+    service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     routes = []
     for route_spec in route_specs:
@@ -2379,6 +2486,7 @@ def registry_auth_bypass_routes(
                     },
                     image_overrides=image_overrides,
                     rollout_version=rollout_version,
+                    service_namespace=service_namespace,
                     use_auth=False,
                     priority=2000,
                 )
@@ -2417,6 +2525,7 @@ def ingress_route(
     *,
     image_overrides: dict[str, str] | None = None,
     rollout_version: str | None = None,
+    service_namespace: str | None = None,
     use_auth: bool | None = None,
     priority: int = 1000,
 ) -> dict[str, Any]:
@@ -2432,7 +2541,7 @@ def ingress_route(
         image_overrides or {},
     )
     service_name = effective_service_name(component_name, component)
-    if version and not worker_versioning_enabled(component):
+    if version and not worker_versioning_enabled(component) and service_namespace is None:
         service_name = candidate_service_name(
             demo_project,
             component_name,
@@ -2446,7 +2555,7 @@ def ingress_route(
         "services": [
             {
                 "name": service_name,
-                "namespace": project_namespace(demo_project),
+                "namespace": service_namespace or project_namespace(demo_project),
                 "passHostHeader": pass_host_header(route_spec),
                 "port": service_port(component, route_spec["port"]),
             }
@@ -2546,13 +2655,17 @@ def auth_header_strip_middleware(demo_project: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
+def external_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
             "name": TEMPORAL_SECRET_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-prefix": project_secret_prefix(demo_project),
@@ -2605,13 +2718,17 @@ def temporal_credentials_external_secret_data(
     ]
 
 
-def worker_runtime_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
+def worker_runtime_external_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
             "name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-prefix": project_secret_prefix(demo_project),
@@ -2668,13 +2785,17 @@ def temporal_api_key_external_secret_annotations(
     return annotations
 
 
-def registry_shared_auth_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
+def registry_shared_auth_external_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
             "name": REGISTRY_SHARED_AUTH_SECRET_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-source": REGISTRY_SHARED_AUTH_SECRET_PATH,
@@ -2701,7 +2822,11 @@ def registry_shared_auth_external_secret(demo_project: dict[str, Any]) -> dict[s
     }
 
 
-def user_external_secrets(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
+def user_external_secrets(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> list[dict[str, Any]]:
     resources = []
     for secret_name in user_secret_names(demo_project):
         resources.append(
@@ -2710,7 +2835,7 @@ def user_external_secrets(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": "ExternalSecret",
                 "metadata": {
                     "name": user_secret_kubernetes_name(secret_name),
-                    "namespace": project_namespace(demo_project),
+                    "namespace": namespace or project_namespace(demo_project),
                     "labels": common_labels(demo_project),
                     "annotations": {
                         "platform.temporal.io/secret-source": user_secret_remote_path(
@@ -2742,13 +2867,17 @@ def user_external_secrets(demo_project: dict[str, Any]) -> list[dict[str, Any]]:
     return resources
 
 
-def instruqt_cli_external_secret(demo_project: dict[str, Any]) -> dict[str, Any]:
+def instruqt_cli_external_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
             "name": INSTRUQT_CLI_SECRET_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/secret-source": INSTRUQT_CLI_SECRET_PATH,
@@ -2825,6 +2954,11 @@ def build_reconcile_status(
     if image_overrides and not missing_images and not build_failed:
         version = candidate_version(demo_project, image_overrides)
         candidate_status["imageVersion"] = version
+        if version and runtime_namespace_rollout_enabled(demo_project):
+            candidate_status["runtimeNamespace"] = runtime_namespace(
+                demo_project,
+                version,
+            )
         candidate_status["services"] = candidate_service_status(
             demo_project,
             image_overrides,
@@ -2922,6 +3056,15 @@ def build_reconcile_status(
     if external_resource_block:
         status["externalResourceBlock"] = external_resource_block
 
+    candidate_runtime_namespace = candidate_status.get("runtimeNamespace")
+    if isinstance(candidate_runtime_namespace, str):
+        status["runtimeNamespaceStatus"] = runtime_namespace_status(
+            candidate_runtime_namespace,
+            applied_resources,
+            mode=mode,
+            error=error,
+        )
+
     if image_overrides and not missing_images and phase in {"Promoted", "Ready"}:
         version = candidate_version(demo_project, image_overrides)
         status["activeImageVersion"] = version
@@ -2930,6 +3073,8 @@ def build_reconcile_status(
             demo_project,
             image_overrides,
         )
+        if version and runtime_namespace_rollout_enabled(demo_project):
+            status["activeRuntimeNamespace"] = runtime_namespace(demo_project, version)
 
     if error:
         status["lastError"] = {
@@ -2983,7 +3128,36 @@ def kubernetes_namespace_status(
     mode: str,
     error: str | None = None,
 ) -> dict[str, Any]:
-    namespace = project_namespace(demo_project)
+    return namespace_status(
+        project_namespace(demo_project),
+        applied_resources,
+        mode=mode,
+        error=error,
+    )
+
+
+def runtime_namespace_status(
+    namespace: str,
+    applied_resources: list[dict[str, Any]],
+    *,
+    mode: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    return namespace_status(
+        namespace,
+        applied_resources,
+        mode=mode,
+        error=error,
+    )
+
+
+def namespace_status(
+    namespace: str,
+    applied_resources: list[dict[str, Any]],
+    *,
+    mode: str,
+    error: str | None = None,
+) -> dict[str, Any]:
     namespace_summary = next(
         (
             resource
@@ -3280,8 +3454,10 @@ def catalog_status_entry(
         "appUrl": f"https://{project_host(demo_project)}",
         "kubernetesNamespace": project_namespace(demo_project),
         "kubernetesNamespaceStatus": status.get("kubernetesNamespaceStatus"),
+        "runtimeNamespaceStatus": status.get("runtimeNamespaceStatus"),
         "temporalNamespace": temporal_namespace_for_status(demo_project, status),
         "activeImageVersion": status.get("activeImageVersion"),
+        "activeRuntimeNamespace": status.get("activeRuntimeNamespace"),
         "activeImages": status.get("activeImages", {}),
         "activeRouteServices": status.get("activeRouteServices", {}),
         "externalResources": external_resource_summary(
@@ -3462,16 +3638,19 @@ def smoke_check_internal_url(
         return None
 
     service_name = effective_service_name(component_name, component)
+    namespace = project_namespace(demo_project)
     if image_overrides and not missing_image_overrides(demo_project, image_overrides):
         version = candidate_version(demo_project, image_overrides)
-        service_name = candidate_service_name(
-            demo_project,
-            component_name,
-            component,
-            version,
-        )
+        if version and runtime_namespace_rollout_enabled(demo_project):
+            namespace = runtime_namespace(demo_project, version)
+        elif version:
+            service_name = candidate_service_name(
+                demo_project,
+                component_name,
+                component,
+                version,
+            )
     port = service_port(component, port_name)
-    namespace = project_namespace(demo_project)
     return f"http://{service_name}.{namespace}.svc.cluster.local:{port}{path}"
 
 
@@ -3536,7 +3715,8 @@ def candidate_service_status(
     return {
         component_name: (
             effective_service_name(component_name, component)
-            if worker_versioning_enabled(component)
+            if runtime_namespace_rollout_enabled(demo_project)
+            or worker_versioning_enabled(component)
             else candidate_service_name(
                 demo_project,
                 component_name,

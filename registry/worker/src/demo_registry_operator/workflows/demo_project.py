@@ -116,6 +116,7 @@ class DemoProjectFinalizationDeletes:
     namespace_action: str
     source_action: str
     source_auth_action: str
+    runtime_namespace_actions: list[dict[str, Any]]
 
 
 def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
@@ -1380,6 +1381,7 @@ class DemoProjectWorkflow:
                 namespace_action=delete_actions.namespace_action,
                 source_action=delete_actions.source_action,
                 source_auth_action=delete_actions.source_auth_action,
+                runtime_namespace_actions=delete_actions.runtime_namespace_actions,
                 external=external,
             )
             self._status = finalized_project_status(project_name, result)
@@ -1403,6 +1405,21 @@ class DemoProjectWorkflow:
         self,
         finalize_plan: dict[str, Any],
     ) -> DemoProjectFinalizationDeletes:
+        runtime_namespace_actions = []
+        for namespace in finalize_plan.get("runtimeNamespaces", []):
+            if not isinstance(namespace, str) or not namespace:
+                continue
+            action = await workflow.execute_activity(
+                reconcile_activities.delete_project_namespace_resource,
+                reconcile_activities.ProjectNamespaceDeleteRequest(namespace),
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            runtime_namespace_actions.append({
+                "name": namespace,
+                "action": action.action,
+            })
+
         namespace_action = await workflow.execute_activity(
             reconcile_activities.delete_project_namespace_resource,
             reconcile_activities.ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
@@ -1431,6 +1448,7 @@ class DemoProjectWorkflow:
             namespace_action=namespace_action.action,
             source_action=source_action.action,
             source_auth_action=source_auth_action.action,
+            runtime_namespace_actions=runtime_namespace_actions,
         )
 
     async def _delete_project_external_resources(

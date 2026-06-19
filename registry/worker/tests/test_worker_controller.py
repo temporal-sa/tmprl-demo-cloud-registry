@@ -1352,6 +1352,20 @@ def test_registry_operator_rbac_can_manage_canary_and_prune_resources():
         "patch",
     }
 
+    namespace_rule = next(
+        rule
+        for rule in cluster_role["rules"]
+        if rule["apiGroups"] == [""]
+        and rule["resources"] == ["namespaces"]
+    )
+    assert set(namespace_rule["verbs"]) >= {
+        "create",
+        "delete",
+        "get",
+        "list",
+        "patch",
+    }
+
 
 def cleanup_plan() -> dict:
     return {
@@ -1468,6 +1482,7 @@ def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
 
 def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
     monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "list_namespaces", lambda *, label_selector: [])
     monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
     monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
     monkeypatch.setattr(canary.kube, "read_config_map",
@@ -1490,6 +1505,7 @@ def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
 
 def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
     monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "list_namespaces", lambda *, label_selector: [])
     monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
     monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
     monkeypatch.setattr(canary.kube, "read_config_map",
@@ -1513,8 +1529,46 @@ def test_canary_cleanup_accepts_finalized_catalog_status(monkeypatch):
     assert result["ok"] is True
 
 
+def test_canary_cleanup_waits_for_runtime_namespaces(monkeypatch):
+    runtime_namespaces = [
+        {"name": "tmprl-dem-cld-operator-canary-abc123-a1b2c"},
+    ]
+
+    def list_runtime_namespaces(*, label_selector):
+        assert "app.kubernetes.io/name=operator-canary-abc123" in label_selector
+        assert "platform.temporal.io/runtime-namespace=true" in label_selector
+        return runtime_namespaces
+
+    monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "list_namespaces", list_runtime_namespaces)
+    monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
+    monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
+    monkeypatch.setattr(canary.kube, "read_config_map",
+        lambda namespace, name: {
+            "data": {
+                "operator-canary-abc123.json": json.dumps(
+                    {
+                        "phase": "Finalized",
+                        "finalizeStatus": {
+                            "externalResources": {"phase": "Deleted"}
+                        },
+                    }
+                )
+            }
+        },
+    )
+
+    result = canary.canary_cleanup_snapshot(cleanup_plan())
+
+    assert result["phase"] == "CleanupPending"
+    assert result["ok"] is False
+    assert result["waitingOn"] == ["runtimeNamespaces"]
+    assert result["runtimeNamespaces"] == runtime_namespaces
+
+
 def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
     monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
+    monkeypatch.setattr(canary.kube, "list_namespaces", lambda *, label_selector: [])
     monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
     monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
     monkeypatch.setattr(canary.kube, "read_config_map",
@@ -1543,6 +1597,7 @@ def test_canary_cleanup_wait_returns_when_cleanup_is_complete(monkeypatch):
 
 def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
     monkeypatch.setattr(canary.kube, "read_namespace", lambda name: {"phase": "Active"})
+    monkeypatch.setattr(canary.kube, "list_namespaces", lambda *, label_selector: [])
     monkeypatch.setattr(canary.kube, "read_git_repository", lambda namespace, name: None)
     monkeypatch.setattr(canary.kube, "read_demo_project", lambda name: None)
     monkeypatch.setattr(canary.kube, "read_config_map",

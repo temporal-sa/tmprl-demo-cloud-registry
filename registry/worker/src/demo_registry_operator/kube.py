@@ -171,6 +171,17 @@ def read_namespace(name: str) -> dict[str, Any] | None:
     }
 
 
+def list_namespaces(*, label_selector: str | None = None) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CoreV1Api().list_namespace(label_selector=label_selector)
+    summaries = [
+        object_metadata_summary(item)
+        for item in getattr(response, "items", [])
+    ]
+    return [item for item in summaries if item.get("name")]
+
+
 def read_config_map(namespace: str, name: str) -> dict[str, Any] | None:
     client = _client_module()
     load_kubernetes_config()

@@ -212,6 +212,8 @@ spec:
                       format: date-time
                 activeImageVersion:
                   type: string
+                activeRuntimeNamespace:
+                  type: string
                 activeImages:
                   type: object
                   additionalProperties:
@@ -221,6 +223,21 @@ spec:
                   additionalProperties:
                     type: string
                 kubernetesNamespaceStatus:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    phase:
+                      type: string
+                    action:
+                      type: string
+                    mode:
+                      type: string
+                    message:
+                      type: string
+                    error:
+                      type: string
+                runtimeNamespaceStatus:
                   type: object
                   properties:
                     name:
@@ -273,6 +290,8 @@ spec:
                       type: string
                     imageVersion:
                       type: string
+                    runtimeNamespace:
+                      type: string
                     url:
                       type: string
                     images:
@@ -323,6 +342,9 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                finalizeStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 externalResources:
                   type: object
                   properties:

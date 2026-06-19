@@ -93,18 +93,22 @@ class RestoreActiveRuntimeRoutesRequest:
     demo_project: dict[str, Any]
     active_images: dict[str, str]
     active_version: str
+    active_runtime_namespace: str | None = None
 
 
 @dataclass(frozen=True)
 class PruneStaleRuntimeCandidatesRequest:
     demo_project: dict[str, Any]
     active_version: str
+    active_runtime_namespace: str | None = None
+    previous_runtime_namespace: str | None = None
 
 
 @dataclass(frozen=True)
 class DeleteRuntimeCandidateResourcesRequest:
     demo_project: dict[str, Any]
     candidate_version: str
+    candidate_runtime_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,17 +143,41 @@ def apply_demo_project_resources(
     external_resource_block = external_resource_blocker(external_resources)
 
     rendered_resources = resources.base_resources(demo_project)
-    rendered_resources.extend(resources.runtime_secret_resources(demo_project))
+    runtime_namespace_rollout = resources.runtime_namespace_rollout_enabled(
+        demo_project
+    )
+    if not runtime_namespace_rollout:
+        rendered_resources.extend(resources.runtime_secret_resources(demo_project))
     smoke_check = resources.spec_of(demo_project).get("smokeCheck")
     has_versioned_workers = bool(resources.versioned_worker_components(demo_project))
     defer_route_promotion = bool(smoke_check) or has_versioned_workers
     if not missing_images and not build_failed and external_resource_block is None:
+        version = resources.candidate_version(demo_project, image_overrides)
+        runtime_namespace = resources.candidate_runtime_namespace(
+            demo_project,
+            image_overrides,
+        )
+        if runtime_namespace and version:
+            rendered_resources.extend(
+                resources.runtime_base_resources(
+                    demo_project,
+                    namespace=runtime_namespace,
+                    rollout_version=version,
+                )
+            )
+            rendered_resources.extend(
+                resources.runtime_secret_resources(
+                    demo_project,
+                    namespace=runtime_namespace,
+                )
+            )
         rendered_resources.extend(
             resources.runtime_workload_resources(
                 demo_project,
                 image_overrides,
                 include_routes=not defer_route_promotion,
                 external_resources=external_resources,
+                namespace=runtime_namespace,
             )
         )
 
@@ -174,7 +202,13 @@ def apply_demo_project_resources(
         message = "Image build failed; workload resources were not reconciled."
     elif missing_images:
         phase = "WaitingForImages"
-        message = "Base resources and ExternalSecrets reconciled; waiting for immutable images."
+        if runtime_namespace_rollout:
+            message = "Base resources reconciled; waiting for immutable images."
+        else:
+            message = (
+                "Base resources and ExternalSecrets reconciled; waiting for "
+                "immutable images."
+            )
     elif external_resource_block:
         phase = "WaitingForExternalResources"
         message = external_resource_block["message"]
@@ -233,6 +267,7 @@ def load_project_finalization_plan(
         "demoProject": demo_project,
         "project": name,
         "namespace": namespace,
+        "runtimeNamespaces": runtime_namespaces_for_project(demo_project),
         "sourceWatchNamespace": config.source_watch_namespace,
         "gitRepository": resources.source_git_repository_name(demo_project),
         "sourceAuthSecret": resources.source_auth_kubernetes_secret_name(demo_project),
@@ -304,6 +339,7 @@ def project_finalization_status(
     namespace_action: str,
     source_action: str,
     external: dict[str, Any],
+    runtime_namespace_actions: list[dict[str, Any]] | None = None,
     source_auth_action: str = "not-required",
 ) -> dict[str, Any]:
     source_status = {
@@ -321,6 +357,7 @@ def project_finalization_status(
             "name": string_field(plan, "namespace"),
             "action": namespace_action,
         },
+        "runtimeNamespaces": runtime_namespace_actions or [],
         "source": source_status,
         "externalResources": external,
     }
@@ -347,6 +384,29 @@ def required_string(field: Any, key: str) -> str:
         f"Activity request is missing {key}",
         error_type=errors.VALIDATION_ERROR,
     )
+
+
+def runtime_namespace_from_candidate(candidate: dict[str, Any]) -> str | None:
+    namespace = candidate.get("runtimeNamespace")
+    return namespace if isinstance(namespace, str) and namespace else None
+
+
+def runtime_namespaces_for_project(demo_project: dict[str, Any]) -> list[str]:
+    project = resources.project_name(demo_project)
+    control_namespace = resources.project_namespace(demo_project)
+    label_selector = ",".join(
+        [
+            f"app.kubernetes.io/name={project}",
+            "app.kubernetes.io/managed-by=demo-registry",
+            f"{resources.RUNTIME_NAMESPACE_LABEL}=true",
+        ]
+    )
+    namespaces = []
+    for namespace in kube.list_namespaces(label_selector=label_selector):
+        name = namespace.get("name")
+        if isinstance(name, str) and name and name != control_namespace:
+            namespaces.append(name)
+    return sorted(set(namespaces))
 
 
 def plan_rollout(request: dict[str, Any]) -> dict[str, Any]:
@@ -532,6 +592,7 @@ def promote_candidate_routes(
             resources.promotion_resources(
                 promotion_project,
                 image_overrides=candidate_images,
+                service_namespace=runtime_namespace_from_candidate(candidate),
             ),
             dry_run=False,
         )
@@ -567,6 +628,7 @@ def restore_active_runtime_routes(
             demo_project,
             image_overrides=active_images,
             rollout_version=active_version,
+            service_namespace=request.active_runtime_namespace,
         ),
         dry_run=False,
     )
@@ -588,6 +650,8 @@ def prune_stale_runtime_candidates(
         prune_stale_runtime_candidates_impl(
             request.demo_project,
             active_version=required_string(request.active_version, "active_version"),
+            active_runtime_namespace=request.active_runtime_namespace,
+            previous_runtime_namespace=request.previous_runtime_namespace,
         )
     )
 
@@ -603,6 +667,7 @@ def delete_runtime_candidate_resources(
                 request.candidate_version,
                 "candidate_version",
             ),
+            candidate_runtime_namespace=request.candidate_runtime_namespace,
         )
     )
 
@@ -611,8 +676,33 @@ def prune_stale_runtime_candidates_impl(
     demo_project: dict[str, Any],
     *,
     active_version: str,
+    active_runtime_namespace: str | None = None,
+    previous_runtime_namespace: str | None = None,
 ) -> dict[str, Any]:
     namespace = resources.project_namespace(demo_project)
+    if (
+        isinstance(previous_runtime_namespace, str)
+        and previous_runtime_namespace
+        and previous_runtime_namespace != namespace
+        and previous_runtime_namespace != active_runtime_namespace
+    ):
+        action = kube.delete_namespace(previous_runtime_namespace, dry_run=False)
+        return {
+            "phase": "Pruned",
+            "message": "Deleted previous runtime namespace.",
+            "activeVersion": active_version,
+            "activeRuntimeNamespace": active_runtime_namespace,
+            "resources": [
+                {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "name": previous_runtime_namespace,
+                    "rolloutVersion": active_version,
+                    "action": action,
+                }
+            ],
+        }
+
     project = resources.project_name(demo_project)
     non_worker_deployment_components = {
         component_name
@@ -656,6 +746,7 @@ def prune_stale_runtime_candidates_impl(
             else "No stale runtime candidate resources found."
         ),
         "activeVersion": active_version,
+        "activeRuntimeNamespace": active_runtime_namespace,
         "resources": pruned_resources,
     }
 
@@ -664,8 +755,31 @@ def delete_runtime_candidate_resources_impl(
     demo_project: dict[str, Any],
     *,
     candidate_version: str,
+    candidate_runtime_namespace: str | None = None,
 ) -> dict[str, Any]:
     namespace = resources.project_namespace(demo_project)
+    if (
+        isinstance(candidate_runtime_namespace, str)
+        and candidate_runtime_namespace
+        and candidate_runtime_namespace != namespace
+    ):
+        action = kube.delete_namespace(candidate_runtime_namespace, dry_run=False)
+        return {
+            "phase": "Deleted",
+            "message": "Deleted failed runtime candidate namespace.",
+            "candidateVersion": candidate_version,
+            "candidateRuntimeNamespace": candidate_runtime_namespace,
+            "resources": [
+                {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "name": candidate_runtime_namespace,
+                    "rolloutVersion": candidate_version,
+                    "action": action,
+                }
+            ],
+        }
+
     project = resources.project_name(demo_project)
     component_names = set(resources.components(demo_project))
     label_selector = ",".join(
@@ -698,6 +812,7 @@ def delete_runtime_candidate_resources_impl(
             else "No failed runtime candidate resources found."
         ),
         "candidateVersion": candidate_version,
+        "candidateRuntimeNamespace": candidate_runtime_namespace,
         "resources": deleted_resources,
     }
 
@@ -912,11 +1027,9 @@ def wait_for_worker_deployment_rollouts(
     )
     deadline = time.monotonic() + wait_seconds
     last_status: dict[str, Any] = {}
+    namespace = resources.project_namespace(demo_project)
     while True:
-        last_status = read_worker_deployments(
-            resources.project_namespace(demo_project),
-            worker_deployments,
-        )
+        last_status = read_worker_deployments(namespace, worker_deployments)
         aggregate = aggregate_worker_deployment_status(last_status)
         if aggregate["phase"] == "Ready":
             return ActivityStatusResult({
@@ -949,7 +1062,7 @@ def wait_for_worker_deployment_rollouts(
         activity.heartbeat(
             {
                 "project": resources.project_name(demo_project),
-                "namespace": resources.project_namespace(demo_project),
+                "namespace": namespace,
                 "workerDeployments": last_status,
             }
         )
