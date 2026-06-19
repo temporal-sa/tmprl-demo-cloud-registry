@@ -22,6 +22,8 @@ class ApplyDemoProjectResourcesRequest:
     demo_project: dict[str, Any]
     external_resources: dict[str, Any] | None = None
     build_status: dict[str, Any] | None = None
+    revision_ref: dict[str, Any] | None = None
+    revision_owner_reference: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,11 @@ def apply_demo_project_resources(
     smoke_check = resources.spec_of(demo_project).get("smokeCheck")
     has_versioned_workers = bool(resources.versioned_worker_components(demo_project))
     defer_route_promotion = bool(smoke_check) or has_versioned_workers
+    owner_references = (
+        [request.revision_owner_reference]
+        if request.revision_owner_reference
+        else None
+    )
     if renderability.ready:
         version = renderability.rollout_version
         runtime_namespace = renderability.runtime_namespace
@@ -179,6 +186,7 @@ def apply_demo_project_resources(
                     demo_project,
                     namespace=runtime_namespace,
                     rollout_version=version,
+                    owner_references=owner_references,
                 )
             )
             rendered_resources.extend(
@@ -194,6 +202,7 @@ def apply_demo_project_resources(
                 include_routes=not defer_route_promotion,
                 external_resources=external_resources,
                 namespace=runtime_namespace,
+                owner_references=owner_references,
             )
         )
 

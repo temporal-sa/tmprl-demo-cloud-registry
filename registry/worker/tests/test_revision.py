@@ -686,3 +686,68 @@ def test_wait_cleanup_terminating_on_deadline_and_heartbeats(monkeypatch):
     assert result["phase"] == "Terminating"
     assert beats  # heartbeated while waiting
     assert slept == [5]
+
+
+# --- Task 4.1: apply threads revision ownerReference into candidate rendering ---
+
+
+def test_apply_threads_revision_owner_reference_to_candidate_namespace(monkeypatch):
+    dp = {
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "a" * 40},
+        },
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    owner = kube.revision_owner_reference("rev-x", "uid-x")
+    rendered: list = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "apply_resources",
+        lambda res, dry_run: rendered.extend(res) or [],
+    )
+    reconcile.apply_demo_project_resources(
+        reconcile.ApplyDemoProjectResourcesRequest(
+            demo_project=dp,
+            build_status={"phase": "Pushed", "images": {"backend": "ex/b:git-v1"}},
+            revision_owner_reference=owner,
+        )
+    )
+    runtime_ns = next(
+        r
+        for r in rendered
+        if r["kind"] == "Namespace"
+        and r["metadata"].get("labels", {}).get(resources.RUNTIME_NAMESPACE_LABEL)
+        == "true"
+    )
+    assert runtime_ns["metadata"]["ownerReferences"] == [owner]
+
+
+def test_apply_without_revision_owner_reference_leaves_namespace_unowned(monkeypatch):
+    dp = {
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {resources.SOURCE_COMMIT_ANNOTATION: "a" * 40},
+        },
+        "spec": {"components": {"backend": {"build": "backend"}}},
+    }
+    rendered: list = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "apply_resources",
+        lambda res, dry_run: rendered.extend(res) or [],
+    )
+    reconcile.apply_demo_project_resources(
+        reconcile.ApplyDemoProjectResourcesRequest(
+            demo_project=dp,
+            build_status={"phase": "Pushed", "images": {"backend": "ex/b:git-v1"}},
+        )
+    )
+    runtime_ns = next(
+        r
+        for r in rendered
+        if r["kind"] == "Namespace"
+        and r["metadata"].get("labels", {}).get(resources.RUNTIME_NAMESPACE_LABEL)
+        == "true"
+    )
+    assert "ownerReferences" not in runtime_ns["metadata"]
