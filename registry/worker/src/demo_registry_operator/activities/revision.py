@@ -240,3 +240,106 @@ def wait_for_revision_cleanup(
         poll_seconds=request.poll_seconds,
         heartbeat=activity.heartbeat,
     )
+
+
+# --- Task 3.4: adoption + repair (verify the LIVE boundary, don't trust status) ---
+
+
+def _revision_owner_present(owner_references: Any, name: str) -> bool:
+    return any(
+        isinstance(ref, dict)
+        and ref.get("kind") == "DemoProjectRevision"
+        and ref.get("name") == name
+        for ref in (owner_references or [])
+    )
+
+
+@dataclass(frozen=True)
+class AdoptActiveRevisionRequest:
+    demo_project: dict[str, Any]
+    active_revision: dict[str, Any] | None
+    active_runtime_namespace: str | None = None
+    active_version: str | None = None
+    active_images: dict[str, str] | None = None
+
+
+@activity.defn
+def adopt_active_revision_resources(
+    request: AdoptActiveRevisionRequest,
+) -> dict[str, Any]:
+    ref = request.active_revision
+    if not isinstance(ref, dict) or not ref.get("name"):
+        return {"phase": "Skipped", "message": "No active revision recorded.", "repaired": []}
+
+    name = ref["name"]
+    repaired: list[str] = []
+
+    # Verify the Revision object itself exists; re-create it from the recorded
+    # identity if it was deleted out from under us.
+    revision = kube.read_demo_project_revision(name)
+    if revision is None:
+        version = request.active_version or ref.get("rolloutVersion")
+        if not version:
+            return {
+                "phase": "Repairing",
+                "message": "Active revision is missing and its version is unknown.",
+                "repaired": repaired,
+            }
+        resource = resources.revision_resource(
+            request.demo_project, version, images=request.active_images or {}
+        )
+        kube.apply_demo_project_revision(resource, dry_run=False)
+        revision = kube.read_demo_project_revision(name) or {}
+        repaired.append("revision")
+
+    metadata = revision.get("metadata", {}) if isinstance(revision, dict) else {}
+    uid = str(metadata.get("uid") or ref.get("uid") or "")
+    owner = kube.revision_owner_reference(name, uid)
+
+    if request.active_runtime_namespace:
+        namespace = kube.read_namespace(request.active_runtime_namespace)
+        if namespace is None:
+            return {
+                "phase": "Repairing",
+                "message": "Active runtime namespace was not found.",
+                "repaired": repaired,
+            }
+        if not _revision_owner_present(namespace.get("ownerReferences"), name):
+            kube.patch_namespace_owner_references(
+                request.active_runtime_namespace, [owner], dry_run=False
+            )
+            repaired.append(f"namespace/{request.active_runtime_namespace}")
+    else:
+        version = request.active_version or ref.get("rolloutVersion")
+        project_namespace = resources.project_namespace(request.demo_project)
+        selector = f"platform.temporal.io/rollout-version={version}"
+        # The rollout-version label only matches versioned candidate Deploy/Svc; the
+        # stable Service and WorkerDeployment are never selected, so never adopted.
+        for deployment in kube.list_deployments(project_namespace, label_selector=selector):
+            dep_name = deployment.get("name")
+            if not dep_name:
+                continue
+            owners = kube.read_deployment_owner_references(project_namespace, dep_name)
+            if not _revision_owner_present(owners, name):
+                kube.patch_deployment_owner_references(
+                    project_namespace, dep_name, [owner], dry_run=False
+                )
+                repaired.append(f"deployment/{dep_name}")
+        for service in kube.list_services(project_namespace, label_selector=selector):
+            svc_name = service.get("name")
+            if not svc_name:
+                continue
+            owners = kube.read_service_owner_references(project_namespace, svc_name)
+            if not _revision_owner_present(owners, name):
+                kube.patch_service_owner_references(
+                    project_namespace, svc_name, [owner], dry_run=False
+                )
+                repaired.append(f"service/{svc_name}")
+
+    if "revision" in repaired:
+        phase = "Repairing"
+    elif repaired:
+        phase = "Adopted"
+    else:
+        phase = "Verified"
+    return {"phase": phase, "name": name, "repaired": repaired}

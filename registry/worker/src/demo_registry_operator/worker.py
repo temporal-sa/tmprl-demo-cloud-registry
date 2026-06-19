@@ -111,6 +111,7 @@ from demo_registry_operator.activities.reconcile import (
     wait_for_worker_deployment_rollouts,
 )
 from demo_registry_operator.activities.revision import (
+    adopt_active_revision_resources,
     delete_revision,
     ensure_revision,
     patch_demo_project_revision_refs,
@@ -287,6 +288,7 @@ async def main() -> None:
                     delete_revision,
                     patch_demo_project_revision_refs,
                     wait_for_revision_cleanup,
+                    adopt_active_revision_resources,
                     delete_runtime_candidate_resources,
                     record_demo_project_status,
                     record_catalog_project_status,

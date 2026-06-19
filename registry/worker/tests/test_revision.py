@@ -776,3 +776,114 @@ def test_one_revision_identity_version_is_consistent():
     rev = resources.revision_resource(dp, plan.rollout_version, images=plan.images)
     assert rev["spec"]["rolloutVersion"] == plan.rollout_version
     assert rev["spec"]["runtimeNamespace"] == plan.runtime_namespace
+
+
+# --- Task 3.4: adoption + repair ---
+
+
+def test_adopt_skipped_when_no_active_revision():
+    result = revision_activities.adopt_active_revision_resources(
+        revision_activities.AdoptActiveRevisionRequest(
+            demo_project={"metadata": {"name": "p"}}, active_revision=None
+        )
+    )
+    assert result["phase"] == "Skipped"
+
+
+def test_adopt_runtime_namespace_verified_when_owner_present(monkeypatch):
+    ref = {"name": "rev-1", "uid": "uid-1", "rolloutVersion": "git-v1"}
+    monkeypatch.setattr(
+        revision_activities.kube, "read_demo_project_revision",
+        lambda name: {"metadata": {"uid": "uid-1"}},
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "read_namespace",
+        lambda name: {
+            "name": name,
+            "ownerReferences": [{"kind": "DemoProjectRevision", "name": "rev-1"}],
+        },
+    )
+    patched = []
+    monkeypatch.setattr(
+        revision_activities.kube, "patch_namespace_owner_references",
+        lambda *a, **k: patched.append(a),
+    )
+    result = revision_activities.adopt_active_revision_resources(
+        revision_activities.AdoptActiveRevisionRequest(
+            demo_project={"metadata": {"name": "banking-money-transfer"}},
+            active_revision=ref,
+            active_runtime_namespace="tmprl-dem-cld-banking-money-transfer-abcde",
+        )
+    )
+    assert result["phase"] == "Verified"
+    assert patched == []
+
+
+def test_adopt_runtime_namespace_patches_when_owner_missing(monkeypatch):
+    ref = {"name": "rev-1", "uid": "uid-1"}
+    monkeypatch.setattr(
+        revision_activities.kube, "read_demo_project_revision",
+        lambda name: {"metadata": {"uid": "uid-1"}},
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "read_namespace",
+        lambda name: {"name": name, "ownerReferences": []},
+    )
+    patched = []
+    monkeypatch.setattr(
+        revision_activities.kube, "patch_namespace_owner_references",
+        lambda ns, owners, *, dry_run: patched.append((ns, owners)),
+    )
+    result = revision_activities.adopt_active_revision_resources(
+        revision_activities.AdoptActiveRevisionRequest(
+            demo_project={"metadata": {"name": "banking-money-transfer"}},
+            active_revision=ref,
+            active_runtime_namespace="ns-x",
+        )
+    )
+    assert result["phase"] == "Adopted"
+    assert patched[0][0] == "ns-x"
+    assert patched[0][1][0]["name"] == "rev-1"
+
+
+def test_adopt_control_plane_patches_candidate_deploy_svc_only(monkeypatch):
+    ref = {"name": "rev-1", "uid": "uid-1", "rolloutVersion": "git-v1"}
+    monkeypatch.setattr(
+        revision_activities.kube, "read_demo_project_revision",
+        lambda name: {"metadata": {"uid": "uid-1"}},
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "list_deployments",
+        lambda ns, *, label_selector: [{"name": "web-git-v1"}],
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "list_services",
+        lambda ns, *, label_selector: [{"name": "web-git-v1"}],
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "read_deployment_owner_references",
+        lambda ns, name: [],
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "read_service_owner_references",
+        lambda ns, name: [],
+    )
+    dep_patched, svc_patched = [], []
+    monkeypatch.setattr(
+        revision_activities.kube, "patch_deployment_owner_references",
+        lambda ns, name, owners, *, dry_run: dep_patched.append(name),
+    )
+    monkeypatch.setattr(
+        revision_activities.kube, "patch_service_owner_references",
+        lambda ns, name, owners, *, dry_run: svc_patched.append(name),
+    )
+    result = revision_activities.adopt_active_revision_resources(
+        revision_activities.AdoptActiveRevisionRequest(
+            demo_project={"metadata": {"name": "registry-operator"}},
+            active_revision=ref,
+            active_version="git-v1",
+        )
+    )
+    assert result["phase"] == "Adopted"
+    assert dep_patched == ["web-git-v1"]
+    assert svc_patched == ["web-git-v1"]

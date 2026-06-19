@@ -173,7 +173,55 @@ def read_namespace(name: str) -> dict[str, Any] | None:
         "name": name,
         "phase": getattr(status, "phase", None),
         "deletionTimestamp": getattr(metadata, "deletion_timestamp", None),
+        "ownerReferences": _owner_reference_summaries(metadata),
     }
+
+
+def _owner_reference_summaries(metadata: Any) -> list[dict[str, Any]]:
+    owner_references = getattr(metadata, "owner_references", None)
+    if not owner_references:
+        return []
+    summaries = []
+    for ref in owner_references:
+        summaries.append(
+            {
+                "apiVersion": getattr(ref, "api_version", None),
+                "kind": getattr(ref, "kind", None),
+                "name": getattr(ref, "name", None),
+                "uid": getattr(ref, "uid", None),
+                "controller": getattr(ref, "controller", None),
+                "blockOwnerDeletion": getattr(ref, "block_owner_deletion", None),
+            }
+        )
+    return summaries
+
+
+def read_deployment_owner_references(
+    namespace: str, name: str
+) -> list[dict[str, Any]] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        deployment = client.AppsV1Api().read_namespaced_deployment(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return _owner_reference_summaries(getattr(deployment, "metadata", None))
+
+
+def read_service_owner_references(
+    namespace: str, name: str
+) -> list[dict[str, Any]] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        service = client.CoreV1Api().read_namespaced_service(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return _owner_reference_summaries(getattr(service, "metadata", None))
 
 
 def list_namespaces(*, label_selector: str | None = None) -> list[dict[str, Any]]:
