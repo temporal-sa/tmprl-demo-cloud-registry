@@ -26,6 +26,11 @@ spec:
       context: .
       dockerfile: Dockerfile.worker
 
+  temporal:
+    searchAttributes:
+      PizzaSessionID:
+        type: keyword
+
   components:
     # Dashboard and order generator. It talks to Temporal through the platform
     # proxy because the app expects a local/plaintext Temporal endpoint.
