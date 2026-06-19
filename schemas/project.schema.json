@@ -591,6 +591,15 @@
       "properties": {
         "auth": {
           "$ref": "#/$defs/temporalAuth"
+        },
+        "searchAttributes": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/temporalSearchAttributeName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/temporalSearchAttribute"
+          }
         }
       }
     },
@@ -604,6 +613,23 @@
           "default": "apiKey"
         }
       }
+    },
+    "temporalSearchAttribute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["text", "keyword", "int", "double", "bool", "datetime", "keywordList"],
+          "default": "keyword"
+        }
+      }
+    },
+    "temporalSearchAttributeName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
     },
     "temporalProxy": {
       "type": "object",

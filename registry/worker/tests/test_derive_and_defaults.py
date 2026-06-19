@@ -13,6 +13,7 @@ from demo_registry_operator.resources import (
     project_temporal_namespace,
     temporal_mtls_status,
     temporal_auth_mode,
+    temporal_search_attributes,
 )
 
 
@@ -144,6 +145,33 @@ def test_temporal_auth_mode_uses_project_config():
     assert temporal_auth_mode(proj) == "mtls"
 
 
+def test_temporal_search_attributes_default_to_keyword_and_support_all_types():
+    proj = project(
+        "banking",
+        temporal={
+            "searchAttributes": {
+                "CustomerId": {},
+                "CartTotal": {"type": "double"},
+                "IsPriority": {"type": "bool"},
+                "OrderCount": {"type": "int"},
+                "PlacedAt": {"type": "datetime"},
+                "Notes": {"type": "text"},
+                "Tags": {"type": "keywordList"},
+            }
+        },
+    )
+
+    assert temporal_search_attributes(proj) == {
+        "CartTotal": "double",
+        "CustomerId": "keyword",
+        "IsPriority": "bool",
+        "Notes": "text",
+        "OrderCount": "int",
+        "PlacedAt": "datetime",
+        "Tags": "keywordList",
+    }
+
+
 def test_temporal_auth_status_is_exposed_in_project_metadata():
     metadata = project_metadata(
         project(
@@ -195,6 +223,28 @@ def test_external_resource_status_exposes_mtls_auth_intent():
     )
     assert temporal["mtls"]["caCertificate"]["rotation"]["rotateEveryDays"] == 90
     assert temporal["mtls"]["clientCertificate"]["rotation"]["rotateEveryDays"] == 7
+
+
+def test_external_resource_status_exposes_search_attributes():
+    status = external_resource_status(
+        project(
+            "banking",
+            temporal={
+                "searchAttributes": {
+                    "CustomerId": {},
+                    "CartTotal": {"type": "double"},
+                }
+            },
+        )
+    )
+
+    search_attributes = status["temporalCloud"]["searchAttributes"]
+    assert status["temporalCloud"]["phase"] == "ManualSetupRequired"
+    assert search_attributes["ownershipPolicy"] == "delete-only-previously-managed"
+    assert search_attributes["attributes"] == [
+        {"name": "CartTotal", "type": "double", "action": "create-or-verify"},
+        {"name": "CustomerId", "type": "keyword", "action": "create-or-verify"},
+    ]
 
 
 # --- catalog -------------------------------------------------------------

@@ -153,6 +153,37 @@ TEMPORAL_MTLS_CA_CERT_ROTATE_EVERY_DAYS = 90
 TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
 TEMPORAL_AUTH_MODE_MTLS = "mtls"
 TEMPORAL_AUTH_MODES = {TEMPORAL_AUTH_MODE_API_KEY, TEMPORAL_AUTH_MODE_MTLS}
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_TEXT = "text"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD = "keyword"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT = "int"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DOUBLE = "double"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL = "bool"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME = "datetime"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST = "keywordList"
+TEMPORAL_SEARCH_ATTRIBUTE_TYPES = {
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_TEXT,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DOUBLE,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME,
+    TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST,
+}
+TEMPORAL_SEARCH_ATTRIBUTE_TYPE_ALIASES = {
+    "text": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_TEXT,
+    "keyword": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+    "int": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT,
+    "integer": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT,
+    "double": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DOUBLE,
+    "bool": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL,
+    "boolean": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL,
+    "datetime": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME,
+    "date_time": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME,
+    "date-time": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME,
+    "keywordlist": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST,
+    "keyword_list": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST,
+    "keyword-list": TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST,
+}
 STANDARD_TEMPORAL_ENV = {
     "endpoint": "TEMPORAL_ADDRESS",
     "namespace": "TEMPORAL_NAMESPACE",
@@ -3034,6 +3065,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     prefix = project_secret_prefix(demo_project)
     build_names = sorted(builds(demo_project))
     temporal_required = bool(temporal_components(demo_project))
+    namespace_required = temporal_namespace_required(demo_project)
     return {
         "phase": "ManualSetupRequired",
         "kubernetesNamespace": project_namespace(demo_project),
@@ -3094,14 +3126,14 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
             ],
         },
         "temporalCloud": {
-            "phase": "ManualSetupRequired" if temporal_required else "NotRequired",
+            "phase": "ManualSetupRequired" if namespace_required else "NotRequired",
             "provider": "temporal-cloud",
             "mode": "cloud-api",
             "auth": temporal_auth_status(demo_project),
             "message": (
                 "The operator manages Temporal Cloud resources through the "
                 "Cloud Operations API when external resource reconciliation runs."
-                if temporal_required
+                if namespace_required
                 else "No component currently requires Temporal credentials."
             ),
             "namespace": {
@@ -3109,6 +3141,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 "action": "create-or-verify",
                 "deletionPolicy": "retain-until-explicitly-approved",
             },
+            "searchAttributes": temporal_search_attributes_status(demo_project),
             **temporal_auth_runtime_status(demo_project),
             "bootstrapCredential": {
                 "secretRemotePath": TEMPORAL_BOOTSTRAP_SECRET_PATH,
@@ -3735,6 +3768,53 @@ def temporal_auth_status(demo_project: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "defaulted": configured_mode != mode,
         "modeSwitchPolicy": "destructive-recreate",
+    }
+
+
+def temporal_search_attributes_config(demo_project: dict[str, Any]) -> dict[str, Any]:
+    search_attributes = temporal_config(demo_project).get("searchAttributes")
+    return search_attributes if isinstance(search_attributes, dict) else {}
+
+
+def temporal_search_attribute_type(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD
+    normalized = value.strip()
+    if normalized in TEMPORAL_SEARCH_ATTRIBUTE_TYPES:
+        return normalized
+    alias = TEMPORAL_SEARCH_ATTRIBUTE_TYPE_ALIASES.get(normalized.lower())
+    return alias if alias else TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD
+
+
+def temporal_search_attributes(demo_project: dict[str, Any]) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for name, config in temporal_search_attributes_config(demo_project).items():
+        if not isinstance(name, str) or not name:
+            continue
+        configured_type: Any = None
+        if isinstance(config, dict):
+            configured_type = config.get("type")
+        elif isinstance(config, str):
+            configured_type = config
+        attributes[name] = temporal_search_attribute_type(configured_type)
+    return dict(sorted(attributes.items()))
+
+
+def temporal_namespace_required(demo_project: dict[str, Any]) -> bool:
+    return bool(temporal_components(demo_project) or temporal_search_attributes(demo_project))
+
+
+def temporal_search_attributes_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    attributes = temporal_search_attributes(demo_project)
+    return {
+        "phase": "NotRequired" if not attributes else "ManualSetupRequired",
+        "action": "create-or-verify",
+        "ownershipPolicy": "delete-only-previously-managed",
+        "attributes": [
+            {"name": name, "type": attribute_type, "action": "create-or-verify"}
+            for name, attribute_type in attributes.items()
+        ],
+        "managedNames": [],
     }
 
 

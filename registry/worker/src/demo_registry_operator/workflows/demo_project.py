@@ -56,6 +56,7 @@ FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 @dataclass
 class TemporalCloudReconcileState:
     namespace: external_resources.TemporalCloudNamespaceResult | None = None
+    search_attributes: dict[str, Any] | None = None
     service_account: external_resources.TemporalCloudServiceAccountResult | None = None
     ca: external_resources.TemporalCloudCredentialStageResult | None = None
     mtls_config: external_resources.TemporalCloudStatusResult | None = None
@@ -82,6 +83,7 @@ class TemporalCloudReconcileState:
             service_account_status=(
                 self.service_account.status if self.service_account else None
             ),
+            search_attributes_status=self.search_attributes,
             credential_status=credential.status if credential else None,
             mirror_status=self.mirror.status if self.mirror else None,
         )
@@ -293,6 +295,128 @@ def temporal_api_key_rotation_state(
     if isinstance(state, dict) and state.get("authMode") == "apiKey":
         return state
     return None
+
+
+def previous_temporal_search_attributes(status: dict[str, Any]) -> dict[str, str]:
+    search_attributes = previous_temporal_search_attributes_status(status)
+    if not search_attributes:
+        return {}
+
+    managed_names = {
+        name
+        for name in search_attributes.get("managedNames", [])
+        if isinstance(name, str) and name
+    }
+    attributes = search_attributes.get("attributes")
+    if not isinstance(attributes, list):
+        return {}
+
+    managed: dict[str, str] = {}
+    for attribute in attributes:
+        if not isinstance(attribute, dict):
+            continue
+        name = attribute.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if managed_names and name not in managed_names:
+            continue
+        if not managed_names and attribute.get("managed") is not True:
+            continue
+        managed[name] = resources.temporal_search_attribute_type(
+            attribute.get("type")
+        )
+    return dict(sorted(managed.items()))
+
+
+def previous_temporal_search_attributes_status(
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    external_resources_status = status.get("externalResources")
+    if isinstance(external_resources_status, dict):
+        temporal_cloud = external_resources_status.get("temporalCloud")
+        if isinstance(temporal_cloud, dict):
+            search_attributes = temporal_cloud.get("searchAttributes")
+            if isinstance(search_attributes, dict):
+                return search_attributes
+
+    temporal_cloud = status.get("temporalCloud")
+    if isinstance(temporal_cloud, dict):
+        search_attributes = temporal_cloud.get("searchAttributes")
+        if isinstance(search_attributes, dict):
+            return search_attributes
+    return {}
+
+
+def temporal_search_attributes_reconcile_status(
+    checked_at: str,
+    *,
+    namespace: str | None,
+    desired: dict[str, external_resources.TemporalCloudSearchAttribute],
+    previous_managed: dict[str, str],
+    results: list[external_resources.TemporalCloudSearchAttributeResult],
+) -> dict[str, Any]:
+    attributes: list[dict[str, Any]] = []
+    managed_names: set[str] = set()
+    deleted: list[str] = []
+    phases: set[str] = set()
+    reason: str | None = None
+    message: str | None = None
+
+    for result in results:
+        status = result.status
+        phase = status.get("phase")
+        if isinstance(phase, str):
+            phases.add(phase)
+        source = status.get("searchAttribute")
+        if not isinstance(source, dict):
+            continue
+        name = source.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        action = source.get("action")
+        entry = dict(source)
+        managed = (
+            action == "created"
+            or (
+                name in previous_managed
+                and action in {"verified", "created", "drifted"}
+            )
+        )
+        entry["managed"] = managed
+        attributes.append(entry)
+        if action == "deleted":
+            deleted.append(name)
+        elif managed:
+            managed_names.add(name)
+        if status.get("reason") and reason is None:
+            reason = str(status["reason"])
+        if status.get("message") and message is None:
+            message = str(status["message"])
+
+    if "Error" in phases:
+        phase = "Error"
+    elif "ManualSetupRequired" in phases:
+        phase = "ManualSetupRequired"
+    elif results:
+        phase = "Ready"
+    else:
+        phase = "NotRequired"
+
+    rendered: dict[str, Any] = {
+        "phase": phase,
+        "checkedAt": checked_at,
+        "namespace": namespace,
+        "ownershipPolicy": "delete-only-previously-managed",
+        "attributes": sorted(attributes, key=lambda item: str(item.get("name", ""))),
+        "managedNames": sorted(managed_names),
+    }
+    if deleted:
+        rendered["deletedNames"] = sorted(deleted)
+    if reason:
+        rendered["reason"] = reason
+    if message:
+        rendered["message"] = message
+    return rendered
 
 
 def rotation_datetime(rotation: dict[str, Any] | None) -> datetime | None:
@@ -549,6 +673,7 @@ class DemoProjectWorkflow:
 
         external = await self._reconcile_external_resources(
             demo_project,
+            previous_status=previous_status,
             force_temporal_auth_rotation=(
                 reconcile_input.force_temporal_auth_rotation
             ),
@@ -581,6 +706,7 @@ class DemoProjectWorkflow:
         self,
         demo_project: dict[str, Any],
         *,
+        previous_status: dict[str, Any],
         force_temporal_auth_rotation: bool,
     ) -> DemoProjectExternalResources:
         external_plan = external_resources.plan_external_resources(
@@ -589,7 +715,10 @@ class DemoProjectWorkflow:
             force_temporal_auth_rotation=force_temporal_auth_rotation,
         )
         ecr_status = await self._reconcile_ecr_repositories(external_plan)
-        temporal_status = await self._reconcile_temporal_cloud(external_plan)
+        temporal_status = await self._reconcile_temporal_cloud(
+            external_plan,
+            previous_status=previous_status,
+        )
         demo_project = demo_project_with_temporal_api_key(
             demo_project,
             temporal_status,
@@ -741,6 +870,8 @@ class DemoProjectWorkflow:
     async def _reconcile_temporal_cloud(
         self,
         external_plan: Any,
+        *,
+        previous_status: dict[str, Any],
     ) -> dict[str, Any]:
         candidate_secret_token = temporal_candidate_secret_token(
             external_plan,
@@ -771,13 +902,24 @@ class DemoProjectWorkflow:
                 )
                 return namespace.status
 
+            await self._reconcile_temporal_cloud_search_attributes(
+                external_plan,
+                state,
+                previous_status=previous_status,
+            )
+            if (
+                isinstance(state.search_attributes, dict)
+                and state.search_attributes.get("phase") == "Error"
+            ):
+                return state.merged_status()
+
             staged = await self._stage_temporal_runtime_credential(
                 external_plan,
                 state,
                 candidate_secret_token,
             )
             if not staged:
-                return namespace.status
+                return state.merged_status()
             if state.stage is None or state.stage.phase != "Ready":
                 return state.merged_status()
 
@@ -854,6 +996,67 @@ class DemoProjectWorkflow:
             candidate_secret_token=candidate_secret_token,
         )
 
+    async def _reconcile_temporal_cloud_search_attributes(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        *,
+        previous_status: dict[str, Any],
+    ) -> None:
+        project = external_plan.temporal_project
+        if state.namespace is None:
+            return
+
+        desired = {
+            attribute.name: attribute
+            for attribute in project.search_attributes
+        }
+        previous_managed = previous_temporal_search_attributes(previous_status)
+        delete_names = sorted(set(previous_managed) - set(desired))
+
+        activity_handles = [
+            workflow.execute_activity(
+                external_resources.create_or_verify_temporal_cloud_search_attribute,
+                external_resources.CreateOrVerifyTemporalCloudSearchAttributeRequest(
+                    checked_at=external_plan.checked_at,
+                    project=project,
+                    namespace=state.namespace,
+                    search_attribute=attribute,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            for attribute in desired.values()
+        ]
+        activity_handles.extend(
+            workflow.execute_activity(
+                external_resources.delete_temporal_cloud_search_attribute,
+                external_resources.DeleteTemporalCloudSearchAttributeRequest(
+                    checked_at=external_plan.checked_at,
+                    project=project,
+                    namespace=state.namespace,
+                    search_attribute=external_resources.TemporalCloudSearchAttribute(
+                        name=name,
+                        type=previous_managed[name],
+                    ),
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            for name in delete_names
+        )
+
+        results = list(await asyncio.gather(*activity_handles)) if activity_handles else []
+        state.search_attributes = temporal_search_attributes_reconcile_status(
+            external_plan.checked_at,
+            namespace=state.namespace.namespace,
+            desired=desired,
+            previous_managed=previous_managed,
+            results=results,
+        )
+
     async def _stage_temporal_runtime_credential(
         self,
         external_plan: Any,
@@ -862,6 +1065,8 @@ class DemoProjectWorkflow:
     ) -> bool:
         project = external_plan.temporal_project
         if state.namespace is None:
+            return False
+        if not project.temporal_required:
             return False
 
         if project.auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
@@ -1556,6 +1761,7 @@ def merge_temporal_cloud_status(
     ca_status: dict[str, Any] | None,
     mtls_config_status: dict[str, Any] | None,
     service_account_status: dict[str, Any] | None,
+    search_attributes_status: dict[str, Any] | None,
     credential_status: dict[str, Any] | None,
     mirror_status: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1573,6 +1779,15 @@ def merge_temporal_cloud_status(
         status["serviceAccount"] = credential["serviceAccount"]
     if isinstance(credential.get("apiKey"), dict):
         status["apiKey"] = credential["apiKey"]
+
+    if isinstance(search_attributes_status, dict):
+        status["searchAttributes"] = search_attributes_status
+        if search_attributes_status.get("phase") == "Error":
+            status["phase"] = "Error"
+            for key in ("reason", "message"):
+                value = search_attributes_status.get(key)
+                if isinstance(value, str) and value:
+                    status[key] = value
 
     mtls = {}
     for source in (mtls_ca.get("mtls"), mtls_config.get("mtls"), credential.get("mtls")):

@@ -16,10 +16,12 @@ from demo_registry_operator.workflows.demo_project import (
     DemoProjectWorkflow,
     demo_project_with_temporal_api_key,
     remember_completed_reconcile_identity,
+    previous_temporal_search_attributes,
     reconcile_identity,
     status_reconcile_identity,
     temporal_api_key_rotation_state,
     temporal_candidate_secret_token,
+    temporal_search_attributes_reconcile_status,
 )
 from demo_registry_operator.workflows.operator_canary import (
     registry_operator_canary_branch_request,
@@ -358,6 +360,103 @@ def test_temporal_cloud_reconcile_state_merges_status_sections():
     assert status["apiKey"]["keyId"] == "key-1"
     assert status["promoted"]["runtimeSecret"] is True
     assert status["runtimeSecretMirror"]["action"] == "mirrored"
+
+
+def test_previous_temporal_search_attributes_reads_managed_names_from_status():
+    status = {
+        "externalResources": {
+            "temporalCloud": {
+                "searchAttributes": {
+                    "managedNames": ["CreatedByOperator"],
+                    "attributes": [
+                        {
+                            "name": "CreatedByOperator",
+                            "type": "double",
+                            "managed": True,
+                        },
+                        {
+                            "name": "VerifiedExternal",
+                            "type": "keyword",
+                            "managed": False,
+                        },
+                    ],
+                }
+            }
+        }
+    }
+
+    assert previous_temporal_search_attributes(status) == {
+        "CreatedByOperator": "double"
+    }
+
+
+def test_temporal_search_attribute_status_tracks_owned_creates_and_deletes():
+    results = [
+        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
+            status={
+                "phase": "Ready",
+                "searchAttribute": {
+                    "name": "NewAttribute",
+                    "type": "keyword",
+                    "action": "created",
+                },
+            },
+            name="NewAttribute",
+            type="keyword",
+            action="created",
+        ),
+        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
+            status={
+                "phase": "Ready",
+                "searchAttribute": {
+                    "name": "ExistingExternal",
+                    "type": "double",
+                    "action": "verified",
+                },
+            },
+            name="ExistingExternal",
+            type="double",
+            action="verified",
+        ),
+        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
+            status={
+                "phase": "Deleted",
+                "searchAttribute": {
+                    "name": "RemovedManaged",
+                    "type": "bool",
+                    "action": "deleted",
+                },
+            },
+            name="RemovedManaged",
+            type="bool",
+            action="deleted",
+        ),
+    ]
+
+    status = temporal_search_attributes_reconcile_status(
+        "2026-06-18T00:00:00+00:00",
+        namespace="tmprl-dem-cld-demo.acct1",
+        desired={
+            "ExistingExternal": demo_project_workflow.external_resources.TemporalCloudSearchAttribute(
+                name="ExistingExternal",
+                type="double",
+            ),
+            "NewAttribute": demo_project_workflow.external_resources.TemporalCloudSearchAttribute(
+                name="NewAttribute",
+                type="keyword",
+            ),
+        },
+        previous_managed={"RemovedManaged": "bool"},
+        results=results,
+    )
+
+    assert status["phase"] == "Ready"
+    assert status["managedNames"] == ["NewAttribute"]
+    assert status["deletedNames"] == ["RemovedManaged"]
+    by_name = {item["name"]: item for item in status["attributes"]}
+    assert by_name["NewAttribute"]["managed"] is True
+    assert by_name["ExistingExternal"]["managed"] is False
+    assert by_name["RemovedManaged"]["managed"] is False
 
 
 def test_registry_operator_canary_branch_request_splits_auth_modes():

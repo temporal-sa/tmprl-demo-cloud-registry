@@ -119,6 +119,27 @@ spec:
                             - apiKey
                             - mtls
                           default: apiKey
+                    searchAttributes:
+                      type: object
+                      propertyNames:
+                        type: string
+                        pattern: "^[A-Za-z][A-Za-z0-9_]*$"
+                        minLength: 1
+                        maxLength: 64
+                      additionalProperties:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            enum:
+                              - text
+                              - keyword
+                              - int
+                              - double
+                              - bool
+                              - datetime
+                              - keywordList
+                            default: keyword
                 ingress:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

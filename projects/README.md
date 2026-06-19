@@ -268,6 +268,24 @@ Rules:
 - Switching between `apiKey` and `mtls` is destructive because Temporal Cloud
   namespaces cannot enable both at once. Finalize the project first so the
   existing namespace is deleted, then deploy it again with the new auth mode.
+- Projects can declare Temporal Cloud namespace search attributes with
+  `spec.temporal.searchAttributes`. Each attribute defaults to `keyword` when
+  `type` is omitted; supported types are `text`, `keyword`, `int`, `double`,
+  `bool`, `datetime`, and `keywordList`.
+
+  ```yaml
+  temporal:
+    searchAttributes:
+      CustomerId: {}
+      CartTotal:
+        type: double
+      FulfillmentTags:
+        type: keywordList
+  ```
+
+  The operator creates or verifies declared attributes after namespace
+  reconciliation. It only deletes removed attributes that it previously created
+  and recorded as managed; unrelated namespace attributes are left intact.
 - Worker versioning is opt-in via the object form:
   `components.<name>.worker.versioning` with `enabled`, optional
   `deploymentName`, and optional `rollout`/`sunset` settings. `deploymentName`

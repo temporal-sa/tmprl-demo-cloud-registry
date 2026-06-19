@@ -327,6 +327,37 @@ def test_mtls_auth_allows_serverless_lambda_worker_versioning():
     assert validate_projects.validate_serverless_components(document) == []
 
 
+def test_schema_allows_temporal_search_attributes():
+    spec = base_spec()
+    spec["temporal"] = {
+        "searchAttributes": {
+            "CustomerId": {},
+            "CartTotal": {"type": "double"},
+            "FulfillmentTags": {"type": "keywordList"},
+        }
+    }
+    document = project_document(spec)
+    validator = validate_projects.load_default_validators()["DemoProject"]
+
+    assert validate_projects.validate_schema(validator, document) == []
+
+
+def test_schema_rejects_unsupported_temporal_search_attribute_type():
+    spec = base_spec()
+    spec["temporal"] = {
+        "searchAttributes": {
+            "CustomerId": {"type": "unsupported"},
+        }
+    }
+    document = project_document(spec)
+    validator = validate_projects.load_default_validators()["DemoProject"]
+
+    errors = validate_projects.validate_schema(validator, document)
+
+    assert len(errors) == 1
+    assert "unsupported" in errors[0].message
+
+
 def test_serverless_lambda_component_rejects_kubernetes_and_buildpack_shape():
     spec = base_spec()
     spec["builds"]["app"] = {

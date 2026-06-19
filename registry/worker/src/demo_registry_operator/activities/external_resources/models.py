@@ -10,6 +10,12 @@ TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = (
 
 
 @dataclass(frozen=True)
+class TemporalCloudSearchAttribute:
+    name: str
+    type: str = "keyword"
+
+
+@dataclass(frozen=True)
 class TemporalCloudProject:
     name: str
     namespace: str
@@ -18,6 +24,7 @@ class TemporalCloudProject:
     components: dict[str, dict[str, Any]]
     runtime_secret_path: str
     mtls_ca_secret_path: str
+    search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
 
     @property
     def component_names(self) -> tuple[str, ...]:
@@ -27,12 +34,22 @@ class TemporalCloudProject:
     def temporal_required(self) -> bool:
         return bool(self.components)
 
+    @property
+    def namespace_required(self) -> bool:
+        return self.temporal_required or bool(self.search_attributes)
+
     def as_demo_project(self) -> dict[str, Any]:
+        temporal: dict[str, Any] = {"auth": {"mode": self.auth_mode}}
+        if self.search_attributes:
+            temporal["searchAttributes"] = {
+                attribute.name: {"type": attribute.type}
+                for attribute in self.search_attributes
+            }
         return {
             "metadata": {"name": self.name},
             "spec": {
                 "components": self.components,
-                "temporal": {"auth": {"mode": self.auth_mode}},
+                "temporal": temporal,
             },
         }
 
@@ -243,6 +260,20 @@ class TemporalCloudServiceAccountResult:
 
 
 @dataclass(frozen=True)
+class TemporalCloudSearchAttributeResult:
+    status: dict[str, Any]
+    name: str | None = None
+    type: str | None = None
+    action: str | None = None
+    managed: bool = False
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
 class TemporalCloudCredentialStageResult:
     status: dict[str, Any]
     promote_required: bool
@@ -302,6 +333,22 @@ class CreateOrVerifyTemporalCloudServiceAccountRequest:
     checked_at: str
     project: TemporalCloudProject
     namespace: TemporalCloudNamespaceResult
+
+
+@dataclass(frozen=True)
+class CreateOrVerifyTemporalCloudSearchAttributeRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    search_attribute: TemporalCloudSearchAttribute
+
+
+@dataclass(frozen=True)
+class DeleteTemporalCloudSearchAttributeRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    search_attribute: TemporalCloudSearchAttribute
 
 
 @dataclass(frozen=True)

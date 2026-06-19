@@ -102,6 +102,19 @@ class TemporalCloudReconciler(Protocol):
         certificate_common_name: str,
     ) -> str: ...
 
+    async def create_or_verify_search_attribute(
+        self,
+        qualified_name: str,
+        name: str,
+        attribute_type: str,
+    ) -> dict[str, str | None]: ...
+
+    async def delete_search_attribute(
+        self,
+        qualified_name: str,
+        name: str,
+    ) -> dict[str, str | None]: ...
+
     async def find_service_account(self, name: str) -> str | None: ...
 
     async def create_service_account(
@@ -142,6 +155,7 @@ async def reconcile_temporal_cloud(
     mirror_kubernetes_secrets: bool = True,
     force_auth_rotation: bool = False,
     runtime_canary: Any = None,
+    previous_managed_search_attributes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create-or-verify the namespace, scoped service account, and runtime key.
 
@@ -155,12 +169,12 @@ async def reconcile_temporal_cloud(
       runtime secret is treated as the source of truth for an active key.
     """
 
-    if not resources.temporal_components(demo_project):
+    if not resources.temporal_namespace_required(demo_project):
         return {
             "phase": "NotRequired",
             "provider": "temporal-cloud",
             "mode": "cloud-api",
-            "message": "No component currently requires Temporal credentials.",
+            "message": "No Temporal Cloud namespace resources are required.",
         }
 
     auth_mode = resources.temporal_auth_mode(demo_project)
@@ -254,7 +268,32 @@ async def reconcile_temporal_cloud(
         )
         namespace_created = True
 
-    if auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
+    search_attributes_status = await reconcile_temporal_cloud_search_attributes(
+        demo_project,
+        namespace=namespace,
+        reconciler=reconciler,
+        checked_at=checked_at,
+        previous_managed=previous_managed_search_attributes or {},
+    )
+    if search_attributes_status.get("phase") == "Error":
+        return {
+            "phase": "Error",
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "accountId": account_id,
+            "region": region,
+            "auth": resources.temporal_auth_status(demo_project),
+            "namespace": namespace_status(namespace, namespace_created),
+            "searchAttributes": search_attributes_status,
+            "reason": search_attributes_status.get("reason"),
+            "message": search_attributes_status.get("message"),
+        }
+
+    auth_status: dict[str, Any] = {}
+    if not resources.temporal_components(demo_project):
+        auth_status = {}
+    elif auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
         auth_status = await temporal_auth.reconcile_mtls_auth(
             demo_project,
             namespace=namespace,
@@ -298,9 +337,119 @@ async def reconcile_temporal_cloud(
             "state": namespace.state,
             "authMode": auth_mode,
         },
+        "searchAttributes": search_attributes_status,
     }
     status.update(auth_status)
     return status
+
+
+async def reconcile_temporal_cloud_search_attributes(
+    demo_project: dict[str, Any],
+    *,
+    namespace: NamespaceInfo,
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+    previous_managed: dict[str, str],
+) -> dict[str, Any]:
+    desired = resources.temporal_search_attributes(demo_project)
+    delete_names = sorted(set(previous_managed) - set(desired))
+    operations = [
+        ensure_temporal_cloud_search_attribute(
+            demo_project,
+            namespace_status_value={"namespace": namespace_status(namespace, False)},
+            search_attribute={"name": name, "type": attribute_type},
+            reconciler=reconciler,
+            checked_at=checked_at,
+        )
+        for name, attribute_type in desired.items()
+    ]
+    operations.extend(
+        delete_temporal_cloud_search_attribute_value(
+            demo_project,
+            namespace_status_value={"namespace": namespace_status(namespace, False)},
+            search_attribute={"name": name, "type": previous_managed[name]},
+            reconciler=reconciler,
+            checked_at=checked_at,
+        )
+        for name in delete_names
+    )
+    statuses = list(await asyncio.gather(*operations)) if operations else []
+    return temporal_cloud_search_attributes_status(
+        checked_at,
+        namespace=namespace.qualified_name,
+        statuses=statuses,
+        previous_managed=previous_managed,
+    )
+
+
+def temporal_cloud_search_attributes_status(
+    checked_at: str,
+    *,
+    namespace: str | None,
+    statuses: list[dict[str, Any]],
+    previous_managed: dict[str, str],
+) -> dict[str, Any]:
+    attributes: list[dict[str, Any]] = []
+    managed_names: set[str] = set()
+    deleted_names: list[str] = []
+    phases: set[str] = set()
+    reason: str | None = None
+    message: str | None = None
+
+    for status in statuses:
+        phase = status.get("phase")
+        if isinstance(phase, str):
+            phases.add(phase)
+        source = status.get("searchAttribute")
+        if not isinstance(source, dict):
+            continue
+        name = source.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        action = source.get("action")
+        entry = dict(source)
+        managed = (
+            action == "created"
+            or (
+                name in previous_managed
+                and action in {"verified", "created", "drifted"}
+            )
+        )
+        entry["managed"] = managed
+        attributes.append(entry)
+        if action == "deleted":
+            deleted_names.append(name)
+        elif managed:
+            managed_names.add(name)
+        if status.get("reason") and reason is None:
+            reason = str(status["reason"])
+        if status.get("message") and message is None:
+            message = str(status["message"])
+
+    if "Error" in phases:
+        phase = "Error"
+    elif "ManualSetupRequired" in phases:
+        phase = "ManualSetupRequired"
+    elif statuses:
+        phase = "Ready"
+    else:
+        phase = "NotRequired"
+
+    rendered: dict[str, Any] = {
+        "phase": phase,
+        "checkedAt": checked_at,
+        "namespace": namespace,
+        "ownershipPolicy": "delete-only-previously-managed",
+        "attributes": sorted(attributes, key=lambda item: str(item.get("name", ""))),
+        "managedNames": sorted(managed_names),
+    }
+    if deleted_names:
+        rendered["deletedNames"] = sorted(deleted_names)
+    if reason:
+        rendered["reason"] = reason
+    if message:
+        rendered["message"] = message
+    return rendered
 
 
 def temporal_runtime_candidate_secret_path(
@@ -357,7 +506,7 @@ async def ensure_temporal_cloud_namespace(
     candidate_ca_secret_path: str | None = None,
     candidate_secret_token: str | None = None,
 ) -> dict[str, Any]:
-    if not resources.temporal_components(demo_project):
+    if not resources.temporal_namespace_required(demo_project):
         return temporal_cloud_not_required_status(checked_at)
 
     auth_mode = resources.temporal_auth_mode(demo_project)
@@ -659,6 +808,94 @@ async def ensure_temporal_cloud_service_account(
             "action": "created" if created else "verified",
         },
     }
+
+
+async def ensure_temporal_cloud_search_attribute(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    search_attribute: dict[str, str],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+) -> dict[str, Any]:
+    if not resources.temporal_namespace_required(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    name = string_value(search_attribute, "name")
+    attribute_type = resources.temporal_search_attribute_type(
+        search_attribute.get("type")
+    )
+    result = await reconciler.create_or_verify_search_attribute(
+        namespace.qualified_name,
+        name,
+        attribute_type,
+    )
+    action = result.get("action")
+    current_type = result.get("currentType")
+    phase = "Error" if action == "drifted" else "Ready"
+    status = {
+        "phase": phase,
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "namespace": {"name": namespace.qualified_name},
+        "searchAttribute": {
+            "name": name,
+            "type": attribute_type,
+            "action": action,
+        },
+    }
+    if current_type:
+        status["searchAttribute"]["currentType"] = current_type
+    if action == "drifted":
+        status.update(
+            {
+                "reason": "SearchAttributeTypeDrift",
+                "message": (
+                    f"Temporal Cloud search attribute {name!r} exists with type "
+                    f"{current_type!r}, but project config requires "
+                    f"{attribute_type!r}."
+                ),
+            }
+        )
+    return status
+
+
+async def delete_temporal_cloud_search_attribute_value(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    search_attribute: dict[str, str],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+) -> dict[str, Any]:
+    if not resources.temporal_namespace_required(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    name = string_value(search_attribute, "name")
+    attribute_type = resources.temporal_search_attribute_type(
+        search_attribute.get("type")
+    )
+    result = await reconciler.delete_search_attribute(namespace.qualified_name, name)
+    action = result.get("action")
+    current_type = result.get("currentType")
+    status = {
+        "phase": "Deleted",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "namespace": {"name": namespace.qualified_name},
+        "searchAttribute": {
+            "name": name,
+            "type": attribute_type,
+            "action": action,
+        },
+    }
+    if current_type:
+        status["searchAttribute"]["currentType"] = current_type
+    return status
 
 
 async def stage_temporal_api_key_candidate(
@@ -1817,6 +2054,104 @@ class CloudApiReconciler:
         )
         return "updated"
 
+    async def create_or_verify_search_attribute(
+        self,
+        qualified_name: str,
+        name: str,
+        attribute_type: str,
+    ) -> dict[str, str | None]:
+        desired_type = resources.temporal_search_attribute_type(attribute_type)
+        desired_value = cloud_search_attribute_type_value(desired_type)
+
+        def mutate(spec: Any) -> tuple[bool, dict[str, str | None]]:
+            current_type = cloud_search_attribute_status_type(spec, name)
+            if current_type == desired_type:
+                return False, {
+                    "action": "verified",
+                    "currentType": current_type,
+                }
+            if current_type is not None:
+                return False, {
+                    "action": "drifted",
+                    "currentType": current_type,
+                }
+            spec.search_attributes[name] = desired_value
+            return True, {
+                "action": "created",
+                "currentType": desired_type,
+            }
+
+        return await self._update_namespace_spec(
+            qualified_name,
+            label=f"create-search-attribute:{qualified_name}:{name}",
+            mutate=mutate,
+        )
+
+    async def delete_search_attribute(
+        self,
+        qualified_name: str,
+        name: str,
+    ) -> dict[str, str | None]:
+        def mutate(spec: Any) -> tuple[bool, dict[str, str | None]]:
+            current_type = cloud_search_attribute_status_type(spec, name)
+            if current_type is None:
+                return False, {
+                    "action": "not-found",
+                    "currentType": None,
+                }
+            del spec.search_attributes[name]
+            return True, {
+                "action": "deleted",
+                "currentType": current_type,
+            }
+
+        return await self._update_namespace_spec(
+            qualified_name,
+            label=f"delete-search-attribute:{qualified_name}:{name}",
+            mutate=mutate,
+        )
+
+    async def _update_namespace_spec(
+        self,
+        qualified_name: str,
+        *,
+        label: str,
+        mutate: Any,
+        max_attempts: int = 5,
+    ) -> dict[str, str | None]:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            GetNamespaceRequest,
+            UpdateNamespaceRequest,
+        )
+
+        for attempt in range(max_attempts):
+            got = await self._cs.get_namespace(
+                GetNamespaceRequest(namespace=qualified_name)
+            )
+            namespace = got.namespace
+            changed, result = mutate(namespace.spec)
+            if not changed:
+                return result
+            try:
+                response = await self._cs.update_namespace(
+                    UpdateNamespaceRequest(
+                        namespace=qualified_name,
+                        spec=namespace.spec,
+                        resource_version=namespace.resource_version,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 - retry stale versions
+                if not _is_stale_resource_version(error) or attempt == max_attempts - 1:
+                    raise
+                await asyncio.sleep(0)
+                continue
+            await self._await_operation(response.async_operation, label=label)
+            return result
+
+        raise RuntimeError(
+            f"Temporal Cloud namespace update {label} exhausted retries."
+        )
+
     async def find_service_account(self, name: str) -> str | None:
         from temporalio.api.cloud.cloudservice.v1 import GetServiceAccountsRequest
 
@@ -2365,6 +2700,16 @@ def _is_invalid_resource_version(error: Exception) -> bool:
     return "invalid resource version" in str(error).lower()
 
 
+def _is_stale_resource_version(error: Exception) -> bool:
+    if _is_invalid_resource_version(error):
+        return True
+    try:
+        from temporalio.service import RPCError, RPCStatusCode
+    except ImportError:
+        return False
+    return isinstance(error, RPCError) and error.status == RPCStatusCode.ABORTED
+
+
 def _error_code(error: Exception) -> str | None:
     response = getattr(error, "response", None)
     if isinstance(response, dict):
@@ -2372,6 +2717,65 @@ def _error_code(error: Exception) -> str | None:
         if isinstance(info, dict) and isinstance(info.get("Code"), str):
             return info["Code"]
     return None
+
+
+def cloud_search_attribute_type_value(attribute_type: str) -> int:
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+
+    values = NamespaceSpec.SearchAttributeType
+    return {
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_TEXT: (
+            values.SEARCH_ATTRIBUTE_TYPE_TEXT
+        ),
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD: (
+            values.SEARCH_ATTRIBUTE_TYPE_KEYWORD
+        ),
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT: values.SEARCH_ATTRIBUTE_TYPE_INT,
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DOUBLE: (
+            values.SEARCH_ATTRIBUTE_TYPE_DOUBLE
+        ),
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL: (
+            values.SEARCH_ATTRIBUTE_TYPE_BOOL
+        ),
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME: (
+            values.SEARCH_ATTRIBUTE_TYPE_DATETIME
+        ),
+        resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST: (
+            values.SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST
+        ),
+    }[resources.temporal_search_attribute_type(attribute_type)]
+
+
+def cloud_search_attribute_status_type(spec: Any, name: str) -> str | None:
+    value = getattr(spec, "search_attributes", {}).get(name)
+    if value is None:
+        return None
+    return cloud_search_attribute_type_name(value)
+
+
+def cloud_search_attribute_type_name(value: Any) -> str | None:
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+
+    values = NamespaceSpec.SearchAttributeType
+    return {
+        values.SEARCH_ATTRIBUTE_TYPE_TEXT: resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_TEXT,
+        values.SEARCH_ATTRIBUTE_TYPE_KEYWORD: (
+            resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD
+        ),
+        values.SEARCH_ATTRIBUTE_TYPE_INT: resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_INT,
+        values.SEARCH_ATTRIBUTE_TYPE_DOUBLE: (
+            resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DOUBLE
+        ),
+        values.SEARCH_ATTRIBUTE_TYPE_BOOL: (
+            resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_BOOL
+        ),
+        values.SEARCH_ATTRIBUTE_TYPE_DATETIME: (
+            resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_DATETIME
+        ),
+        values.SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST: (
+            resources.TEMPORAL_SEARCH_ATTRIBUTE_TYPE_KEYWORD_LIST
+        ),
+    }.get(value)
 
 
 def namespace_auth_mode(namespace: Any) -> str | None:

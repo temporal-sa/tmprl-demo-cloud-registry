@@ -32,7 +32,7 @@ def stage_temporal_mtls_ca(
 def create_or_verify_temporal_cloud_namespace(
     request: models.CreateOrVerifyTemporalCloudNamespaceRequest,
 ) -> models.TemporalCloudNamespaceResult:
-    if not request.project.temporal_required:
+    if not request.project.namespace_required:
         return namespace_result(
             temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
         )
@@ -72,6 +72,86 @@ def create_or_verify_temporal_cloud_namespace(
         raise temporal_cloud_application_error(
             error,
             operation="Create or verify Temporal Cloud namespace",
+        ) from error
+
+
+@activity.defn
+def create_or_verify_temporal_cloud_search_attribute(
+    request: models.CreateOrVerifyTemporalCloudSearchAttributeRequest,
+) -> models.TemporalCloudSearchAttributeResult:
+    if not request.project.namespace_required:
+        return search_attribute_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return search_attribute_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return search_attribute_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.ensure_temporal_cloud_search_attribute(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            search_attribute={
+                "name": request.search_attribute.name,
+                "type": request.search_attribute.type,
+            },
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return search_attribute_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Create or verify Temporal Cloud search attribute",
+        ) from error
+
+
+@activity.defn
+def delete_temporal_cloud_search_attribute(
+    request: models.DeleteTemporalCloudSearchAttributeRequest,
+) -> models.TemporalCloudSearchAttributeResult:
+    if not request.project.namespace_required:
+        return search_attribute_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return search_attribute_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return search_attribute_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.delete_temporal_cloud_search_attribute_value(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            search_attribute={
+                "name": request.search_attribute.name,
+                "type": request.search_attribute.type,
+            },
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return search_attribute_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Delete Temporal Cloud search attribute",
         ) from error
 
 
@@ -691,6 +771,20 @@ def service_account_result(status: dict[str, Any]) -> models.TemporalCloudServic
         service_account_id=string_value(service_account.get("id")),
         service_account_name=string_value(service_account.get("name")),
         created=service_account.get("action") == "created",
+    )
+
+
+def search_attribute_result(
+    status: dict[str, Any],
+) -> models.TemporalCloudSearchAttributeResult:
+    search_attribute = status.get("searchAttribute")
+    search_attribute = search_attribute if isinstance(search_attribute, dict) else {}
+    return models.TemporalCloudSearchAttributeResult(
+        status=status,
+        name=string_value(search_attribute.get("name")),
+        type=string_value(search_attribute.get("type")),
+        action=string_value(search_attribute.get("action")),
+        managed=search_attribute.get("action") == "created",
     )
 
 

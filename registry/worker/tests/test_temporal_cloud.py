@@ -9,7 +9,9 @@ from demo_registry_operator.activities.temporal_cloud import (
     CloudApiReconciler,
     NamespaceInfo,
     configure_temporal_cloud_namespace_mtls,
+    ensure_temporal_cloud_search_attribute,
     delete_temporal_runtime_candidate_secret,
+    delete_temporal_cloud_search_attribute_value,
     ensure_temporal_cloud_namespace,
     finalize_temporal_cloud,
     promote_temporal_runtime_secret,
@@ -36,10 +38,18 @@ CANDIDATE_TOKEN = "1a2b3c4d5e6f7890abcd"
 
 
 class FakeReconciler:
-    def __init__(self, *, existing_namespace=None, existing_sa=None, regions=None):
+    def __init__(
+        self,
+        *,
+        existing_namespace=None,
+        existing_sa=None,
+        regions=None,
+        search_attributes=None,
+    ):
         self.existing_namespace = existing_namespace
         self.existing_sa = existing_sa
         self.regions = regions or ["aws-us-west-2", "aws-ca-central-1", "gcp-us-central1"]
+        self.search_attributes = dict(search_attributes or {})
         self.calls: list[tuple] = []
 
     async def list_regions(self):
@@ -112,6 +122,30 @@ class FakeReconciler:
             token="SECRET-TOKEN-VALUE",
             expiry_time="2027-06-13T00:00:00+00:00",
         )
+
+    async def create_or_verify_search_attribute(self, qualified_name, name, attribute_type):
+        self.calls.append(
+            (
+                "create_or_verify_search_attribute",
+                qualified_name,
+                name,
+                attribute_type,
+            )
+        )
+        current_type = self.search_attributes.get(name)
+        if current_type == attribute_type:
+            return {"action": "verified", "currentType": current_type}
+        if current_type is not None:
+            return {"action": "drifted", "currentType": current_type}
+        self.search_attributes[name] = attribute_type
+        return {"action": "created", "currentType": attribute_type}
+
+    async def delete_search_attribute(self, qualified_name, name):
+        self.calls.append(("delete_search_attribute", qualified_name, name))
+        current_type = self.search_attributes.pop(name, None)
+        if current_type is None:
+            return {"action": "not-found", "currentType": None}
+        return {"action": "deleted", "currentType": current_type}
 
     async def delete_namespace(self, qualified_name):
         self.calls.append(("delete_namespace", qualified_name))
@@ -235,6 +269,126 @@ def test_idempotent_reuses_existing_runtime_key():
     assert status["namespace"]["action"] == "verified"
     assert status["apiKey"]["action"] == "verified"
     assert status["apiKey"]["keyId"] == "key-old"
+
+
+def test_create_or_verify_search_attribute_defaults_to_keyword():
+    reconciler = FakeReconciler()
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+
+    status = asyncio.run(
+        ensure_temporal_cloud_search_attribute(
+            {
+                **PROJECT,
+                "spec": {
+                    **PROJECT["spec"],
+                    "temporal": {"searchAttributes": {"CustomerId": {}}},
+                },
+            },
+            namespace_status_value=namespace_status,
+            search_attribute={"name": "CustomerId"},
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "Ready"
+    assert status["searchAttribute"] == {
+        "name": "CustomerId",
+        "type": "keyword",
+        "action": "created",
+        "currentType": "keyword",
+    }
+    assert reconciler.search_attributes == {"CustomerId": "keyword"}
+
+
+def test_create_or_verify_search_attribute_reports_type_drift():
+    reconciler = FakeReconciler(search_attributes={"CustomerId": "keyword"})
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+
+    status = asyncio.run(
+        ensure_temporal_cloud_search_attribute(
+            {
+                **PROJECT,
+                "spec": {
+                    **PROJECT["spec"],
+                    "temporal": {
+                        "searchAttributes": {"CustomerId": {"type": "double"}}
+                    },
+                },
+            },
+            namespace_status_value=namespace_status,
+            search_attribute={"name": "CustomerId", "type": "double"},
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "Error"
+    assert status["reason"] == "SearchAttributeTypeDrift"
+    assert status["searchAttribute"]["currentType"] == "keyword"
+
+
+def test_delete_search_attribute_deletes_requested_managed_name_only():
+    reconciler = FakeReconciler(
+        search_attributes={"OwnedAttribute": "bool", "ExternalAttribute": "keyword"}
+    )
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+
+    status = asyncio.run(
+        delete_temporal_cloud_search_attribute_value(
+            PROJECT,
+            namespace_status_value=namespace_status,
+            search_attribute={"name": "OwnedAttribute", "type": "bool"},
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "Deleted"
+    assert status["searchAttribute"]["action"] == "deleted"
+    assert reconciler.search_attributes == {"ExternalAttribute": "keyword"}
+
+
+def test_reconcile_search_attribute_only_project_does_not_create_runtime_credentials():
+    project = {
+        "metadata": {"name": "search-only"},
+        "spec": {
+            "components": {"frontend": {"build": "app"}},
+            "temporal": {
+                "searchAttributes": {
+                    "CustomerId": {},
+                }
+            },
+        },
+    }
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore()
+
+    status = reconcile(reconciler, secrets, demo_project=project)
+
+    assert status["phase"] == "Ready"
+    assert status["searchAttributes"]["managedNames"] == ["CustomerId"]
+    assert reconciler.called("create_service_account") == []
+    assert reconciler.called("create_api_key") == []
+    assert secrets.store == {}
 
 
 def test_existing_runtime_key_without_expiry_is_rotated():
@@ -849,6 +1003,101 @@ def test_cloud_api_disable_namespace_delete_protection_is_separate_update():
             False,
         )
     ]
+
+
+def test_cloud_api_create_search_attribute_preserves_existing_and_retries_stale_resource_version():
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+
+    values = NamespaceSpec.SearchAttributeType
+
+    class FakeCloudService:
+        def __init__(self):
+            self.resource_versions = ["old-version", "new-version"]
+            self.updates = []
+
+        async def get_namespace(self, request):
+            spec = NamespaceSpec()
+            spec.search_attributes["ExistingAttribute"] = (
+                values.SEARCH_ATTRIBUTE_TYPE_KEYWORD
+            )
+            return SimpleNamespace(
+                namespace=SimpleNamespace(
+                    spec=spec,
+                    resource_version=self.resource_versions.pop(0),
+                )
+            )
+
+        async def update_namespace(self, request):
+            self.updates.append(
+                (
+                    request.resource_version,
+                    dict(request.spec.search_attributes),
+                )
+            )
+            if request.resource_version == "old-version":
+                raise RuntimeError("invalid resource version")
+            return SimpleNamespace(async_operation=SimpleNamespace(id="", state=0))
+
+    service = FakeCloudService()
+    reconciler = CloudApiReconciler(service, account_id="acct1")
+
+    result = asyncio.run(
+        reconciler.create_or_verify_search_attribute(
+            "tmprl-dem-cld-banking-money-transfer.acct1",
+            "CustomerId",
+            "keyword",
+        )
+    )
+
+    assert result == {"action": "created", "currentType": "keyword"}
+    assert [update[0] for update in service.updates] == [
+        "old-version",
+        "new-version",
+    ]
+    assert service.updates[-1][1] == {
+        "ExistingAttribute": values.SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+        "CustomerId": values.SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+    }
+
+
+def test_cloud_api_search_attribute_type_drift_does_not_update_namespace():
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+
+    values = NamespaceSpec.SearchAttributeType
+
+    class FakeCloudService:
+        def __init__(self):
+            self.updates = []
+
+        async def get_namespace(self, request):
+            spec = NamespaceSpec()
+            spec.search_attributes["CustomerId"] = (
+                values.SEARCH_ATTRIBUTE_TYPE_KEYWORD
+            )
+            return SimpleNamespace(
+                namespace=SimpleNamespace(
+                    spec=spec,
+                    resource_version="namespace-version-1",
+                )
+            )
+
+        async def update_namespace(self, request):
+            self.updates.append(request)
+            return SimpleNamespace(async_operation=SimpleNamespace(id="", state=0))
+
+    service = FakeCloudService()
+    reconciler = CloudApiReconciler(service, account_id="acct1")
+
+    result = asyncio.run(
+        reconciler.create_or_verify_search_attribute(
+            "tmprl-dem-cld-banking-money-transfer.acct1",
+            "CustomerId",
+            "double",
+        )
+    )
+
+    assert result == {"action": "drifted", "currentType": "keyword"}
+    assert service.updates == []
 
 
 def test_cloud_api_delete_api_key_uses_resource_version():
