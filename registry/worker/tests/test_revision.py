@@ -220,3 +220,85 @@ def test_revision_owner_reference_shape():
     assert ref["uid"] == "uid-123"
     assert ref["controller"] is True
     assert ref["blockOwnerDeletion"] is True
+
+
+# --- Task 2.1: revision_name + revision_resource ---
+
+from demo_registry_operator import resources  # noqa: E402
+
+
+def _ordinary_project() -> dict:
+    return {
+        "metadata": {
+            "name": "banking-money-transfer",
+            "annotations": {
+                resources.SOURCE_COMMIT_ANNOTATION: "a" * 40,
+                resources.SOURCE_ARTIFACT_DIGEST_ANNOTATION: "sha256:dead",
+            },
+        },
+        "spec": {
+            "components": {
+                "backend": {"build": "backend"},
+                "worker": {
+                    "build": "worker",
+                    "worker": {"versioning": {"enabled": True}},
+                },
+            },
+            "smokeCheck": {"path": "/api/health", "expectedStatus": 200},
+            "ingress": {"subdomain": "banking"},
+        },
+    }
+
+
+def _control_plane_project() -> dict:
+    return {
+        "metadata": {
+            "name": "registry-operator",
+            "annotations": {
+                resources.FINALIZATION_POLICY_ANNOTATION: resources.FINALIZATION_POLICY_RETAIN,
+            },
+        },
+        "spec": {"components": {"web": {"build": "web"}}},
+    }
+
+
+def test_revision_name_is_dns_safe_and_bounded():
+    dp = {"metadata": {"name": "banking-money-transfer"}}
+    name = resources.revision_name(dp, "git-388c26cb1e5e-key-7aa36083")
+    assert len(name) <= 63
+    assert name.startswith("banking-money-transfer-")
+
+
+def test_revision_resource_ordinary_demo_enables_runtime_namespace():
+    dp = _ordinary_project()
+    images = {
+        "backend": "example.com/backend:git-v1",
+        "worker": "example.com/worker:git-v1",
+    }
+    rev = resources.revision_resource(dp, "git-v1", images=images, reconcile_key="rk1")
+    assert rev["kind"] == "DemoProjectRevision"
+    assert rev["apiVersion"].startswith("registry.tmprl-demo.cloud/")
+    assert rev["metadata"]["name"] == resources.revision_name(dp, "git-v1")
+    assert (
+        rev["metadata"]["labels"]["platform.temporal.io/rollout-version"] == "git-v1"
+    )
+    spec = rev["spec"]
+    assert spec["projectName"] == "banking-money-transfer"
+    assert spec["rolloutVersion"] == "git-v1"
+    assert spec["reconcileKey"] == "rk1"
+    assert spec["sourceCommitSha"] == "a" * 40
+    assert spec["sourceArtifactDigest"] == "sha256:dead"
+    assert spec["runtimeNamespaceEnabled"] is True
+    assert spec["runtimeNamespace"] == resources.runtime_namespace(dp, "git-v1")
+    assert spec["images"] == images
+    assert "backend" in spec["components"]
+
+
+def test_revision_resource_control_plane_disables_runtime_namespace():
+    dp = _control_plane_project()
+    rev = resources.revision_resource(
+        dp, "git-v1", images={"web": "example.com/web:git-v1"}
+    )
+    spec = rev["spec"]
+    assert spec["runtimeNamespaceEnabled"] is False
+    assert spec.get("runtimeNamespace") in (None, "")

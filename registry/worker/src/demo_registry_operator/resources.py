@@ -76,6 +76,8 @@ INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
 TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
+DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
     "http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify"
 )
@@ -294,6 +296,67 @@ def candidate_runtime_namespace(
     if not version:
         return None
     return runtime_namespace(demo_project, version)
+
+
+def revision_name(demo_project: dict[str, Any], rollout_version: str) -> str:
+    digest = hashlib.sha256(rollout_version.encode("utf-8")).hexdigest()[:12]
+    return suffixed_dns_name(project_name(demo_project), digest)
+
+
+def revision_resource(
+    demo_project: dict[str, Any],
+    rollout_version: str,
+    *,
+    images: dict[str, str],
+    reconcile_key: str | None = None,
+) -> dict[str, Any]:
+    """Render a cluster-scoped DemoProjectRevision describing one rollout attempt."""
+    runtime_ns_enabled = runtime_namespace_rollout_enabled(demo_project)
+    runtime_ns = (
+        runtime_namespace(demo_project, rollout_version)
+        if runtime_ns_enabled
+        else None
+    )
+    worker_deployments = {
+        name: worker_deployment_name(name, component)
+        for name, component in kubernetes_versioned_worker_components(
+            demo_project
+        ).items()
+    }
+    spec: dict[str, Any] = {
+        "projectName": project_name(demo_project),
+        "rolloutVersion": rollout_version,
+        "runtimeNamespaceEnabled": runtime_ns_enabled,
+        "host": project_host(demo_project),
+        "images": dict(images),
+        "components": components(demo_project),
+        "workerDeployments": worker_deployments,
+    }
+    if reconcile_key:
+        spec["reconcileKey"] = reconcile_key
+    commit = source_commit_sha(demo_project)
+    if commit:
+        spec["sourceCommitSha"] = commit
+    digest = source_artifact_digest(demo_project)
+    if digest:
+        spec["sourceArtifactDigest"] = digest
+    if runtime_ns:
+        spec["runtimeNamespace"] = runtime_ns
+    smoke = spec_of(demo_project).get("smokeCheck")
+    if isinstance(smoke, dict):
+        spec["smokeCheck"] = smoke
+    return {
+        "apiVersion": DEMO_PROJECT_API_VERSION,
+        "kind": DEMO_PROJECT_REVISION_KIND,
+        "metadata": {
+            "name": revision_name(demo_project, rollout_version),
+            "labels": {
+                **common_labels(demo_project),
+                "platform.temporal.io/rollout-version": rollout_version,
+            },
+        },
+        "spec": spec,
+    }
 
 
 def project_temporal_namespace(demo_project: dict[str, Any]) -> str:
