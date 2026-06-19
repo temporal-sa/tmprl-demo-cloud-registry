@@ -689,3 +689,75 @@ def test_require_allowed_revision_delete_raises_on_unexpected_target():
         kubernetes_runtime_workflow.require_allowed_revision_delete(
             "rev-active", decision
         )
+
+
+# --- Task 4.1-4.3: revision lifecycle helpers ---
+
+from demo_registry_operator.activities.revision import RevisionRef  # noqa: E402
+
+
+def _revref():
+    return RevisionRef(
+        name="rev-1",
+        uid="uid-9",
+        rollout_version="git-v1",
+        runtime_namespace="ns-x",
+        runtime_namespace_enabled=True,
+    )
+
+
+def test_revision_owner_reference_from_ref():
+    owner = kubernetes_runtime_workflow.revision_owner_reference_from_ref(_revref())
+    assert owner["kind"] == "DemoProjectRevision"
+    assert owner["apiVersion"] == "registry.tmprl-demo.cloud/v1alpha1"
+    assert owner["name"] == "rev-1"
+    assert owner["uid"] == "uid-9"
+    assert owner["controller"] is True
+    assert owner["blockOwnerDeletion"] is True
+
+
+def test_revision_ref_summary():
+    assert kubernetes_runtime_workflow.revision_ref_summary(_revref()) == {
+        "name": "rev-1",
+        "uid": "uid-9",
+        "rolloutVersion": "git-v1",
+        "runtimeNamespace": "ns-x",
+        "runtimeNamespaceEnabled": True,
+    }
+
+
+def test_revision_cleanup_mode():
+    assert (
+        kubernetes_runtime_workflow.revision_cleanup_mode(
+            {"runtimeNamespaceEnabled": True}
+        )
+        == "runtime-namespace"
+    )
+    assert (
+        kubernetes_runtime_workflow.revision_cleanup_mode(
+            {"runtimeNamespaceEnabled": False}
+        )
+        == "control-plane"
+    )
+    assert kubernetes_runtime_workflow.revision_cleanup_mode(None) == "control-plane"
+
+
+def test_revision_phase_for_reconcile():
+    assert (
+        kubernetes_runtime_workflow._revision_phase_for_reconcile(
+            {"phase": "WorkerRolloutPending"}
+        )
+        == "WorkerRolloutPending"
+    )
+    assert (
+        kubernetes_runtime_workflow._revision_phase_for_reconcile(
+            {"phase": "SmokeCheckPending"}
+        )
+        == "Applied"
+    )
+
+
+def test_revision_name_of():
+    assert kubernetes_runtime_workflow._revision_name_of({"name": "rev-1"}) == "rev-1"
+    assert kubernetes_runtime_workflow._revision_name_of(None) is None
+    assert kubernetes_runtime_workflow._revision_name_of({}) is None

@@ -8,6 +8,7 @@ from temporalio.common import RetryPolicy
 
 from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import reconcile as reconcile_activities
+from demo_registry_operator.activities import revision as revision_activities
 from demo_registry_operator.workflows import messages
 
 
@@ -39,17 +40,49 @@ class DemoProjectKubernetesRuntimeWorkflow:
         project = request.project
         demo_project = request.demoProject
         previous_status = request.previousStatus or {}
+        self._project = project
+        self._demo_project = demo_project
+        self._external_resources = request.externalResources
+        self._previous_status = previous_status
+        self._revision_summary = None
+        self._previous_active_revision = _revision_name_of(
+            previous_status.get("activeRevision")
+        )
+
+        # 4.1: plan candidate renderability and create the Revision BEFORE apply, so
+        # the candidate Namespace / Deploy+Svc are owned by the Revision from birth.
+        plan = await self._plan_candidate_revision(
+            demo_project, request.externalResources, request.buildStatus
+        )
+        revision_summary = None
+        revision_owner_reference = None
+        if plan.ready:
+            revision_ref = await self._ensure_revision(demo_project, plan)
+            revision_summary = revision_ref_summary(revision_ref)
+            self._revision_summary = revision_summary
+            revision_owner_reference = revision_owner_reference_from_ref(revision_ref)
+            await self._patch_revision_refs(
+                project, {"candidateRevision": revision_summary}
+            )
+
         reconcile_result = await workflow.execute_activity(
             reconcile_activities.apply_demo_project_resources,
             reconcile_activities.ApplyDemoProjectResourcesRequest(
                 demo_project=demo_project,
                 external_resources=request.externalResources,
                 build_status=request.buildStatus,
+                revision_ref=revision_summary,
+                revision_owner_reference=revision_owner_reference,
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
         )
         reconcile_status = reconcile_result.status
+        if revision_summary is not None:
+            await self._set_revision_phase(
+                revision_summary["name"],
+                _revision_phase_for_reconcile(reconcile_status),
+            )
 
         smoke_plan = {
             "project": project,
@@ -84,6 +117,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     demo_project,
                     reconcile_status,
                     previous_status,
+                    worker_rollout_failed=True,
                 )
                 status = self._worker_rollout_failed_status(
                     reconcile_status,
@@ -299,6 +333,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         active_version = candidate_status.get("imageVersion")
         if isinstance(active_version, str):
             promoted_status["activeImageVersion"] = active_version
+        promoted_status = await self._finalize_promoted_revision(promoted_status)
         return promoted_status
 
     async def _promote_without_smoke_check(
@@ -345,6 +380,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
         active_version = candidate_status.get("imageVersion")
         if isinstance(active_version, str):
             promoted_status["activeImageVersion"] = active_version
+        promoted_status = await self._finalize_promoted_revision(promoted_status)
         return promoted_status
 
     async def _promote_candidate(
@@ -399,20 +435,32 @@ class DemoProjectKubernetesRuntimeWorkflow:
         demo_project: dict[str, Any],
         reconcile_status: dict[str, Any],
         previous_status: dict[str, Any],
+        *,
+        worker_rollout_failed: bool = False,
     ) -> dict[str, Any]:
         rollback_status = await self._restore_previous_active_runtime_routes(
             project,
             demo_project,
             previous_status,
         )
+        result: dict[str, Any] = {"rollbackStatus": rollback_status}
+        # 4.2: on a worker rollout failure, render+apply the previous active
+        # WorkerDeployment (Worker Versioning rollback) before tearing the candidate down.
+        if worker_rollout_failed:
+            result["workerDeploymentRollbackStatus"] = (
+                await self._rollback_worker_deployments(demo_project, previous_status)
+            )
         prune_status = await self._delete_failed_candidate_resources(
             demo_project,
             reconcile_status,
         )
-        return {
-            "rollbackStatus": rollback_status,
-            "pruneStatus": prune_status,
-        }
+        result["pruneStatus"] = prune_status
+        # 4.2: finalize the candidate Revision (Failed -> lastFailedRevision ->
+        # guarded delete -> bounded cleanup wait -> revisionCleanupStatus).
+        revision_cleanup = await self._finalize_failed_revision()
+        if revision_cleanup is not None:
+            result["revisionCleanupStatus"] = revision_cleanup
+        return result
 
     async def _restore_previous_active_runtime_routes(
         self,
@@ -561,7 +609,195 @@ class DemoProjectKubernetesRuntimeWorkflow:
         if isinstance(prune_status, dict):
             rendered["pruneStatus"] = prune_status
             rendered["prunedResources"] = prune_status.get("resources", [])
+
+        worker_rollback = cleanup_status.get("workerDeploymentRollbackStatus")
+        if isinstance(worker_rollback, dict):
+            rendered["workerDeploymentRollbackStatus"] = worker_rollback
+        revision_cleanup = cleanup_status.get("revisionCleanupStatus")
+        if isinstance(revision_cleanup, dict):
+            rendered["revisionCleanupStatus"] = revision_cleanup
         return rendered
+
+    # --- Phase 4.1-4.3: revision lifecycle (activity-calling) ---
+
+    async def _plan_candidate_revision(
+        self,
+        demo_project: dict[str, Any],
+        external_resources: dict[str, Any] | None,
+        build_status: dict[str, Any] | None,
+    ) -> Any:
+        return await workflow.execute_activity(
+            revision_activities.plan_candidate_revision,
+            revision_activities.PlanCandidateRevisionRequest(
+                demo_project=demo_project,
+                external_resources=external_resources,
+                build_status=build_status,
+            ),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=CHECK_RETRY_POLICY,
+        )
+
+    async def _ensure_revision(
+        self, demo_project: dict[str, Any], plan: Any
+    ) -> Any:
+        return await workflow.execute_activity(
+            revision_activities.ensure_revision,
+            revision_activities.EnsureRevisionRequest(
+                demo_project=demo_project,
+                rollout_version=plan.rollout_version,
+                images=plan.images or {},
+                reconcile_key=resources.demo_project_reconcile_key(demo_project),
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _set_revision_phase(
+        self, name: str, phase: str, message: str | None = None
+    ) -> None:
+        await workflow.execute_activity(
+            revision_activities.set_revision_phase,
+            revision_activities.SetRevisionPhaseRequest(
+                name=name, phase=phase, message=message
+            ),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _patch_revision_refs(
+        self, project: str, refs: dict[str, Any]
+    ) -> None:
+        await workflow.execute_activity(
+            revision_activities.patch_demo_project_revision_refs,
+            revision_activities.PatchRevisionRefsRequest(project=project, refs=refs),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _delete_revision(self, name: str) -> dict[str, Any]:
+        return await workflow.execute_activity(
+            revision_activities.delete_revision,
+            revision_activities.DeleteRevisionRequest(name=name),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _wait_revision_cleanup(
+        self, ref_summary: dict[str, Any]
+    ) -> dict[str, Any]:
+        namespace = (
+            ref_summary.get("runtimeNamespace")
+            if ref_summary.get("runtimeNamespaceEnabled")
+            else resources.project_namespace(self._demo_project)
+        )
+        return await workflow.execute_activity(
+            revision_activities.wait_for_revision_cleanup,
+            revision_activities.WaitForRevisionCleanupRequest(
+                name=ref_summary["name"],
+                mode=revision_cleanup_mode(ref_summary),
+                namespace=namespace,
+                rollout_version=ref_summary.get("rolloutVersion"),
+            ),
+            start_to_close_timeout=timedelta(minutes=7),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=CHECK_RETRY_POLICY,
+        )
+
+    async def _rollback_worker_deployments(
+        self, demo_project: dict[str, Any], previous_status: dict[str, Any]
+    ) -> dict[str, Any]:
+        active_images = string_map(previous_status.get("activeImages"))
+        active_version = previous_status.get("activeImageVersion")
+        if not active_images or not isinstance(active_version, str):
+            return {
+                "phase": "Skipped",
+                "message": "Previous active worker images were not available.",
+            }
+        result = await workflow.execute_activity(
+            reconcile_activities.rollback_worker_deployments,
+            reconcile_activities.WorkerDeploymentRollbackRequest(
+                demo_project=demo_project,
+                external_resources=self._external_resources,
+                active_images=active_images,
+                active_version=active_version,
+                worker_deployments=(
+                    previous_status.get("workerDeploymentStatus", {}) or {}
+                ),
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        return result.status
+
+    async def _finalize_failed_revision(self) -> dict[str, Any] | None:
+        revision = self._revision_summary
+        if not revision:
+            return None
+        name = revision["name"]
+        await self._set_revision_phase(name, "Failed", "Candidate rollout failed.")
+        await self._patch_revision_refs(
+            self._project, {"lastFailedRevision": revision}
+        )
+        decision = compute_delete_targets(
+            active_revision=self._previous_active_revision,
+            candidate_revision=name,
+            promoted=False,
+            previous_active_revision=self._previous_active_revision,
+        )
+        cleanup: dict[str, Any] = {"phase": "Skipped", "decision": decision}
+        if name in (decision.get("delete") or []):
+            target = require_allowed_revision_delete(name, decision)
+            await self._delete_revision(target)
+            cleanup = await self._wait_revision_cleanup(revision)
+        await self._patch_revision_refs(
+            self._project, {"revisionCleanupStatus": cleanup}
+        )
+        return cleanup
+
+    async def _finalize_promoted_revision(
+        self, promoted_status: dict[str, Any]
+    ) -> dict[str, Any]:
+        revision = self._revision_summary
+        if not revision:
+            return promoted_status
+        name = revision["name"]
+        await self._set_revision_phase(name, "Promoted", "Candidate promoted.")
+        # Record the new active FIRST, so the previous active is never deleted before
+        # the new one is durably recorded (compute_delete_targets safety).
+        await self._patch_revision_refs(self._project, {"activeRevision": revision})
+        promoted_status["activeRevision"] = revision
+        decision = compute_delete_targets(
+            active_revision=name,
+            candidate_revision=name,
+            promoted=True,
+            previous_active_revision=self._previous_active_revision,
+        )
+        previous_summary = self._previous_active_revision_summary()
+        cleanup: dict[str, Any] = {"phase": "Skipped", "decision": decision}
+        for target in decision.get("delete") or []:
+            allowed = require_allowed_revision_delete(target, decision)
+            await self._set_revision_phase(
+                allowed, "Superseded", "Superseded by a newer revision."
+            )
+            await self._delete_revision(allowed)
+            cleanup = await self._wait_revision_cleanup(previous_summary or revision)
+        await self._patch_revision_refs(
+            self._project, {"revisionCleanupStatus": cleanup}
+        )
+        promoted_status["revisionCleanupStatus"] = cleanup
+        return promoted_status
+
+    def _previous_active_revision_summary(self) -> dict[str, Any] | None:
+        previous = self._previous_status.get("activeRevision")
+        return previous if isinstance(previous, dict) else None
+
+
+def _revision_name_of(ref: Any) -> str | None:
+    if isinstance(ref, dict):
+        name = ref.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
 
 
 def string_map(value: Any) -> dict[str, str]:
@@ -621,3 +857,44 @@ def require_allowed_revision_delete(target: str, decision: dict[str, Any]) -> st
             f"Refusing to delete revision {target!r}; not in computed delete targets."
         )
     return target
+
+
+# --- Phase 4.1-4.3: revision lifecycle helpers (pure) ---
+
+REVISION_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
+REVISION_KIND = "DemoProjectRevision"
+
+
+def revision_owner_reference_from_ref(ref: Any) -> dict[str, Any]:
+    """Build a controller ownerReference dict from a RevisionRef (pure, no kube)."""
+    return {
+        "apiVersion": REVISION_API_VERSION,
+        "kind": REVISION_KIND,
+        "name": ref.name,
+        "uid": ref.uid,
+        "controller": True,
+        "blockOwnerDeletion": True,
+    }
+
+
+def revision_ref_summary(ref: Any) -> dict[str, Any]:
+    """Serialize a RevisionRef to the dict stored in activeRevision/candidateRevision."""
+    return {
+        "name": ref.name,
+        "uid": ref.uid,
+        "rolloutVersion": ref.rollout_version,
+        "runtimeNamespace": ref.runtime_namespace,
+        "runtimeNamespaceEnabled": ref.runtime_namespace_enabled,
+    }
+
+
+def revision_cleanup_mode(ref_summary: dict[str, Any] | None) -> str:
+    if ref_summary and ref_summary.get("runtimeNamespaceEnabled"):
+        return "runtime-namespace"
+    return "control-plane"
+
+
+def _revision_phase_for_reconcile(reconcile_status: dict[str, Any]) -> str:
+    if reconcile_status.get("phase") == "WorkerRolloutPending":
+        return "WorkerRolloutPending"
+    return "Applied"
