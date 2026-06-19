@@ -887,3 +887,61 @@ def test_adopt_control_plane_patches_candidate_deploy_svc_only(monkeypatch):
     assert result["phase"] == "Adopted"
     assert dep_patched == ["web-git-v1"]
     assert svc_patched == ["web-git-v1"]
+
+
+# --- Task 8: finalization-policy footgun coupling (regression doc) ---
+
+
+def test_finalization_policy_couples_control_plane_and_runtime_namespace():
+    # Documents the footgun: finalization-policy=retain drives BOTH control-plane
+    # teardown-retain AND runtime-namespace disable. If this coupling is ever split,
+    # update this test alongside.
+    operator = {
+        "metadata": {
+            "name": "registry-operator",
+            "annotations": {
+                resources.FINALIZATION_POLICY_ANNOTATION: resources.FINALIZATION_POLICY_RETAIN
+            },
+        }
+    }
+    ordinary = {"metadata": {"name": "banking-money-transfer", "annotations": {}}}
+
+    assert resources.is_control_plane_project(operator) is True
+    assert resources.runtime_namespace_rollout_enabled(operator) is False
+
+    assert resources.is_control_plane_project(ordinary) is False
+    assert resources.runtime_namespace_rollout_enabled(ordinary) is True
+
+
+# --- Task 6.2: canary shape unchanged (registry.yaml uses the banking template) ---
+
+REGISTRY_PROJECT = ROOT / "projects" / "demo" / "registry.yaml"
+
+
+def _operator_canary_gate() -> dict:
+    spec = _load(REGISTRY_PROJECT)["spec"]
+    for component in spec.get("components", {}).values():
+        worker = component.get("worker") if isinstance(component, dict) else None
+        versioning = worker.get("versioning") if isinstance(worker, dict) else None
+        gate = (
+            versioning.get("rollout", {}).get("gate")
+            if isinstance(versioning, dict)
+            else None
+        )
+        if isinstance(gate, dict):
+            return gate
+    raise AssertionError("no worker rollout gate found in registry.yaml")
+
+
+def test_operator_canary_uses_full_banking_template_unchanged():
+    gate = _operator_canary_gate()
+    assert gate["workflowType"] == "RegistryOperatorCanaryWorkflow"
+    template = gate["input"]["demoProjectTemplate"]["spec"]
+    assert (
+        template["source"]["repo"]
+        == "https://github.com/temporal-sa/demo-banking-app-money-transfer"
+    )
+    assert set(template["builds"]) == {"frontend", "backend", "worker"}
+    assert set(template["components"]) == {"frontend", "backend", "worker"}
+    assert template["smokeCheck"]["path"] == "/api/health"
+    assert template["smokeCheck"]["expectedStatus"] == 200

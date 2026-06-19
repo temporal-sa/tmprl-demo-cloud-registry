@@ -283,6 +283,11 @@ def runtime_namespace(demo_project: dict[str, Any], rollout_version: str) -> str
 
 
 def runtime_namespace_rollout_enabled(demo_project: dict[str, Any]) -> bool:
+    # TODO(footgun): finalization-policy=retain is overloaded — it drives BOTH
+    # teardown-retain (is_control_plane_project) AND runtime-namespace-disable here.
+    # These should be decoupled into explicit spec.controlPlane and
+    # spec.runtimeNamespace.enabled fields so an ordinary demo can retain without
+    # losing runtime-namespace rollout (and vice versa).
     return not is_control_plane_project(demo_project)
 
 
