@@ -1041,3 +1041,42 @@ def test_delete_candidate_resources_targets_candidate_version_and_managed(monkey
     for selector in (captured["dep"], captured["svc"]):
         assert "app.kubernetes.io/managed-by=demo-registry" in selector
         assert "platform.temporal.io/rollout-version=git-failed" in selector
+
+
+# --- Regression: patch helpers must drive the REAL kubernetes client correctly ---
+# The pinned client rejects a `_content_type` kwarg (ApiTypeError), and built-in
+# patch methods negotiate application/json-patch+json by default — which cannot
+# carry a merge-patch dict body. Mocked `kube` tests never exercised this; drive
+# the real client (mock only call_api, so kwarg-validation + content-type
+# negotiation run for real) and assert a merge-patch is sent.
+
+def test_status_and_ownerref_patches_drive_real_client_with_merge_patch(monkeypatch):
+    from kubernetes import client as k8s
+    from demo_registry_operator import kube as kubemod
+
+    captured = []
+
+    def fake_call_api(self, resource_path, method, path_params=None,
+                      query_params=None, header_params=None, body=None,
+                      *args, **kwargs):
+        captured.append(
+            {"method": method, "ct": (header_params or {}).get("Content-Type")}
+        )
+        return {}
+
+    monkeypatch.setattr(k8s.ApiClient, "call_api", fake_call_api, raising=True)
+    monkeypatch.setattr(kubemod, "load_kubernetes_config", lambda: None)
+    k8s.Configuration.set_default(k8s.Configuration())
+
+    # custom-object status (default merge-patch) + built-in owner-ref (default
+    # json-patch — must be forced to merge-patch).
+    kubemod.patch_demo_project_status("proj", {"phase": "Ready"}, dry_run=False)
+    kubemod.patch_demo_project_revision_status("rev", {"phase": "Ready"}, dry_run=False)
+    kubemod.patch_namespace_owner_references(
+        "ns", [{"apiVersion": "v1", "kind": "X", "name": "n", "uid": "u"}], dry_run=False
+    )
+
+    assert len(captured) == 3, captured
+    for c in captured:
+        assert c["method"] == "PATCH", c
+        assert c["ct"] == "application/merge-patch+json", c

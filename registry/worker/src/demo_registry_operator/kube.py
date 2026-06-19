@@ -644,12 +644,27 @@ def delete_namespace(name: str, *, dry_run: bool = False) -> str:
         raise
 
 
+def _content_type_api_client(content_type: str) -> Any:
+    """Return an ApiClient that forces ``content_type`` for the request.
+
+    The pinned kubernetes client's generated patch methods do NOT accept a
+    ``_content_type`` kwarg (passing one raises ApiTypeError), and the built-in
+    (Core/Apps) patch methods negotiate ``application/json-patch+json`` by
+    default — which cannot carry a merge-patch dict body. Override the
+    content-type negotiation on a dedicated client instead of relying on the
+    per-method default.
+    """
+    api_client = _client_module().ApiClient()
+    api_client.select_header_content_type = lambda _content_types: content_type
+    return api_client
+
+
 def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     # JSON merge patch: keys absent from `status` are preserved by the server, so a
     # child mid-rollout patch and the parent's end-of-reconcile write don't clobber
-    # each other. Pass the content type explicitly; do not rely on the client default.
+    # each other. Force the content type explicitly; do not rely on the client default.
     _patch_demo_project_status_raw(
         name,
         {"status": status},
@@ -665,13 +680,14 @@ def _patch_demo_project_status_raw(
 ) -> None:
     client = _client_module()
     load_kubernetes_config()
-    client.CustomObjectsApi().patch_cluster_custom_object_status(
+    client.CustomObjectsApi(
+        _content_type_api_client(content_type)
+    ).patch_cluster_custom_object_status(
         group=DEMO_PROJECT_GROUP,
         version=DEMO_PROJECT_VERSION,
         plural=DEMO_PROJECT_PLURAL,
         name=name,
         body=body,
-        _content_type=content_type,
     )
 
 
@@ -777,13 +793,14 @@ def _patch_demo_project_revision_status_raw(
 ) -> None:
     client = _client_module()
     load_kubernetes_config()
-    client.CustomObjectsApi().patch_cluster_custom_object_status(
+    client.CustomObjectsApi(
+        _content_type_api_client(content_type)
+    ).patch_cluster_custom_object_status(
         group=DEMO_PROJECT_REVISION_GROUP,
         version=DEMO_PROJECT_REVISION_VERSION,
         plural=DEMO_PROJECT_REVISION_PLURAL,
         name=name,
         body=body,
-        _content_type=content_type,
     )
 
 
@@ -820,8 +837,8 @@ def patch_namespace_owner_references(
 ) -> str:
     return _patch_owner_references(
         lambda body, content_type: _client_module()
-        .CoreV1Api()
-        .patch_namespace(name, body, _content_type=content_type),
+        .CoreV1Api(_content_type_api_client(content_type))
+        .patch_namespace(name, body),
         owner_references,
         dry_run=dry_run,
     )
@@ -836,8 +853,8 @@ def patch_deployment_owner_references(
 ) -> str:
     return _patch_owner_references(
         lambda body, content_type: _client_module()
-        .AppsV1Api()
-        .patch_namespaced_deployment(name, namespace, body, _content_type=content_type),
+        .AppsV1Api(_content_type_api_client(content_type))
+        .patch_namespaced_deployment(name, namespace, body),
         owner_references,
         dry_run=dry_run,
     )
@@ -852,8 +869,8 @@ def patch_service_owner_references(
 ) -> str:
     return _patch_owner_references(
         lambda body, content_type: _client_module()
-        .CoreV1Api()
-        .patch_namespaced_service(name, namespace, body, _content_type=content_type),
+        .CoreV1Api(_content_type_api_client(content_type))
+        .patch_namespaced_service(name, namespace, body),
         owner_references,
         dry_run=dry_run,
     )
