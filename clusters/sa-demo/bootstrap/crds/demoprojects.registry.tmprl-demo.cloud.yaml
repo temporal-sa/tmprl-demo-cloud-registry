@@ -121,11 +121,12 @@ spec:
                           default: apiKey
                     searchAttributes:
                       type: object
-                      propertyNames:
-                        type: string
-                        pattern: "^[A-Za-z][A-Za-z0-9_]*$"
-                        minLength: 1
-                        maxLength: 64
+                      # NOTE: search-attribute key names are intentionally not validated
+                      # here. `propertyNames` is valid JSON Schema but is NOT a field of
+                      # Kubernetes apiextensions/v1 JSONSchemaProps, so the apiserver
+                      # rejects it ("field not declared in schema") and fails the whole
+                      # CRD apply. Validate key format in the operator (or a bounded
+                      # x-kubernetes-validations CEL rule) if it is needed.
                       additionalProperties:
                         type: object
                         properties:
