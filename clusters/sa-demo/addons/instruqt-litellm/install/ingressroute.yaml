@@ -11,7 +11,7 @@ spec:
     - websecure
   routes:
     - kind: Rule
-      match: Host(`litellm-instruqt.tmprl-demo.cloud`) && !PathPrefix(`/ui`)
+      match: Host(`litellm-instruqt.tmprl-demo.cloud`) && !PathPrefix(`/ui`) && !PathPrefix(`/fallback`)
       services:
         - name: instruqt-litellm
           namespace: tmprl-dem-cld-instruqt-litellm
