@@ -496,6 +496,11 @@ class DemoProjectWorkflow:
         self._last_build_status: dict[str, Any] | None = None
         self._last_demo_project: dict[str, Any] | None = None
         self._temporal_api_key_rotation: dict[str, Any] | None = None
+        # Captured per-reconcile so a failure anywhere in the pass (incl. child
+        # workflows) can compensate the Temporal Cloud resources created THIS pass.
+        self._tc_state: TemporalCloudReconcileState | None = None
+        self._tc_plan: Any = None
+        self._tc_token: str | None = None
         self._status: dict[str, Any] = {
             "phase": "Starting",
             "message": "Workflow has not received project state.",
@@ -680,30 +685,43 @@ class DemoProjectWorkflow:
             ),
         }
 
-        external = await self._reconcile_external_resources(
-            demo_project,
-            previous_status=previous_status,
-            force_temporal_auth_rotation=(
-                reconcile_input.force_temporal_auth_rotation
-            ),
-        )
-        build_status = await self._build_project_artifact(
-            external.demo_project,
-            external.status,
-        )
-        serverless_status = await self._reconcile_serverless_lambda_if_needed(
-            project_name,
-            external.demo_project,
-            external.status,
-            build_status,
-        )
-        runtime_status = await self._reconcile_kubernetes_runtime(
-            project_name,
-            external.demo_project,
-            external.status,
-            build_status,
-            previous_status,
-        )
+        # Reset the per-reconcile Temporal Cloud capture used for saga compensation.
+        self._tc_state = None
+        self._tc_plan = None
+        self._tc_token = None
+        try:
+            external = await self._reconcile_external_resources(
+                demo_project,
+                previous_status=previous_status,
+                force_temporal_auth_rotation=(
+                    reconcile_input.force_temporal_auth_rotation
+                ),
+            )
+            build_status = await self._build_project_artifact(
+                external.demo_project,
+                external.status,
+            )
+            serverless_status = await self._reconcile_serverless_lambda_if_needed(
+                project_name,
+                external.demo_project,
+                external.status,
+                build_status,
+            )
+            runtime_status = await self._reconcile_kubernetes_runtime(
+                project_name,
+                external.demo_project,
+                external.status,
+                build_status,
+                previous_status,
+            )
+        except Exception as error:  # noqa: BLE001 - saga compensation boundary
+            # A provisioning activity or a child workflow failed unexpectedly
+            # (raised, vs. returning a rollout-failure status). Without this the
+            # exception would fail the entity workflow AND orphan the Temporal
+            # Cloud namespace / credentials / secrets created this pass.
+            return await self._handle_reconcile_failure(
+                project_name, demo_project, error
+            )
         self._status = status_with_serverless_lambda(
             runtime_status,
             serverless_status,
@@ -889,6 +907,12 @@ class DemoProjectWorkflow:
             reconcile_sequence=self._reconcile_sequence,
         )
         state = TemporalCloudReconcileState()
+        # Capture for reconcile-level saga compensation: `state` mutates in place
+        # as each resource is created, so a later failure (incl. a child workflow)
+        # can tear down exactly what this pass created.
+        self._tc_state = state
+        self._tc_plan = external_plan
+        self._tc_token = candidate_secret_token
 
         try:
             await self._stage_temporal_mtls_ca_if_needed(
@@ -1370,6 +1394,83 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
+    async def _handle_reconcile_failure(
+        self,
+        project_name: str,
+        demo_project: dict[str, Any],
+        error: BaseException,
+    ) -> bool:
+        record_target = self._last_demo_project or demo_project
+        if not project_has_active_version(demo_project):
+            # First-time provision (empty state): tear down everything created this
+            # pass so we don't orphan the Temporal Cloud namespace / credentials /
+            # secrets, then re-raise to fail the entity workflow.
+            await self._compensate_first_time_external_resources()
+            raise error
+        # Established project: a new rollout failed. Preserve the active/production
+        # resources, settle to a terminal rollout-failure status, and keep the
+        # long-lived entity workflow running (it retries on the next change).
+        self._status = self._failed_rollout_status(record_target)
+        await self._record_status(record_target, self._status)
+        return True
+
+    def _failed_rollout_status(
+        self,
+        demo_project: dict[str, Any],
+    ) -> dict[str, Any]:
+        status: dict[str, Any] = {
+            "project": self._project_name,
+            "phase": "WorkerRolloutFailed",
+            "message": (
+                "Reconcile failed unexpectedly; rollout did not complete. "
+                "The active version was preserved."
+            ),
+        }
+        current = demo_project.get("status") if isinstance(demo_project, dict) else None
+        if isinstance(current, dict):
+            for key in (
+                "activeImageVersion",
+                "activeImages",
+                "activeRuntimeNamespace",
+                "activeRevision",
+                "activeRouteServices",
+            ):
+                if current.get(key) is not None:
+                    status[key] = current[key]
+        return status
+
+    async def _compensate_first_time_external_resources(self) -> None:
+        plan = self._tc_plan
+        state = self._tc_state
+        if plan is None or state is None:
+            return
+        # Full teardown of resources created THIS pass, mirroring the finalize
+        # order (api key -> service account -> namespace -> secrets). No `promoted`
+        # guard: a failed first provision must not leave a promoted-but-unused
+        # credential or namespace behind.
+        await self._compensate_temporal_candidate_api_key(plan, state)
+        await self._compensate_temporal_service_account(plan, state)
+        await self._compensate_temporal_namespace(plan, state)
+        if state.namespace is not None and state.namespace.created:
+            await self._delete_temporal_runtime_secret(plan)
+        await self._delete_temporal_candidate_secret(
+            plan,
+            stage=state.stage,
+            ca=state.ca,
+            candidate_secret_token=self._tc_token,
+        )
+
+    async def _delete_temporal_runtime_secret(self, external_plan: Any) -> None:
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_runtime_secret,
+            external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
     async def _run_finalize(self, project_name: str) -> None:
         demo_project = (
             self._finalize_spec
@@ -1728,6 +1829,21 @@ class DemoProjectWorkflow:
             return None
         token = self._pending_force_reconcile.get("token")
         return token if isinstance(token, str) and token else None
+
+
+def project_has_active_version(demo_project: Any) -> bool:
+    """True if the project has already promoted a version (not a first provision).
+
+    A first-time provision has no active version; if it fails it should compensate
+    and fail the entity workflow (empty state). An established project preserves its
+    active resources and settles to a failed rollout.
+    """
+    if not isinstance(demo_project, dict):
+        return False
+    status = demo_project.get("status")
+    if not isinstance(status, dict):
+        return False
+    return bool(status.get("activeImageVersion"))
 
 
 def remember_completed_reconcile_identity(status: Any) -> bool:

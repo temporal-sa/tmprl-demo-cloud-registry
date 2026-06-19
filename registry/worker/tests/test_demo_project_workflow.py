@@ -15,6 +15,7 @@ from demo_registry_operator.resources import (
 from demo_registry_operator.workflows.demo_project import (
     DemoProjectWorkflow,
     demo_project_with_temporal_api_key,
+    project_has_active_version,
     remember_completed_reconcile_identity,
     previous_temporal_search_attributes,
     reconcile_identity,
@@ -798,3 +799,67 @@ def test_smoke_check_failed_settles_then_force_reconcile_retries():
     # 5.1: force_reconcile queues exactly one new attempt
     wf.force_reconcile(ForceReconcileSignal(token="retry-1", reason="manual"))
     assert wf._pending_force_reconcile == {"token": "retry-1", "reason": "manual"}
+
+
+# --- Saga: first-time-failure compensation vs established-project settle ---
+
+
+def test_project_has_active_version_distinguishes_first_time():
+    assert project_has_active_version({"status": {"activeImageVersion": "git-x"}}) is True
+    assert project_has_active_version({"status": {}}) is False
+    assert project_has_active_version({"status": {"activeImageVersion": ""}}) is False
+    assert project_has_active_version({}) is False
+    assert project_has_active_version(None) is False
+
+
+def test_failed_rollout_status_preserves_active_and_settles():
+    wf = workflow_instance("demo")
+    demo_project = {
+        "status": {
+            "activeImageVersion": "git-active",
+            "activeRuntimeNamespace": "ns-active",
+            "activeImages": {"worker": "git-active"},
+        }
+    }
+    status = wf._failed_rollout_status(demo_project)
+    assert status["phase"] == "WorkerRolloutFailed"
+    # active/production fields are preserved so the catalog is not blanked
+    assert status["activeImageVersion"] == "git-active"
+    assert status["activeRuntimeNamespace"] == "ns-active"
+    # WorkerRolloutFailed is a terminal phase -> the entity settles (keeps running)
+    assert remember_completed_reconcile_identity(status) is True
+
+
+def test_reconcile_wraps_children_in_saga_compensation_boundary():
+    source = inspect.getsource(DemoProjectWorkflow._run_demo_project_reconcile)
+    # external resources + child workflows run inside one try/except that routes
+    # to the saga failure handler.
+    assert "try:" in source
+    assert "except Exception" in source
+    assert "_handle_reconcile_failure" in source
+    # the per-reconcile temporal-cloud capture is reset each pass
+    assert "self._tc_state = None" in source
+
+
+def test_handle_reconcile_failure_splits_first_time_vs_existing():
+    source = inspect.getsource(DemoProjectWorkflow._handle_reconcile_failure)
+    assert "project_has_active_version" in source
+    # first-time: compensate then re-raise (fail the entity workflow)
+    assert "_compensate_first_time_external_resources" in source
+    assert "raise error" in source
+    # existing: settle to a failed rollout, keep running (no destructive teardown)
+    assert "_failed_rollout_status" in source
+    assert "_record_status" in source
+
+
+def test_first_time_compensation_tears_down_full_temporal_stack():
+    source = inspect.getsource(
+        DemoProjectWorkflow._compensate_first_time_external_resources
+    )
+    # no `promoted` guard here — a failed first provision tears down everything,
+    # including the promoted runtime secret.
+    assert "_compensate_temporal_candidate_api_key" in source
+    assert "_compensate_temporal_service_account" in source
+    assert "_compensate_temporal_namespace" in source
+    assert "_delete_temporal_runtime_secret" in source
+    assert "_delete_temporal_candidate_secret" in source
