@@ -121,6 +121,7 @@ from demo_registry_operator.activities.revision import (
     ensure_revision,
     patch_demo_project_revision_refs,
     plan_candidate_revision,
+    plan_revision_deletes,
     set_revision_phase,
     wait_for_revision_cleanup,
 )
@@ -337,6 +338,7 @@ async def main() -> None:
                     rollback_worker_deployments,
                     prune_stale_runtime_candidates,
                     plan_candidate_revision,
+                    plan_revision_deletes,
                     ensure_revision,
                     set_revision_phase,
                     delete_revision,

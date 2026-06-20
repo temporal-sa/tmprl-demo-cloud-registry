@@ -126,6 +126,66 @@ class DeleteRevisionRequest:
     name: str
 
 
+def _revision_ref_from_resource(resource: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = resource.get("metadata")
+    spec = resource.get("spec")
+    if not isinstance(metadata, dict) or not isinstance(spec, dict):
+        return None
+    name = metadata.get("name")
+    rollout_version = spec.get("rolloutVersion")
+    if not isinstance(name, str) or not name:
+        return None
+    if not isinstance(rollout_version, str) or not rollout_version:
+        return None
+    return {
+        "name": name,
+        "uid": str(metadata.get("uid") or ""),
+        "rolloutVersion": rollout_version,
+        "runtimeNamespace": spec.get("runtimeNamespace"),
+        "runtimeNamespaceEnabled": bool(spec.get("runtimeNamespaceEnabled")),
+    }
+
+
+@dataclass(frozen=True)
+class PlanRevisionDeletesRequest:
+    project: str
+    protected_revisions: list[str] | None = None
+
+
+@activity.defn
+def plan_revision_deletes(request: PlanRevisionDeletesRequest) -> dict[str, Any]:
+    """Plan deletion of cluster-scoped revisions not protected by live status."""
+    project = request.project
+    if not isinstance(project, str) or not project:
+        raise ValueError("plan_revision_deletes requires project")
+
+    protected = {
+        name
+        for name in (request.protected_revisions or [])
+        if isinstance(name, str) and name
+    }
+    selector = f"platform.temporal.io/project={project}"
+    revisions = kube.list_demo_project_revisions(label_selector=selector)
+    delete: list[str] = []
+    refs: dict[str, dict[str, Any]] = {}
+    for revision in revisions:
+        ref = _revision_ref_from_resource(revision)
+        if ref is None:
+            continue
+        name = ref["name"]
+        refs[name] = ref
+        if name not in protected:
+            delete.append(name)
+
+    return {
+        "project": project,
+        "delete": sorted(delete),
+        "protected": sorted(protected),
+        "refused": sorted(name for name in protected if name in refs),
+        "revisions": refs,
+    }
+
+
 @activity.defn
 def delete_revision(request: DeleteRevisionRequest) -> dict[str, Any]:
     # Foreground deletion: returns immediately; cleanup is awaited by

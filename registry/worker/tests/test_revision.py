@@ -608,6 +608,43 @@ def test_delete_revision_uses_foreground_propagation(monkeypatch):
     assert result["action"] == "deleting"
 
 
+def test_plan_revision_deletes_protects_active_and_deletes_stale(monkeypatch):
+    monkeypatch.setattr(
+        revision_activities.kube,
+        "list_demo_project_revisions",
+        lambda label_selector: [
+            {
+                "metadata": {"name": "rev-active", "uid": "uid-active"},
+                "spec": {
+                    "rolloutVersion": "git-new",
+                    "runtimeNamespace": "runtime-new",
+                    "runtimeNamespaceEnabled": True,
+                },
+            },
+            {
+                "metadata": {"name": "rev-old", "uid": "uid-old"},
+                "spec": {
+                    "rolloutVersion": "git-old",
+                    "runtimeNamespace": "runtime-old",
+                    "runtimeNamespaceEnabled": True,
+                },
+            },
+        ],
+    )
+
+    decision = revision_activities.plan_revision_deletes(
+        revision_activities.PlanRevisionDeletesRequest(
+            project="demo",
+            protected_revisions=["rev-active"],
+        )
+    )
+
+    assert decision["delete"] == ["rev-old"]
+    assert decision["protected"] == ["rev-active"]
+    assert decision["refused"] == ["rev-active"]
+    assert decision["revisions"]["rev-old"]["runtimeNamespace"] == "runtime-old"
+
+
 def test_patch_revision_refs_only_patches_ref_keys(monkeypatch):
     sent = {}
     monkeypatch.setattr(

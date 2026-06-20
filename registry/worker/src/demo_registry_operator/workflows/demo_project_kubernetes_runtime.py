@@ -682,6 +682,22 @@ class DemoProjectKubernetesRuntimeWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
 
+    async def _plan_revision_deletes(
+        self,
+        project: str,
+        *,
+        protected_revisions: list[str],
+    ) -> dict[str, Any]:
+        return await workflow.execute_activity(
+            revision_activities.plan_revision_deletes,
+            revision_activities.PlanRevisionDeletesRequest(
+                project=project,
+                protected_revisions=protected_revisions,
+            ),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
     async def _wait_revision_cleanup(
         self, ref_summary: dict[str, Any]
     ) -> dict[str, Any]:
@@ -766,13 +782,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
         # the new one is durably recorded (compute_delete_targets safety).
         await self._patch_revision_refs(self._project, {"activeRevision": revision})
         promoted_status["activeRevision"] = revision
-        decision = compute_delete_targets(
-            active_revision=name,
-            candidate_revision=name,
-            promoted=True,
-            previous_active_revision=self._previous_active_revision,
+        decision = await self._plan_revision_deletes(
+            self._project,
+            protected_revisions=[name],
         )
-        previous_summary = self._previous_active_revision_summary()
         cleanup: dict[str, Any] = {"phase": "Skipped", "decision": decision}
         for target in decision.get("delete") or []:
             allowed = require_allowed_revision_delete(target, decision)
@@ -780,17 +793,13 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 allowed, "Superseded", "Superseded by a newer revision."
             )
             await self._delete_revision(allowed)
-            cleanup = await self._wait_revision_cleanup(previous_summary or revision)
+            target_summary = revision_summary_from_delete_decision(decision, allowed)
+            cleanup = await self._wait_revision_cleanup(target_summary or revision)
         await self._patch_revision_refs(
             self._project, {"revisionCleanupStatus": cleanup}
         )
         promoted_status["revisionCleanupStatus"] = cleanup
         return promoted_status
-
-    def _previous_active_revision_summary(self) -> dict[str, Any] | None:
-        previous = self._previous_status.get("activeRevision")
-        return previous if isinstance(previous, dict) else None
-
 
 def _revision_name_of(ref: Any) -> str | None:
     if isinstance(ref, dict):
@@ -857,6 +866,17 @@ def require_allowed_revision_delete(target: str, decision: dict[str, Any]) -> st
             f"Refusing to delete revision {target!r}; not in computed delete targets."
         )
     return target
+
+
+def revision_summary_from_delete_decision(
+    decision: dict[str, Any],
+    name: str,
+) -> dict[str, Any] | None:
+    revisions = decision.get("revisions")
+    if not isinstance(revisions, dict):
+        return None
+    revision = revisions.get(name)
+    return revision if isinstance(revision, dict) else None
 
 
 # --- Phase 4.1-4.3: revision lifecycle helpers (pure) ---

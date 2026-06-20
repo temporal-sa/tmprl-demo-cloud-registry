@@ -13,6 +13,7 @@ from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import external_resources
 from demo_registry_operator.activities import force_reconcile as force_reconcile_activities
 from demo_registry_operator.activities import reconcile as reconcile_activities
+from demo_registry_operator.activities import revision as revision_activities
 from demo_registry_operator.workflows import demo_project_artifact_build as artifact_build_workflow
 from demo_registry_operator.workflows import demo_project_kubernetes_runtime as kubernetes_runtime_workflow
 from demo_registry_operator.workflows import demo_project_serverless_lambda as serverless_lambda_workflow
@@ -131,6 +132,7 @@ class DemoProjectFinalizationDeletes:
     source_action: str
     source_auth_action: str
     runtime_namespace_actions: list[dict[str, Any]]
+    revision_actions: list[dict[str, Any]]
 
 
 def reconcile_identity(demo_project: dict[str, Any]) -> dict[str, str]:
@@ -1630,6 +1632,7 @@ class DemoProjectWorkflow:
                 source_action=delete_actions.source_action,
                 source_auth_action=delete_actions.source_auth_action,
                 runtime_namespace_actions=delete_actions.runtime_namespace_actions,
+                revision_actions=delete_actions.revision_actions,
                 external=external,
             )
             self._status = finalized_project_status(project_name, result)
@@ -1668,6 +1671,9 @@ class DemoProjectWorkflow:
                 "action": action.action,
             })
 
+        revision_actions = await self._delete_project_revisions(
+            finalize_plan["project"]
+        )
         namespace_action = await workflow.execute_activity(
             reconcile_activities.delete_project_namespace_resource,
             reconcile_activities.ProjectNamespaceDeleteRequest(finalize_plan["namespace"]),
@@ -1697,7 +1703,32 @@ class DemoProjectWorkflow:
             source_action=source_action.action,
             source_auth_action=source_auth_action.action,
             runtime_namespace_actions=runtime_namespace_actions,
+            revision_actions=revision_actions,
         )
+
+    async def _delete_project_revisions(self, project: str) -> list[dict[str, Any]]:
+        decision = await workflow.execute_activity(
+            revision_activities.plan_revision_deletes,
+            revision_activities.PlanRevisionDeletesRequest(
+                project=project,
+                protected_revisions=[],
+            ),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        actions: list[dict[str, Any]] = []
+        for name in decision.get("delete") or []:
+            result = await workflow.execute_activity(
+                revision_activities.delete_revision,
+                revision_activities.DeleteRevisionRequest(name=name),
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            actions.append({
+                "name": name,
+                "action": result.get("action"),
+            })
+        return actions
 
     async def _delete_project_external_resources(
         self,

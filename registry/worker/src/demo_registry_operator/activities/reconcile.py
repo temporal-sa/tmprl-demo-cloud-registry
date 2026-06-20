@@ -372,6 +372,7 @@ def project_finalization_status(
     source_action: str,
     external: dict[str, Any],
     runtime_namespace_actions: list[dict[str, Any]] | None = None,
+    revision_actions: list[dict[str, Any]] | None = None,
     source_auth_action: str = "not-required",
 ) -> dict[str, Any]:
     source_status = {
@@ -390,6 +391,7 @@ def project_finalization_status(
             "action": namespace_action,
         },
         "runtimeNamespaces": runtime_namespace_actions or [],
+        "revisions": revision_actions or [],
         "source": source_status,
         "externalResources": external,
     }

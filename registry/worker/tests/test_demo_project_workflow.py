@@ -867,6 +867,24 @@ def test_require_allowed_revision_delete_raises_on_unexpected_target():
         )
 
 
+def test_revision_summary_from_delete_decision_returns_listed_revision():
+    decision = {
+        "delete": ["rev-old"],
+        "revisions": {
+            "rev-old": {
+                "name": "rev-old",
+                "rolloutVersion": "git-old",
+                "runtimeNamespace": "runtime-old",
+                "runtimeNamespaceEnabled": True,
+            }
+        },
+    }
+
+    assert kubernetes_runtime_workflow.revision_summary_from_delete_decision(
+        decision, "rev-old"
+    ) == decision["revisions"]["rev-old"]
+
+
 # --- Task 4.1-4.3: revision lifecycle helpers ---
 
 from demo_registry_operator.activities.revision import RevisionRef  # noqa: E402
