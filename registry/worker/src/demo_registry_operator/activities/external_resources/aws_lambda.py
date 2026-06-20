@@ -11,6 +11,16 @@ from demo_registry_operator.activities.external_resources import serverless_name
 from demo_registry_operator.config import WorkerConfig
 
 
+TEMPORAL_RUNTIME_SECRET_ARN_ENV = "TEMPORAL_RUNTIME_SECRET_ARN"
+TEMPORAL_RUNTIME_SECRET_ID_ENV = "TEMPORAL_RUNTIME_SECRET_ID"
+SECRET_ENV_MANIFEST_ENV = "TMPRL_DEMO_CLOUD_SECRET_ENV"
+SECRET_FILE_MANIFEST_ENV = "TMPRL_DEMO_CLOUD_SECRET_FILES"
+TEMPORAL_MTLS_TMP_DIR = "/tmp/tmprl-demo-cloud/temporal"
+TEMPORAL_MTLS_CA_PATH = f"{TEMPORAL_MTLS_TMP_DIR}/ca.crt"
+TEMPORAL_MTLS_CERT_PATH = f"{TEMPORAL_MTLS_TMP_DIR}/tls.crt"
+TEMPORAL_MTLS_KEY_PATH = f"{TEMPORAL_MTLS_TMP_DIR}/tls.key"
+
+
 @activity.defn
 def ensure_lambda_function(
     request: models.EnsureLambdaFunctionRequest,
@@ -29,8 +39,12 @@ def ensure_lambda_function(
     lambda_client = session.client("lambda")
     secretsmanager = session.client("secretsmanager")
     try:
-        temporal_secret = read_json_secret(secretsmanager, request.temporal_secret_path)
-        environment = lambda_environment(request, temporal_secret)
+        temporal_secret = describe_secret_reference(
+            secretsmanager,
+            request.temporal_secret_path,
+        )
+        secret_env = describe_secret_environment(secretsmanager, request.secret_env)
+        environment = lambda_environment(request, temporal_secret, secret_env)
         result = ensure_image_lambda(lambda_client, request, environment)
     except (BotoCoreError, ClientError) as error:
         raise lambda_application_error(
@@ -51,7 +65,8 @@ def ensure_lambda_function(
         "timeoutSeconds": request.timeout_seconds,
         "deploymentName": request.deployment_name,
         "buildId": request.build_id,
-        "temporalAuthMode": "apiKey" if temporal_secret.get("apiKey") else "mtls",
+        "temporalAuthMode": request.temporal_auth_mode,
+        "temporalSecretArn": temporal_secret["arn"],
     }
     return models.EnsureLambdaFunctionResult(
         status=status,
@@ -368,62 +383,156 @@ def read_json_secret(secretsmanager: Any, secret_id: str) -> dict[str, Any]:
     return decoded
 
 
-def lambda_environment(
-    request: models.EnsureLambdaFunctionRequest,
-    temporal_secret: dict[str, Any],
-) -> dict[str, str]:
-    required = ("address", "namespace", "tls")
-    missing = [key for key in required if key not in temporal_secret]
-    if missing:
+def describe_secret_reference(secretsmanager: Any, secret_id: str) -> dict[str, str]:
+    try:
+        response = secretsmanager.describe_secret(SecretId=secret_id)
+    except Exception as error:
+        if common.error_code(error) == "ResourceNotFoundException":
+            raise errors.non_retryable_error(
+                f"Secrets Manager secret {secret_id!r} does not exist",
+                error_type=errors.CONFIGURATION_ERROR,
+            ) from error
+        raise
+    arn = response.get("ARN")
+    name = response.get("Name")
+    if not isinstance(arn, str) or not arn:
         raise errors.non_retryable_error(
-            "Temporal runtime secret is missing required properties: "
-            + ", ".join(missing),
+            f"Secrets Manager secret {secret_id!r} is missing an ARN",
             error_type=errors.CONFIGURATION_ERROR,
         )
+    return {
+        "arn": arn,
+        "name": str(name or secret_id),
+    }
 
+
+def describe_secret_environment(
+    secretsmanager: Any,
+    refs: tuple[models.LambdaSecretEnvironmentVariable, ...],
+) -> tuple[dict[str, str], ...]:
+    cache: dict[str, dict[str, str]] = {}
+    described: list[dict[str, str]] = []
+    for ref in refs:
+        secret = cache.get(ref.secret_path)
+        if secret is None:
+            secret = describe_secret_reference(secretsmanager, ref.secret_path)
+            cache[ref.secret_path] = secret
+        described.append(
+            {
+                "name": ref.name,
+                "secretArn": secret["arn"],
+                "secretId": secret["name"],
+                "property": ref.property_name,
+            }
+        )
+    return tuple(described)
+
+
+def lambda_environment(
+    request: models.EnsureLambdaFunctionRequest,
+    temporal_secret: dict[str, str],
+    secret_env: tuple[dict[str, str], ...] = (),
+) -> dict[str, str]:
     environment = {key: str(value) for key, value in sorted(request.env.items())}
     environment.update(
         {
             "HOME": "/tmp",
-            "TEMPORAL_ADDRESS": str(temporal_secret["address"]),
-            "TEMPORAL_NAMESPACE": str(temporal_secret["namespace"]),
             "TEMPORAL_DEPLOYMENT_NAME": request.deployment_name,
             "TEMPORAL_WORKER_DEPLOYMENT_NAME": request.deployment_name,
             "TEMPORAL_WORKER_BUILD_ID": request.build_id,
-            "TEMPORAL_TLS": normalized_bool(temporal_secret.get("tls")),
+            TEMPORAL_RUNTIME_SECRET_ARN_ENV: temporal_secret["arn"],
+            TEMPORAL_RUNTIME_SECRET_ID_ENV: temporal_secret["name"],
         }
     )
-    if temporal_secret.get("apiKey"):
-        environment["TEMPORAL_API_KEY"] = str(temporal_secret["apiKey"])
-        environment.pop("TEMPORAL_TLS_CLIENT_CERT_DATA", None)
-        environment.pop("TEMPORAL_TLS_CLIENT_KEY_DATA", None)
-        return environment
-
-    mtls_missing = [
-        key for key in ("clientCert", "clientKey") if not temporal_secret.get(key)
-    ]
-    if mtls_missing:
-        raise errors.non_retryable_error(
-            "Temporal mTLS runtime secret is missing required properties: "
-            + ", ".join(mtls_missing),
-            error_type=errors.CONFIGURATION_ERROR,
-        )
     environment.pop("TEMPORAL_API_KEY", None)
-    environment["TEMPORAL_TLS_CLIENT_CERT_DATA"] = str(temporal_secret["clientCert"])
-    environment["TEMPORAL_TLS_CLIENT_KEY_DATA"] = str(temporal_secret["clientKey"])
+    environment.pop("TEMPORAL_TLS_CLIENT_CERT_DATA", None)
+    environment.pop("TEMPORAL_TLS_CLIENT_KEY_DATA", None)
+
+    secret_env_manifest = [
+        *temporal_secret_env_manifest(request, temporal_secret),
+        *secret_env,
+    ]
+    if secret_env_manifest:
+        environment[SECRET_ENV_MANIFEST_ENV] = json.dumps(
+            secret_env_manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    secret_file_manifest = temporal_secret_file_manifest(request, temporal_secret)
+    if secret_file_manifest:
+        environment[SECRET_FILE_MANIFEST_ENV] = json.dumps(
+            secret_file_manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for item in request.mtls_file_path_env:
+            environment[item.name] = item.value
     return environment
 
 
-def normalized_bool(value: Any) -> str:
-    if isinstance(value, bool):
-        return str(value).lower()
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "on"}:
-            return "true"
-        if lowered in {"false", "0", "no", "off"}:
-            return "false"
-    return "true"
+def temporal_secret_env_manifest(
+    request: models.EnsureLambdaFunctionRequest,
+    temporal_secret: dict[str, str],
+) -> list[dict[str, str]]:
+    refs = [
+        {
+            "name": "TEMPORAL_ADDRESS",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "address",
+        },
+        {
+            "name": "TEMPORAL_NAMESPACE",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "namespace",
+        },
+        {
+            "name": "TEMPORAL_TLS",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "tls",
+        },
+    ]
+    if request.temporal_auth_mode == "apiKey":
+        refs.append(
+            {
+                "name": "TEMPORAL_API_KEY",
+                "secretArn": temporal_secret["arn"],
+                "secretId": temporal_secret["name"],
+                "property": "apiKey",
+            }
+        )
+    return refs
+
+
+def temporal_secret_file_manifest(
+    request: models.EnsureLambdaFunctionRequest,
+    temporal_secret: dict[str, str],
+) -> list[dict[str, str]]:
+    if request.temporal_auth_mode != "mtls":
+        return []
+    return [
+        {
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "caCert",
+            "path": TEMPORAL_MTLS_CA_PATH,
+        },
+        {
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "clientCert",
+            "path": TEMPORAL_MTLS_CERT_PATH,
+        },
+        {
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+            "property": "clientKey",
+            "path": TEMPORAL_MTLS_KEY_PATH,
+        },
+    ]
 
 
 def lambda_description(request: models.EnsureLambdaFunctionRequest) -> str:

@@ -703,7 +703,6 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 "command",
                 "args",
                 "temporalProxy",
-                "temporalMtls",
                 "temporalAccess",
                 "secrets",
             )
@@ -720,14 +719,16 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 )
             )
 
-        for index, item in enumerate(component.get("env", [])):
-            if isinstance(item, dict) and "valueFrom" in item:
+        cert_files = temporal_mtls_cert_files_config(component)
+        for field in ("mountPath", "paths"):
+            if field in cert_files:
                 errors.append(
                     ProjectError(
                         document.path,
                         (
-                            f"components.{component_name}.env[{index}].valueFrom "
-                            "is not supported for serverless aws-lambda components"
+                            f"components.{component_name}.temporalMtls.certFiles."
+                            f"{field} is not supported for serverless aws-lambda "
+                            "components; Lambda cert files are materialized under /tmp"
                         ),
                     )
                 )

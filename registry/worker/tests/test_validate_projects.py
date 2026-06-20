@@ -285,6 +285,53 @@ def test_schema_accepts_serverless_lambda_component():
     assert errors == []
 
 
+def test_serverless_lambda_accepts_secret_env_and_mtls_path_remaps():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {
+            "provider": "aws-lambda",
+            "packageType": "image",
+        },
+        "temporalMtls": {
+            "certFiles": {
+                "pathEnv": {
+                    "clientCert": "TEMPORAL_CERT_PATH",
+                    "clientKey": "TEMPORAL_KEY_PATH",
+                }
+            }
+        },
+        "env": [
+            {
+                "name": "TEMPORAL_CERT_PEM",
+                "valueFrom": {"inputRef": "temporal.clientCert"},
+            },
+            {
+                "name": "BANKING_TOKEN",
+                "valueFrom": {"inputRef": "secrets.banking-api.TOKEN"},
+            },
+        ],
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "deploymentName": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+    assert validate_projects.validate_env_input_refs(document) == []
+    assert validate_projects.validate_temporal_mtls_cert_files(document) == []
+    assert validate_projects.validate_serverless_components(document) == []
+
+
 def test_schema_rejects_worker_versioning_task_queue_field():
     spec = base_spec()
     spec["components"]["app"] = {
@@ -369,12 +416,6 @@ def test_serverless_lambda_component_rejects_kubernetes_and_buildpack_shape():
         "build": "app",
         "serverless": {"provider": "aws-lambda"},
         "ports": [{"containerPort": 8000}],
-        "env": [
-            {
-                "name": "TEMPORAL_TOKEN",
-                "valueFrom": {"inputRef": "temporal.apiKey"},
-            }
-        ],
     }
     document = project_document(spec)
 
@@ -390,8 +431,48 @@ def test_serverless_lambda_component_rejects_kubernetes_and_buildpack_shape():
             "worker.versioning.enabled true"
         ),
         "components.app.ports is not supported for serverless aws-lambda components",
+    ]
+
+
+def test_serverless_lambda_rejects_custom_mtls_file_paths():
+    spec = base_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {"provider": "aws-lambda"},
+        "temporalMtls": {
+            "certFiles": {
+                "mountPath": "/etc/temporal",
+                "paths": {
+                    "clientCert": "/etc/temporal/client.pem",
+                    "clientKey": "/etc/temporal/client-key.pem",
+                },
+                "pathEnv": {
+                    "clientCert": "TEMPORAL_CERT_PATH",
+                    "clientKey": "TEMPORAL_KEY_PATH",
+                },
+            }
+        },
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "deploymentName": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_serverless_components(document)
+
+    assert [error.message for error in errors] == [
         (
-            "components.app.env[0].valueFrom is not supported for serverless "
-            "aws-lambda components"
+            "components.app.temporalMtls.certFiles.mountPath is not supported "
+            "for serverless aws-lambda components; Lambda cert files are "
+            "materialized under /tmp"
+        ),
+        (
+            "components.app.temporalMtls.certFiles.paths is not supported for "
+            "serverless aws-lambda components; Lambda cert files are "
+            "materialized under /tmp"
         ),
     ]

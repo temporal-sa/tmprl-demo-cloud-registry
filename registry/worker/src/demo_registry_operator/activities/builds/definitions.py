@@ -5,7 +5,7 @@ import json
 import shlex
 from typing import Any
 
-from demo_registry_operator.resources import builds
+from demo_registry_operator import resources
 
 
 DOCKERFILE_BUILD_STRATEGY = "dockerfile"
@@ -13,6 +13,7 @@ BUILDPACK_BUILD_STRATEGY = "buildpack"
 PACK_VERSION = "0.40.6"
 BUILDPACK_IMPLEMENTATION_VERSION = "buildpack-post-processes-v1"
 GENERATED_PROCESS_BUILDPACK_ID = "tmprl-demo/generated-processes"
+SERVERLESS_LAMBDA_WRAPPER_IMPLEMENTATION_VERSION = "lambda-secret-wrapper-v1"
 
 
 def build_strategy(build: dict[str, Any]) -> str:
@@ -52,13 +53,27 @@ def build_definition_hash(demo_project: dict[str, Any]) -> str:
 
 
 def build_definition_input(demo_project: dict[str, Any]) -> dict[str, Any]:
-    definition = json.loads(json.dumps(builds(demo_project)))
+    definition = json.loads(json.dumps(resources.builds(demo_project)))
     if not isinstance(definition, dict):
         return {}
-    for build in definition.values():
+    lambda_builds = serverless_lambda_build_names(demo_project)
+    for build_name, build in definition.items():
         if isinstance(build, dict) and build_strategy(build) == BUILDPACK_BUILD_STRATEGY:
             build["_registryBuildImplementation"] = BUILDPACK_IMPLEMENTATION_VERSION
+        if isinstance(build, dict) and build_name in lambda_builds:
+            build["_registryServerlessLambdaWrapper"] = (
+                SERVERLESS_LAMBDA_WRAPPER_IMPLEMENTATION_VERSION
+            )
     return definition
+
+
+def serverless_lambda_build_names(demo_project: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for component in resources.serverless_lambda_components(demo_project).values():
+        build_name = component.get("build")
+        if isinstance(build_name, str) and build_name:
+            names.add(build_name)
+    return names
 
 
 def buildpack_processes(build: dict[str, Any]) -> dict[str, str]:
@@ -140,8 +155,8 @@ def image_version(demo_project: dict[str, Any], source_commit: str) -> str:
 def image_version_suffix(demo_project: dict[str, Any]) -> str:
     if any(
         build_strategy(build) == BUILDPACK_BUILD_STRATEGY
-        for build in builds(demo_project).values()
-    ):
+        for build in resources.builds(demo_project).values()
+    ) or serverless_lambda_build_names(demo_project):
         return f"-b{build_definition_hash(demo_project)[:12]}"
     return ""
 

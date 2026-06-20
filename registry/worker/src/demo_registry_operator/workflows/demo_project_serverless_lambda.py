@@ -113,6 +113,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 project=project,
                 component=component_name,
                 role_name=execution_role_name,
+                secret_paths=secret_paths_for_lambda(demo_project),
             ),
             start_to_close_timeout=timedelta(minutes=3),
             retry_policy=COMMON_RETRY_POLICY,
@@ -134,6 +135,9 @@ class DemoProjectServerlessLambdaWorkflow:
                     demo_project
                 ),
                 env=literal_env(component),
+                temporal_auth_mode=resources.temporal_auth_mode(demo_project),
+                secret_env=secret_env(component, demo_project),
+                mtls_file_path_env=mtls_file_path_env(component),
             ),
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=LAMBDA_RETRY_POLICY,
@@ -212,6 +216,95 @@ def literal_env(component: dict[str, Any]) -> dict[str, str]:
         if isinstance(name, str) and "value" in item:
             rendered[name] = str(item["value"])
     return rendered
+
+
+def secret_env(
+    component: dict[str, Any],
+    demo_project: dict[str, Any],
+) -> tuple[external_resources.LambdaSecretEnvironmentVariable, ...]:
+    refs: list[external_resources.LambdaSecretEnvironmentVariable] = []
+    for item in resources.component_env_items(component):
+        name = item.get("name")
+        input_ref = resources.env_input_ref(item)
+        if not isinstance(name, str) or not input_ref:
+            continue
+
+        temporal_key = temporal_secret_property(input_ref)
+        if temporal_key:
+            refs.append(
+                external_resources.LambdaSecretEnvironmentVariable(
+                    name=name,
+                    secret_path=resources.temporal_secret_remote_path(demo_project),
+                    property_name=temporal_key,
+                )
+            )
+            continue
+
+        user_secret_ref = resources.parse_user_secret_input_ref(input_ref)
+        if user_secret_ref:
+            secret_name, property_name = user_secret_ref
+            refs.append(
+                external_resources.LambdaSecretEnvironmentVariable(
+                    name=name,
+                    secret_path=resources.user_secret_remote_path(
+                        demo_project,
+                        secret_name,
+                    ),
+                    property_name=property_name,
+                )
+            )
+
+    return tuple(refs)
+
+
+def temporal_secret_property(input_ref: str) -> str | None:
+    if not input_ref.startswith("temporal."):
+        return None
+    property_name = input_ref.removeprefix("temporal.")
+    return property_name or None
+
+
+def secret_paths_for_lambda(demo_project: dict[str, Any]) -> tuple[str, ...]:
+    paths = {
+        resources.project_secret_prefix(demo_project),
+        resources.temporal_secret_remote_path(demo_project),
+    }
+    for secret_name in resources.user_secret_names(demo_project):
+        paths.add(resources.user_secret_remote_path(demo_project, secret_name))
+    return tuple(sorted(paths))
+
+
+def mtls_file_path_env(
+    component: dict[str, Any],
+) -> tuple[external_resources.LambdaEnvironmentVariable, ...]:
+    paths = {
+        "certDir": "/tmp/tmprl-demo-cloud/temporal",
+        "caCert": "/tmp/tmprl-demo-cloud/temporal/ca.crt",
+        "clientCert": "/tmp/tmprl-demo-cloud/temporal/tls.crt",
+        "clientKey": "/tmp/tmprl-demo-cloud/temporal/tls.key",
+    }
+    configured = resources.temporal_mtls_cert_files_config(component).get("pathEnv")
+    path_envs = list(resources.TEMPORAL_MTLS_CERT_FILE_PATH_ENVS.items())
+    if isinstance(configured, dict):
+        path_envs.extend(
+            (key, value)
+            for key, value in configured.items()
+            if key in paths and isinstance(value, str) and value
+        )
+
+    rendered: list[external_resources.LambdaEnvironmentVariable] = []
+    seen: set[str] = set()
+    for key, env_name in path_envs:
+        if key not in paths or env_name in seen:
+            continue
+        rendered.append(
+            external_resources.LambdaEnvironmentVariable(
+                name=env_name,
+                value=paths[key],
+            )
+        )
+        seen.add(env_name)
+    return tuple(rendered)
 
 
 def aggregate_phase(statuses: dict[str, Any]) -> str:

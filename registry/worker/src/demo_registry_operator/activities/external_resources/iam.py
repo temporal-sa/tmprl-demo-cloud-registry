@@ -6,7 +6,7 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator import errors
+from demo_registry_operator import derive, errors
 from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
 
@@ -22,6 +22,7 @@ LAMBDA_EXECUTION_TRUST_POLICY = {
     ],
 }
 LAMBDA_LOGS_POLICY_NAME = "LambdaBasicExecution"
+LAMBDA_PROJECT_SECRETS_POLICY_NAME = "LambdaProjectSecrets"
 TEMPORAL_LAMBDA_INVOKE_POLICY_NAME = "TemporalLambdaInvoke"
 TEMPORAL_CLOUD_LAMBDA_INVOKE_PRINCIPALS_ENV = (
     "DEMO_REGISTRY_TEMPORAL_CLOUD_LAMBDA_INVOKE_PRINCIPALS"
@@ -65,6 +66,16 @@ def ensure_lambda_execution_role(
             policy_name=LAMBDA_LOGS_POLICY_NAME,
             policy_document=lambda_logs_policy(config),
         )
+        secrets_policy_action = ensure_inline_policy(
+            iam,
+            role_name=request.role_name,
+            policy_name=LAMBDA_PROJECT_SECRETS_POLICY_NAME,
+            policy_document=lambda_project_secrets_policy(
+                config,
+                project=request.project,
+                secret_paths=request.secret_paths,
+            ),
+        )
     except Exception as error:
         raise errors.aws_application_error(
             error,
@@ -73,10 +84,18 @@ def ensure_lambda_execution_role(
 
     status = {
         "phase": "Ready",
-        "action": aggregate_action(result["action"], policy_action),
+        "action": aggregate_action(
+            result["action"],
+            policy_action,
+            secrets_policy_action,
+        ),
         "roleName": request.role_name,
         "roleArn": result["arn"],
         "policy": LAMBDA_LOGS_POLICY_NAME,
+        "policies": [
+            LAMBDA_LOGS_POLICY_NAME,
+            LAMBDA_PROJECT_SECRETS_POLICY_NAME,
+        ],
     }
     return models.EnsureLambdaExecutionRoleResult(
         status=status,
@@ -265,6 +284,83 @@ def lambda_logs_policy(config: WorkerConfig) -> dict[str, Any]:
             },
         ],
     }
+
+
+def lambda_project_secrets_policy(
+    config: WorkerConfig,
+    *,
+    project: str,
+    secret_paths: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    account = required_aws_account_id(config)
+    region = config.aws_region
+    resources = sorted(
+        {
+            secret_resource_arn(config, pattern)
+            for pattern in lambda_secret_resource_patterns(project, secret_paths)
+        }
+    )
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:GetSecretValue",
+                ],
+                "Resource": resources
+                or (
+                    f"arn:aws:secretsmanager:{region}:{account}:"
+                    f"secret:{derive.secret_prefix(project)}/*"
+                ),
+            }
+        ],
+    }
+
+
+def lambda_secret_resource_patterns(
+    project: str,
+    secret_paths: tuple[str, ...],
+) -> list[str]:
+    project_prefix = derive.secret_prefix(project)
+    patterns = {f"{project_prefix}/*"}
+    for path in secret_paths:
+        cleaned = normalized_secret_path(path)
+        if not cleaned:
+            continue
+        if cleaned == project_prefix:
+            patterns.add(f"{cleaned}/*")
+        else:
+            patterns.add(f"{cleaned}-*")
+    return sorted(patterns)
+
+
+def normalized_secret_path(path: str) -> str:
+    cleaned = path.strip().strip("/")
+    if "*" in cleaned or "?" in cleaned:
+        raise errors.non_retryable_error(
+            f"Secrets Manager path {path!r} must not contain wildcard characters",
+            error_type=errors.CONFIGURATION_ERROR,
+        )
+    return cleaned
+
+
+def secret_resource_arn(config: WorkerConfig, secret_name_pattern: str) -> str:
+    account = required_aws_account_id(config)
+    return (
+        f"arn:aws:secretsmanager:{config.aws_region}:{account}:"
+        f"secret:{secret_name_pattern}"
+    )
+
+
+def required_aws_account_id(config: WorkerConfig) -> str:
+    if not config.aws_account_id:
+        raise errors.non_retryable_error(
+            "DEMO_REGISTRY_AWS_ACCOUNT_ID is required to scope Lambda secret access",
+            error_type=errors.CONFIGURATION_ERROR,
+        )
+    return config.aws_account_id
 
 
 def temporal_lambda_invoke_trust_policy(

@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 
 from demo_registry_operator.activities.external_resources.aws_lambda import (
+    SECRET_ENV_MANIFEST_ENV,
+    SECRET_FILE_MANIFEST_ENV,
+    TEMPORAL_RUNTIME_SECRET_ARN_ENV,
+    TEMPORAL_RUNTIME_SECRET_ID_ENV,
     lambda_environment,
 )
 from demo_registry_operator.activities.external_resources.iam import (
+    lambda_project_secrets_policy,
     lambda_logs_policy,
     serverless_permissions_boundary_arn,
     temporal_lambda_invoke_policy,
@@ -14,6 +19,7 @@ from demo_registry_operator.activities.external_resources.iam import (
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.activities.external_resources.models import (
     EnsureLambdaFunctionRequest,
+    LambdaEnvironmentVariable,
     ReconcileServerlessWorkerDeploymentRequest,
 )
 from demo_registry_operator.activities.external_resources.serverless_names import (
@@ -24,6 +30,9 @@ from demo_registry_operator.activities.external_resources.serverless_names impor
 )
 from demo_registry_operator.activities.external_resources.serverless_worker import (
     aws_lambda_provider_details_payload,
+)
+from demo_registry_operator.workflows.demo_project_serverless_lambda import (
+    mtls_file_path_env,
 )
 
 
@@ -45,42 +54,188 @@ def lambda_request() -> EnsureLambdaFunctionRequest:
 
 
 def test_lambda_environment_injects_api_key_runtime_config():
+    temporal_secret = {
+        "arn": (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/temporal-AbCdEf"
+        ),
+        "name": "tmprl-dem-cld/banking-money-transfer/temporal",
+    }
     environment = lambda_environment(
         lambda_request(),
-        {
-            "address": "namespace.account.tmprl.cloud:7233",
-            "namespace": "namespace.account",
-            "tls": True,
-            "apiKey": "platform-key",
-        },
+        temporal_secret,
     )
 
     assert environment["APP_MODE"] == "demo"
-    assert environment["TEMPORAL_ADDRESS"] == "namespace.account.tmprl.cloud:7233"
-    assert environment["TEMPORAL_NAMESPACE"] == "namespace.account"
     assert environment["TEMPORAL_DEPLOYMENT_NAME"] == "money-transfer"
     assert environment["TEMPORAL_WORKER_BUILD_ID"] == "git-e12b0ed9d450"
-    assert environment["TEMPORAL_TLS"] == "true"
-    assert environment["TEMPORAL_API_KEY"] == "platform-key"
+    assert environment[TEMPORAL_RUNTIME_SECRET_ARN_ENV] == temporal_secret["arn"]
+    assert environment[TEMPORAL_RUNTIME_SECRET_ID_ENV] == temporal_secret["name"]
+    assert "TEMPORAL_ADDRESS" not in environment
+    assert "TEMPORAL_NAMESPACE" not in environment
+    assert "TEMPORAL_TLS" not in environment
+    assert "TEMPORAL_API_KEY" not in environment
     assert "TEMPORAL_TLS_CLIENT_CERT_DATA" not in environment
     assert "TEMPORAL_TLS_CLIENT_KEY_DATA" not in environment
+    assert json.loads(environment[SECRET_ENV_MANIFEST_ENV]) == [
+        {
+            "name": "TEMPORAL_ADDRESS",
+            "property": "address",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+        {
+            "name": "TEMPORAL_NAMESPACE",
+            "property": "namespace",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+        {
+            "name": "TEMPORAL_TLS",
+            "property": "tls",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+        {
+            "name": "TEMPORAL_API_KEY",
+            "property": "apiKey",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+    ]
+    assert SECRET_FILE_MANIFEST_ENV not in environment
 
 
 def test_lambda_environment_injects_mtls_runtime_config():
+    temporal_secret = {
+        "arn": (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/temporal-AbCdEf"
+        ),
+        "name": "tmprl-dem-cld/banking-money-transfer/temporal",
+    }
+    request = EnsureLambdaFunctionRequest(
+        **{
+            **lambda_request().__dict__,
+            "temporal_auth_mode": "mtls",
+            "mtls_file_path_env": (
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_MTLS_CERT_DIR",
+                    value="/tmp/tmprl-demo-cloud/temporal",
+                ),
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_MTLS_CA_CERT_PATH",
+                    value="/tmp/tmprl-demo-cloud/temporal/ca.crt",
+                ),
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_MTLS_CLIENT_CERT_PATH",
+                    value="/tmp/tmprl-demo-cloud/temporal/tls.crt",
+                ),
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_MTLS_CLIENT_KEY_PATH",
+                    value="/tmp/tmprl-demo-cloud/temporal/tls.key",
+                ),
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_CERT_PATH",
+                    value="/tmp/tmprl-demo-cloud/temporal/tls.crt",
+                ),
+                LambdaEnvironmentVariable(
+                    name="TEMPORAL_KEY_PATH",
+                    value="/tmp/tmprl-demo-cloud/temporal/tls.key",
+                ),
+            ),
+        }
+    )
     environment = lambda_environment(
-        lambda_request(),
-        {
-            "address": "namespace.account.tmprl.cloud:7233",
-            "namespace": "namespace.account",
-            "tls": "true",
-            "clientCert": "cert-pem",
-            "clientKey": "key-pem",
-        },
+        request,
+        temporal_secret,
     )
 
     assert "TEMPORAL_API_KEY" not in environment
-    assert environment["TEMPORAL_TLS_CLIENT_CERT_DATA"] == "cert-pem"
-    assert environment["TEMPORAL_TLS_CLIENT_KEY_DATA"] == "key-pem"
+    assert "TEMPORAL_TLS_CLIENT_CERT_DATA" not in environment
+    assert "TEMPORAL_TLS_CLIENT_KEY_DATA" not in environment
+    assert environment["TEMPORAL_CERT_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.crt"
+    assert environment["TEMPORAL_KEY_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.key"
+    assert environment["TEMPORAL_MTLS_CLIENT_CERT_PATH"] == (
+        "/tmp/tmprl-demo-cloud/temporal/tls.crt"
+    )
+    assert json.loads(environment[SECRET_FILE_MANIFEST_ENV]) == [
+        {
+            "path": "/tmp/tmprl-demo-cloud/temporal/ca.crt",
+            "property": "caCert",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+        {
+            "path": "/tmp/tmprl-demo-cloud/temporal/tls.crt",
+            "property": "clientCert",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+        {
+            "path": "/tmp/tmprl-demo-cloud/temporal/tls.key",
+            "property": "clientKey",
+            "secretArn": temporal_secret["arn"],
+            "secretId": temporal_secret["name"],
+        },
+    ]
+
+
+def test_lambda_environment_includes_user_secret_env_manifest():
+    temporal_secret = {
+        "arn": (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/temporal-AbCdEf"
+        ),
+        "name": "tmprl-dem-cld/banking-money-transfer/temporal",
+    }
+    user_secret = {
+        "name": "API_TOKEN",
+        "secretArn": (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/app-token-AbCdEf"
+        ),
+        "secretId": "tmprl-dem-cld/banking-money-transfer/app-token",
+        "property": "TOKEN",
+    }
+
+    environment = lambda_environment(
+        lambda_request(),
+        temporal_secret,
+        (user_secret,),
+    )
+
+    manifest = json.loads(environment[SECRET_ENV_MANIFEST_ENV])
+    assert user_secret in manifest
+
+
+def test_lambda_mtls_file_path_env_uses_tmp_paths_and_custom_names():
+    component = {
+        "temporalMtls": {
+            "certFiles": {
+                "mountPath": "/etc/ignored",
+                "pathEnv": {
+                    "clientCert": "TEMPORAL_CERT_PATH",
+                    "clientKey": "TEMPORAL_KEY_PATH",
+                },
+            }
+        }
+    }
+
+    env = {item.name: item.value for item in mtls_file_path_env(component)}
+
+    assert env["TEMPORAL_MTLS_CERT_DIR"] == "/tmp/tmprl-demo-cloud/temporal"
+    assert env["TEMPORAL_MTLS_CA_CERT_PATH"] == (
+        "/tmp/tmprl-demo-cloud/temporal/ca.crt"
+    )
+    assert env["TEMPORAL_MTLS_CLIENT_CERT_PATH"] == (
+        "/tmp/tmprl-demo-cloud/temporal/tls.crt"
+    )
+    assert env["TEMPORAL_MTLS_CLIENT_KEY_PATH"] == (
+        "/tmp/tmprl-demo-cloud/temporal/tls.key"
+    )
+    assert env["TEMPORAL_CERT_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.crt"
+    assert env["TEMPORAL_KEY_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.key"
 
 
 def test_serverless_names_are_stable_and_within_aws_limits():
@@ -159,6 +314,47 @@ def test_lambda_logs_policy_is_scoped_to_managed_function_prefix():
         "arn:aws:logs:us-west-1:123456789012:"
         "log-group:/aws/lambda/tmprl-dem-cld-*:*"
     )
+
+
+def test_lambda_project_secrets_policy_is_scoped_to_project_prefix_and_paths():
+    config = WorkerConfig.from_env()
+    config = WorkerConfig(
+        **{
+            **config.__dict__,
+            "aws_account_id": "123456789012",
+            "aws_region": "us-west-1",
+        }
+    )
+
+    policy = lambda_project_secrets_policy(
+        config,
+        project="banking-money-transfer",
+        secret_paths=(
+            "tmprl-dem-cld/banking-money-transfer",
+            "tmprl-dem-cld/banking-money-transfer/temporal",
+            "tmprl-dem-cld/banking-money-transfer/app-token",
+        ),
+    )
+
+    statement = policy["Statement"][0]
+    assert statement["Action"] == [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+    ]
+    assert statement["Resource"] == [
+        (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/*"
+        ),
+        (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/app-token-*"
+        ),
+        (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/temporal-*"
+        ),
+    ]
 
 
 def test_temporal_compute_provider_payload_matches_cli_shape():

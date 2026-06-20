@@ -77,6 +77,29 @@ def buildpack_demo_project(*, source_sha=SOURCE_SHA):
     return project
 
 
+def lambda_demo_project(*, source_sha=SOURCE_SHA):
+    project = demo_project(source_sha=source_sha)
+    project["spec"]["builds"]["worker"] = {
+        "context": ".",
+        "dockerfile": "docker/worker-lambda.Dockerfile",
+    }
+    project["spec"]["components"]["worker"] = {
+        "build": "worker",
+        "serverless": {
+            "provider": "aws-lambda",
+            "packageType": "image",
+            "architecture": "x86_64",
+        },
+        "worker": {
+            "versioning": {
+                "enabled": True,
+                "deploymentName": "money-transfer",
+            }
+        },
+    }
+    return project
+
+
 def previous_build_status(
     *,
     source_sha=SOURCE_SHA,
@@ -390,6 +413,27 @@ def test_codebuild_buildspec_defaults_to_dockerfile_strategy():
     assert "docker build -f docker/frontend.Dockerfile" in buildspec
     assert "docker push example.com/frontend:git-${SOURCE_SHA}" in buildspec
     assert "pack build" not in buildspec
+
+
+def test_codebuild_buildspec_wraps_serverless_lambda_images():
+    buildspec = builds.codebuild_buildspec(
+        lambda_demo_project(),
+        {
+            "frontend": "example.com/frontend:git-${SOURCE_SHA}",
+            "backend": "example.com/backend:git-${SOURCE_SHA}",
+            "worker": "example.com/worker:${IMAGE_VERSION}",
+        },
+        aws_region="us-west-1",
+    )
+
+    assert "tmprl-lambda-secret-wrapper" in buildspec
+    assert "public.ecr.aws/docker/library/golang:1.22" in buildspec
+    assert "GOARCH=amd64" in buildspec
+    assert "docker build -f docker/worker-lambda.Dockerfile -t tmprl-demo-local/worker:unwrapped" in buildspec
+    assert "TMPRL_ORIGINAL_ENTRYPOINT_B64" in buildspec
+    assert "ENTRYPOINT [\\\"/opt/tmprl-demo-cloud/bin/secret-wrapper\\\"]" in buildspec
+    assert "docker build -f /tmp/tmprl-lambda-wrapper-images/worker/Dockerfile -t example.com/worker:${IMAGE_VERSION}" in buildspec
+    assert "docker push example.com/worker:${IMAGE_VERSION}" in buildspec
 
 
 def test_codebuild_buildspec_supports_buildpack_strategy():

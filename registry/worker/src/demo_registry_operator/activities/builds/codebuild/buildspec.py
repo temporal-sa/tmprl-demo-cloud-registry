@@ -10,6 +10,345 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.activities.builds import definitions as build_definitions
 
 
+LAMBDA_SECRET_WRAPPER_GO_SOURCE = r'''
+package main
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+)
+
+type manifestRef struct {
+	Name      string `json:"name"`
+	SecretARN string `json:"secretArn"`
+	SecretID  string `json:"secretId"`
+	Property  string `json:"property"`
+	Path      string `json:"path"`
+}
+
+type secretValueResponse struct {
+	SecretString *string `json:"SecretString"`
+	SecretBinary *string `json:"SecretBinary"`
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "tmprl-demo-cloud secret wrapper:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cache := map[string]map[string]any{}
+	envRefs, err := parseManifest("TMPRL_DEMO_CLOUD_SECRET_ENV")
+	if err != nil {
+		return err
+	}
+	for _, ref := range envRefs {
+		if ref.Name == "" {
+			return errors.New("secret env manifest entry is missing name")
+		}
+		value, err := materializeSecretProperty(ref, cache)
+		if err != nil {
+			return err
+		}
+		if err := os.Setenv(ref.Name, value); err != nil {
+			return err
+		}
+	}
+
+	fileRefs, err := parseManifest("TMPRL_DEMO_CLOUD_SECRET_FILES")
+	if err != nil {
+		return err
+	}
+	for _, ref := range fileRefs {
+		if ref.Path == "" {
+			return errors.New("secret file manifest entry is missing path")
+		}
+		value, err := materializeSecretProperty(ref, cache)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(ref.Path), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(ref.Path, []byte(value), 0o600); err != nil {
+			return err
+		}
+	}
+
+	command, err := originalCommand(os.Args[1:])
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(command[0], command, os.Environ())
+}
+
+func parseManifest(name string) ([]manifestRef, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil, nil
+	}
+	var refs []manifestRef
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	return refs, nil
+}
+
+func materializeSecretProperty(ref manifestRef, cache map[string]map[string]any) (string, error) {
+	secretID := ref.SecretARN
+	if secretID == "" {
+		secretID = ref.SecretID
+	}
+	if secretID == "" {
+		return "", errors.New("secret manifest entry is missing secretArn/secretId")
+	}
+	values, ok := cache[secretID]
+	if !ok {
+		secretString, err := getSecretValue(secretID)
+		if err != nil {
+			return "", err
+		}
+		values, err = decodeSecret(secretID, secretString)
+		if err != nil {
+			return "", err
+		}
+		cache[secretID] = values
+	}
+	value, ok := values[ref.Property]
+	if !ok {
+		return "", fmt.Errorf("secret %s is missing property %q", secretID, ref.Property)
+	}
+	return stringifySecretProperty(value)
+}
+
+func decodeSecret(secretID, secretString string) (map[string]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(secretString))
+	decoder.UseNumber()
+	var values map[string]any
+	if err := decoder.Decode(&values); err != nil {
+		return nil, fmt.Errorf("secret %s must be a JSON object: %w", secretID, err)
+	}
+	return values, nil
+}
+
+func stringifySecretProperty(value any) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		return typed, nil
+	case bool:
+		if typed {
+			return "true", nil
+		}
+		return "false", nil
+	case json.Number:
+		return typed.String(), nil
+	case nil:
+		return "", nil
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	}
+}
+
+func getSecretValue(secretID string) (string, error) {
+	region := firstEnv("AWS_REGION", "AWS_DEFAULT_REGION")
+	if region == "" {
+		return "", errors.New("AWS_REGION or AWS_DEFAULT_REGION is required")
+	}
+	body, err := json.Marshal(map[string]string{"SecretId": secretID})
+	if err != nil {
+		return "", err
+	}
+	endpoint := "https://secretsmanager." + region + ".amazonaws.com/"
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	request.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+	if err := signV4(request, body, region, "secretsmanager"); err != nil {
+		return "", err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("GetSecretValue %s failed: %s: %s", secretID, response.Status, strings.TrimSpace(string(responseBody)))
+	}
+	var decoded secretValueResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return "", err
+	}
+	if decoded.SecretString != nil {
+		return *decoded.SecretString, nil
+	}
+	if decoded.SecretBinary != nil {
+		bytes, err := base64.StdEncoding.DecodeString(*decoded.SecretBinary)
+		if err != nil {
+			return "", err
+		}
+		return string(bytes), nil
+	}
+	return "", fmt.Errorf("GetSecretValue %s returned no SecretString or SecretBinary", secretID)
+}
+
+func signV4(request *http.Request, payload []byte, region, service string) error {
+	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
+	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	sessionToken := os.Getenv("AWS_SESSION_TOKEN")
+	if accessKey == "" || secretKey == "" {
+		return errors.New("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
+	}
+
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	date := now.Format("20060102")
+	request.Header.Set("X-Amz-Date", amzDate)
+	if sessionToken != "" {
+		request.Header.Set("X-Amz-Security-Token", sessionToken)
+	}
+
+	payloadHash := sha256Hex(payload)
+	canonicalHeaders, signedHeaders := canonicalHeaders(request)
+	canonicalRequest := strings.Join([]string{
+		request.Method,
+		"/",
+		"",
+		canonicalHeaders,
+		signedHeaders,
+		payloadHash,
+	}, "\n")
+	scope := date + "/" + region + "/" + service + "/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		sha256Hex([]byte(canonicalRequest)),
+	}, "\n")
+	signingKey := v4SigningKey(secretKey, date, region, service)
+	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+	request.Header.Set(
+		"Authorization",
+		"AWS4-HMAC-SHA256 Credential="+accessKey+"/"+scope+", SignedHeaders="+signedHeaders+", Signature="+signature,
+	)
+	return nil
+}
+
+func canonicalHeaders(request *http.Request) (string, string) {
+	headers := map[string]string{
+		"host": request.URL.Host,
+	}
+	for key, values := range request.Header {
+		lower := strings.ToLower(key)
+		normalized := make([]string, 0, len(values))
+		for _, value := range values {
+			normalized = append(normalized, strings.Join(strings.Fields(value), " "))
+		}
+		headers[lower] = strings.Join(normalized, ",")
+	}
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		lines = append(lines, name+":"+headers[name])
+	}
+	return strings.Join(lines, "\n") + "\n", strings.Join(names, ";")
+}
+
+func v4SigningKey(secretKey, date, region, service string) []byte {
+	kDate := hmacSHA256([]byte("AWS4"+secretKey), []byte(date))
+	kRegion := hmacSHA256(kDate, []byte(region))
+	kService := hmacSHA256(kRegion, []byte(service))
+	return hmacSHA256(kService, []byte("aws4_request"))
+}
+
+func hmacSHA256(key, data []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	return mac.Sum(nil)
+}
+
+func sha256Hex(value []byte) string {
+	sum := sha256.Sum256(value)
+	return hex.EncodeToString(sum[:])
+}
+
+func originalCommand(args []string) ([]string, error) {
+	entrypoint, err := decodeStringArrayEnv("TMPRL_ORIGINAL_ENTRYPOINT_B64")
+	if err != nil {
+		return nil, err
+	}
+	cmd, err := decodeStringArrayEnv("TMPRL_ORIGINAL_CMD_B64")
+	if err != nil {
+		return nil, err
+	}
+	if len(args) == 0 {
+		args = cmd
+	}
+	if len(entrypoint) > 0 {
+		return append(entrypoint, args...), nil
+	}
+	if len(args) > 0 {
+		return args, nil
+	}
+	return nil, errors.New("original image has no entrypoint or command")
+}
+
+func decodeStringArrayEnv(name string) ([]string, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var values []string
+	if err := json.Unmarshal(decoded, &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+'''
+
+
 def codebuild_start_build_args(
     demo_project: dict[str, Any],
     config: WorkerConfig,
@@ -128,6 +467,13 @@ def codebuild_buildspec(
         for build in resources.builds(demo_project).values()
     ):
         pre_build_commands.append(pack_install_command())
+    lambda_build_architectures = serverless_lambda_build_architectures(demo_project)
+    if lambda_build_architectures:
+        pre_build_commands.extend(
+            lambda_secret_wrapper_build_commands(
+                sorted(set(lambda_build_architectures.values()))
+            )
+        )
     pre_build_commands.extend(
         [
             (
@@ -143,8 +489,14 @@ def codebuild_buildspec(
     for build_name, build in sorted(resources.builds(demo_project).items()):
         image = image_templates[build_name]
         shell_image = shell_quote_image_template(image)
+        lambda_goarch = lambda_build_architectures.get(build_name)
         strategy = build_definitions.build_strategy(build)
         if strategy == build_definitions.DOCKERFILE_BUILD_STRATEGY:
+            target_image = (
+                shlex.quote(local_unwrapped_image_tag(build_name))
+                if lambda_goarch
+                else shell_image
+            )
             build_commands.append(
                 source_prefix
                 + " ".join(
@@ -154,11 +506,20 @@ def codebuild_buildspec(
                         "-f",
                         shlex.quote(build_definitions.required_build_string(build, "dockerfile")),
                         "-t",
-                        shell_image,
+                        target_image,
                         shlex.quote(build_definitions.required_build_string(build, "context")),
                     ]
                 )
             )
+            if lambda_goarch:
+                build_commands.extend(
+                    wrap_lambda_image_commands(
+                        build_name=build_name,
+                        base_image=local_unwrapped_image_tag(build_name),
+                        target_image=image,
+                        goarch=lambda_goarch,
+                    )
+                )
             build_commands.append("docker push " + shell_image)
             continue
 
@@ -222,6 +583,169 @@ def pack_install_command() -> str:
         f"pack-v{build_definitions.PACK_VERSION}-${{pack_arch}}.tgz "
         "| tar -xz -C /usr/local/bin pack"
     )
+
+
+def lambda_secret_wrapper_build_commands(goarches: list[str]) -> list[str]:
+    commands = [write_lambda_secret_wrapper_source_command()]
+    commands.extend(compile_lambda_secret_wrapper_command(goarch) for goarch in goarches)
+    return commands
+
+
+def write_lambda_secret_wrapper_source_command() -> str:
+    script = (
+        "import pathlib; "
+        "root=pathlib.Path('/tmp/tmprl-lambda-secret-wrapper'); "
+        "root.mkdir(parents=True, exist_ok=True); "
+        "(root/'main.go').write_text("
+        + json.dumps(LAMBDA_SECRET_WRAPPER_GO_SOURCE)
+        + ", encoding='utf-8')"
+    )
+    return "python3 -c " + shlex.quote(script)
+
+
+def compile_lambda_secret_wrapper_command(goarch: str) -> str:
+    return " ".join(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            "/tmp/tmprl-lambda-secret-wrapper:/src",
+            "-w",
+            "/src",
+            "-e",
+            "CGO_ENABLED=0",
+            "-e",
+            "GOOS=linux",
+            "-e",
+            f"GOARCH={shlex.quote(goarch)}",
+            "public.ecr.aws/docker/library/golang:1.22",
+            "go",
+            "build",
+            "-trimpath",
+            "-ldflags",
+            shlex.quote("-s -w"),
+            "-o",
+            shlex.quote(f"/src/bin/{goarch}/tmprl-secret-wrapper"),
+            "/src/main.go",
+        ]
+    )
+
+
+def wrap_lambda_image_commands(
+    *,
+    build_name: str,
+    base_image: str,
+    target_image: str,
+    goarch: str,
+) -> list[str]:
+    context_dir = lambda_wrapper_context_dir(build_name)
+    return [
+        write_lambda_wrapper_dockerfile_command(
+            build_name=build_name,
+            base_image=base_image,
+            goarch=goarch,
+        ),
+        " ".join(
+            [
+                "docker",
+                "build",
+                "-f",
+                shlex.quote(f"{context_dir}/Dockerfile"),
+                "-t",
+                shell_quote_image_template(target_image),
+                shlex.quote(context_dir),
+            ]
+        ),
+    ]
+
+
+def write_lambda_wrapper_dockerfile_command(
+    *,
+    build_name: str,
+    base_image: str,
+    goarch: str,
+) -> str:
+    script = (
+        "import base64, json, pathlib, shutil, subprocess, sys; "
+        "base_image, goarch, build_name = sys.argv[1:4]; "
+        "safe=''.join(c if c.isalnum() or c in '._-' else '-' for c in build_name) or 'build'; "
+        "root=pathlib.Path('/tmp/tmprl-lambda-wrapper-images')/safe; "
+        "root.mkdir(parents=True, exist_ok=True); "
+        "wrapper=pathlib.Path('/tmp/tmprl-lambda-secret-wrapper/bin')/goarch/'tmprl-secret-wrapper'; "
+        "shutil.copy2(wrapper, root/'tmprl-secret-wrapper'); "
+        "config=json.loads(subprocess.check_output(['docker','image','inspect',base_image]))[0].get('Config') or {}; "
+        "entrypoint=config.get('Entrypoint') or []; "
+        "cmd=config.get('Cmd') or []; "
+        "enc=lambda value: base64.b64encode(json.dumps(value, separators=(',', ':')).encode()).decode(); "
+        "dockerfile='\\n'.join(["
+        "'FROM '+base_image,"
+        "'COPY tmprl-secret-wrapper /opt/tmprl-demo-cloud/bin/secret-wrapper',"
+        "'ENV TMPRL_ORIGINAL_ENTRYPOINT_B64='+enc(entrypoint),"
+        "'ENV TMPRL_ORIGINAL_CMD_B64='+enc(cmd),"
+        "'ENTRYPOINT [\"/opt/tmprl-demo-cloud/bin/secret-wrapper\"]',"
+        "('CMD '+json.dumps(cmd, separators=(',', ':')) if cmd else ''),"
+        "])+'\\n'; "
+        "(root/'Dockerfile').write_text(dockerfile, encoding='utf-8')"
+    )
+    return (
+        "python3 -c "
+        + shlex.quote(script)
+        + " "
+        + shlex.quote(base_image)
+        + " "
+        + shlex.quote(goarch)
+        + " "
+        + shlex.quote(build_name)
+    )
+
+
+def serverless_lambda_build_architectures(
+    demo_project: dict[str, Any],
+) -> dict[str, str]:
+    architectures: dict[str, str] = {}
+    for component_name, component in sorted(
+        resources.serverless_lambda_components(demo_project).items()
+    ):
+        build_name = component.get("build")
+        if not isinstance(build_name, str) or not build_name:
+            continue
+        architecture = resources.serverless_config(component).get(
+            "architecture",
+            "x86_64",
+        )
+        goarch = lambda_wrapper_goarch(str(architecture))
+        previous = architectures.get(build_name)
+        if previous and previous != goarch:
+            raise ValueError(
+                "serverless aws-lambda components sharing build "
+                f"{build_name!r} must use the same architecture; "
+                f"{component_name!r} uses {architecture!r}"
+            )
+        architectures[build_name] = goarch
+    return architectures
+
+
+def lambda_wrapper_goarch(architecture: str) -> str:
+    if architecture == "arm64":
+        return "arm64"
+    return "amd64"
+
+
+def local_unwrapped_image_tag(build_name: str) -> str:
+    safe = "".join(
+        character if character.isalnum() or character in "._-" else "-"
+        for character in build_name.lower()
+    )
+    return f"tmprl-demo-local/{safe or 'build'}:unwrapped"
+
+
+def lambda_wrapper_context_dir(build_name: str) -> str:
+    safe = "".join(
+        character if character.isalnum() or character in "._-" else "-"
+        for character in build_name
+    )
+    return f"/tmp/tmprl-lambda-wrapper-images/{safe or 'build'}"
 
 
 def dockerhub_official_base_prefetch_command(

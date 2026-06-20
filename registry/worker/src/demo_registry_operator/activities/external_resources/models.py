@@ -113,6 +113,20 @@ class EnsureLambdaExecutionRoleRequest:
     project: str
     component: str
     role_name: str
+    secret_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LambdaSecretEnvironmentVariable:
+    name: str
+    secret_path: str
+    property_name: str
+
+
+@dataclass(frozen=True)
+class LambdaEnvironmentVariable:
+    name: str
+    value: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +150,9 @@ class EnsureLambdaFunctionRequest:
     build_id: str
     temporal_secret_path: str
     env: dict[str, str]
+    temporal_auth_mode: str = "apiKey"
+    secret_env: tuple[LambdaSecretEnvironmentVariable, ...] = ()
+    mtls_file_path_env: tuple[LambdaEnvironmentVariable, ...] = ()
 
 
 @dataclass(frozen=True)

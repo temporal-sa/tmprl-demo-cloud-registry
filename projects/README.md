@@ -331,14 +331,24 @@ Rules:
   parent directory so they can be mounted from the same Secret volume.
   Use `enabled: false` under `certFiles` only when the component needs PEM env
   values but should not receive mounted cert files.
+- Serverless AWS Lambda image workers use the same Temporal runtime secret, but
+  the platform wraps the built image instead of editing the demo Dockerfile.
+  At Lambda cold start, the wrapper fetches the referenced AWS Secrets Manager
+  values, writes mTLS cert files under `/tmp/tmprl-demo-cloud/temporal`, sets
+  the requested environment variables, and then execs the original image
+  entrypoint. Lambda components can use `temporalMtls.certFiles.pathEnv` to
+  map those `/tmp` paths into app-specific env names. `mountPath` and `paths`
+  are Kubernetes-only and are rejected for serverless Lambda components.
 - Components can remap platform inputs with
   `components.<name>.env[].valueFrom.inputRef`. API-key Temporal refs are
   `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and
   `temporal.tls`. mTLS cert refs are `temporal.caCert`,
   `temporal.clientCert`, and `temporal.clientKey`, and require
   `spec.temporal.auth.mode: mtls`. These render as targeted `secretKeyRef` env
-  vars, so the app can consume names like `TEMPORAL_HOST`,
-  `TEMPORAL_TOKEN`, or `TEMPORAL_CLIENT_CERT_PEM` without changing code.
+  vars for Kubernetes components. For serverless Lambda image workers, the
+  wrapper materializes the same refs from Secrets Manager before process start,
+  so the app can consume names like `TEMPORAL_HOST`, `TEMPORAL_TOKEN`, or
+  `TEMPORAL_CLIENT_CERT_PEM` without changing code.
 - `components.<name>.temporalProxy.enabled: true` replaces direct Temporal
   credential injection for that app container with a local plaintext proxy at
   `127.0.0.1:7233`. The sidecar receives the platform-managed Cloud credential,
