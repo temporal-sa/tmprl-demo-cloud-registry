@@ -339,6 +339,14 @@ Rules:
   entrypoint. Lambda components can use `temporalMtls.certFiles.pathEnv` to
   map those `/tmp` paths into app-specific env names. `mountPath` and `paths`
   are Kubernetes-only and are rejected for serverless Lambda components.
+- Serverless Lambda Worker Deployment settings live under
+  `components.<name>.serverless.workerDeployment`, not `worker.versioning`.
+  `deploymentName` and `buildId` can be hard-coded there; otherwise the
+  platform derives them from the component name and rollout version. Use
+  `env.deploymentName` and `env.buildId` arrays when the app needs those values
+  in app-specific environment variable names. The platform still sets
+  `TEMPORAL_DEPLOYMENT_NAME`, `TEMPORAL_WORKER_DEPLOYMENT_NAME`, and
+  `TEMPORAL_WORKER_BUILD_ID` for SDK defaults.
 - Components can remap platform inputs with
   `components.<name>.env[].valueFrom.inputRef`. API-key Temporal refs are
   `temporal.address`, `temporal.namespace`, `temporal.apiKey`, and

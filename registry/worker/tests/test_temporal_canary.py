@@ -218,7 +218,7 @@ def _canary_template(name: str) -> dict:
 def test_load_canary_templates_returns_external_self_contained_templates():
     templates = _canary.load_canary_templates()
     names = {t["name"] for t in templates}
-    assert {"api-key", "mtls"} <= names
+    assert {"api-key", "mtls", "lambda"} <= names
     for t in templates:
         assert t["authMode"] in ("apiKey", "mtls")
         assert t["demoProjectTemplate"]["kind"] == "DemoProject"
@@ -240,6 +240,27 @@ def test_mtls_canary_template_worker_exposes_app_cert_env_and_no_api_key():
     assert env.get("TEMPORAL_CERT_PATH", "").endswith("/tls.crt")
     assert env.get("TEMPORAL_KEY_PATH", "").endswith("/tls.key")
     assert "TEMPORAL_API_KEY" not in env
+
+
+def test_lambda_canary_template_uses_serverless_worker_deployment_config():
+    lambda_canary = _canary_template("lambda")["demoProjectTemplate"]
+    worker = lambda_canary["spec"]["components"]["worker"]
+
+    assert "worker" not in worker
+    assert _resources.serverless_lambda_enabled(worker)
+    assert not _resources.worker_versioning_enabled(worker)
+    assert _resources.serverless_worker_deployment_name(
+        "worker",
+        worker,
+    ) == "money-transfer"
+
+    worker_deployment = worker["serverless"]["workerDeployment"]
+    assert "buildId" not in worker_deployment
+    assert "env" not in worker_deployment
+    assert _resources.serverless_worker_deployment_env_names(worker) == {
+        "deploymentName": (),
+        "buildId": (),
+    }
 
 
 def test_api_key_canary_template_worker_has_no_cert_mount():

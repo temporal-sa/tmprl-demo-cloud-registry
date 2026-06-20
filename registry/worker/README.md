@@ -17,7 +17,7 @@ During reconcile it creates or patches:
 - versioned candidate Deployments and Services when every build has an
   immutable image override;
 - Temporal Worker Controller `Connection` and `WorkerDeployment` resources for
-  components that opt into `worker.versioning.enabled: true`;
+  Kubernetes components that opt into `worker.versioning.enabled: true`;
 - Traefik middleware and IngressRoutes after a configured smoke check passes,
   or immediately for projects without a smoke check.
 

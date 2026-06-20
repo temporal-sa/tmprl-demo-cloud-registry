@@ -49,8 +49,8 @@ class DemoProjectServerlessLambdaWorkflow:
             )
 
         images = build_images(request.buildStatus)
-        build_id = resources.candidate_version(demo_project, images)
-        if not build_id:
+        default_build_id = resources.candidate_version(demo_project, images)
+        if not default_build_id:
             return messages.DemoProjectServerlessLambdaResult(
                 status={
                     "phase": "ImagesMissing",
@@ -66,7 +66,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 component_name,
                 component,
                 images,
-                build_id,
+                default_build_id,
             )
 
         return messages.DemoProjectServerlessLambdaResult(
@@ -83,7 +83,7 @@ class DemoProjectServerlessLambdaWorkflow:
         component_name: str,
         component: dict[str, Any],
         images: dict[str, str],
-        build_id: str,
+        default_build_id: str,
     ) -> dict[str, Any]:
         build_name = component.get("build")
         image_uri = images.get(build_name) if isinstance(build_name, str) else None
@@ -94,7 +94,11 @@ class DemoProjectServerlessLambdaWorkflow:
             }
 
         project = resources.project_name(demo_project)
-        deployment_name = resources.worker_deployment_name(component_name, component)
+        deployment_name = resources.serverless_worker_deployment_name(
+            component_name,
+            component,
+        )
+        build_id = resources.serverless_worker_build_id(component, default_build_id)
         function_name = serverless_names.lambda_function_name(project, component_name)
         execution_role_name = serverless_names.lambda_execution_role_name(
             project, component_name
@@ -138,6 +142,11 @@ class DemoProjectServerlessLambdaWorkflow:
                 temporal_auth_mode=resources.temporal_auth_mode(demo_project),
                 secret_env=secret_env(component, demo_project),
                 mtls_file_path_env=mtls_file_path_env(component),
+                worker_deployment_env=worker_deployment_env(
+                    component,
+                    deployment_name,
+                    build_id,
+                ),
             ),
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=LAMBDA_RETRY_POLICY,
@@ -366,6 +375,37 @@ def mtls_file_path_env(
             external_resources.LambdaEnvironmentVariable(
                 name=env_name,
                 value=paths[key],
+            )
+        )
+        seen.add(env_name)
+    return tuple(rendered)
+
+
+def worker_deployment_env(
+    component: dict[str, Any],
+    deployment_name: str,
+    build_id: str,
+) -> tuple[external_resources.LambdaEnvironmentVariable, ...]:
+    configured = resources.serverless_worker_deployment_env_names(component)
+    rendered: list[external_resources.LambdaEnvironmentVariable] = []
+    seen: set[str] = set()
+    for env_name in configured["deploymentName"]:
+        if env_name in seen:
+            continue
+        rendered.append(
+            external_resources.LambdaEnvironmentVariable(
+                name=env_name,
+                value=deployment_name,
+            )
+        )
+        seen.add(env_name)
+    for env_name in configured["buildId"]:
+        if env_name in seen:
+            continue
+        rendered.append(
+            external_resources.LambdaEnvironmentVariable(
+                name=env_name,
+                value=build_id,
             )
         )
         seen.add(env_name)

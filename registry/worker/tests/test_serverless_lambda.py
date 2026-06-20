@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
+from temporalio.api.compute.v1 import config_pb2
+from temporalio.api.deployment.v1 import message_pb2 as deployment_pb2
+from temporalio.service import RPCError, RPCStatusCode
+
+from demo_registry_operator import errors
+from demo_registry_operator import resources
 from demo_registry_operator.activities.external_resources.aws_lambda import (
     SECRET_ENV_MANIFEST_ENV,
     SECRET_FILE_MANIFEST_ENV,
@@ -29,11 +36,15 @@ from demo_registry_operator.activities.external_resources.serverless_names impor
     temporal_lambda_invoke_role_name,
 )
 from demo_registry_operator.activities.external_resources.serverless_worker import (
+    SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     aws_lambda_provider_details_payload,
+    create_or_update_worker_deployment_version,
+    temporal_service_application_error,
 )
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
     mtls_file_path_env,
     serverless_worker_deployment_status,
+    worker_deployment_env,
 )
 
 
@@ -105,6 +116,39 @@ def test_lambda_environment_injects_api_key_runtime_config():
         },
     ]
     assert SECRET_FILE_MANIFEST_ENV not in environment
+
+
+def test_lambda_environment_injects_worker_deployment_env_remaps():
+    temporal_secret = {
+        "arn": (
+            "arn:aws:secretsmanager:us-west-1:123456789012:"
+            "secret:tmprl-dem-cld/banking-money-transfer/temporal-AbCdEf"
+        ),
+        "name": "tmprl-dem-cld/banking-money-transfer/temporal",
+    }
+    request = EnsureLambdaFunctionRequest(
+        **{
+            **lambda_request().__dict__,
+            "worker_deployment_env": (
+                LambdaEnvironmentVariable(
+                    name="BANKING_WORKER_DEPLOYMENT",
+                    value="money-transfer",
+                ),
+                LambdaEnvironmentVariable(
+                    name="BANKING_WORKER_BUILD_ID",
+                    value="stable-money-transfer-worker",
+                ),
+            ),
+        }
+    )
+
+    environment = lambda_environment(request, temporal_secret)
+
+    assert environment["TEMPORAL_DEPLOYMENT_NAME"] == "money-transfer"
+    assert environment["TEMPORAL_WORKER_DEPLOYMENT_NAME"] == "money-transfer"
+    assert environment["TEMPORAL_WORKER_BUILD_ID"] == "git-e12b0ed9d450"
+    assert environment["BANKING_WORKER_DEPLOYMENT"] == "money-transfer"
+    assert environment["BANKING_WORKER_BUILD_ID"] == "stable-money-transfer-worker"
 
 
 def test_lambda_environment_injects_mtls_runtime_config():
@@ -237,6 +281,45 @@ def test_lambda_mtls_file_path_env_uses_tmp_paths_and_custom_names():
     )
     assert env["TEMPORAL_CERT_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.crt"
     assert env["TEMPORAL_KEY_PATH"] == "/tmp/tmprl-demo-cloud/temporal/tls.key"
+
+
+def test_serverless_worker_deployment_config_uses_serverless_block():
+    component = {
+        "build": "worker",
+        "serverless": {
+            "provider": "aws-lambda",
+            "workerDeployment": {
+                "deploymentName": "money-transfer",
+                "buildId": "stable-money-transfer-worker",
+                "env": {
+                    "deploymentName": ["BANKING_WORKER_DEPLOYMENT"],
+                    "buildId": ["BANKING_WORKER_BUILD_ID"],
+                },
+            },
+        },
+    }
+
+    assert resources.worker_versioning_enabled(component) is False
+    assert (
+        resources.serverless_worker_deployment_name("worker", component)
+        == "money-transfer"
+    )
+    assert (
+        resources.serverless_worker_build_id(component, "git-e12b0ed9d450")
+        == "stable-money-transfer-worker"
+    )
+    env = {
+        item.name: item.value
+        for item in worker_deployment_env(
+            component,
+            "money-transfer",
+            "stable-money-transfer-worker",
+        )
+    }
+    assert env == {
+        "BANKING_WORKER_DEPLOYMENT": "money-transfer",
+        "BANKING_WORKER_BUILD_ID": "stable-money-transfer-worker",
+    }
 
 
 def test_serverless_names_are_stable_and_within_aws_limits():
@@ -380,6 +463,54 @@ def test_temporal_compute_provider_payload_matches_cli_shape():
         "role": "arn:aws:iam::123456789012:role/temporal-invoke",
         "role_external_id": "tdc-external",
     }
+
+
+def test_temporal_service_cancelled_timeout_is_retryable():
+    error = RPCError("Timeout expired", RPCStatusCode.CANCELLED, b"")
+
+    application_error = temporal_service_application_error(
+        error,
+        operation="Upsert Temporal Serverless Worker Deployment Version worker.build",
+    )
+
+    assert application_error.type == errors.PROVIDER_TRANSIENT_ERROR
+    assert application_error.non_retryable is False
+
+
+def test_worker_deployment_version_create_uses_explicit_rpc_timeout():
+    class WorkflowService:
+        def __init__(self):
+            self.calls = []
+
+        async def create_worker_deployment_version(self, request, *, retry, timeout):
+            self.calls.append((request, retry, timeout))
+
+    class Client:
+        def __init__(self):
+            self.workflow_service = WorkflowService()
+
+    client = Client()
+
+    action = asyncio.run(
+        create_or_update_worker_deployment_version(
+            client,
+            namespace="tmprl-demo",
+            deployment_version=deployment_pb2.WorkerDeploymentVersion(
+                deployment_name="money-transfer",
+                build_id="git-e12b0ed9d450",
+            ),
+            scaling_group=config_pb2.ComputeConfigScalingGroup(),
+            identity="tmprl-demo-cloud-registry",
+        )
+    )
+
+    assert action == "created"
+    [(request, retry, timeout)] = client.workflow_service.calls
+    assert request.namespace == "tmprl-demo"
+    assert request.deployment_version.deployment_name == "money-transfer"
+    assert request.deployment_version.build_id == "git-e12b0ed9d450"
+    assert retry is True
+    assert timeout == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
 
 
 def test_serverless_worker_deployment_status_preserves_step_boundaries():

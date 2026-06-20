@@ -153,6 +153,7 @@ class EnsureLambdaFunctionRequest:
     temporal_auth_mode: str = "apiKey"
     secret_env: tuple[LambdaSecretEnvironmentVariable, ...] = ()
     mtls_file_path_env: tuple[LambdaEnvironmentVariable, ...] = ()
+    worker_deployment_env: tuple[LambdaEnvironmentVariable, ...] = ()
 
 
 @dataclass(frozen=True)

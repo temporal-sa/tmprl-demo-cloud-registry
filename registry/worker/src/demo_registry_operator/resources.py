@@ -4277,6 +4277,7 @@ def temporal_mtls_status(demo_project: dict[str, Any]) -> dict[str, Any]:
 def component_needs_temporal(component: dict[str, Any]) -> bool:
     return (
         component_receives_default_temporal_env(component)
+        or serverless_lambda_enabled(component)
         or bool(temporal_input_refs(component))
         or temporal_mtls_cert_files_requested(component)
     )
@@ -4333,6 +4334,11 @@ def serverless_lambda_package_type(component: dict[str, Any]) -> str:
     )
 
 
+def serverless_worker_deployment_config(component: dict[str, Any]) -> dict[str, Any]:
+    worker_deployment = serverless_config(component).get("workerDeployment")
+    return worker_deployment if isinstance(worker_deployment, dict) else {}
+
+
 def serverless_lambda_components(
     demo_project: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
@@ -4385,6 +4391,52 @@ def worker_deployment_name(component_name: str, component: dict[str, Any]) -> st
     return dns_label(
         deployment_name if isinstance(deployment_name, str) else component_name
     )
+
+
+def serverless_worker_deployment_name(
+    component_name: str,
+    component: dict[str, Any],
+) -> str:
+    worker_deployment = serverless_worker_deployment_config(component)
+    deployment_name = worker_deployment.get("deploymentName")
+    if not isinstance(deployment_name, str):
+        versioning = worker_versioning(component)
+        deployment_name = (
+            versioning.get("deploymentName") if isinstance(versioning, dict) else None
+        )
+    return dns_label(
+        deployment_name if isinstance(deployment_name, str) else component_name
+    )
+
+
+def serverless_worker_build_id(
+    component: dict[str, Any],
+    default_build_id: str,
+) -> str:
+    worker_deployment = serverless_worker_deployment_config(component)
+    build_id = worker_deployment.get("buildId")
+    if isinstance(build_id, str) and build_id:
+        return build_id
+    return default_build_id
+
+
+def serverless_worker_deployment_env_names(
+    component: dict[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    configured = serverless_worker_deployment_config(component).get("env")
+    configured = configured if isinstance(configured, dict) else {}
+    return {
+        "deploymentName": tuple(
+            env_name
+            for env_name in configured.get("deploymentName", ())
+            if isinstance(env_name, str) and env_name
+        ),
+        "buildId": tuple(
+            env_name
+            for env_name in configured.get("buildId", ())
+            if isinstance(env_name, str) and env_name
+        ),
+    }
 
 
 def temporal_components(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:

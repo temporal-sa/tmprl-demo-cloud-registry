@@ -267,11 +267,13 @@ def test_schema_accepts_serverless_lambda_component():
             "architecture": "x86_64",
             "memoryMb": 512,
             "timeoutSeconds": 600,
-        },
-        "worker": {
-            "versioning": {
-                "enabled": True,
+            "workerDeployment": {
                 "deploymentName": "worker",
+                "buildId": "stable-worker-build",
+                "env": {
+                    "deploymentName": ["WORKER_DEPLOYMENT_NAME"],
+                    "buildId": ["WORKER_BUILD_ID"],
+                },
             }
         },
     }
@@ -293,6 +295,9 @@ def test_serverless_lambda_accepts_secret_env_and_mtls_path_remaps():
         "serverless": {
             "provider": "aws-lambda",
             "packageType": "image",
+            "workerDeployment": {
+                "deploymentName": "worker",
+            },
         },
         "temporalMtls": {
             "certFiles": {
@@ -312,12 +317,6 @@ def test_serverless_lambda_accepts_secret_env_and_mtls_path_remaps():
                 "valueFrom": {"inputRef": "secrets.banking-api.TOKEN"},
             },
         ],
-        "worker": {
-            "versioning": {
-                "enabled": True,
-                "deploymentName": "worker",
-            }
-        },
     }
     document = project_document(spec)
 
@@ -355,9 +354,26 @@ def test_schema_rejects_worker_versioning_task_queue_field():
     assert "taskQueue" in errors[0].message
 
 
-def test_mtls_auth_allows_serverless_lambda_worker_versioning():
+def test_mtls_auth_allows_serverless_lambda_worker_deployment():
     spec = base_spec()
     spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {
+            "provider": "aws-lambda",
+            "workerDeployment": {
+                "deploymentName": "worker",
+            }
+        },
+    }
+    document = project_document(spec)
+
+    assert validate_projects.validate_temporal_auth_compatibility(document) == []
+    assert validate_projects.validate_serverless_components(document) == []
+
+
+def test_serverless_lambda_rejects_worker_controller_versioning():
+    spec = base_spec()
     spec["components"]["app"] = {
         "build": "app",
         "serverless": {"provider": "aws-lambda"},
@@ -370,8 +386,42 @@ def test_mtls_auth_allows_serverless_lambda_worker_versioning():
     }
     document = project_document(spec)
 
-    assert validate_projects.validate_temporal_auth_compatibility(document) == []
-    assert validate_projects.validate_serverless_components(document) == []
+    errors = validate_projects.validate_serverless_components(document)
+
+    assert [error.message for error in errors] == [
+        (
+            "components.app.worker is not supported for serverless aws-lambda "
+            "components; configure the Temporal Worker Deployment under "
+            "serverless.workerDeployment"
+        )
+    ]
+
+
+def test_serverless_lambda_rejects_worker_deployment_env_name_reuse():
+    spec = base_spec()
+    spec["components"]["app"] = {
+        "build": "app",
+        "serverless": {
+            "provider": "aws-lambda",
+            "workerDeployment": {
+                "env": {
+                    "deploymentName": ["TEMPORAL_WORKER_VERSION"],
+                    "buildId": ["TEMPORAL_WORKER_VERSION"],
+                }
+            },
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_serverless_components(document)
+
+    assert [error.message for error in errors] == [
+        (
+            "components.app.serverless.workerDeployment.env cannot map "
+            "deploymentName and buildId to the same environment variable(s): "
+            "TEMPORAL_WORKER_VERSION"
+        )
+    ]
 
 
 def test_schema_allows_temporal_search_attributes():
@@ -426,10 +476,6 @@ def test_serverless_lambda_component_rejects_kubernetes_and_buildpack_shape():
             "components.app.build must reference a dockerfile build for "
             "serverless aws-lambda"
         ),
-        (
-            "components.app.serverless aws-lambda requires "
-            "worker.versioning.enabled true"
-        ),
         "components.app.ports is not supported for serverless aws-lambda components",
     ]
 
@@ -451,12 +497,6 @@ def test_serverless_lambda_rejects_custom_mtls_file_paths():
                     "clientCert": "TEMPORAL_CERT_PATH",
                     "clientKey": "TEMPORAL_KEY_PATH",
                 },
-            }
-        },
-        "worker": {
-            "versioning": {
-                "enabled": True,
-                "deploymentName": "worker",
             }
         },
     }

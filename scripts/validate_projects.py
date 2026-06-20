@@ -598,9 +598,7 @@ def validate_temporal_auth_compatibility(
                     ),
                 )
             )
-        if worker_versioning_enabled(component) and not serverless_lambda_enabled(
-            component
-        ):
+        if worker_versioning_enabled(component):
             errors.append(
                 ProjectError(
                     document.path,
@@ -682,13 +680,31 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 )
             )
 
-        if not worker_versioning_enabled(component):
+        if "worker" in component:
             errors.append(
                 ProjectError(
                     document.path,
                     (
-                        f"components.{component_name}.serverless aws-lambda "
-                        "requires worker.versioning.enabled true"
+                        f"components.{component_name}.worker is not supported for "
+                        "serverless aws-lambda components; configure the Temporal "
+                        "Worker Deployment under serverless.workerDeployment"
+                    ),
+                )
+            )
+
+        worker_deployment_env = serverless_worker_deployment_env_names(component)
+        duplicate_env_names = sorted(
+            set(worker_deployment_env["deploymentName"])
+            & set(worker_deployment_env["buildId"])
+        )
+        if duplicate_env_names:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        f"components.{component_name}.serverless.workerDeployment."
+                        "env cannot map deploymentName and buildId to the same "
+                        f"environment variable(s): {', '.join(duplicate_env_names)}"
                     ),
                 )
             )
@@ -1068,6 +1084,30 @@ def worker_versioning_enabled(component: dict[str, Any]) -> bool:
 def serverless_config(component: dict[str, Any]) -> dict[str, Any]:
     serverless = component.get("serverless")
     return serverless if isinstance(serverless, dict) else {}
+
+
+def serverless_worker_deployment_config(component: dict[str, Any]) -> dict[str, Any]:
+    worker_deployment = serverless_config(component).get("workerDeployment")
+    return worker_deployment if isinstance(worker_deployment, dict) else {}
+
+
+def serverless_worker_deployment_env_names(
+    component: dict[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    configured = serverless_worker_deployment_config(component).get("env")
+    configured = configured if isinstance(configured, dict) else {}
+    return {
+        "deploymentName": tuple(
+            env_name
+            for env_name in configured.get("deploymentName", ())
+            if isinstance(env_name, str) and env_name
+        ),
+        "buildId": tuple(
+            env_name
+            for env_name in configured.get("buildId", ())
+            if isinstance(env_name, str) and env_name
+        ),
+    }
 
 
 def serverless_lambda_enabled(component: dict[str, Any]) -> bool:

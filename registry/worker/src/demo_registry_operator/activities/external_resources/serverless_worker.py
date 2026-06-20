@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import timedelta
 from typing import Any, Mapping
 
 from google.protobuf import field_mask_pb2
@@ -16,6 +17,9 @@ from temporalio.service import RPCError, RPCStatusCode
 from demo_registry_operator import errors
 from demo_registry_operator.activities.external_resources import aws_lambda, models
 from demo_registry_operator.config import WorkerConfig
+
+
+SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT = timedelta(seconds=60)
 
 
 @activity.defn
@@ -255,6 +259,7 @@ async def ensure_worker_deployment(
                 request_id=str(uuid.uuid4()),
             ),
             retry=True,
+            timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
         )
         return "created"
     except RPCError as error:
@@ -284,6 +289,7 @@ async def create_or_update_worker_deployment_version(
                 request_id=str(uuid.uuid4()),
             ),
             retry=True,
+            timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
         )
         return "created"
     except RPCError as error:
@@ -301,6 +307,7 @@ async def create_or_update_worker_deployment_version(
             request_id=str(uuid.uuid4()),
         ),
         retry=True,
+        timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
     return "updated"
 
@@ -323,6 +330,7 @@ async def validate_worker_deployment_compute_config(
             identity=identity,
         ),
         retry=True,
+        timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
 
 
@@ -342,6 +350,7 @@ async def set_worker_deployment_current(
                 deployment_name=deployment_name,
             ),
             retry=True,
+            timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
         )
         conflict_token = response.conflict_token
     except RPCError as error:
@@ -359,6 +368,7 @@ async def set_worker_deployment_current(
             allow_no_pollers=True,
         ),
         retry=True,
+        timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
 
 
@@ -375,6 +385,7 @@ async def describe_worker_deployment_version_status(
             report_task_queue_stats=True,
         ),
         retry=True,
+        timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
     task_queues = [
         {
@@ -507,9 +518,12 @@ def temporal_service_application_error(
             error_type=errors.PROVIDER_CONFIGURATION_ERROR,
         )
     if error.status in {
+        RPCStatusCode.CANCELLED,
         RPCStatusCode.DEADLINE_EXCEEDED,
         RPCStatusCode.RESOURCE_EXHAUSTED,
         RPCStatusCode.ABORTED,
+        RPCStatusCode.UNKNOWN,
+        RPCStatusCode.INTERNAL,
         RPCStatusCode.UNAVAILABLE,
     }:
         return errors.retryable_provider_error(message)

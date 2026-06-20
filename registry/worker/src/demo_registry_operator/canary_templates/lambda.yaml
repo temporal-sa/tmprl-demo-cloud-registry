@@ -48,9 +48,7 @@ demoProjectTemplate:
           architecture: x86_64
           memoryMb: 512
           timeoutSeconds: 600
-        worker:
-          versioning:
-            enabled: true
+          workerDeployment:
             deploymentName: money-transfer
     ingress:
       subdomain: operator-canary-lambda

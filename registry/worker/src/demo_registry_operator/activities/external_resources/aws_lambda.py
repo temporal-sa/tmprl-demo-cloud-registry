@@ -437,13 +437,14 @@ def lambda_environment(
     environment.update(
         {
             "HOME": "/tmp",
-            "TEMPORAL_DEPLOYMENT_NAME": request.deployment_name,
-            "TEMPORAL_WORKER_DEPLOYMENT_NAME": request.deployment_name,
-            "TEMPORAL_WORKER_BUILD_ID": request.build_id,
             TEMPORAL_RUNTIME_SECRET_ARN_ENV: temporal_secret["arn"],
             TEMPORAL_RUNTIME_SECRET_ID_ENV: temporal_secret["name"],
         }
     )
+    for item in default_worker_deployment_env(request):
+        environment[item.name] = item.value
+    for item in request.worker_deployment_env:
+        environment[item.name] = item.value
     environment.pop("TEMPORAL_API_KEY", None)
     environment.pop("TEMPORAL_TLS_CLIENT_CERT_DATA", None)
     environment.pop("TEMPORAL_TLS_CLIENT_KEY_DATA", None)
@@ -469,6 +470,25 @@ def lambda_environment(
         for item in request.mtls_file_path_env:
             environment[item.name] = item.value
     return environment
+
+
+def default_worker_deployment_env(
+    request: models.EnsureLambdaFunctionRequest,
+) -> tuple[models.LambdaEnvironmentVariable, ...]:
+    return (
+        models.LambdaEnvironmentVariable(
+            name="TEMPORAL_DEPLOYMENT_NAME",
+            value=request.deployment_name,
+        ),
+        models.LambdaEnvironmentVariable(
+            name="TEMPORAL_WORKER_DEPLOYMENT_NAME",
+            value=request.deployment_name,
+        ),
+        models.LambdaEnvironmentVariable(
+            name="TEMPORAL_WORKER_BUILD_ID",
+            value=request.build_id,
+        ),
+    )
 
 
 def temporal_secret_env_manifest(
