@@ -1750,6 +1750,7 @@ class DemoProjectWorkflow:
         finalize_checked_at = finalize_plan.get("checkedAt")
         if not isinstance(finalize_checked_at, str) or not finalize_checked_at:
             finalize_checked_at = workflow.now().astimezone(UTC).isoformat()
+        demo_project = self._demo_project_with_known_runtime_secret_path(demo_project)
         return external_resources.plan_external_resources(
             demo_project,
             checked_at=finalize_checked_at,

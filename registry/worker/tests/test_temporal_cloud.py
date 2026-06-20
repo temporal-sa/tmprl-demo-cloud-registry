@@ -11,6 +11,8 @@ from demo_registry_operator.activities.temporal_cloud import (
     check_temporal_api_key_runtime_secret,
     configure_temporal_cloud_namespace_mtls,
     create_temporal_api_key_candidate_secret,
+    delete_temporal_cloud_api_key,
+    delete_temporal_cloud_runtime_secret,
     ensure_temporal_cloud_search_attribute,
     delete_temporal_runtime_candidate_secret,
     delete_temporal_cloud_search_attribute_value,
@@ -37,6 +39,12 @@ PROJECT = {
 }
 RUNTIME_PATH = "tmprl-dem-cld/banking-money-transfer/temporal"
 CANDIDATE_TOKEN = "1a2b3c4d5e6f7890abcd"
+
+
+def project_with_runtime_secret_path(path):
+    project = json.loads(json.dumps(PROJECT))
+    project.setdefault("spec", {})["temporal"] = {"runtimeSecretPath": path}
+    return project
 
 
 class FakeReconciler:
@@ -986,6 +994,43 @@ def test_finalize_deletes_namespace_service_account_key_and_secret():
     ]
     assert RUNTIME_PATH not in secrets.store
     assert status["deleted"]["secret"] == "scheduled-deletion"
+
+
+def test_temporal_cloud_cleanup_uses_explicit_runtime_secret_path():
+    explicit_path = "tmprl-dem-cld/banking-money-transfer/temporal-stable123"
+    project = project_with_runtime_secret_path(explicit_path)
+    reconciler = FakeReconciler()
+    secrets = FakeSecretStore(
+        {
+            explicit_path: {
+                "namespace": "tmprl-dem-cld-banking-money-transfer.acct1",
+                "keyId": "key-explicit",
+            },
+            RUNTIME_PATH: {"keyId": "key-legacy"},
+        }
+    )
+
+    api_key_status = asyncio.run(
+        delete_temporal_cloud_api_key(
+            project,
+            reconciler=reconciler,
+            secret_store=secrets,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+    secret_status = delete_temporal_cloud_runtime_secret(
+        project,
+        secret_store=secrets,
+        checked_at="2026-06-13T00:00:00+00:00",
+    )
+
+    assert api_key_status["deleted"]["apiKey"] == "deleted"
+    assert reconciler.called("delete_api_key") == [
+        ("delete_api_key", "key-explicit")
+    ]
+    assert secret_status["deleted"]["secret"] == "scheduled-deletion"
+    assert explicit_path not in secrets.store
+    assert RUNTIME_PATH in secrets.store
 
 
 def test_finalize_is_idempotent_when_nothing_exists():

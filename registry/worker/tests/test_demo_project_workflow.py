@@ -729,6 +729,26 @@ def test_external_resources_uses_moved_runtime_secret_plan(monkeypatch):
     assert result.status["secretsManager"]["phase"] == "Ready"
 
 
+def test_finalization_external_plan_uses_carried_runtime_secret_path():
+    workflow = workflow_instance()
+    workflow._temporal_runtime_secret_suffix = "stable123"
+
+    plan = workflow._project_finalization_external_plan(
+        project(),
+        {"checkedAt": "2026-06-20T00:00:00+00:00"},
+    )
+
+    assert plan.temporal_project.runtime_secret_path == (
+        "tmprl-dem-cld/demo/temporal-stable123"
+    )
+    assert plan.secrets_manager.temporal_credentials.path == (
+        "tmprl-dem-cld/demo/temporal-stable123"
+    )
+    assert plan.demo_project["spec"]["temporal"]["runtimeSecretPath"] == (
+        "tmprl-dem-cld/demo/temporal-stable123"
+    )
+
+
 def test_child_workflow_id_is_scoped_to_reconcile_sequence(monkeypatch):
     workflow = workflow_instance()
     workflow._reconcile_sequence = 7

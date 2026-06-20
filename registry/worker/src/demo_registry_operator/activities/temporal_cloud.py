@@ -1778,9 +1778,10 @@ async def finalize_temporal_cloud(
             "message": "No Temporal Cloud resources to delete.",
         }
 
-    runtime_path = resources.temporal_secret_remote_path(demo_project)
-    existing = secret_store.read_json(runtime_path)
-    existing = existing if isinstance(existing, dict) else {}
+    runtime_path, existing = temporal_cloud_runtime_secret_with_path(
+        demo_project,
+        secret_store,
+    )
     key_id = existing.get("keyId")
     service_account_id = existing.get("serviceAccountId")
     qualified = existing.get("namespace")
@@ -1929,7 +1930,7 @@ def delete_temporal_cloud_runtime_secret(
     if base is not None:
         return base
 
-    runtime_path = resources.temporal_secret_remote_path(demo_project)
+    runtime_path = temporal_cloud_runtime_secret_path(demo_project)
     action = secret_store.delete(runtime_path)
     return temporal_cloud_step_status(
         checked_at,
@@ -1952,12 +1953,28 @@ def finalization_step_base(
     }
 
 
+def temporal_cloud_runtime_secret_path(demo_project: dict[str, Any]) -> str:
+    return resources.temporal_secret_remote_path(demo_project)
+
+
+def temporal_cloud_runtime_secret_with_path(
+    demo_project: dict[str, Any],
+    secret_store: SecretStore,
+) -> tuple[str, dict[str, Any]]:
+    path = temporal_cloud_runtime_secret_path(demo_project)
+    existing = secret_store.read_json(path)
+    return path, existing if isinstance(existing, dict) else {}
+
+
 def temporal_cloud_runtime_secret(
     demo_project: dict[str, Any],
     secret_store: SecretStore,
 ) -> dict[str, Any]:
-    existing = secret_store.read_json(resources.temporal_secret_remote_path(demo_project))
-    return existing if isinstance(existing, dict) else {}
+    _path, existing = temporal_cloud_runtime_secret_with_path(
+        demo_project,
+        secret_store,
+    )
+    return existing
 
 
 async def resolve_temporal_cloud_namespace(
