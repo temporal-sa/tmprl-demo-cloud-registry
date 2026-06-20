@@ -381,6 +381,16 @@ def project_secret_prefix(demo_project: dict[str, Any]) -> str:
     return derive.secret_prefix(project_name(demo_project))
 
 
+def temporal_secret_instance_suffix(demo_project: dict[str, Any]) -> str | None:
+    metadata = demo_project.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not uid.strip():
+        return None
+    return hashlib.sha256(uid.strip().encode("utf-8")).hexdigest()[:12]
+
+
 def spec_of(demo_project: dict[str, Any]) -> dict[str, Any]:
     spec = demo_project.get("spec")
     return spec if isinstance(spec, dict) else {}
@@ -4507,7 +4517,9 @@ def user_secret_input_refs(component: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def temporal_secret_remote_path(demo_project: dict[str, Any]) -> str:
-    return f"{project_secret_prefix(demo_project)}/temporal"
+    path = f"{project_secret_prefix(demo_project)}/temporal"
+    suffix = temporal_secret_instance_suffix(demo_project)
+    return f"{path}-{suffix}" if suffix else path
 
 
 def temporal_mtls_ca_secret_remote_path(demo_project: dict[str, Any]) -> str:
