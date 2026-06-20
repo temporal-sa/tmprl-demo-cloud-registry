@@ -22,7 +22,7 @@ demoProjectTemplate:
         dockerfile: docker/frontend.Dockerfile
       worker:
         context: .
-        dockerfile: docker/worker-lambda.Dockerfile
+        dockerfile: docker/worker-python-lambda.Dockerfile
     components:
       backend:
         build: backend
