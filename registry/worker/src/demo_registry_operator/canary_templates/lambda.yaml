@@ -1,0 +1,69 @@
+# Operator-canary project template: banking app worker on AWS Lambda.
+#
+# The backend is exposed through the canary ingress because the Lambda worker
+# cannot use the in-cluster Kubernetes service DNS name.
+name: lambda
+authMode: apiKey
+demoProjectTemplate:
+  apiVersion: registry.tmprl-demo.cloud/v1alpha1
+  kind: DemoProject
+  metadata:
+    name: operator-canary-template
+  spec:
+    temporal:
+      auth:
+        mode: apiKey
+    builds:
+      backend:
+        context: .
+        dockerfile: docker/backend.Dockerfile
+      frontend:
+        context: .
+        dockerfile: docker/frontend.Dockerfile
+      worker:
+        context: .
+        dockerfile: docker/worker-lambda.Dockerfile
+    components:
+      backend:
+        build: backend
+        ports:
+          - name: http
+            containerPort: 8000
+            servicePort: 8000
+        temporalAccess: true
+      frontend:
+        build: frontend
+        ports:
+          - name: http
+            containerPort: 5173
+            servicePort: 80
+      worker:
+        build: worker
+        env:
+          - name: BANKING_BACKEND_URL
+            value: https://operator-canary-lambda.tmprl-demo.cloud
+        serverless:
+          provider: aws-lambda
+          packageType: image
+          architecture: x86_64
+          memoryMb: 512
+          timeoutSeconds: 600
+        worker:
+          versioning:
+            enabled: true
+            deploymentName: money-transfer
+    ingress:
+      subdomain: operator-canary-lambda
+      temporalAuthRequired: false
+      routes:
+        - pathPrefix: /api
+          component: backend
+          port: http
+        - pathPrefix: /
+          component: frontend
+          port: http
+    smokeCheck:
+      expectedStatus: 200
+      path: /api/health
+    source:
+      repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
