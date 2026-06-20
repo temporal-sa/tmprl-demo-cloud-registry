@@ -23,6 +23,11 @@ spec:
   components: {}
 ```
 
+The live schema currently requires `spec.source`, `spec.builds`, and
+`spec.components`; `builds` and `components` must each contain at least one
+entry. A pure “manage only the Temporal namespace and credentials while I deploy
+everything myself” project is not first-class today.
+
 `metadata.name` is the project identity. The operator derives:
 
 - Kubernetes namespace: `tmprl-dem-cld-<metadata.name>`
@@ -215,6 +220,10 @@ Do not author standard Worker Versioning envs such as
 `TEMPORAL_DEPLOYMENT_NAME` or `TEMPORAL_WORKER_BUILD_ID`; Worker Controller
 owns those.
 
+For Lambda workers, standard Temporal and Worker Deployment env vars are also
+set by the Lambda wrapper. Custom Worker Deployment env names are configured
+under `serverless.workerDeployment.env`, not as literal `env` values.
+
 ## Ingress
 
 `ingress.subdomain` is the left-hand label only. Do not include
@@ -301,14 +310,48 @@ worker:
       deleteDelay: 24h
 ```
 
-Use Worker Versioning only when the app uses SDK Worker Versioning and can
-satisfy Worker Controller rollout expectations. Serverless Lambda workers
-require Worker Versioning.
+Use Kubernetes Worker Versioning only when the app uses SDK Worker Versioning
+and can satisfy Worker Controller rollout expectations. Serverless Lambda
+workers use SDK Worker Versioning too, but configure their Worker Deployment
+under `serverless.workerDeployment`; do not add `worker.versioning` to Lambda
+components.
 
 `worker.livenessProbe` may be enabled in the object form when the worker process
 supports the platform heartbeat file contract. Do not enable it unless the app
 or worker wrapper actually refreshes the heartbeat after a successful Temporal
 round trip.
+
+## Manual Or External Runtime Mode
+
+Some users may want the operator to manage only Temporal Cloud namespace/auth
+material while they deploy their own Kubernetes resources manually. That is not
+currently a clean `DemoProject` mode.
+
+Current limitations:
+
+- `source`, `builds`, and `components` are required by schema.
+- Temporal runtime credentials are created and rotated only when at least one
+  component needs Temporal (`worker`, `temporalAccess`, `temporal.*` refs,
+  `temporalProxy`, mTLS files, or Lambda serverless worker).
+- Search attributes can make a Temporal namespace required, but they do not by
+  themselves require API key or mTLS runtime credentials.
+- Kubernetes `ExternalSecret` resources for `temporal-credentials` or
+  `temporal-worker-runtime` are rendered only for components that need those
+  credentials.
+
+There is an internal retain annotation:
+
+```yaml
+metadata:
+  annotations:
+    registry.tmprl-demo.cloud/finalization-policy: retain
+```
+
+Do not recommend it as a general user-facing fix. Today it is overloaded: it
+skips normal finalizer cleanup and also disables revision runtime namespaces,
+leaving resources in the stable project namespace. It is used for the
+control-plane project, but ordinary demos need a first-class external/manual
+runtime mode before this pattern is safe to expose.
 
 ## Registry Catalog Metadata
 

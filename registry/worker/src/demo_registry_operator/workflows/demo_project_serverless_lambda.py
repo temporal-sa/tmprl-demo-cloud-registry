@@ -26,6 +26,7 @@ LAMBDA_RETRY_POLICY = RetryPolicy(
     maximum_attempts=8,
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
+SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT = timedelta(minutes=6)
 
 
 @workflow.defn
@@ -164,19 +165,23 @@ class DemoProjectServerlessLambdaWorkflow:
             start_to_close_timeout=timedelta(minutes=3),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        worker_deployment = await workflow.execute_activity(
-            external_resources.ensure_serverless_worker_deployment,
-            external_resources.EnsureServerlessWorkerDeploymentRequest(
-                project=project,
-                component=component_name,
-                temporal_secret_path=resources.temporal_secret_remote_path(
-                    demo_project
+        ensure_status: dict[str, Any] | None = None
+        if not workflow.patched("serverless-lambda-version-upsert-owns-deployment"):
+            worker_deployment = await workflow.execute_activity(
+                external_resources.ensure_serverless_worker_deployment,
+                external_resources.EnsureServerlessWorkerDeploymentRequest(
+                    project=project,
+                    component=component_name,
+                    temporal_secret_path=resources.temporal_secret_remote_path(
+                        demo_project
+                    ),
+                    deployment_name=deployment_name,
                 ),
-                deployment_name=deployment_name,
-            ),
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+            ensure_status = worker_deployment.status
+
         worker_version = await workflow.execute_activity(
             external_resources.upsert_serverless_worker_deployment_version,
             external_resources.UpsertServerlessWorkerDeploymentVersionRequest(
@@ -191,7 +196,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 invoke_role_arn=invoke_role.role_arn,
                 invoke_role_external_id=invoke_role.external_id,
             ),
-            start_to_close_timeout=timedelta(minutes=2),
+            start_to_close_timeout=SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT,
             retry_policy=COMMON_RETRY_POLICY,
         )
         compute_validation = await workflow.execute_activity(
@@ -208,7 +213,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 invoke_role_arn=invoke_role.role_arn,
                 invoke_role_external_id=invoke_role.external_id,
             ),
-            start_to_close_timeout=timedelta(minutes=2),
+            start_to_close_timeout=SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT,
             retry_policy=COMMON_RETRY_POLICY,
         )
         current_version = await workflow.execute_activity(
@@ -240,11 +245,11 @@ class DemoProjectServerlessLambdaWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         worker_deployment_status = serverless_worker_deployment_status(
-            worker_deployment.status,
             worker_version.status,
             compute_validation.status,
             current_version.status,
             version_status.status,
+            ensure_status=ensure_status,
         )
         return {
             "phase": aggregate_phase(
@@ -413,19 +418,21 @@ def worker_deployment_env(
 
 
 def serverless_worker_deployment_status(
-    ensure_status: dict[str, Any],
     version_status: dict[str, Any],
     validation_status: dict[str, Any],
     current_status: dict[str, Any],
     describe_status: dict[str, Any],
+    *,
+    ensure_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     steps = {
-        "ensureDeployment": ensure_status,
         "upsertVersion": version_status,
         "validateComputeConfig": validation_status,
         "setCurrent": current_status,
         "describeVersion": describe_status,
     }
+    if ensure_status is not None:
+        steps = {"ensureDeployment": ensure_status, **steps}
     status = {
         "phase": aggregate_phase(steps),
         "steps": steps,

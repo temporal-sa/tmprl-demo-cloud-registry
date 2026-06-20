@@ -181,11 +181,53 @@ components:
       architecture: x86_64
       memoryMb: 512
       timeoutSeconds: 600
-    worker:
-      versioning:
-        enabled: true
+      workerDeployment:
         deploymentName: money-transfer
 ```
+
+This keeps `buildId` dynamic. The wrapper sets
+`TEMPORAL_WORKER_DEPLOYMENT_NAME=money-transfer` and
+`TEMPORAL_WORKER_BUILD_ID=<generated rollout build id>`.
+
+## Lambda Worker With Fixed Build ID
+
+Use only when app code cannot tolerate dynamic build IDs:
+
+```yaml
+components:
+  worker:
+    build: worker
+    serverless:
+      provider: aws-lambda
+      workerDeployment:
+        deploymentName: money-transfer
+        buildId: stable-money-transfer-worker
+```
+
+Prefer the dynamic default when possible; fixed build IDs cause image changes to
+reuse the same Temporal Worker Deployment version and only update compute config.
+
+## Lambda Worker Deployment Env Remap
+
+Use when app code expects names other than the standard
+`TEMPORAL_WORKER_DEPLOYMENT_NAME` and `TEMPORAL_WORKER_BUILD_ID`:
+
+```yaml
+components:
+  worker:
+    build: worker
+    serverless:
+      provider: aws-lambda
+      workerDeployment:
+        deploymentName: money-transfer
+        env:
+          deploymentName:
+            - APP_DEPLOYMENT_NAME
+          buildId:
+            - APP_BUILD_ID
+```
+
+Do not use this for apps already reading the standard Temporal worker env vars.
 
 ## User Secret Targeted Env
 

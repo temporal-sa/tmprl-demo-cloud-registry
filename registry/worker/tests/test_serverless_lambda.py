@@ -513,16 +513,58 @@ def test_worker_deployment_version_create_uses_explicit_rpc_timeout():
     assert timeout == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
 
 
-def test_serverless_worker_deployment_status_preserves_step_boundaries():
+def test_worker_deployment_version_create_creates_missing_deployment_prerequisite():
+    class WorkflowService:
+        def __init__(self):
+            self.calls = []
+
+        async def create_worker_deployment_version(self, request, *, retry, timeout):
+            self.calls.append(("create-version", request, retry, timeout))
+            if len([call for call in self.calls if call[0] == "create-version"]) == 1:
+                raise RPCError("deployment not found", RPCStatusCode.NOT_FOUND, b"")
+
+        async def create_worker_deployment(self, request, *, retry, timeout):
+            self.calls.append(("create-deployment", request, retry, timeout))
+
+    class Client:
+        def __init__(self):
+            self.workflow_service = WorkflowService()
+
+    client = Client()
+
+    action = asyncio.run(
+        create_or_update_worker_deployment_version(
+            client,
+            namespace="tmprl-demo",
+            deployment_version=deployment_pb2.WorkerDeploymentVersion(
+                deployment_name="money-transfer",
+                build_id="git-e12b0ed9d450",
+            ),
+            scaling_group=config_pb2.ComputeConfigScalingGroup(),
+            identity="tmprl-demo-cloud-registry",
+        )
+    )
+
+    assert action == "created"
+    assert [call[0] for call in client.workflow_service.calls] == [
+        "create-version",
+        "create-deployment",
+        "create-version",
+    ]
+    deployment_request = client.workflow_service.calls[1][1]
+    assert deployment_request.deployment_name == "money-transfer"
+    assert all(
+        call[3] == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
+        for call in client.workflow_service.calls
+    )
+
+
+def test_serverless_worker_deployment_status_preserves_version_step_boundaries():
     status = serverless_worker_deployment_status(
         {
             "phase": "Ready",
             "namespace": "tmprl-dem-cld-banking.a2dd6",
             "deploymentName": "money-transfer",
-            "action": "verified",
-        },
-        {
-            "phase": "Ready",
             "buildId": "git-e12b0ed9d450",
             "functionVersionArn": (
                 "arn:aws:lambda:us-west-1:123456789012:function:worker:12"
@@ -554,9 +596,41 @@ def test_serverless_worker_deployment_status_preserves_step_boundaries():
         "Temporal validated the Lambda compute configuration."
     )
     assert set(status["steps"]) == {
-        "ensureDeployment",
         "upsertVersion",
         "validateComputeConfig",
         "setCurrent",
         "describeVersion",
     }
+
+
+def test_serverless_worker_deployment_status_preserves_legacy_ensure_step():
+    status = serverless_worker_deployment_status(
+        {
+            "phase": "Ready",
+            "buildId": "git-e12b0ed9d450",
+        },
+        {
+            "phase": "Ready",
+        },
+        {
+            "phase": "Ready",
+        },
+        {
+            "phase": "Ready",
+        },
+        ensure_status={
+            "phase": "Ready",
+            "namespace": "tmprl-dem-cld-banking.a2dd6",
+            "deploymentName": "money-transfer",
+            "action": "verified",
+        },
+    )
+
+    assert status["namespace"] == "tmprl-dem-cld-banking.a2dd6"
+    assert list(status["steps"]) == [
+        "ensureDeployment",
+        "upsertVersion",
+        "validateComputeConfig",
+        "setCurrent",
+        "describeVersion",
+    ]

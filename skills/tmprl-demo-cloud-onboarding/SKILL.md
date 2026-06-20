@@ -57,15 +57,17 @@ Read only the references needed for the current task:
   whether code/Docker adapters are needed.
 - `references/demo-project-contract.md`: all core `DemoProject` fields,
   including source, builds, components, ports, env, ingress, smoke checks,
-  worker settings, catalog metadata, rollouts, and validation.
+  worker settings, manual/external runtime limitations, catalog metadata,
+  rollouts, and validation.
 - `references/temporal-auth.md`: API key, mTLS, Temporal proxy, Worker
   Versioning, mTLS files, runtime secret properties, and env remapping options.
 - `references/secrets.md`: user-managed AWS Secrets Manager secrets, source auth
   secrets, component secret injection, targeted `valueFrom` mappings, Lambda
   direct secret reads, and safe AWS CLI examples.
 - `references/serverless-lambda.md`: AWS Lambda image worker config, wrapper
-  behavior, `/tmp` mTLS materialization, secret ARN envs, unsupported fields,
-  IAM implications, and when Lambda is a bad fit.
+  behavior, dynamic vs fixed Worker Deployment build IDs, `/tmp` mTLS
+  materialization, secret ARN envs, unsupported fields, IAM implications, and
+  when Lambda is a bad fit.
 - `references/examples.md`: compact YAML examples for common patterns.
 
 ## Operating Rules

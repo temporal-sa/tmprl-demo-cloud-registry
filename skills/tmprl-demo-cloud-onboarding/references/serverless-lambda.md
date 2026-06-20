@@ -10,7 +10,9 @@ Lambda is a good fit when:
 - The component is a Temporal worker, not a web server.
 - The worker has a Dockerfile image entrypoint that can run inside Lambda's
   container environment.
-- The app uses Temporal Worker Versioning.
+- The app uses Temporal SDK Worker Versioning. The platform creates the
+  Temporal Worker Deployment and version through the Lambda deployment flow;
+  it does not use the Kubernetes Worker Controller for Lambda.
 - Runtime config can be passed through env vars, Secrets Manager refs, or mTLS
   file paths under `/tmp/tmprl-demo-cloud/temporal`.
 - The worker does not need stable Kubernetes DNS, Kubernetes services, inbound
@@ -47,9 +49,7 @@ spec:
         architecture: x86_64
         memoryMb: 512
         timeoutSeconds: 600
-      worker:
-        versioning:
-          enabled: true
+        workerDeployment:
           deploymentName: money-transfer
 ```
 
@@ -60,8 +60,20 @@ Fields:
 - `architecture`: `x86_64` or `arm64`; default `x86_64`.
 - `memoryMb`: 128 to 10240; default 512.
 - `timeoutSeconds`: 1 to 900; default 600.
-- `worker.versioning.enabled`: required.
+- `workerDeployment.deploymentName`: optional Temporal Worker Deployment name.
+  Defaults to the component name. Use this when app code expects a fixed SDK
+  deployment name such as `money-transfer`.
+- `workerDeployment.buildId`: optional fixed Temporal Worker Deployment build
+  ID. Omit it for normal rollouts so the platform uses the generated rollout
+  build ID.
+- `workerDeployment.env.deploymentName`: optional list of extra env var names
+  that should receive the resolved deployment name.
+- `workerDeployment.env.buildId`: optional list of extra env var names that
+  should receive the resolved build ID.
 - `build`: must reference a Dockerfile build.
+
+Do not set `worker`, `worker.versioning`, `temporalAccess`, or
+`temporalProxy` on a Lambda component. Those are Kubernetes runtime controls.
 
 ## Unsupported Component Fields
 
@@ -76,6 +88,7 @@ Serverless Lambda components reject:
 - `temporalProxy`
 - `temporalAccess`
 - `secrets`
+- `worker`
 
 Use a separate Kubernetes component for public HTTP/API service needs. A Lambda
 worker can call that service through its public ingress URL or another external
@@ -106,6 +119,29 @@ In API-key mode, the wrapper materializes the standard Temporal env vars:
 - `TEMPORAL_TLS`
 - `TEMPORAL_API_KEY`
 
+The platform also sets Worker Versioning defaults:
+
+- `TEMPORAL_DEPLOYMENT_NAME`
+- `TEMPORAL_WORKER_DEPLOYMENT_NAME`
+- `TEMPORAL_WORKER_BUILD_ID`
+
+Many Python demos use a helper like:
+
+```python
+WorkerDeploymentVersion(
+    deployment_name=os.getenv("TEMPORAL_WORKER_DEPLOYMENT_NAME", "default"),
+    build_id=(
+        os.getenv("TEMPORAL_WORKER_BUILD_ID")
+        or os.getenv("AWS_LAMBDA_FUNCTION_VERSION")
+        or "default"
+    ),
+)
+```
+
+For that shape, set `serverless.workerDeployment.deploymentName` if the app
+expects a fixed deployment name and leave `buildId` omitted for generated
+rollout IDs.
+
 If the app needs different names, use `env[].valueFrom.inputRef`:
 
 ```yaml
@@ -121,12 +157,39 @@ components:
           inputRef: temporal.apiKey
     serverless:
       provider: aws-lambda
-    worker:
-      versioning:
-        enabled: true
 ```
 
 The wrapper sets both the standard names and requested remaps.
+
+If the app needs custom names for Worker Deployment metadata, map them under
+`serverless.workerDeployment.env` instead of authoring literal values:
+
+```yaml
+serverless:
+  provider: aws-lambda
+  workerDeployment:
+    deploymentName: money-transfer
+    env:
+      deploymentName:
+        - APP_WORKER_DEPLOYMENT
+      buildId:
+        - APP_WORKER_BUILD_ID
+```
+
+Only set `workerDeployment.buildId` when the app really needs a fixed build ID:
+
+```yaml
+serverless:
+  provider: aws-lambda
+  workerDeployment:
+    deploymentName: money-transfer
+    buildId: stable-money-transfer-worker
+```
+
+Fixed build IDs trade rollout identity for app compatibility. Reusing the same
+build ID across image changes can make Temporal see the update as the same
+Worker Deployment version with updated compute config. Prefer the generated
+build ID unless the demo code cannot tolerate it.
 
 ## Temporal mTLS On Lambda
 
@@ -165,9 +228,6 @@ components:
           clientKey: TEMPORAL_KEY_PATH
     serverless:
       provider: aws-lambda
-    worker:
-      versioning:
-        enabled: true
 ```
 
 Lambda does not support `temporalMtls.certFiles.mountPath` or
@@ -218,9 +278,6 @@ spec:
             inputRef: secrets.llm.ANTHROPIC_API_KEY
       serverless:
         provider: aws-lambda
-      worker:
-        versioning:
-          enabled: true
 ```
 
 The wrapper fetches the secret and sets `MODEL_API_KEY` before starting the

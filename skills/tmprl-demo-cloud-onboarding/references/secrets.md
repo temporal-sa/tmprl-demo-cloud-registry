@@ -20,6 +20,8 @@ tmprl-dem-cld/<project>/<secret-name>
 - The operator creates the platform-managed Temporal runtime secret at
   `tmprl-dem-cld/<project>/temporal`; do not create it manually for normal
   projects.
+- That runtime secret is managed only when the project has at least one
+  Temporal-consuming component. A `spec.temporal` block alone is not enough.
 
 ## Declare User Secrets
 
@@ -215,6 +217,18 @@ Kubernetes components normally consume these through platform-injected env vars,
 secretKeyRefs, mTLS files, or the Temporal proxy. Serverless Lambda components
 can consume them through the Lambda wrapper or by reading the injected ARN.
 
+The project namespace gets Kubernetes `ExternalSecret` mirrors only when the
+rendered components need them:
+
+- `temporal-credentials`: ordinary workers, `temporalAccess`, targeted
+  `temporal.*` refs, mTLS file mounts, or Temporal proxy.
+- `temporal-worker-runtime`: Kubernetes Worker Controller workers or targeted
+  worker runtime refs.
+
+There is no first-class “create only Temporal secrets for externally managed
+resources” mode today. Do not tell users they can omit `builds` and
+`components`; the schema rejects that shape.
+
 ## Direct Secrets Manager Reads From Lambda
 
 Serverless Lambda image workers get these env vars:
@@ -225,6 +239,8 @@ Serverless Lambda image workers get these env vars:
 If the app code already knows how to call AWS Secrets Manager, it can read the
 Temporal runtime secret itself using `TEMPORAL_RUNTIME_SECRET_ARN`. This is a
 valid approach for code that wants to construct Temporal client config manually.
+The Lambda execution role is granted project-scoped Secrets Manager read access
+for the runtime secret and declared project secrets.
 
 For user-managed secrets, prefer targeted `valueFrom` mappings so the platform
 wrapper materializes env vars. If the app intentionally reads Secrets Manager

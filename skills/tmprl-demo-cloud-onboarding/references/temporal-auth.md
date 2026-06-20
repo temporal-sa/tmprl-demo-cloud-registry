@@ -54,7 +54,11 @@ mTLS runtime secret properties:
 
 ## Which Components Need Temporal Credentials
 
-- `worker: true` or `worker.versioning.enabled: true` marks a Temporal worker.
+- `worker: true` marks an ordinary Kubernetes Temporal worker.
+- `worker.versioning.enabled: true` marks a Kubernetes worker managed by the
+  Temporal Worker Controller.
+- `serverless.provider: aws-lambda` marks a Lambda Temporal worker. Configure
+  its Worker Deployment under `serverless.workerDeployment`, not `worker`.
 - Set `temporalAccess: true` on non-worker components that start, signal, query,
   describe, list, or otherwise call workflows.
 - Do not set `temporalAccess` merely because a component is public or talks to a
@@ -217,7 +221,7 @@ Limitations:
 - Do not set `temporal.*` input refs on a component using the proxy.
 - Do not inject `TEMPORAL_API_KEY` into the app container on the proxy path.
 
-## Worker Versioning
+## Kubernetes Worker Versioning
 
 Ordinary worker:
 
@@ -240,7 +244,7 @@ worker:
 ```
 
 Use the object form only when the code is compatible with Temporal SDK Worker
-Versioning.
+Versioning and the worker runs as a Kubernetes component.
 
 Worker Controller injects versioning metadata and owns these values:
 
@@ -257,8 +261,34 @@ Compatibility:
 
 - Kubernetes Worker Versioning with mTLS is currently blocked until Connection
   CRD support exists for client certificate refs.
-- Serverless Lambda workers require Worker Versioning and can use either API-key
-  or mTLS project auth.
+- Serverless Lambda workers also use Temporal SDK Worker Versioning, but they do
+  not use `worker.versioning` or the Kubernetes Worker Controller. See
+  `serverless-lambda.md`.
+
+## Lambda Worker Deployment Metadata
+
+Lambda worker deployment settings live under `serverless.workerDeployment`:
+
+```yaml
+serverless:
+  provider: aws-lambda
+  workerDeployment:
+    deploymentName: money-transfer
+```
+
+The platform sets:
+
+- `TEMPORAL_DEPLOYMENT_NAME`
+- `TEMPORAL_WORKER_DEPLOYMENT_NAME`
+- `TEMPORAL_WORKER_BUILD_ID`
+
+Use `workerDeployment.deploymentName` for a fixed SDK deployment name. Omit
+`workerDeployment.buildId` for normal dynamic rollouts, or set it only when app
+code requires a fixed build ID. Use `workerDeployment.env.deploymentName` and
+`workerDeployment.env.buildId` to copy resolved values into app-specific env
+var names.
+
+Lambda workers can use either API-key or mTLS project auth.
 
 ## Temporal Search Attributes
 
