@@ -26,6 +26,7 @@ from demo_registry_operator.resources import (
     candidate_service_status,
     deployment_resources,
     runtime_secret_resources,
+    runtime_namespace,
     runtime_workload_resources,
     source_git_repository,
     worker_deployment_status,
@@ -398,6 +399,8 @@ def test_mtls_cert_file_mount_can_be_disabled():
 
 def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment():
     demo_project = project(worker=versioned_worker())
+    version = candidate_version(demo_project, images())
+    namespace = runtime_namespace(demo_project, version)
 
     deployments = deployment_resources(demo_project, images())
     resources = runtime_workload_resources(
@@ -413,9 +416,7 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
 
     connection = next(item for item in resources if item["kind"] == "Connection")
     assert connection["apiVersion"] == "temporal.io/v1alpha1"
-    assert connection["metadata"]["namespace"] == (
-        "tmprl-dem-cld-banking-money-transfer"
-    )
+    assert connection["metadata"]["namespace"] == namespace
     assert connection["spec"] == {
         "hostPort": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
         "apiKeySecretRef": {
@@ -428,6 +429,7 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
         item for item in resources if item["kind"] == "WorkerDeployment"
     )
     assert worker_deployment["metadata"]["name"] == "money-transfer"
+    assert worker_deployment["metadata"]["namespace"] == namespace
     assert worker_deployment["spec"]["workerOptions"] == {
         "connectionRef": {"name": "temporal"},
         "temporalNamespace": "tmprl-dem-cld-banking-money-transfer.acct1",

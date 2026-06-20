@@ -1266,6 +1266,7 @@ def runtime_workload_resources(
             demo_project,
             image_overrides,
             external_resources=external_resources,
+            namespace=runtime_ns,
         )
     )
 
@@ -1288,6 +1289,7 @@ def promotion_resources(
     service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     resources = []
+    route_namespace = service_namespace or project_namespace(demo_project)
     resolved_images = (
         image_overrides
         if image_overrides is not None
@@ -1304,16 +1306,26 @@ def promotion_resources(
             )
         )
     if ingress_routes(demo_project):
-        resources.append(certificate_resource(demo_project))
-        resources.append(https_redirect_middleware(demo_project))
+        resources.append(
+            certificate_resource(demo_project, namespace=route_namespace)
+        )
+        resources.append(
+            https_redirect_middleware(demo_project, namespace=route_namespace)
+        )
     if auth_required(demo_project):
-        resources.append(auth_header_strip_middleware(demo_project))
-        resources.append(auth_middleware(demo_project))
+        resources.append(
+            auth_header_strip_middleware(
+                demo_project,
+                namespace=route_namespace,
+            )
+        )
+        resources.append(auth_middleware(demo_project, namespace=route_namespace))
     resources.extend(
         ingress_resources(
             demo_project,
             image_overrides=resolved_images,
             rollout_version=rollout_version,
+            namespace=route_namespace,
             service_namespace=service_namespace,
         )
     )
@@ -2549,12 +2561,14 @@ def ingress_resources(
     *,
     image_overrides: dict[str, str] | None = None,
     rollout_version: str | None = None,
+    namespace: str | None = None,
     service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
     route_specs = ingress_routes(demo_project)
     if not route_specs:
         return []
 
+    route_namespace = namespace or project_namespace(demo_project)
     version = rollout_version or candidate_version(
         demo_project,
         image_overrides or {},
@@ -2565,6 +2579,7 @@ def ingress_resources(
             route_spec,
             image_overrides=image_overrides or {},
             rollout_version=rollout_version,
+            namespace=route_namespace,
             service_namespace=service_namespace,
         )
         for route_spec in route_specs
@@ -2576,6 +2591,7 @@ def ingress_resources(
                 route_specs,
                 image_overrides=image_overrides or {},
                 rollout_version=rollout_version,
+                namespace=route_namespace,
                 service_namespace=service_namespace,
             ),
             *routes,
@@ -2593,7 +2609,7 @@ def ingress_resources(
         "kind": "IngressRoute",
         "metadata": {
             "name": project_name(demo_project),
-            "namespace": project_namespace(demo_project),
+            "namespace": route_namespace,
             "labels": common_labels(demo_project),
             "annotations": annotations,
         },
@@ -2615,7 +2631,11 @@ def ingress_resources(
         "spec": {
             **base["spec"],
             "entryPoints": ["web"],
-            "routes": http_redirect_routes(routes, demo_project),
+            "routes": http_redirect_routes(
+                routes,
+                demo_project,
+                namespace=route_namespace,
+            ),
         },
     }
     http["spec"].pop("tls", None)
@@ -2625,14 +2645,17 @@ def ingress_resources(
 def http_redirect_routes(
     routes: list[dict[str, Any]],
     demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
 ) -> list[dict[str, Any]]:
+    middleware_namespace = namespace or project_namespace(demo_project)
     rendered = []
     for route in routes:
         http_route = {**route}
         http_route["middlewares"] = [
             {
                 "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
-                "namespace": project_namespace(demo_project),
+                "namespace": middleware_namespace,
             }
         ]
         rendered.append(http_route)
@@ -2649,8 +2672,10 @@ def registry_auth_bypass_routes(
     *,
     image_overrides: dict[str, str],
     rollout_version: str | None = None,
+    namespace: str | None = None,
     service_namespace: str | None = None,
 ) -> list[dict[str, Any]]:
+    route_namespace = namespace or project_namespace(demo_project)
     routes = []
     for route_spec in route_specs:
         for path_prefix in REGISTRY_AUTH_PUBLIC_PATH_PREFIXES:
@@ -2663,6 +2688,7 @@ def registry_auth_bypass_routes(
                     },
                     image_overrides=image_overrides,
                     rollout_version=rollout_version,
+                    namespace=route_namespace,
                     service_namespace=service_namespace,
                     use_auth=False,
                     priority=2000,
@@ -2671,14 +2697,18 @@ def registry_auth_bypass_routes(
     return routes
 
 
-def certificate_resource(demo_project: dict[str, Any]) -> dict[str, Any]:
+def certificate_resource(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     name = project_name(demo_project)
     return {
         "apiVersion": "cert-manager.io/v1",
         "kind": "Certificate",
         "metadata": {
             "name": f"{name}-tls",
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
         },
         "spec": {
@@ -2702,10 +2732,12 @@ def ingress_route(
     *,
     image_overrides: dict[str, str] | None = None,
     rollout_version: str | None = None,
+    namespace: str | None = None,
     service_namespace: str | None = None,
     use_auth: bool | None = None,
     priority: int = 1000,
 ) -> dict[str, Any]:
+    route_namespace = namespace or project_namespace(demo_project)
     match = f"Host(`{project_host(demo_project)}`)"
     path_prefix = route_spec.get("pathPrefix")
     if path_prefix:
@@ -2732,7 +2764,7 @@ def ingress_route(
         "services": [
             {
                 "name": service_name,
-                "namespace": service_namespace or project_namespace(demo_project),
+                "namespace": service_namespace or route_namespace,
                 "passHostHeader": pass_host_header(route_spec),
                 "port": service_port(component, route_spec["port"]),
             }
@@ -2744,11 +2776,11 @@ def ingress_route(
         route["middlewares"] = [
             {
                 "name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
-                "namespace": project_namespace(demo_project),
+                "namespace": route_namespace,
             },
             {
                 "name": AUTH_MIDDLEWARE_NAME,
-                "namespace": project_namespace(demo_project),
+                "namespace": route_namespace,
             }
         ]
     return route
@@ -2759,13 +2791,17 @@ def pass_host_header(route_spec: dict[str, Any]) -> bool:
     return value if isinstance(value, bool) else True
 
 
-def auth_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
+def auth_middleware(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": TRAEFIK_API_VERSION,
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_MIDDLEWARE_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/description": "Temporal employee catalog auth forward-auth middleware.",
@@ -2786,13 +2822,17 @@ def auth_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def https_redirect_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
+def https_redirect_middleware(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": TRAEFIK_API_VERSION,
         "kind": "Middleware",
         "metadata": {
             "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/description": "Redirect all HTTP demo traffic to HTTPS.",
@@ -2807,13 +2847,17 @@ def https_redirect_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def auth_header_strip_middleware(demo_project: dict[str, Any]) -> dict[str, Any]:
+def auth_header_strip_middleware(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
     return {
         "apiVersion": TRAEFIK_API_VERSION,
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
-            "namespace": project_namespace(demo_project),
+            "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
                 "platform.temporal.io/description": "Remove untrusted client-supplied Temporal auth headers before forward-auth runs.",

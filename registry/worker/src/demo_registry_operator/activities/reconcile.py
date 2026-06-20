@@ -163,9 +163,13 @@ def apply_demo_project_resources(
         demo_project, external_resources, build_status
     )
 
-    rendered_resources = resources.base_resources(demo_project)
     runtime_namespace_rollout = resources.runtime_namespace_rollout_enabled(
         demo_project
+    )
+    rendered_resources = (
+        []
+        if runtime_namespace_rollout
+        else resources.base_resources(demo_project)
     )
     if not runtime_namespace_rollout:
         rendered_resources.extend(resources.runtime_secret_resources(demo_project))
@@ -228,7 +232,10 @@ def apply_demo_project_resources(
     elif missing_images:
         phase = "WaitingForImages"
         if runtime_namespace_rollout:
-            message = "Base resources reconciled; waiting for immutable images."
+            message = (
+                "Waiting for immutable images; runtime namespace resources are "
+                "deferred."
+            )
         else:
             message = (
                 "Base resources and ExternalSecrets reconciled; waiting for "
@@ -811,6 +818,7 @@ def prune_stale_runtime_candidates_impl(
     previous_runtime_namespace: str | None = None,
 ) -> dict[str, Any]:
     namespace = resources.project_namespace(demo_project)
+    namespace_prunes: list[dict[str, Any]] = []
     if (
         isinstance(previous_runtime_namespace, str)
         and previous_runtime_namespace
@@ -818,20 +826,44 @@ def prune_stale_runtime_candidates_impl(
         and previous_runtime_namespace != active_runtime_namespace
     ):
         action = kube.delete_namespace(previous_runtime_namespace, dry_run=False)
+        namespace_prunes.append({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "name": previous_runtime_namespace,
+            "rolloutVersion": active_version,
+            "action": action,
+            "role": "previous-runtime",
+        })
+
+    if (
+        isinstance(active_runtime_namespace, str)
+        and active_runtime_namespace
+        and active_runtime_namespace != namespace
+    ):
+        action = kube.delete_namespace(namespace, dry_run=False)
+        namespace_prunes.append({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "name": namespace,
+            "rolloutVersion": active_version,
+            "action": action,
+            "role": "legacy-base",
+        })
+
+    if namespace_prunes:
+        deleted = [
+            item for item in namespace_prunes if item.get("action") != "not-found"
+        ]
         return {
-            "phase": "Pruned",
-            "message": "Deleted previous runtime namespace.",
+            "phase": "Pruned" if deleted else "Skipped",
+            "message": (
+                f"Deleted {len(deleted)} stale namespace(s)."
+                if deleted
+                else "No stale runtime namespaces found."
+            ),
             "activeVersion": active_version,
             "activeRuntimeNamespace": active_runtime_namespace,
-            "resources": [
-                {
-                    "apiVersion": "v1",
-                    "kind": "Namespace",
-                    "name": previous_runtime_namespace,
-                    "rolloutVersion": active_version,
-                    "action": action,
-                }
-            ],
+            "resources": namespace_prunes,
         }
 
     project = resources.project_name(demo_project)

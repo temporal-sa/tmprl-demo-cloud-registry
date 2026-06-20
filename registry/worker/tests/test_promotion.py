@@ -161,11 +161,43 @@ def test_runtime_namespace_waiting_for_images_defers_runtime_secrets(monkeypatch
 
     assert status["phase"] == "WaitingForImages"
     assert status["message"] == (
-        "Base resources reconciled; waiting for immutable images."
+        "Waiting for immutable images; runtime namespace resources are deferred."
     )
+    assert applied == []
     assert [
         resource for resource in applied if resource["kind"] == "ExternalSecret"
     ] == []
+
+
+def test_runtime_namespace_apply_does_not_render_base_namespace(monkeypatch):
+    applied = []
+    demo_project = banking_project()
+    images = banking_images()
+    version = resources.candidate_version(demo_project, images)
+    runtime_namespace = resources.runtime_namespace(demo_project, version)
+
+    def capture_apply(rendered, *, dry_run):
+        applied.extend(rendered)
+        assert dry_run is False
+        return applied_summary(rendered)
+
+    monkeypatch.setattr(reconcile.kube, "apply_resources", capture_apply)
+
+    status = reconcile.apply_demo_project_resources(
+        reconcile.ApplyDemoProjectResourcesRequest(
+            demo_project=demo_project,
+            build_status={"phase": "Pushed", "images": images},
+        )
+    ).status
+
+    namespace_names = {
+        resource["metadata"]["name"]
+        for resource in applied
+        if resource["kind"] == "Namespace"
+    }
+
+    assert status["phase"] == "SmokeCheckPending"
+    assert namespace_names == {runtime_namespace}
 
 
 def test_candidate_runtime_apply_does_not_promote_stable_services():
@@ -255,14 +287,47 @@ def test_promotion_resources_point_routes_at_runtime_namespace():
         if resource["kind"] == "IngressRoute"
         and resource["metadata"]["name"] == "banking-money-transfer"
     )
+    http_route = next(
+        resource
+        for resource in rendered
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == "banking-money-transfer-http"
+    )
+    certificate = next(
+        resource for resource in rendered if resource["kind"] == "Certificate"
+    )
+    redirect = next(
+        resource
+        for resource in rendered
+        if resource["kind"] == "Middleware"
+        and resource["metadata"]["name"] == HTTPS_REDIRECT_MIDDLEWARE_NAME
+    )
 
     assert services == []
+    assert ingress_route["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer-a1b2c"
+    )
+    assert http_route["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer-a1b2c"
+    )
+    assert certificate["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer-a1b2c"
+    )
+    assert redirect["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer-a1b2c"
+    )
     assert ingress_route["spec"]["routes"][0]["services"][0] == {
         "name": "frontend",
         "namespace": "tmprl-dem-cld-banking-money-transfer-a1b2c",
         "passHostHeader": True,
         "port": 80,
     }
+    assert http_route["spec"]["routes"][0]["middlewares"] == [
+        {
+            "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
+            "namespace": "tmprl-dem-cld-banking-money-transfer-a1b2c",
+        }
+    ]
 
 
 def test_promotion_resources_without_runtime_namespace_promotes_stable_services():
@@ -406,7 +471,7 @@ def test_promote_candidate_uses_candidate_source_commit_for_route_version(
     assert http_route["spec"]["routes"][0]["middlewares"] == [
         {
             "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
-            "namespace": "tmprl-dem-cld-banking-money-transfer",
+            "namespace": "tmprl-dem-cld-banking-money-transfer-a1b2c",
         }
     ]
 
@@ -562,7 +627,10 @@ def test_promote_candidate_prunes_previous_runtime_namespace(monkeypatch):
         )
     ).status
 
-    assert deleted == [("tmprl-dem-cld-banking-money-transfer-old12", False)]
+    assert deleted == [
+        ("tmprl-dem-cld-banking-money-transfer-old12", False),
+        ("tmprl-dem-cld-banking-money-transfer", False),
+    ]
     assert result["phase"] == "Pruned"
     assert result["resources"] == [
         {
@@ -571,8 +639,39 @@ def test_promote_candidate_prunes_previous_runtime_namespace(monkeypatch):
             "name": "tmprl-dem-cld-banking-money-transfer-old12",
             "rolloutVersion": "git-new",
             "action": "deleting",
+            "role": "previous-runtime",
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "name": "tmprl-dem-cld-banking-money-transfer",
+            "rolloutVersion": "git-new",
+            "action": "deleting",
+            "role": "legacy-base",
         }
     ]
+
+
+def test_promote_candidate_prunes_legacy_base_namespace(monkeypatch):
+    deleted = []
+
+    def delete_namespace(name, *, dry_run):
+        deleted.append((name, dry_run))
+        return "deleting"
+
+    monkeypatch.setattr(reconcile.kube, "delete_namespace", delete_namespace)
+
+    result = reconcile.prune_stale_runtime_candidates(
+        reconcile.PruneStaleRuntimeCandidatesRequest(
+            demo_project=banking_project(),
+            active_version="git-new",
+            active_runtime_namespace="tmprl-dem-cld-banking-money-transfer-new12",
+        )
+    ).status
+
+    assert deleted == [("tmprl-dem-cld-banking-money-transfer", False)]
+    assert result["phase"] == "Pruned"
+    assert result["resources"][0]["role"] == "legacy-base"
 
 
 def test_restore_active_runtime_routes_uses_explicit_active_version(monkeypatch):
