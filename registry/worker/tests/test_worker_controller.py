@@ -1483,6 +1483,55 @@ def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
     assert result["workflow"]["executionStatus"] == "FAILED"
 
 
+def test_canary_promotion_wait_uses_active_runtime_namespace(monkeypatch):
+    runtime_namespace = "tmprl-dem-cld-operator-canary-abc123-a1b2c"
+    read_namespaces = []
+    status = {
+        "phase": "Promoted",
+        "activeRuntimeNamespace": runtime_namespace,
+        "activeRouteServices": {"frontend": "frontend"},
+        "candidateRolloutStatus": {
+            "deployments": {"frontend": "frontend-git-abc"},
+            "runtimeNamespace": runtime_namespace,
+            "sourceCommitSha": "abc123",
+        },
+    }
+
+    monkeypatch.setattr(
+        canary.kube,
+        "read_demo_project",
+        lambda name: {"status": status},
+    )
+
+    def read_namespace(name):
+        read_namespaces.append(name)
+        return {"metadata": {"name": name}} if name == runtime_namespace else None
+
+    monkeypatch.setattr(canary.kube, "read_namespace", read_namespace)
+    monkeypatch.setattr(
+        canary.kube,
+        "read_deployment_status",
+        lambda namespace, name: {"namespace": namespace, "name": name},
+    )
+    monkeypatch.setattr(
+        canary.kube,
+        "read_service",
+        lambda namespace, name: {"metadata": {"namespace": namespace, "name": name}},
+    )
+
+    plan = {
+        **cleanup_plan(),
+        "expectedSourceCommitSha": "abc123",
+    }
+    result = canary.wait_for_registry_operator_canary_promotion(
+        promotion_wait_request(plan)
+    ).status
+
+    assert result["phase"] == "Promoted"
+    assert result["ok"] is True
+    assert read_namespaces == [runtime_namespace]
+
+
 def test_canary_cleanup_requires_finalized_catalog_status(monkeypatch):
     monkeypatch.setattr(canary.kube, "read_namespace", lambda name: None)
     monkeypatch.setattr(canary.kube, "list_namespaces", lambda *, label_selector: [])

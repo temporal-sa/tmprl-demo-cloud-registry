@@ -540,13 +540,15 @@ def wait_for_registry_operator_canary_promotion(
             resource.get("status", {}) if isinstance(resource, dict) else None
         )
         if isinstance(last_status, dict) and canary_promoted(plan, last_status):
-            namespace_status = kube.read_namespace(string_field(plan, "namespace"))
+            namespace_name = promoted_workload_namespace(plan, last_status)
+            namespace_status = kube.read_namespace(namespace_name)
             if namespace_status is None:
                 return RegistryOperatorCanaryActivityResult({
                     "project": string_field(plan, "project"),
                     "phase": "Failed",
                     "ok": False,
                     "message": "Canary promoted but namespace was not found.",
+                    "namespace": namespace_name,
                     "status": last_status,
                     "checkedAt": datetime.now(UTC).isoformat(),
                 })
@@ -1181,13 +1183,9 @@ def verify_promoted_workload_resources(
     plan: dict[str, Any],
     status: dict[str, Any],
 ) -> dict[str, Any]:
+    namespace = promoted_workload_namespace(plan, status)
     candidate = status.get("candidateRolloutStatus")
     candidate = candidate if isinstance(candidate, dict) else {}
-    namespace = status.get("activeRuntimeNamespace") or candidate.get("runtimeNamespace")
-    namespace = namespace if isinstance(namespace, str) and namespace else string_field(
-        plan,
-        "namespace",
-    )
     deployments = candidate.get("deployments")
     services = status.get("activeRouteServices") or candidate.get("services")
     deployments = deployments if isinstance(deployments, dict) else {}
@@ -1249,6 +1247,19 @@ def verify_promoted_workload_resources(
         "services": service_statuses,
         "missing": missing,
     }
+
+
+def promoted_workload_namespace(
+    plan: dict[str, Any],
+    status: dict[str, Any],
+) -> str:
+    candidate = status.get("candidateRolloutStatus")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    namespace = status.get("activeRuntimeNamespace") or candidate.get("runtimeNamespace")
+    return namespace if isinstance(namespace, str) and namespace else string_field(
+        plan,
+        "namespace",
+    )
 
 
 def catalog_cleanup_status(plan: dict[str, Any]) -> dict[str, Any]:
