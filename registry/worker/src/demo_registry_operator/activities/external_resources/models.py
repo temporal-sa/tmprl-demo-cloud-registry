@@ -24,6 +24,7 @@ class TemporalCloudProject:
     components: dict[str, dict[str, Any]]
     runtime_secret_path: str
     mtls_ca_secret_path: str
+    uid: str | None = None
     search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
 
     @property
@@ -39,14 +40,20 @@ class TemporalCloudProject:
         return self.temporal_required or bool(self.search_attributes)
 
     def as_demo_project(self) -> dict[str, Any]:
-        temporal: dict[str, Any] = {"auth": {"mode": self.auth_mode}}
+        temporal: dict[str, Any] = {
+            "auth": {"mode": self.auth_mode},
+            "runtimeSecretPath": self.runtime_secret_path,
+        }
         if self.search_attributes:
             temporal["searchAttributes"] = {
                 attribute.name: {"type": attribute.type}
                 for attribute in self.search_attributes
             }
+        metadata: dict[str, Any] = {"name": self.name}
+        if self.uid:
+            metadata["uid"] = self.uid
         return {
-            "metadata": {"name": self.name},
+            "metadata": metadata,
             "spec": {
                 "components": self.components,
                 "temporal": temporal,

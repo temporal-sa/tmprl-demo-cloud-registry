@@ -7,6 +7,9 @@ from demo_registry_operator.activities.external_resources import (
     TemporalCloudProject,
     stage_temporal_mtls_ca,
 )
+from demo_registry_operator.activities.external_resources.planning import (
+    temporal_cloud_project,
+)
 from demo_registry_operator.activities.external_resources import temporal
 from demo_registry_operator.activities import temporal_cloud
 
@@ -61,3 +64,32 @@ def test_stage_temporal_mtls_ca_uses_explicit_dataclass_request_without_bootstra
     assert captured["stageSecretStore"] is store
     assert captured["stageCheckedAt"] == "2026-06-17T00:00:00+00:00"
     assert captured["stageCandidateSecretToken"] is None
+
+
+def test_temporal_cloud_project_as_demo_project_preserves_runtime_secret_path():
+    demo_project = PROJECT.as_demo_project()
+
+    assert demo_project["spec"]["temporal"]["runtimeSecretPath"] == (
+        "tmprl-dem-cld/banking-money-transfer/temporal"
+    )
+
+
+def test_temporal_cloud_project_plan_preserves_live_uid():
+    project = {
+        "metadata": {
+            "name": "dejavu-tacos",
+            "uid": "df1a4cee-d539-4009-999c-9fcc547f9c10",
+        },
+        "spec": {
+            "components": {"worker": {"build": "worker", "worker": True}},
+        },
+    }
+
+    temporal_project = temporal_cloud_project(project)
+    demo_project = temporal_project.as_demo_project()
+
+    assert temporal_project.uid == "df1a4cee-d539-4009-999c-9fcc547f9c10"
+    assert demo_project["metadata"]["uid"] == "df1a4cee-d539-4009-999c-9fcc547f9c10"
+    assert demo_project["spec"]["temporal"]["runtimeSecretPath"].startswith(
+        "tmprl-dem-cld/dejavu-tacos/temporal-"
+    )

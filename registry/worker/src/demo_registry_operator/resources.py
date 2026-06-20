@@ -4517,6 +4517,11 @@ def user_secret_input_refs(component: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def temporal_secret_remote_path(demo_project: dict[str, Any]) -> str:
+    temporal = spec_of(demo_project).get("temporal", {})
+    if isinstance(temporal, dict):
+        runtime_secret_path = temporal.get("runtimeSecretPath")
+        if isinstance(runtime_secret_path, str) and runtime_secret_path.strip():
+            return runtime_secret_path.strip()
     path = f"{project_secret_prefix(demo_project)}/temporal"
     suffix = temporal_secret_instance_suffix(demo_project)
     return f"{path}-{suffix}" if suffix else path

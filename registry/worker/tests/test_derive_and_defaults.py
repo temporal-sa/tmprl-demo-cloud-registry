@@ -80,6 +80,20 @@ def test_temporal_secret_path_without_uid_keeps_legacy_offline_path():
     )
 
 
+def test_temporal_secret_path_uses_planned_runtime_path_override():
+    proj = project(
+        "dejavu-tacos",
+        temporal={
+            "runtimeSecretPath": "tmprl-dem-cld/dejavu-tacos/temporal-planned"
+        },
+    )
+
+    assert (
+        temporal_secret_remote_path(proj)
+        == "tmprl-dem-cld/dejavu-tacos/temporal-planned"
+    )
+
+
 def test_worker_runtime_external_secret_uses_uid_suffixed_remote_path():
     uid = "df1a4cee-d539-4009-999c-9fcc547f9c10"
     proj = {
