@@ -15,6 +15,26 @@ spec:
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
+  name: node-local-dns
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/sa-demo/addons/node-local-dns/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: DaemonSet
+      name: node-local-dns
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
   name: metrics-server
   namespace: flux-system
 spec:
@@ -90,6 +110,8 @@ metadata:
   name: temporal-worker-controller
   namespace: flux-system
 spec:
+  dependsOn:
+    - name: node-local-dns
   interval: 5m
   path: ./clusters/sa-demo/addons/temporal-worker-controller/install
   prune: true
@@ -135,6 +157,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
+    - name: node-local-dns
     - name: external-secrets-stores
   interval: 5m
   path: ./clusters/sa-demo/addons/instruqt-litellm/install
@@ -176,6 +199,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
+    - name: node-local-dns
     - name: external-secrets-stores
     - name: registry-crds
     - name: temporal-worker-controller
@@ -198,6 +222,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
+    - name: node-local-dns
     - name: registry-operator
     - name: temporal-worker-controller
   interval: 5m
@@ -219,6 +244,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
+    - name: node-local-dns
     - name: registry-operator
   interval: 5m
   # InstruqtCourse CRs authored directly under projects/instruqt/.
