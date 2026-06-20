@@ -309,8 +309,43 @@ def test_workflow_signal_payload_is_trimmed_and_can_inject_source_commit():
             SOURCE_ARTIFACT_DIGEST_ANNOTATION: "sha256:aaaabbbb",
         },
     }
-    assert "status" not in payload
+    assert "status" not in payload  # status-less source -> no status carried
     assert "managedFields" not in payload["metadata"]
+
+
+def test_workflow_signal_payload_carries_active_version_status():
+    # Regression: the entity saga tells first-time from established projects by the
+    # active version in the signal payload. Stripping status entirely (the old
+    # behavior) made every established project read as first-time, so a transient
+    # rollout error failed the whole entity workflow instead of settling. The
+    # payload must carry the active-version subset (and only that, not volatile
+    # fields like conditions/appliedResources).
+    from demo_registry_operator.workflows.demo_project import project_has_active_version
+
+    established = project()
+    established["status"] = {
+        "activeImageVersion": "git-abc123-key-1",
+        "activeImages": {"worker": "repo/worker:git-abc123"},
+        "activeRuntimeNamespace": "tmprl-dem-cld-banking-money-transfer-7aa3",
+        "activeRevision": {"name": "banking-money-transfer-deadbeef"},
+        "activeRouteServices": {"web": "web-git-abc123-key-1"},
+        "conditions": [{"type": "Ready", "status": "True"}],
+        "appliedResources": [{"kind": "Namespace"}],
+        "phase": "Promoted",
+    }
+
+    payload = workflow_signal_payload(established)
+
+    assert payload["status"] == {
+        "activeImageVersion": "git-abc123-key-1",
+        "activeImages": {"worker": "repo/worker:git-abc123"},
+        "activeRuntimeNamespace": "tmprl-dem-cld-banking-money-transfer-7aa3",
+        "activeRevision": {"name": "banking-money-transfer-deadbeef"},
+        "activeRouteServices": {"web": "web-git-abc123-key-1"},
+    }
+    assert project_has_active_version(payload) is True
+    # status-less project stays first-time
+    assert project_has_active_version(workflow_signal_payload(project())) is False
 
 
 def test_reconcile_key_changes_with_flux_source_commit_without_artifact_digest():

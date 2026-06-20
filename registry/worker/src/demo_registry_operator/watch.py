@@ -1083,6 +1083,31 @@ def source_commit_from_revision(revision: Any) -> str | None:
     return None
 
 
+# Status fields the entity workflow needs to distinguish a first-time provision
+# from an established project (project_has_active_version) and to preserve the
+# live active version on a failed rollout (_failed_rollout_status). Kept minimal
+# and stable — volatile fields (conditions, appliedResources, ...) are excluded.
+ACTIVE_VERSION_STATUS_KEYS = (
+    "activeImageVersion",
+    "activeImages",
+    "activeRuntimeNamespace",
+    "activeRevision",
+    "activeRouteServices",
+)
+
+
+def active_version_status(demo_project: dict[str, Any]) -> dict[str, Any]:
+    """Active-version subset of a DemoProject's live status (empty if none)."""
+    status = demo_project.get("status") if isinstance(demo_project, dict) else None
+    if not isinstance(status, dict):
+        return {}
+    return {
+        key: copy.deepcopy(status[key])
+        for key in ACTIVE_VERSION_STATUS_KEYS
+        if status.get(key) is not None
+    }
+
+
 def workflow_signal_payload(
     demo_project: dict[str, Any],
     *,
@@ -1133,7 +1158,7 @@ def workflow_signal_payload(
     if annotations:
         payload_metadata["annotations"] = annotations
 
-    return {
+    payload: dict[str, Any] = {
         "apiVersion": demo_project.get(
             "apiVersion",
             "registry.tmprl-demo.cloud/v1alpha1",
@@ -1142,6 +1167,15 @@ def workflow_signal_payload(
         "metadata": payload_metadata,
         "spec": copy.deepcopy(spec_of(demo_project)),
     }
+    # Carry the active-version subset of status (only) so the entity workflow's
+    # saga can tell a first-time provision from an established project when a
+    # rollout fails — and preserve the live active version instead of failing the
+    # whole entity. The reconcile happy path and reconcile_identity both ignore
+    # status, so this has no effect on normal reconciliation.
+    active_status = active_version_status(demo_project)
+    if active_status:
+        payload["status"] = active_status
+    return payload
 
 
 async def signal_workflow(

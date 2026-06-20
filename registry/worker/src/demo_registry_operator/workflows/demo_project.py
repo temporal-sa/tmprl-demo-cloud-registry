@@ -1400,11 +1400,21 @@ class DemoProjectWorkflow:
         demo_project: dict[str, Any],
         error: BaseException,
     ) -> bool:
-        record_target = self._last_demo_project or demo_project
-        if not project_has_active_version(demo_project):
-            # First-time provision (empty state): tear down everything created this
-            # pass so we don't orphan the Temporal Cloud namespace / credentials /
-            # secrets, then re-raise to fail the entity workflow.
+        # Decide first-time vs established from whichever known state still carries
+        # the live active version — the current reconcile input first, then the
+        # last one we saw. The signal payload carries the active-version status
+        # subset (watch.active_version_status) for exactly this decision; without
+        # it an established project reads as first-time and a transient rollout
+        # error would fail the whole entity workflow instead of settling.
+        record_target = demo_project
+        if not project_has_active_version(record_target) and project_has_active_version(
+            self._last_demo_project
+        ):
+            record_target = self._last_demo_project
+        if not project_has_active_version(record_target):
+            # First-time provision (no active version to fall back to): tear down
+            # everything created this pass so we don't orphan the Temporal Cloud
+            # namespace / credentials / secrets, then re-raise to fail the entity.
             await self._compensate_first_time_external_resources()
             raise error
         # Established project: a new rollout failed. Preserve the active/production
