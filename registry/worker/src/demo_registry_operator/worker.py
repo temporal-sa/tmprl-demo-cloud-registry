@@ -195,9 +195,9 @@ async def liveness_heartbeat(
 
     Pairs with resources.worker_liveness_probe(). A wedged worker (e.g. the gRPC
     DNS resolver stuck) stays Running but can't poll, and an OS-level probe would
-    falsely pass — so the heartbeat is driven by a real Temporal health round-trip
-    over the worker's own client. If that stops succeeding the file goes stale and
-    the kubelet restarts the container (fresh process -> fresh resolver).
+    falsely pass — so the heartbeat is driven by a real Temporal round-trip over
+    the worker's own client. If that stops succeeding the file goes stale and the
+    kubelet restarts the container (fresh process -> fresh resolver).
     """
     heartbeat = Path(path)
     try:
@@ -206,16 +206,20 @@ async def liveness_heartbeat(
         logger.warning("Liveness heartbeat: cannot write %s", path)
     while True:
         try:
-            healthy = await client.service_client.check_health(
-                timeout=timedelta(seconds=timeout_seconds)
+            # A real WorkflowService round-trip on the worker's own channel — the
+            # same path polling uses, so it fails exactly when the worker is
+            # wedged. Deliberately NOT service_client.check_health(): the gRPC
+            # health service can't decompress the gzip responses the 1.29 client
+            # negotiates ('Decompressor is not installed for grpc-encoding
+            # "gzip"'), so it would never refresh on a perfectly healthy worker.
+            await client.workflow_service.describe_namespace(
+                workflowservice_pb2.DescribeNamespaceRequest(namespace=client.namespace),
+                timeout=timedelta(seconds=timeout_seconds),
             )
-            if healthy:
-                heartbeat.touch()
-            else:
-                logger.warning("Liveness heartbeat: Temporal reported unhealthy")
+            heartbeat.touch()
         except Exception:  # noqa: BLE001 - any failure means we can't reach Temporal
             logger.warning(
-                "Liveness heartbeat: Temporal health check failed; %s not refreshed",
+                "Liveness heartbeat: Temporal round-trip failed; %s not refreshed",
                 path,
             )
         await asyncio.sleep(interval_seconds)

@@ -32,4 +32,8 @@ async def connect(config: WorkerConfig) -> Client:
         dns_load_balancing_config=DnsLoadBalancingConfig(
             resolution_interval_millis=TEMPORAL_DNS_RESOLUTION_INTERVAL_MS
         ),
+        # NB: gzip compression (the 1.29 default) is intentionally left ON — it
+        # compresses workflow histories/payloads and normal polling handles it
+        # fine. The liveness heartbeat avoids service_client.check_health(), which
+        # can't decompress gzip responses; see worker.liveness_heartbeat.
     )

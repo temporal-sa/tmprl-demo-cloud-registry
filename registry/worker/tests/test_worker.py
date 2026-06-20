@@ -199,16 +199,21 @@ def test_signal_running_entity_workflows_falls_back_to_individual_signals():
 
 
 def test_liveness_heartbeat_refreshes_via_temporal_health_check(tmp_path, monkeypatch):
-    # Must drive the heartbeat from the worker's OWN client (check_health) — an
-    # OS-level probe would falsely pass while the in-process resolver is wedged.
+    # Must drive the heartbeat from the worker's OWN client via a real
+    # WorkflowService round-trip (describe_namespace) — an OS-level probe would
+    # falsely pass while the in-process resolver is wedged. (Not check_health:
+    # the gRPC health service can't decompress the 1.29 client's gzip responses.)
     path = tmp_path / "alive"
-    calls = {"health": 0}
+    calls = {"describe": 0}
 
-    async def fake_check_health(**kwargs):
-        calls["health"] += 1
-        return True
+    async def fake_describe_namespace(_req, **kwargs):
+        calls["describe"] += 1
+        return SimpleNamespace()
 
-    client = SimpleNamespace(service_client=SimpleNamespace(check_health=fake_check_health))
+    client = SimpleNamespace(
+        namespace="ns.acct",
+        workflow_service=SimpleNamespace(describe_namespace=fake_describe_namespace),
+    )
 
     async def stop_after_one(_seconds):
         raise asyncio.CancelledError
@@ -219,19 +224,22 @@ def test_liveness_heartbeat_refreshes_via_temporal_health_check(tmp_path, monkey
     except asyncio.CancelledError:
         pass
     assert path.exists()
-    assert calls["health"] == 1
+    assert calls["describe"] == 1
 
 
 def test_liveness_heartbeat_survives_unreachable_temporal(tmp_path, monkeypatch):
-    # A wedged connection (check_health raises) must NOT crash the loop; it stops
-    # refreshing the file so the probe restarts the pod.
+    # A wedged connection (the round-trip raises) must NOT crash the loop; it
+    # stops refreshing the file so the probe restarts the pod.
     path = tmp_path / "alive"
     sleeps = {"n": 0}
 
-    async def fake_check_health(**kwargs):
+    async def fake_describe_namespace(_req, **kwargs):
         raise RuntimeError("dns error")
 
-    client = SimpleNamespace(service_client=SimpleNamespace(check_health=fake_check_health))
+    client = SimpleNamespace(
+        namespace="ns.acct",
+        workflow_service=SimpleNamespace(describe_namespace=fake_describe_namespace),
+    )
 
     async def count_then_stop(_seconds):
         sleeps["n"] += 1
@@ -242,7 +250,7 @@ def test_liveness_heartbeat_survives_unreachable_temporal(tmp_path, monkeypatch)
         asyncio.run(worker.liveness_heartbeat(client, path=str(path), interval_seconds=0))
     except asyncio.CancelledError:
         pass
-    assert sleeps["n"] == 1  # the failed health check was caught; loop proceeded
+    assert sleeps["n"] == 1  # the failed round-trip was caught; loop proceeded
 
 
 def test_connect_enables_dns_load_balancing(monkeypatch):
@@ -270,3 +278,10 @@ def test_connect_enables_dns_load_balancing(monkeypatch):
     dlb = captured.get("dns_load_balancing_config")
     assert dlb is not None, "connect() did not pass dns_load_balancing_config"
     assert dlb.resolution_interval_millis == temporal_client.TEMPORAL_DNS_RESOLUTION_INTERVAL_MS
+    # gzip (1.29 default) is intentionally left on — the heartbeat avoids the one
+    # RPC that can't decompress it rather than disabling compression globally.
+    from temporalio.service import GrpcCompression
+
+    assert captured.get("grpc_compression") in (None, GrpcCompression.GZIP), (
+        "connect() should not disable gzip compression"
+    )
