@@ -198,6 +198,85 @@ def test_signal_running_entity_workflows_falls_back_to_individual_signals():
     ]
 
 
+def test_worker_update_restarts_after_observed_promotion(monkeypatch):
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-new")
+    observed = iter([False, True])
+    signals = []
+    restarts = []
+
+    async def fake_is_current(_client, version):
+        assert version.deployment_name == "registry-operator"
+        assert version.build_id == "git-new"
+        return next(observed)
+
+    async def fake_signal(client, **kwargs):
+        signals.append((client, kwargs))
+        return {"mode": "batch"}
+
+    monkeypatch.setattr(
+        worker,
+        "temporal_worker_deployment_version_is_current",
+        fake_is_current,
+    )
+    monkeypatch.setattr(
+        worker,
+        "signal_running_entity_workflows_for_worker_update",
+        fake_signal,
+    )
+
+    client = SimpleNamespace(namespace="default")
+
+    asyncio.run(
+        worker.signal_entity_workflows_for_worker_update_when_current(
+            client,
+            poll_interval_seconds=0,
+            restart_process=lambda: restarts.append("restart"),
+        )
+    )
+
+    assert signals == [(client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL})]
+    assert restarts == ["restart"]
+
+
+def test_worker_update_does_not_restart_when_current_at_start(monkeypatch):
+    monkeypatch.setenv("TEMPORAL_DEPLOYMENT_NAME", "registry-operator")
+    monkeypatch.setenv("TEMPORAL_WORKER_BUILD_ID", "git-new")
+    signals = []
+    restarts = []
+
+    async def fake_is_current(_client, _version):
+        return True
+
+    async def fake_signal(client, **kwargs):
+        signals.append((client, kwargs))
+        return {"mode": "batch"}
+
+    monkeypatch.setattr(
+        worker,
+        "temporal_worker_deployment_version_is_current",
+        fake_is_current,
+    )
+    monkeypatch.setattr(
+        worker,
+        "signal_running_entity_workflows_for_worker_update",
+        fake_signal,
+    )
+
+    client = SimpleNamespace(namespace="default")
+
+    asyncio.run(
+        worker.signal_entity_workflows_for_worker_update_when_current(
+            client,
+            poll_interval_seconds=0,
+            restart_process=lambda: restarts.append("restart"),
+        )
+    )
+
+    assert signals == [(client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL})]
+    assert restarts == []
+
+
 def test_liveness_heartbeat_refreshes_via_temporal_health_check(tmp_path, monkeypatch):
     # Must drive the heartbeat from the worker's OWN client via a real
     # WorkflowService round-trip (describe_namespace) — an OS-level probe would
@@ -280,8 +359,4 @@ def test_connect_enables_dns_load_balancing(monkeypatch):
     assert dlb.resolution_interval_millis == temporal_client.TEMPORAL_DNS_RESOLUTION_INTERVAL_MS
     # gzip (1.29 default) is intentionally left on — the heartbeat avoids the one
     # RPC that can't decompress it rather than disabling compression globally.
-    from temporalio.service import GrpcCompression
-
-    assert captured.get("grpc_compression") in (None, GrpcCompression.GZIP), (
-        "connect() should not disable gzip compression"
-    )
+    assert "grpc_compression" not in captured, "connect() should not override compression"

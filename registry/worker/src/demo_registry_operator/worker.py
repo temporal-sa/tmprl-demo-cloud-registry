@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from temporalio.api.batch.v1 import message_pb2 as batch_pb2
 from temporalio.api.common.v1 import message_pb2 as common_pb2
@@ -402,10 +402,13 @@ async def signal_entity_workflows_for_worker_update_when_current(
     temporal_client: Client,
     *,
     poll_interval_seconds: int,
+    restart_process: Callable[[], None] | None = None,
 ) -> None:
     version = worker_deployment_version_from_env()
     if version is None:
         return
+    restart_process = restart_process or restart_process_after_worker_promotion
+    observed_not_current = False
 
     logger.info(
         "Waiting for WorkerDeployment version %s/%s to become current "
@@ -420,6 +423,7 @@ async def signal_entity_workflows_for_worker_update_when_current(
                 version,
             ):
                 break
+            observed_not_current = True
         except Exception:
             logger.warning(
                 "Could not verify current WorkerDeployment version; will retry.",
@@ -441,6 +445,19 @@ async def signal_entity_workflows_for_worker_update_when_current(
             "Failed to signal entity workflows for worker version update.",
             exc_info=True,
         )
+    if observed_not_current:
+        logger.warning(
+            "WorkerDeployment version %s/%s became current after this process "
+            "started; exiting so Kubernetes restarts Temporal worker pollers "
+            "with a fresh SDK core.",
+            version.deployment_name,
+            version.build_id,
+        )
+        restart_process()
+
+
+def restart_process_after_worker_promotion() -> None:
+    os._exit(0)
 
 
 async def temporal_worker_deployment_version_is_current(
