@@ -20,7 +20,7 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.activities.external_resources.models import (
     EnsureLambdaFunctionRequest,
     LambdaEnvironmentVariable,
-    ReconcileServerlessWorkerDeploymentRequest,
+    UpsertServerlessWorkerDeploymentVersionRequest,
 )
 from demo_registry_operator.activities.external_resources.serverless_names import (
     lambda_execution_role_name,
@@ -33,6 +33,7 @@ from demo_registry_operator.activities.external_resources.serverless_worker impo
 )
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
     mtls_file_path_env,
+    serverless_worker_deployment_status,
 )
 
 
@@ -358,7 +359,7 @@ def test_lambda_project_secrets_policy_is_scoped_to_project_prefix_and_paths():
 
 
 def test_temporal_compute_provider_payload_matches_cli_shape():
-    request = ReconcileServerlessWorkerDeploymentRequest(
+    request = UpsertServerlessWorkerDeploymentVersionRequest(
         project="banking-money-transfer",
         component="worker",
         temporal_secret_path="tmprl-dem-cld/banking-money-transfer/temporal",
@@ -378,4 +379,53 @@ def test_temporal_compute_provider_payload_matches_cli_shape():
         "arn": "arn:aws:lambda:us-west-1:123456789012:function:worker:12",
         "role": "arn:aws:iam::123456789012:role/temporal-invoke",
         "role_external_id": "tdc-external",
+    }
+
+
+def test_serverless_worker_deployment_status_preserves_step_boundaries():
+    status = serverless_worker_deployment_status(
+        {
+            "phase": "Ready",
+            "namespace": "tmprl-dem-cld-banking.a2dd6",
+            "deploymentName": "money-transfer",
+            "action": "verified",
+        },
+        {
+            "phase": "Ready",
+            "buildId": "git-e12b0ed9d450",
+            "functionVersionArn": (
+                "arn:aws:lambda:us-west-1:123456789012:function:worker:12"
+            ),
+            "invokeRoleArn": "arn:aws:iam::123456789012:role/temporal-invoke",
+            "externalId": "tdc-external",
+            "computeProvider": "aws-lambda",
+            "scaler": "no-sync",
+        },
+        {
+            "phase": "Ready",
+            "message": "Temporal validated the Lambda compute configuration.",
+        },
+        {
+            "phase": "Ready",
+            "action": "set-current",
+        },
+        {
+            "phase": "Ready",
+            "taskQueues": [{"name": "money-transfer", "type": "workflow"}],
+        },
+    )
+
+    assert status["phase"] == "Ready"
+    assert status["namespace"] == "tmprl-dem-cld-banking.a2dd6"
+    assert status["buildId"] == "git-e12b0ed9d450"
+    assert status["computeProvider"] == "aws-lambda"
+    assert status["validation"]["message"] == (
+        "Temporal validated the Lambda compute configuration."
+    )
+    assert set(status["steps"]) == {
+        "ensureDeployment",
+        "upsertVersion",
+        "validateComputeConfig",
+        "setCurrent",
+        "describeVersion",
     }

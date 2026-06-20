@@ -19,9 +19,209 @@ from demo_registry_operator.config import WorkerConfig
 
 
 @activity.defn
-async def reconcile_serverless_worker_deployment(
-    request: models.ReconcileServerlessWorkerDeploymentRequest,
-) -> models.ReconcileServerlessWorkerDeploymentResult:
+async def ensure_serverless_worker_deployment(
+    request: models.EnsureServerlessWorkerDeploymentRequest,
+) -> models.EnsureServerlessWorkerDeploymentResult:
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    identity = "tmprl-demo-cloud-registry"
+    try:
+        action = await ensure_worker_deployment(
+            client,
+            namespace=namespace,
+            deployment_name=request.deployment_name,
+            identity=identity,
+        )
+    except RPCError as error:
+        raise temporal_service_application_error(
+            error,
+            operation=(
+                "Ensure Temporal Serverless Worker Deployment "
+                f"{request.deployment_name}"
+            ),
+        ) from error
+
+    return models.EnsureServerlessWorkerDeploymentResult(
+        status={
+            "phase": "Ready",
+            "action": action,
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+        }
+    )
+
+
+@activity.defn
+async def upsert_serverless_worker_deployment_version(
+    request: models.UpsertServerlessWorkerDeploymentVersionRequest,
+) -> models.UpsertServerlessWorkerDeploymentVersionResult:
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    identity = "tmprl-demo-cloud-registry"
+    deployment_version = deployment_pb2.WorkerDeploymentVersion(
+        deployment_name=request.deployment_name,
+        build_id=request.build_id,
+    )
+    scaling_group = compute_scaling_group(request)
+
+    try:
+        action = await create_or_update_worker_deployment_version(
+            client,
+            namespace=namespace,
+            deployment_version=deployment_version,
+            scaling_group=scaling_group,
+            identity=identity,
+        )
+    except RPCError as error:
+        raise temporal_service_application_error(
+            error,
+            operation=(
+                "Upsert Temporal Serverless Worker Deployment Version "
+                f"{request.deployment_name}.{request.build_id}"
+            ),
+        ) from error
+
+    return models.UpsertServerlessWorkerDeploymentVersionResult(
+        status={
+            "phase": "Ready",
+            "action": action,
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+            "buildId": request.build_id,
+            "functionVersionArn": request.function_version_arn,
+            "invokeRoleArn": request.invoke_role_arn,
+            "externalId": request.invoke_role_external_id,
+            "computeProvider": "aws-lambda",
+            "scaler": "no-sync",
+        }
+    )
+
+
+@activity.defn
+async def validate_serverless_worker_compute_config(
+    request: models.ValidateServerlessWorkerComputeConfigRequest,
+) -> models.ValidateServerlessWorkerComputeConfigResult:
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    identity = "tmprl-demo-cloud-registry"
+    deployment_version = deployment_pb2.WorkerDeploymentVersion(
+        deployment_name=request.deployment_name,
+        build_id=request.build_id,
+    )
+    scaling_group = compute_scaling_group(request)
+
+    try:
+        await validate_worker_deployment_compute_config(
+            client,
+            namespace=namespace,
+            deployment_version=deployment_version,
+            scaling_group=scaling_group,
+            identity=identity,
+        )
+    except RPCError as error:
+        raise temporal_service_application_error(
+            error,
+            operation=(
+                "Validate Temporal Serverless Worker Deployment Version "
+                f"{request.deployment_name}.{request.build_id}"
+            ),
+        ) from error
+
+    return models.ValidateServerlessWorkerComputeConfigResult(
+        status={
+            "phase": "Ready",
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+            "buildId": request.build_id,
+            "functionVersionArn": request.function_version_arn,
+            "invokeRoleArn": request.invoke_role_arn,
+            "externalId": request.invoke_role_external_id,
+            "computeProvider": "aws-lambda",
+            "scaler": "no-sync",
+            "message": "Temporal validated the Lambda compute configuration.",
+        }
+    )
+
+
+@activity.defn
+async def set_serverless_worker_deployment_current(
+    request: models.SetServerlessWorkerDeploymentCurrentRequest,
+) -> models.SetServerlessWorkerDeploymentCurrentResult:
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    identity = "tmprl-demo-cloud-registry"
+    try:
+        await set_worker_deployment_current(
+            client,
+            namespace=namespace,
+            deployment_name=request.deployment_name,
+            build_id=request.build_id,
+            identity=identity,
+        )
+    except RPCError as error:
+        raise temporal_service_application_error(
+            error,
+            operation=(
+                "Set Temporal Serverless Worker Deployment Current Version "
+                f"{request.deployment_name}.{request.build_id}"
+            ),
+        ) from error
+
+    return models.SetServerlessWorkerDeploymentCurrentResult(
+        status={
+            "phase": "Ready",
+            "action": "set-current",
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+            "buildId": request.build_id,
+        }
+    )
+
+
+@activity.defn
+async def describe_serverless_worker_deployment_version(
+    request: models.DescribeServerlessWorkerDeploymentVersionRequest,
+) -> models.DescribeServerlessWorkerDeploymentVersionResult:
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    deployment_version = deployment_pb2.WorkerDeploymentVersion(
+        deployment_name=request.deployment_name,
+        build_id=request.build_id,
+    )
+    try:
+        version_status = await describe_worker_deployment_version_status(
+            client,
+            namespace=namespace,
+            deployment_version=deployment_version,
+        )
+    except RPCError as error:
+        raise temporal_service_application_error(
+            error,
+            operation=(
+                "Describe Temporal Serverless Worker Deployment Version "
+                f"{request.deployment_name}.{request.build_id}"
+            ),
+        ) from error
+
+    return models.DescribeServerlessWorkerDeploymentVersionResult(
+        status={
+            "phase": "Ready",
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+            "buildId": request.build_id,
+            **version_status,
+        }
+    )
+
+
+async def connect_to_project_namespace_from_secret_path(
+    temporal_secret_path: str,
+) -> tuple[Client, str]:
     config = WorkerConfig.from_env()
     try:
         import boto3
@@ -34,76 +234,9 @@ async def reconcile_serverless_worker_deployment(
     secretsmanager = boto3.session.Session(region_name=config.aws_region).client(
         "secretsmanager"
     )
-    temporal_secret = aws_lambda.read_json_secret(secretsmanager, request.temporal_secret_path)
+    temporal_secret = aws_lambda.read_json_secret(secretsmanager, temporal_secret_path)
     client = await connect_to_project_namespace(temporal_secret)
-    namespace = str(temporal_secret["namespace"])
-    identity = "tmprl-demo-cloud-registry"
-    deployment_version = deployment_pb2.WorkerDeploymentVersion(
-        deployment_name=request.deployment_name,
-        build_id=request.build_id,
-    )
-    scaling_group = compute_scaling_group(request)
-
-    try:
-        await ensure_worker_deployment(
-            client,
-            namespace=namespace,
-            deployment_name=request.deployment_name,
-            identity=identity,
-        )
-        action = await create_or_update_worker_deployment_version(
-            client,
-            namespace=namespace,
-            deployment_version=deployment_version,
-            scaling_group=scaling_group,
-            identity=identity,
-        )
-        await validate_worker_deployment_compute_config(
-            client,
-            namespace=namespace,
-            deployment_version=deployment_version,
-            scaling_group=scaling_group,
-            identity=identity,
-        )
-        await set_worker_deployment_current(
-            client,
-            namespace=namespace,
-            deployment_name=request.deployment_name,
-            build_id=request.build_id,
-            identity=identity,
-        )
-        version_status = await describe_worker_deployment_version_status(
-            client,
-            namespace=namespace,
-            deployment_version=deployment_version,
-        )
-    except RPCError as error:
-        raise temporal_service_application_error(
-            error,
-            operation=(
-                "Reconcile Temporal Serverless Worker Deployment Version "
-                f"{request.deployment_name}.{request.build_id}"
-            ),
-        ) from error
-
-    status = {
-        "phase": "Ready",
-        "action": action,
-        "namespace": namespace,
-        "deploymentName": request.deployment_name,
-        "buildId": request.build_id,
-        "functionVersionArn": request.function_version_arn,
-        "invokeRoleArn": request.invoke_role_arn,
-        "externalId": request.invoke_role_external_id,
-        "computeProvider": "aws-lambda",
-        "scaler": "no-sync",
-        "validation": {
-            "phase": "Ready",
-            "message": "Temporal validated the Lambda compute configuration.",
-        },
-        **version_status,
-    }
-    return models.ReconcileServerlessWorkerDeploymentResult(status=status)
+    return client, str(temporal_secret["namespace"])
 
 
 async def ensure_worker_deployment(
@@ -112,7 +245,7 @@ async def ensure_worker_deployment(
     namespace: str,
     deployment_name: str,
     identity: str,
-) -> None:
+) -> str:
     try:
         await client.workflow_service.create_worker_deployment(
             workflowservice_pb2.CreateWorkerDeploymentRequest(
@@ -123,9 +256,11 @@ async def ensure_worker_deployment(
             ),
             retry=True,
         )
+        return "created"
     except RPCError as error:
         if error.status != RPCStatusCode.ALREADY_EXISTS:
             raise
+    return "verified"
 
 
 async def create_or_update_worker_deployment_version(
@@ -254,7 +389,10 @@ async def describe_worker_deployment_version_status(
 
 
 def compute_scaling_group(
-    request: models.ReconcileServerlessWorkerDeploymentRequest,
+    request: (
+        models.UpsertServerlessWorkerDeploymentVersionRequest
+        | models.ValidateServerlessWorkerComputeConfigRequest
+    ),
 ) -> config_pb2.ComputeConfigScalingGroup:
     return config_pb2.ComputeConfigScalingGroup(
         provider=provider_pb2.ComputeProvider(
@@ -275,7 +413,10 @@ def compute_scaling_group_update(
 
 
 def aws_lambda_provider_details_payload(
-    request: models.ReconcileServerlessWorkerDeploymentRequest,
+    request: (
+        models.UpsertServerlessWorkerDeploymentVersionRequest
+        | models.ValidateServerlessWorkerComputeConfigRequest
+    ),
 ) -> Any:
     details = {
         "arn": request.function_version_arn,

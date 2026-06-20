@@ -156,8 +156,21 @@ class DemoProjectServerlessLambdaWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         worker_deployment = await workflow.execute_activity(
-            external_resources.reconcile_serverless_worker_deployment,
-            external_resources.ReconcileServerlessWorkerDeploymentRequest(
+            external_resources.ensure_serverless_worker_deployment,
+            external_resources.EnsureServerlessWorkerDeploymentRequest(
+                project=project,
+                component=component_name,
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
+                deployment_name=deployment_name,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        worker_version = await workflow.execute_activity(
+            external_resources.upsert_serverless_worker_deployment_version,
+            external_resources.UpsertServerlessWorkerDeploymentVersionRequest(
                 project=project,
                 component=component_name,
                 temporal_secret_path=resources.temporal_secret_remote_path(
@@ -169,8 +182,60 @@ class DemoProjectServerlessLambdaWorkflow:
                 invoke_role_arn=invoke_role.role_arn,
                 invoke_role_external_id=invoke_role.external_id,
             ),
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
+        )
+        compute_validation = await workflow.execute_activity(
+            external_resources.validate_serverless_worker_compute_config,
+            external_resources.ValidateServerlessWorkerComputeConfigRequest(
+                project=project,
+                component=component_name,
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
+                deployment_name=deployment_name,
+                build_id=build_id,
+                function_version_arn=function.function_version_arn,
+                invoke_role_arn=invoke_role.role_arn,
+                invoke_role_external_id=invoke_role.external_id,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        current_version = await workflow.execute_activity(
+            external_resources.set_serverless_worker_deployment_current,
+            external_resources.SetServerlessWorkerDeploymentCurrentRequest(
+                project=project,
+                component=component_name,
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
+                deployment_name=deployment_name,
+                build_id=build_id,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        version_status = await workflow.execute_activity(
+            external_resources.describe_serverless_worker_deployment_version,
+            external_resources.DescribeServerlessWorkerDeploymentVersionRequest(
+                project=project,
+                component=component_name,
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
+                ),
+                deployment_name=deployment_name,
+                build_id=build_id,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        worker_deployment_status = serverless_worker_deployment_status(
+            worker_deployment.status,
+            worker_version.status,
+            compute_validation.status,
+            current_version.status,
+            version_status.status,
         )
         return {
             "phase": aggregate_phase(
@@ -178,7 +243,7 @@ class DemoProjectServerlessLambdaWorkflow:
                     "executionRole": execution_role.status,
                     "function": function.status,
                     "invokeRole": invoke_role.status,
-                    "workerDeployment": worker_deployment.status,
+                    "workerDeployment": worker_deployment_status,
                 }
             ),
             "deploymentName": deployment_name,
@@ -188,7 +253,7 @@ class DemoProjectServerlessLambdaWorkflow:
                 "executionRole": execution_role.status,
                 "function": function.status,
                 "invokeRole": invoke_role.status,
-                "workerDeployment": worker_deployment.status,
+                "workerDeployment": worker_deployment_status,
             },
         }
 
@@ -305,6 +370,44 @@ def mtls_file_path_env(
         )
         seen.add(env_name)
     return tuple(rendered)
+
+
+def serverless_worker_deployment_status(
+    ensure_status: dict[str, Any],
+    version_status: dict[str, Any],
+    validation_status: dict[str, Any],
+    current_status: dict[str, Any],
+    describe_status: dict[str, Any],
+) -> dict[str, Any]:
+    steps = {
+        "ensureDeployment": ensure_status,
+        "upsertVersion": version_status,
+        "validateComputeConfig": validation_status,
+        "setCurrent": current_status,
+        "describeVersion": describe_status,
+    }
+    status = {
+        "phase": aggregate_phase(steps),
+        "steps": steps,
+    }
+    for key in (
+        "namespace",
+        "deploymentName",
+        "buildId",
+        "functionVersionArn",
+        "invokeRoleArn",
+        "externalId",
+        "computeProvider",
+        "scaler",
+        "taskQueues",
+    ):
+        for step_status in steps.values():
+            value = step_status.get(key)
+            if value is not None:
+                status[key] = value
+                break
+    status["validation"] = validation_status
+    return status
 
 
 def aggregate_phase(statuses: dict[str, Any]) -> str:

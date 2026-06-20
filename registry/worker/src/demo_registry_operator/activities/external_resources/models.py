@@ -183,7 +183,20 @@ class EnsureTemporalLambdaInvokeRoleResult:
 
 
 @dataclass(frozen=True)
-class ReconcileServerlessWorkerDeploymentRequest:
+class EnsureServerlessWorkerDeploymentRequest:
+    project: str
+    component: str
+    temporal_secret_path: str
+    deployment_name: str
+
+
+@dataclass(frozen=True)
+class EnsureServerlessWorkerDeploymentResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UpsertServerlessWorkerDeploymentVersionRequest:
     project: str
     component: str
     temporal_secret_path: str
@@ -195,7 +208,52 @@ class ReconcileServerlessWorkerDeploymentRequest:
 
 
 @dataclass(frozen=True)
-class ReconcileServerlessWorkerDeploymentResult:
+class UpsertServerlessWorkerDeploymentVersionResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ValidateServerlessWorkerComputeConfigRequest:
+    project: str
+    component: str
+    temporal_secret_path: str
+    deployment_name: str
+    build_id: str
+    function_version_arn: str
+    invoke_role_arn: str
+    invoke_role_external_id: str
+
+
+@dataclass(frozen=True)
+class ValidateServerlessWorkerComputeConfigResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SetServerlessWorkerDeploymentCurrentRequest:
+    project: str
+    component: str
+    temporal_secret_path: str
+    deployment_name: str
+    build_id: str
+
+
+@dataclass(frozen=True)
+class SetServerlessWorkerDeploymentCurrentResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DescribeServerlessWorkerDeploymentVersionRequest:
+    project: str
+    component: str
+    temporal_secret_path: str
+    deployment_name: str
+    build_id: str
+
+
+@dataclass(frozen=True)
+class DescribeServerlessWorkerDeploymentVersionResult:
     status: dict[str, Any]
 
 
