@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-
 from demo_registry_operator import derive
 from demo_registry_operator.activities.builds import source_config
 from demo_registry_operator.resources import (
@@ -16,6 +14,7 @@ from demo_registry_operator.resources import (
     temporal_mtls_status,
     temporal_auth_mode,
     temporal_secret_remote_path,
+    temporal_secret_remote_path_with_suffix,
     temporal_search_attributes,
     worker_runtime_external_secret,
 )
@@ -62,18 +61,7 @@ def test_secret_prefix_and_host():
     assert derive.host(None, "banking") == "banking.tmprl-demo.cloud"
 
 
-def test_temporal_secret_path_uses_object_uid_suffix_when_available():
-    uid = "df1a4cee-d539-4009-999c-9fcc547f9c10"
-    proj = {"metadata": {"name": "dejavu-tacos", "uid": uid}, "spec": {}}
-    suffix = hashlib.sha256(uid.encode("utf-8")).hexdigest()[:12]
-
-    assert (
-        temporal_secret_remote_path(proj)
-        == f"tmprl-dem-cld/dejavu-tacos/temporal-{suffix}"
-    )
-
-
-def test_temporal_secret_path_without_uid_keeps_legacy_offline_path():
+def test_temporal_secret_path_defaults_to_legacy_project_path():
     assert (
         temporal_secret_remote_path(project("dejavu-tacos"))
         == "tmprl-dem-cld/dejavu-tacos/temporal"
@@ -94,11 +82,22 @@ def test_temporal_secret_path_uses_planned_runtime_path_override():
     )
 
 
-def test_worker_runtime_external_secret_uses_uid_suffixed_remote_path():
-    uid = "df1a4cee-d539-4009-999c-9fcc547f9c10"
+def test_temporal_secret_path_with_workflow_suffix():
+    assert (
+        temporal_secret_remote_path_with_suffix(project("dejavu-tacos"), "AbC123")
+        == "tmprl-dem-cld/dejavu-tacos/temporal-abc123"
+    )
+
+
+def test_worker_runtime_external_secret_uses_planned_remote_path():
     proj = {
-        "metadata": {"name": "dejavu-tacos", "uid": uid},
-        "spec": {"components": {"worker": {"build": "worker", "worker": True}}},
+        "metadata": {"name": "dejavu-tacos"},
+        "spec": {
+            "temporal": {
+                "runtimeSecretPath": "tmprl-dem-cld/dejavu-tacos/temporal-owned"
+            },
+            "components": {"worker": {"build": "worker", "worker": True}},
+        },
     }
     remote_keys = {
         item["remoteRef"]["key"]

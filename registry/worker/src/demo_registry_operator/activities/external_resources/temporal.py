@@ -228,6 +228,67 @@ def create_or_verify_temporal_cloud_service_account(
 
 
 @activity.defn
+def check_temporal_runtime_secret(
+    request: models.CheckTemporalRuntimeSecretRequest,
+) -> models.TemporalRuntimeSecretCheckResult:
+    store = temporal_secret_store()
+    if not request.project.temporal_required:
+        return runtime_secret_check_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return runtime_secret_check_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    status = temporal_cloud.check_temporal_api_key_runtime_secret(
+        request.project.as_demo_project(),
+        namespace_status_value=request.namespace.status,
+        secret_store=store,
+        checked_at=request.checked_at,
+        force_rotation=request.force_rotation,
+    )
+    return runtime_secret_check_result(status)
+
+
+@activity.defn
+def create_temporal_api_key_candidate_secret(
+    request: models.CreateTemporalApiKeyCandidateSecretRequest,
+) -> models.TemporalCloudCredentialStageResult:
+    if not request.project.temporal_required:
+        return stage_result(temporal_cloud.temporal_cloud_not_required_status(request.checked_at))
+    if platform_manual_setup_required(request.project):
+        return stage_result(manual_setup_required_status(request.project, request.checked_at))
+
+    config = WorkerConfig.from_env()
+    store = temporal_secret_store()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return stage_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.create_temporal_api_key_candidate_secret(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            service_account_status=request.service_account.status,
+            runtime_secret_status=request.runtime_secret.status,
+            reconciler=reconciler,
+            secret_store=store,
+            checked_at=request.checked_at,
+            candidate_secret_token=request.candidate_secret_token,
+        )
+
+    try:
+        return stage_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Create Temporal API key candidate secret",
+        ) from error
+
+
+@activity.defn
 def stage_temporal_api_key_candidate(
     request: models.StageTemporalApiKeyCandidateRequest,
 ) -> models.TemporalCloudCredentialStageResult:
@@ -798,6 +859,28 @@ def stage_result(status: dict[str, Any]) -> models.TemporalCloudCredentialStageR
             status.get("candidateCaSecretRemotePath")
         ),
         candidate_secret_token=string_value(status.get("candidateSecretToken")),
+    )
+
+
+def runtime_secret_check_result(
+    status: dict[str, Any],
+) -> models.TemporalRuntimeSecretCheckResult:
+    runtime_secret = status.get("runtimeSecret")
+    runtime_secret = runtime_secret if isinstance(runtime_secret, dict) else {}
+    rotation = status.get("rotation")
+    rotation = rotation if isinstance(rotation, dict) else {}
+    api_key = status.get("apiKey")
+    api_key = api_key if isinstance(api_key, dict) else {}
+    return models.TemporalRuntimeSecretCheckResult(
+        status=status,
+        runtime_secret_path=string_value(runtime_secret.get("secretRemotePath")),
+        state=string_value(runtime_secret.get("state")) or "Unknown",
+        exists=bool(runtime_secret.get("exists")),
+        rotate=bool(status.get("rotate")),
+        rotation_reason=string_value(rotation.get("reason")),
+        key_id=string_value(api_key.get("keyId")),
+        expiry_time=string_value(api_key.get("expiryTime")),
+        created_at=string_value(api_key.get("createdAt")),
     )
 
 

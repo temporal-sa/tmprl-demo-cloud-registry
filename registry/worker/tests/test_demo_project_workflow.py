@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from copy import deepcopy
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +17,7 @@ from demo_registry_operator.resources import (
 from demo_registry_operator.workflows.demo_project import (
     DemoProjectWorkflow,
     demo_project_with_temporal_api_key,
+    demo_project_with_temporal_runtime_secret_path,
     project_has_active_version,
     remember_completed_reconcile_identity,
     previous_temporal_search_attributes,
@@ -570,6 +573,7 @@ def test_worker_update_continue_as_new_uses_initial_auto_upgrade(monkeypatch):
     calls = []
     workflow = workflow_instance()
     workflow._continue_as_new_for_worker_version = True
+    workflow._temporal_runtime_secret_suffix = "stable123"
 
     monkeypatch.setattr(
         demo_project_workflow.workflow,
@@ -588,6 +592,141 @@ def test_worker_update_continue_as_new_uses_initial_auto_upgrade(monkeypatch):
     assert calls[0]["initial_versioning_behavior"] == (
         demo_project_workflow.workflow.ContinueAsNewVersioningBehavior.AUTO_UPGRADE
     )
+    assert (
+        calls[0]["args"][0].carried_temporal_runtime_secret_suffix
+        == "stable123"
+    )
+
+
+def test_runtime_secret_suffix_is_carried_from_run_request():
+    workflow = DemoProjectWorkflow(
+        DemoProjectRunRequest(
+            project_name="demo",
+            carried_temporal_runtime_secret_suffix="stable123",
+        )
+    )
+
+    assert workflow._temporal_runtime_secret_suffix == "stable123"
+
+
+def test_runtime_secret_path_moves_from_missing_legacy_to_workflow_suffix(
+    monkeypatch,
+):
+    workflow = workflow_instance()
+    demo_project = project()
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        demo_project,
+        checked_at="2026-06-20T00:00:00+00:00",
+    )
+    runtime_secret = (
+        demo_project_workflow.external_resources.TemporalRuntimeSecretCheckResult(
+            status={},
+            runtime_secret_path=external_plan.temporal_project.runtime_secret_path,
+            state="MarkedForDeletion",
+            exists=False,
+            rotate=True,
+            rotation_reason="MissingRuntimeSecret",
+        )
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "uuid4",
+        lambda: SimpleNamespace(hex="abcdef1234567890abcdef1234567890"),
+    )
+
+    assert workflow._runtime_secret_path_can_move(external_plan, runtime_secret)
+
+    moved = workflow._external_plan_with_new_runtime_secret_path(external_plan)
+
+    assert workflow._temporal_runtime_secret_suffix == "abcdef123456"
+    assert moved.temporal_project.runtime_secret_path.endswith("-abcdef123456")
+    assert moved.demo_project["spec"]["temporal"]["runtimeSecretPath"].endswith(
+        "-abcdef123456"
+    )
+
+
+def test_runtime_secret_path_does_not_move_after_suffix_is_owned():
+    workflow = workflow_instance()
+    workflow._temporal_runtime_secret_suffix = "stable123"
+    demo_project = demo_project_with_temporal_runtime_secret_path(
+        project(),
+        "tmprl-dem-cld/demo/temporal-stable123",
+    )
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        demo_project,
+        checked_at="2026-06-20T00:00:00+00:00",
+    )
+    runtime_secret = (
+        demo_project_workflow.external_resources.TemporalRuntimeSecretCheckResult(
+            status={},
+            runtime_secret_path=external_plan.temporal_project.runtime_secret_path,
+            state="Missing",
+            exists=False,
+            rotate=True,
+        )
+    )
+
+    assert not workflow._runtime_secret_path_can_move(external_plan, runtime_secret)
+
+
+def test_external_resources_uses_moved_runtime_secret_plan(monkeypatch):
+    workflow = workflow_instance()
+    source = project()
+    checked_at = "2026-06-20T00:00:00+00:00"
+    moved_path = "tmprl-dem-cld/demo/temporal-stable123"
+    moved_project = demo_project_with_temporal_runtime_secret_path(
+        source,
+        moved_path,
+    )
+    moved_plan = demo_project_workflow.external_resources.plan_external_resources(
+        moved_project,
+        checked_at=checked_at,
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_reconcile_ecr_repositories(external_plan):
+        captured["ecrPlan"] = external_plan
+        return {"phase": "NotRequired"}
+
+    async def fake_reconcile_temporal_cloud(external_plan, *, previous_status):
+        captured["temporalInputPlan"] = external_plan
+        workflow._tc_plan = moved_plan
+        return {
+            "phase": "Ready",
+            "apiKey": {
+                "keyId": "key-1",
+                "expiryTime": "2026-07-20T00:00:00+00:00",
+            },
+        }
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        captured["secretsRequest"] = request
+        return SimpleNamespace(status={"phase": "Ready"})
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    workflow._reconcile_ecr_repositories = fake_reconcile_ecr_repositories
+    workflow._reconcile_temporal_cloud = fake_reconcile_temporal_cloud
+
+    result = asyncio.run(
+        workflow._reconcile_external_resources(
+            source,
+            previous_status={},
+            force_temporal_auth_rotation=False,
+        )
+    )
+
+    assert result.demo_project["spec"]["temporal"]["runtimeSecretPath"] == moved_path
+    assert captured["secretsRequest"].temporal_credentials.path == moved_path
+    assert result.status["secretsManager"]["phase"] == "Ready"
 
 
 def test_child_workflow_id_is_scoped_to_reconcile_sequence(monkeypatch):

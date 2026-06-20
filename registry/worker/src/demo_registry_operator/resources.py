@@ -381,16 +381,6 @@ def project_secret_prefix(demo_project: dict[str, Any]) -> str:
     return derive.secret_prefix(project_name(demo_project))
 
 
-def temporal_secret_instance_suffix(demo_project: dict[str, Any]) -> str | None:
-    metadata = demo_project.get("metadata", {})
-    if not isinstance(metadata, dict):
-        return None
-    uid = metadata.get("uid")
-    if not isinstance(uid, str) or not uid.strip():
-        return None
-    return hashlib.sha256(uid.strip().encode("utf-8")).hexdigest()[:12]
-
-
 def spec_of(demo_project: dict[str, Any]) -> dict[str, Any]:
     spec = demo_project.get("spec")
     return spec if isinstance(spec, dict) else {}
@@ -4522,9 +4512,21 @@ def temporal_secret_remote_path(demo_project: dict[str, Any]) -> str:
         runtime_secret_path = temporal.get("runtimeSecretPath")
         if isinstance(runtime_secret_path, str) and runtime_secret_path.strip():
             return runtime_secret_path.strip()
-    path = f"{project_secret_prefix(demo_project)}/temporal"
-    suffix = temporal_secret_instance_suffix(demo_project)
-    return f"{path}-{suffix}" if suffix else path
+    return f"{project_secret_prefix(demo_project)}/temporal"
+
+
+def temporal_secret_remote_path_with_suffix(
+    demo_project: dict[str, Any],
+    suffix: str,
+) -> str:
+    token = "".join(
+        character.lower()
+        for character in suffix.strip()
+        if character.isalnum() or character == "-"
+    )
+    if not token:
+        raise ValueError("Temporal runtime secret suffix must not be empty.")
+    return f"{project_secret_prefix(demo_project)}/temporal-{token}"
 
 
 def temporal_mtls_ca_secret_remote_path(demo_project: dict[str, Any]) -> str:

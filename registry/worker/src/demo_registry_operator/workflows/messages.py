@@ -11,6 +11,7 @@ class DemoProjectRunRequest:
     carried_completed_reconcile_identity: dict[str, str] | None = None
     carried_last_demo_project: dict[str, Any] | None = None
     carried_temporal_api_key_rotation: dict[str, Any] | None = None
+    carried_temporal_runtime_secret_suffix: str | None = None
     carried_pending_force_reconcile: dict[str, str] | None = None
     carried_completed_force_reconcile_token: str | None = None
 

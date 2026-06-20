@@ -98,6 +98,12 @@ class TemporalCloudReconcileState:
 
 
 @dataclass
+class TemporalRuntimeStageOutcome:
+    external_plan: Any
+    staged: bool
+
+
+@dataclass
 class DemoProjectReconcileInput:
     demo_project: dict[str, Any] | None
     force_reconcile: dict[str, str] | None
@@ -244,6 +250,21 @@ def demo_project_with_temporal_api_key(
 
     rendered_metadata["annotations"] = rendered_annotations
     rendered["metadata"] = rendered_metadata
+    return rendered
+
+
+def demo_project_with_temporal_runtime_secret_path(
+    demo_project: dict[str, Any],
+    runtime_secret_path: str,
+) -> dict[str, Any]:
+    rendered = {**demo_project}
+    spec = demo_project.get("spec")
+    rendered_spec = {**spec} if isinstance(spec, dict) else {}
+    temporal = rendered_spec.get("temporal")
+    rendered_temporal = {**temporal} if isinstance(temporal, dict) else {}
+    rendered_temporal["runtimeSecretPath"] = runtime_secret_path
+    rendered_spec["temporal"] = rendered_temporal
+    rendered["spec"] = rendered_spec
     return rendered
 
 
@@ -496,6 +517,9 @@ class DemoProjectWorkflow:
         self._last_build_status: dict[str, Any] | None = None
         self._last_demo_project: dict[str, Any] | None = None
         self._temporal_api_key_rotation: dict[str, Any] | None = None
+        self._temporal_runtime_secret_suffix: str | None = (
+            request.carried_temporal_runtime_secret_suffix
+        )
         # Captured per-reconcile so a failure anywhere in the pass (incl. child
         # workflows) can compensate the Temporal Cloud resources created THIS pass.
         self._tc_state: TemporalCloudReconcileState | None = None
@@ -566,6 +590,10 @@ class DemoProjectWorkflow:
         if request.carried_temporal_api_key_rotation is not None:
             self._temporal_api_key_rotation = (
                 request.carried_temporal_api_key_rotation
+            )
+        if request.carried_temporal_runtime_secret_suffix is not None:
+            self._temporal_runtime_secret_suffix = (
+                request.carried_temporal_runtime_secret_suffix
             )
         if request.carried_pending_force_reconcile is not None:
             self._pending_force_reconcile = request.carried_pending_force_reconcile
@@ -736,6 +764,7 @@ class DemoProjectWorkflow:
         previous_status: dict[str, Any],
         force_temporal_auth_rotation: bool,
     ) -> DemoProjectExternalResources:
+        demo_project = self._demo_project_with_known_runtime_secret_path(demo_project)
         external_plan = external_resources.plan_external_resources(
             demo_project,
             checked_at=workflow.now().astimezone(UTC).isoformat(),
@@ -746,6 +775,9 @@ class DemoProjectWorkflow:
             external_plan,
             previous_status=previous_status,
         )
+        if self._tc_plan is not None:
+            external_plan = self._tc_plan
+            demo_project = external_plan.demo_project
         demo_project = demo_project_with_temporal_api_key(
             demo_project,
             temporal_status,
@@ -767,6 +799,60 @@ class DemoProjectWorkflow:
             secrets_status=secrets_status.status,
         )
         return DemoProjectExternalResources(demo_project=demo_project, status=status)
+
+    def _demo_project_with_known_runtime_secret_path(
+        self,
+        demo_project: dict[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            not self._temporal_runtime_secret_suffix
+            or not resources.temporal_components(demo_project)
+        ):
+            return demo_project
+        path = resources.temporal_secret_remote_path_with_suffix(
+            demo_project,
+            self._temporal_runtime_secret_suffix,
+        )
+        return demo_project_with_temporal_runtime_secret_path(demo_project, path)
+
+    def _external_plan_with_new_runtime_secret_path(
+        self,
+        external_plan: Any,
+    ) -> Any:
+        if self._temporal_runtime_secret_suffix is None:
+            self._temporal_runtime_secret_suffix = workflow.uuid4().hex[:12]
+        path = resources.temporal_secret_remote_path_with_suffix(
+            external_plan.demo_project,
+            self._temporal_runtime_secret_suffix,
+        )
+        demo_project = demo_project_with_temporal_runtime_secret_path(
+            external_plan.demo_project,
+            path,
+        )
+        return external_resources.plan_external_resources(
+            demo_project,
+            checked_at=external_plan.checked_at,
+            force_temporal_auth_rotation=(
+                external_plan.force_temporal_auth_rotation
+            ),
+        )
+
+    def _runtime_secret_path_can_move(
+        self,
+        external_plan: Any,
+        runtime_secret: external_resources.TemporalRuntimeSecretCheckResult,
+    ) -> bool:
+        if runtime_secret.state not in {"Missing", "MarkedForDeletion"}:
+            return False
+        if self._temporal_runtime_secret_suffix is not None:
+            return False
+        legacy_project = {
+            "metadata": {"name": external_plan.temporal_project.name},
+            "spec": {},
+        }
+        return external_plan.temporal_project.runtime_secret_path == (
+            resources.temporal_secret_remote_path(legacy_project)
+        )
 
     async def _reconcile_ecr_repositories(
         self,
@@ -946,12 +1032,14 @@ class DemoProjectWorkflow:
             ):
                 return state.merged_status()
 
-            staged = await self._stage_temporal_runtime_credential(
+            stage_outcome = await self._stage_temporal_runtime_credential(
                 external_plan,
                 state,
                 candidate_secret_token,
             )
-            if not staged:
+            external_plan = stage_outcome.external_plan
+            self._tc_plan = external_plan
+            if not stage_outcome.staged:
                 return state.merged_status()
             if state.stage is None or state.stage.phase != "Ready":
                 return state.merged_status()
@@ -1095,12 +1183,12 @@ class DemoProjectWorkflow:
         external_plan: Any,
         state: TemporalCloudReconcileState,
         candidate_secret_token: str,
-    ) -> bool:
+    ) -> TemporalRuntimeStageOutcome:
         project = external_plan.temporal_project
         if state.namespace is None:
-            return False
+            return TemporalRuntimeStageOutcome(external_plan, False)
         if not project.temporal_required:
-            return False
+            return TemporalRuntimeStageOutcome(external_plan, False)
 
         if project.auth_mode == resources.TEMPORAL_AUTH_MODE_MTLS:
             state.mtls_config = await workflow.execute_activity(
@@ -1131,7 +1219,7 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            return True
+            return TemporalRuntimeStageOutcome(external_plan, True)
 
         if project.auth_mode == resources.TEMPORAL_AUTH_MODE_API_KEY:
             state.service_account = await workflow.execute_activity(
@@ -1145,23 +1233,64 @@ class DemoProjectWorkflow:
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
             )
+            runtime_secret = await workflow.execute_activity(
+                external_resources.check_temporal_runtime_secret,
+                external_resources.CheckTemporalRuntimeSecretRequest(
+                    checked_at=external_plan.checked_at,
+                    project=project,
+                    namespace=state.namespace,
+                    force_rotation=external_plan.force_temporal_auth_rotation,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+
+            if self._runtime_secret_path_can_move(external_plan, runtime_secret):
+                external_plan = self._external_plan_with_new_runtime_secret_path(
+                    external_plan
+                )
+                project = external_plan.temporal_project
+                self._tc_plan = external_plan
+                runtime_secret = await workflow.execute_activity(
+                    external_resources.check_temporal_runtime_secret,
+                    external_resources.CheckTemporalRuntimeSecretRequest(
+                        checked_at=external_plan.checked_at,
+                        project=project,
+                        namespace=state.namespace,
+                        force_rotation=(
+                            external_plan.force_temporal_auth_rotation
+                        ),
+                    ),
+                    start_to_close_timeout=timedelta(minutes=5),
+                    heartbeat_timeout=timedelta(minutes=1),
+                    retry_policy=COMMON_RETRY_POLICY,
+                )
+
+            if not runtime_secret.rotate:
+                state.stage = external_resources.TemporalCloudCredentialStageResult(
+                    status=runtime_secret.status,
+                    promote_required=False,
+                )
+                return TemporalRuntimeStageOutcome(external_plan, True)
+
             state.stage = await workflow.execute_activity(
-                external_resources.stage_temporal_api_key_candidate,
-                external_resources.StageTemporalApiKeyCandidateRequest(
+                external_resources.create_temporal_api_key_candidate_secret,
+                external_resources.CreateTemporalApiKeyCandidateSecretRequest(
                     checked_at=external_plan.checked_at,
                     project=project,
                     namespace=state.namespace,
                     service_account=state.service_account,
-                    force_rotation=external_plan.force_temporal_auth_rotation,
+                    runtime_secret=runtime_secret,
                     candidate_secret_token=candidate_secret_token,
                 ),
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            return True
+            return TemporalRuntimeStageOutcome(external_plan, True)
 
-        return False
+        return TemporalRuntimeStageOutcome(external_plan, False)
 
     async def _promote_temporal_runtime_credential_if_needed(
         self,
@@ -1754,6 +1883,9 @@ class DemoProjectWorkflow:
                     carried_last_demo_project=self._last_demo_project,
                     carried_temporal_api_key_rotation=(
                         self._temporal_api_key_rotation
+                    ),
+                    carried_temporal_runtime_secret_suffix=(
+                        self._temporal_runtime_secret_suffix
                     ),
                     carried_pending_force_reconcile=(
                         self._pending_force_reconcile

@@ -6,6 +6,10 @@ from temporalio import activity
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.errors import VALIDATION_ERROR, non_retryable_error
 from demo_registry_operator.kube import read_demo_project, read_instruqt_course
+from demo_registry_operator.reconcile_payloads import (
+    demo_project_reconcile_payload_state,
+    instruqt_course_reconcile_payload_state,
+)
 from demo_registry_operator.resources import resource_with_force_reconcile
 
 
@@ -39,9 +43,7 @@ def load_current_demo_project_for_reconcile(
             error_type=VALIDATION_ERROR,
         )
 
-    from demo_registry_operator import watch
-
-    state = watch.demo_project_reconcile_payload_state(
+    state = demo_project_reconcile_payload_state(
         demo_project,
         WorkerConfig.from_env(),
     )
@@ -76,9 +78,7 @@ def load_current_instruqt_course_for_reconcile(
             error_type=VALIDATION_ERROR,
         )
 
-    from demo_registry_operator import watch
-
-    state = watch.instruqt_course_reconcile_payload_state(
+    state = instruqt_course_reconcile_payload_state(
         instruqt_course,
         WorkerConfig.from_env(),
     )

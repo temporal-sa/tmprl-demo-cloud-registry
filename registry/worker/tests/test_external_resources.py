@@ -74,13 +74,15 @@ def test_temporal_cloud_project_as_demo_project_preserves_runtime_secret_path():
     )
 
 
-def test_temporal_cloud_project_plan_preserves_live_uid():
+def test_temporal_cloud_project_plan_uses_explicit_runtime_secret_path():
     project = {
         "metadata": {
             "name": "dejavu-tacos",
-            "uid": "df1a4cee-d539-4009-999c-9fcc547f9c10",
         },
         "spec": {
+            "temporal": {
+                "runtimeSecretPath": "tmprl-dem-cld/dejavu-tacos/temporal-owned"
+            },
             "components": {"worker": {"build": "worker", "worker": True}},
         },
     }
@@ -88,8 +90,10 @@ def test_temporal_cloud_project_plan_preserves_live_uid():
     temporal_project = temporal_cloud_project(project)
     demo_project = temporal_project.as_demo_project()
 
-    assert temporal_project.uid == "df1a4cee-d539-4009-999c-9fcc547f9c10"
-    assert demo_project["metadata"]["uid"] == "df1a4cee-d539-4009-999c-9fcc547f9c10"
-    assert demo_project["spec"]["temporal"]["runtimeSecretPath"].startswith(
-        "tmprl-dem-cld/dejavu-tacos/temporal-"
+    assert temporal_project.runtime_secret_path == (
+        "tmprl-dem-cld/dejavu-tacos/temporal-owned"
+    )
+    assert "uid" not in demo_project["metadata"]
+    assert demo_project["spec"]["temporal"]["runtimeSecretPath"] == (
+        "tmprl-dem-cld/dejavu-tacos/temporal-owned"
     )

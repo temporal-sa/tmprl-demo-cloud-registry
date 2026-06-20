@@ -30,8 +30,6 @@ def plan_external_resources(
 
 
 def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloudProject:
-    metadata = demo_project.get("metadata", {})
-    uid = metadata.get("uid") if isinstance(metadata, dict) else None
     return models.TemporalCloudProject(
         name=resources.project_name(demo_project),
         namespace=resources.project_temporal_namespace(demo_project),
@@ -40,7 +38,6 @@ def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloud
         components=resources.temporal_components(demo_project),
         runtime_secret_path=resources.temporal_secret_remote_path(demo_project),
         mtls_ca_secret_path=resources.temporal_mtls_ca_secret_remote_path(demo_project),
-        uid=uid if isinstance(uid, str) and uid.strip() else None,
         search_attributes=tuple(
             models.TemporalCloudSearchAttribute(name=name, type=attribute_type)
             for name, attribute_type in resources.temporal_search_attributes(

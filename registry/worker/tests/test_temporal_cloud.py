@@ -8,7 +8,9 @@ from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     CloudApiReconciler,
     NamespaceInfo,
+    check_temporal_api_key_runtime_secret,
     configure_temporal_cloud_namespace_mtls,
+    create_temporal_api_key_candidate_secret,
     ensure_temporal_cloud_search_attribute,
     delete_temporal_runtime_candidate_secret,
     delete_temporal_cloud_search_attribute_value,
@@ -168,11 +170,14 @@ class FakeReconciler:
 
 
 class FakeSecretStore:
-    def __init__(self, initial=None):
+    def __init__(self, initial=None, read_errors=None):
         self.store = dict(initial or {})
+        self.read_errors = dict(read_errors or {})
         self.writes: list[tuple] = []
 
     def read_json(self, path):
+        if path in self.read_errors:
+            raise self.read_errors[path]
         return self.store.get(path)
 
     def write_json(self, path, value, description=None):
@@ -185,6 +190,12 @@ class FakeSecretStore:
         existed = path in self.store
         self.store.pop(path, None)
         return "scheduled-deletion" if existed else "not-found"
+
+
+class AwsInvalidRequest(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.response = {"Error": {"Code": "InvalidRequestException"}}
 
 
 async def passing_canary(credential):
@@ -492,6 +503,82 @@ def test_stage_api_key_candidate_does_not_promote_or_return_token():
     assert RUNTIME_PATH not in secrets.store
     assert secrets.store[candidate_path]["apiKey"] == "SECRET-TOKEN-VALUE"
     assert secrets.store[candidate_path]["candidateSecretToken"] == CANDIDATE_TOKEN
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
+
+
+def test_check_runtime_secret_treats_marked_for_deletion_as_missing():
+    secrets = FakeSecretStore(
+        read_errors={
+            RUNTIME_PATH: AwsInvalidRequest(
+                "You can't perform this operation on the secret because it was marked for deletion."
+            )
+        }
+    )
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        }
+    }
+
+    status = check_temporal_api_key_runtime_secret(
+        PROJECT,
+        namespace_status_value=namespace_status,
+        secret_store=secrets,
+        checked_at="2026-06-13T00:00:00+00:00",
+    )
+
+    assert status["rotate"] is True
+    assert status["runtimeSecret"] == {
+        "secretRemotePath": RUNTIME_PATH,
+        "state": "MarkedForDeletion",
+        "exists": False,
+    }
+    assert status["rotation"]["reason"] == "MissingRuntimeSecret"
+
+
+def test_create_api_key_candidate_secret_uses_checked_runtime_metadata():
+    reconciler = FakeReconciler(existing_sa="sa-existing")
+    secrets = FakeSecretStore()
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+    service_account_status = {
+        "serviceAccount": {
+            "id": "sa-existing",
+            "name": "banking-money-transfer-runtime",
+        }
+    }
+    runtime_secret_status = {
+        "rotation": {"rotate": True, "reason": "MarkedForDeletion"},
+        "apiKey": {
+            "keyId": "key-old",
+            "expiryTime": "2026-06-30T00:00:00+00:00",
+        },
+    }
+
+    status = asyncio.run(
+        create_temporal_api_key_candidate_secret(
+            PROJECT,
+            namespace_status_value=namespace_status,
+            service_account_status=service_account_status,
+            runtime_secret_status=runtime_secret_status,
+            reconciler=reconciler,
+            secret_store=secrets,
+            checked_at="2026-06-13T00:00:00+00:00",
+            candidate_secret_token=CANDIDATE_TOKEN,
+        )
+    )
+
+    candidate_path = temporal_runtime_candidate_secret_path(PROJECT, CANDIDATE_TOKEN)
+    assert status["promoteRequired"] is True
+    assert status["apiKey"]["action"] == "rotated"
+    assert status["apiKey"]["previousKeyId"] == "key-old"
+    assert secrets.store[candidate_path]["previousKeyId"] == "key-old"
     assert "SECRET-TOKEN-VALUE" not in json.dumps(status)
 
 

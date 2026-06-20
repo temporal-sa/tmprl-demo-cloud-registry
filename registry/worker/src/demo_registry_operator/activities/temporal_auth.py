@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from temporalio import activity
 
+from demo_registry_operator.activities import temporal_canary
 from demo_registry_operator import kube, resources
 
 
@@ -213,8 +214,6 @@ async def run_runtime_canary(
     runtime_canary: RuntimeCanary | None,
 ) -> dict[str, Any]:
     if runtime_canary is None:
-        from demo_registry_operator.activities import temporal_canary
-
         runtime_canary = temporal_canary.run_temporal_runtime_canary
 
     heartbeat_task = asyncio.create_task(heartbeat_runtime_canary(credential))

@@ -916,13 +916,50 @@ async def stage_temporal_api_key_candidate(
     if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_API_KEY:
         return temporal_cloud_auth_skipped_status(demo_project, checked_at)
 
+    runtime = check_temporal_api_key_runtime_secret(
+        demo_project,
+        namespace_status_value=namespace_status_value,
+        secret_store=secret_store,
+        checked_at=checked_at,
+        api_key_ttl_days=api_key_ttl_days,
+        rotate_before_days=rotate_before_days,
+        force_rotation=force_rotation,
+    )
+    if not bool(runtime.get("rotate")):
+        return runtime
+
+    return await create_temporal_api_key_candidate_secret(
+        demo_project,
+        namespace_status_value=namespace_status_value,
+        service_account_status=service_account_status,
+        runtime_secret_status=runtime,
+        reconciler=reconciler,
+        secret_store=secret_store,
+        checked_at=checked_at,
+        api_key_ttl_days=api_key_ttl_days,
+        rotate_before_days=rotate_before_days,
+        candidate_secret_token=candidate_secret_token,
+    )
+
+
+def check_temporal_api_key_runtime_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    secret_store: SecretStore,
+    checked_at: str,
+    api_key_ttl_days: int = TEMPORAL_API_KEY_TTL_DAYS,
+    rotate_before_days: int = TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
+    force_rotation: bool = False,
+) -> dict[str, Any]:
+    if not resources.temporal_components(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_API_KEY:
+        return temporal_cloud_auth_skipped_status(demo_project, checked_at)
+
     namespace = namespace_info_from_status(namespace_status_value)
-    service_account = service_account_status.get("serviceAccount")
-    service_account = service_account if isinstance(service_account, dict) else {}
-    service_account_id = string_value(service_account, "id")
-    service_account_name = string_value(service_account, "name")
     runtime_path = resources.temporal_secret_remote_path(demo_project)
-    existing = secret_store.read_json(runtime_path)
+    existing, state = read_runtime_secret_for_rotation(secret_store, runtime_path)
     rotation = temporal_auth.temporal_api_key_rotation_decision(
         existing,
         checked_at=checked_at,
@@ -935,29 +972,74 @@ async def stage_temporal_api_key_candidate(
     ):
         rotation = {"rotate": True, "reason": temporal_auth.MANUAL_ROTATION_REASON}
 
+    checked = {
+        "phase": "Ready",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "authMode": resources.TEMPORAL_AUTH_MODE_API_KEY,
+        "promoteRequired": False,
+        "rotate": bool(rotation["rotate"]),
+        "rotation": rotation,
+        "runtimeSecret": {
+            "secretRemotePath": runtime_path,
+            "state": state,
+            "exists": isinstance(existing, dict),
+        },
+    }
+    if state == "MarkedForDeletion":
+        checked["message"] = (
+            "Temporal runtime secret is marked for deletion; treating it as absent."
+        )
+
     if isinstance(existing, dict) and existing.get("apiKey") and not rotation["rotate"]:
         key_id = string_optional(existing.get("keyId"))
         expiry_time = string_optional(existing.get("expiryTime"))
-        return {
-            "phase": "Ready",
-            "provider": "temporal-cloud",
-            "mode": "cloud-api",
-            "checkedAt": checked_at,
-            "authMode": resources.TEMPORAL_AUTH_MODE_API_KEY,
-            "promoteRequired": False,
-            "apiKey": api_key_candidate_status(
-                demo_project,
-                namespace=namespace,
-                key_id=key_id,
-                action="verified",
-                ttl_days=api_key_ttl_days,
-                rotate_before_days=rotate_before_days,
-                rotation=rotation,
-                expiry_time=expiry_time,
-                created_at=string_optional(existing.get("createdAt")),
-                canary_status=existing.get("canary"),
-            ),
-        }
+        checked["apiKey"] = api_key_candidate_status(
+            demo_project,
+            namespace=namespace,
+            key_id=key_id,
+            action="verified",
+            ttl_days=api_key_ttl_days,
+            rotate_before_days=rotate_before_days,
+            rotation=rotation,
+            expiry_time=expiry_time,
+            created_at=string_optional(existing.get("createdAt")),
+            canary_status=existing.get("canary"),
+        )
+    return checked
+
+
+async def create_temporal_api_key_candidate_secret(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    service_account_status: dict[str, Any],
+    runtime_secret_status: dict[str, Any],
+    reconciler: TemporalCloudReconciler,
+    secret_store: SecretStore,
+    checked_at: str,
+    api_key_ttl_days: int = TEMPORAL_API_KEY_TTL_DAYS,
+    rotate_before_days: int = TEMPORAL_API_KEY_ROTATE_BEFORE_EXPIRY_DAYS,
+    candidate_secret_token: str | None = None,
+) -> dict[str, Any]:
+    if not resources.temporal_components(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+    if resources.temporal_auth_mode(demo_project) != resources.TEMPORAL_AUTH_MODE_API_KEY:
+        return temporal_cloud_auth_skipped_status(demo_project, checked_at)
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    service_account = service_account_status.get("serviceAccount")
+    service_account = service_account if isinstance(service_account, dict) else {}
+    service_account_id = string_value(service_account, "id")
+    service_account_name = string_value(service_account, "name")
+    rotation = runtime_secret_status.get("rotation")
+    rotation = rotation if isinstance(rotation, dict) else {
+        "rotate": True,
+        "reason": "MissingRuntimeSecret",
+    }
+    api_key = runtime_secret_status.get("apiKey")
+    api_key = api_key if isinstance(api_key, dict) else {}
 
     result = await reconciler.create_api_key(
         service_account_id,
@@ -965,10 +1047,8 @@ async def stage_temporal_api_key_candidate(
         f"tmprl-demo.cloud runtime key for {resources.project_name(demo_project)}",
         api_key_ttl_days,
     )
-    previous_key_id = existing.get("keyId") if isinstance(existing, dict) else None
-    previous_expiry_time = (
-        existing.get("expiryTime") if isinstance(existing, dict) else None
-    )
+    previous_key_id = string_optional(api_key.get("keyId"))
+    previous_expiry_time = string_optional(api_key.get("expiryTime"))
     candidate_path = temporal_runtime_candidate_secret_path(
         demo_project,
         candidate_secret_token,
@@ -1022,6 +1102,27 @@ async def stage_temporal_api_key_candidate(
     if token:
         status["candidateSecretToken"] = token
     return status
+
+
+def read_runtime_secret_for_rotation(
+    secret_store: SecretStore,
+    runtime_path: str,
+) -> tuple[dict[str, Any] | None, str]:
+    try:
+        existing = secret_store.read_json(runtime_path)
+    except Exception as error:  # noqa: BLE001 - normalize provider deletion state
+        if secret_marked_for_deletion(error):
+            return None, "MarkedForDeletion"
+        raise
+    if isinstance(existing, dict):
+        return existing, "Ready"
+    return None, "Missing"
+
+
+def secret_marked_for_deletion(error: Exception) -> bool:
+    if _error_code(error) != "InvalidRequestException":
+        return False
+    return "marked for deletion" in str(error).lower()
 
 
 def stage_temporal_mtls_client_certificate(

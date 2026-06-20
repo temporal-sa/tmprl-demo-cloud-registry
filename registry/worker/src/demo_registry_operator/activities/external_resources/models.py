@@ -24,6 +24,9 @@ class TemporalCloudProject:
     components: dict[str, dict[str, Any]]
     runtime_secret_path: str
     mtls_ca_secret_path: str
+    # Kept only for payload compatibility with rollout builds that briefly
+    # carried Kubernetes object UID through this model. Runtime secret identity
+    # is workflow-owned via runtime_secret_path, not derived from this field.
     uid: str | None = None
     search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
 
@@ -49,11 +52,8 @@ class TemporalCloudProject:
                 attribute.name: {"type": attribute.type}
                 for attribute in self.search_attributes
             }
-        metadata: dict[str, Any] = {"name": self.name}
-        if self.uid:
-            metadata["uid"] = self.uid
         return {
-            "metadata": metadata,
+            "metadata": {"name": self.name},
             "spec": {
                 "components": self.components,
                 "temporal": temporal,
@@ -296,6 +296,19 @@ class TemporalCloudCredentialStageResult:
 
 
 @dataclass(frozen=True)
+class TemporalRuntimeSecretCheckResult:
+    status: dict[str, Any]
+    runtime_secret_path: str
+    state: str
+    exists: bool
+    rotate: bool
+    rotation_reason: str | None = None
+    key_id: str | None = None
+    expiry_time: str | None = None
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
 class TemporalCloudPromotionResult:
     status: dict[str, Any]
     promoted: bool = False
@@ -365,6 +378,24 @@ class StageTemporalApiKeyCandidateRequest:
     namespace: TemporalCloudNamespaceResult
     service_account: TemporalCloudServiceAccountResult
     force_rotation: bool = False
+    candidate_secret_token: str | None = None
+
+
+@dataclass(frozen=True)
+class CheckTemporalRuntimeSecretRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    force_rotation: bool = False
+
+
+@dataclass(frozen=True)
+class CreateTemporalApiKeyCandidateSecretRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    service_account: TemporalCloudServiceAccountResult
+    runtime_secret: TemporalRuntimeSecretCheckResult
     candidate_secret_token: str | None = None
 
 
