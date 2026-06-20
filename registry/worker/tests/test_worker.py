@@ -243,3 +243,30 @@ def test_liveness_heartbeat_survives_unreachable_temporal(tmp_path, monkeypatch)
     except asyncio.CancelledError:
         pass
     assert sleeps["n"] == 1  # the failed health check was caught; loop proceeded
+
+
+def test_connect_enables_dns_load_balancing(monkeypatch):
+    # The poisoned-resolver wedge is recovered by Core periodically re-resolving
+    # DNS; connect() must pass dns_load_balancing_config so that's actually on.
+    import asyncio as _asyncio
+    from temporalio.client import Client
+    from demo_registry_operator import temporal_client
+
+    captured = {}
+
+    async def fake_connect(address, **kwargs):
+        captured["address"] = address
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(Client, "connect", staticmethod(fake_connect))
+    config = SimpleNamespace(
+        temporal_address="ns.acct.tmprl.cloud:7233",
+        temporal_namespace="ns.acct",
+        temporal_tls=True,
+        temporal_api_key="k",
+    )
+    _asyncio.run(temporal_client.connect(config))
+    dlb = captured.get("dns_load_balancing_config")
+    assert dlb is not None, "connect() did not pass dns_load_balancing_config"
+    assert dlb.resolution_interval_millis == temporal_client.TEMPORAL_DNS_RESOLUTION_INTERVAL_MS

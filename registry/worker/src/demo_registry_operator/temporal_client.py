@@ -3,8 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from temporalio.client import Client
+from temporalio.service import DnsLoadBalancingConfig
 
 from demo_registry_operator.config import WorkerConfig
+
+# Periodically re-resolve the Temporal Cloud endpoint. The gRPC client's DNS
+# resolver can get poisoned under polling load and never re-resolve on its own,
+# leaving the worker Running but unable to poll ("dns error: failed to lookup
+# address information: Name or service not known") until a pod restart — even
+# though the node's OS DNS is fine. Core's DNS load balancing forces a fresh
+# lookup on this interval, which recovers a stuck resolver in place. Off by
+# default in the SDK; safe here because the operator connects directly (no HTTP
+# CONNECT proxy, which would silently disable it). The worker liveness probe
+# stays as the backstop for any failure this doesn't cover.
+TEMPORAL_DNS_RESOLUTION_INTERVAL_MS = 15000
 
 
 async def connect(config: WorkerConfig) -> Client:
@@ -17,4 +29,7 @@ async def connect(config: WorkerConfig) -> Client:
         namespace=config.temporal_namespace,
         tls=config.temporal_tls,
         rpc_metadata=rpc_metadata,
+        dns_load_balancing_config=DnsLoadBalancingConfig(
+            resolution_interval_millis=TEMPORAL_DNS_RESOLUTION_INTERVAL_MS
+        ),
     )
