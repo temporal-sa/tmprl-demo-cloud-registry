@@ -477,7 +477,7 @@ def test_temporal_service_cancelled_timeout_is_retryable():
     assert application_error.non_retryable is False
 
 
-def test_worker_deployment_version_create_uses_explicit_rpc_timeout():
+def test_worker_deployment_version_create_uses_activity_owned_retry():
     class WorkflowService:
         def __init__(self):
             self.calls = []
@@ -509,22 +509,18 @@ def test_worker_deployment_version_create_uses_explicit_rpc_timeout():
     assert request.namespace == "tmprl-demo"
     assert request.deployment_version.deployment_name == "money-transfer"
     assert request.deployment_version.build_id == "git-e12b0ed9d450"
-    assert retry is True
+    assert retry is False
     assert timeout == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
 
 
-def test_worker_deployment_version_create_creates_missing_deployment_prerequisite():
+def test_worker_deployment_version_create_requires_existing_deployment():
     class WorkflowService:
         def __init__(self):
             self.calls = []
 
         async def create_worker_deployment_version(self, request, *, retry, timeout):
             self.calls.append(("create-version", request, retry, timeout))
-            if len([call for call in self.calls if call[0] == "create-version"]) == 1:
-                raise RPCError("deployment not found", RPCStatusCode.NOT_FOUND, b"")
-
-        async def create_worker_deployment(self, request, *, retry, timeout):
-            self.calls.append(("create-deployment", request, retry, timeout))
+            raise RPCError("deployment not found", RPCStatusCode.NOT_FOUND, b"")
 
     class Client:
         def __init__(self):
@@ -532,27 +528,26 @@ def test_worker_deployment_version_create_creates_missing_deployment_prerequisit
 
     client = Client()
 
-    action = asyncio.run(
-        create_or_update_worker_deployment_version(
-            client,
-            namespace="tmprl-demo",
-            deployment_version=deployment_pb2.WorkerDeploymentVersion(
-                deployment_name="money-transfer",
-                build_id="git-e12b0ed9d450",
-            ),
-            scaling_group=config_pb2.ComputeConfigScalingGroup(),
-            identity="tmprl-demo-cloud-registry",
+    try:
+        asyncio.run(
+            create_or_update_worker_deployment_version(
+                client,
+                namespace="tmprl-demo",
+                deployment_version=deployment_pb2.WorkerDeploymentVersion(
+                    deployment_name="money-transfer",
+                    build_id="git-e12b0ed9d450",
+                ),
+                scaling_group=config_pb2.ComputeConfigScalingGroup(),
+                identity="tmprl-demo-cloud-registry",
+            )
         )
-    )
+    except RPCError as error:
+        assert error.status == RPCStatusCode.NOT_FOUND
+    else:
+        raise AssertionError("expected missing deployment to propagate")
 
-    assert action == "created"
-    assert [call[0] for call in client.workflow_service.calls] == [
-        "create-version",
-        "create-deployment",
-        "create-version",
-    ]
-    deployment_request = client.workflow_service.calls[1][1]
-    assert deployment_request.deployment_name == "money-transfer"
+    assert [call[0] for call in client.workflow_service.calls] == ["create-version"]
+    assert all(call[2] is False for call in client.workflow_service.calls)
     assert all(
         call[3] == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
         for call in client.workflow_service.calls

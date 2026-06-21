@@ -70,6 +70,10 @@ async def upsert_serverless_worker_deployment_version(
     )
     scaling_group = compute_scaling_group(request)
 
+    operation = (
+        "Upsert Temporal Serverless Worker Deployment Version "
+        f"{request.deployment_name}.{request.build_id}"
+    )
     try:
         action = await create_or_update_worker_deployment_version(
             client,
@@ -79,12 +83,13 @@ async def upsert_serverless_worker_deployment_version(
             identity=identity,
         )
     except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            raise errors.retryable_provider_error(
+                f"{operation} failed: {error}"
+            ) from error
         raise temporal_service_application_error(
             error,
-            operation=(
-                "Upsert Temporal Serverless Worker Deployment Version "
-                f"{request.deployment_name}.{request.build_id}"
-            ),
+            operation=operation,
         ) from error
 
     return models.UpsertServerlessWorkerDeploymentVersionResult(
@@ -258,7 +263,7 @@ async def ensure_worker_deployment(
                 identity=identity,
                 request_id=str(uuid.uuid4()),
             ),
-            retry=True,
+            retry=False,
             timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
         )
         return "created"
@@ -289,30 +294,7 @@ async def create_or_update_worker_deployment_version(
         )
         return "created"
     except RPCError as error:
-        if error.status == RPCStatusCode.NOT_FOUND:
-            # Temporal exposes the deployment shell and the Lambda-backed
-            # version as separate RPCs. Keep that prerequisite within the
-            # version activity so workflow history does not report an empty
-            # deployment as its own successful rollout step.
-            await ensure_worker_deployment(
-                client,
-                namespace=namespace,
-                deployment_name=deployment_version.deployment_name,
-                identity=identity,
-            )
-            try:
-                await create_worker_deployment_version(
-                    client,
-                    namespace=namespace,
-                    deployment_version=deployment_version,
-                    compute_config=compute_config,
-                    identity=identity,
-                )
-                return "created"
-            except RPCError as retry_error:
-                if retry_error.status != RPCStatusCode.ALREADY_EXISTS:
-                    raise
-        elif error.status != RPCStatusCode.ALREADY_EXISTS:
+        if error.status != RPCStatusCode.ALREADY_EXISTS:
             raise
 
     await client.workflow_service.update_worker_deployment_version_compute_config(
@@ -325,7 +307,7 @@ async def create_or_update_worker_deployment_version(
             identity=identity,
             request_id=str(uuid.uuid4()),
         ),
-        retry=True,
+        retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
     return "updated"
@@ -347,7 +329,7 @@ async def create_worker_deployment_version(
             identity=identity,
             request_id=str(uuid.uuid4()),
         ),
-        retry=True,
+        retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
 
@@ -369,7 +351,7 @@ async def validate_worker_deployment_compute_config(
             },
             identity=identity,
         ),
-        retry=True,
+        retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
 
@@ -389,7 +371,7 @@ async def set_worker_deployment_current(
                 namespace=namespace,
                 deployment_name=deployment_name,
             ),
-            retry=True,
+            retry=False,
             timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
         )
         conflict_token = response.conflict_token
@@ -407,7 +389,7 @@ async def set_worker_deployment_current(
             ignore_missing_task_queues=True,
             allow_no_pollers=True,
         ),
-        retry=True,
+        retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
 
@@ -424,7 +406,7 @@ async def describe_worker_deployment_version_status(
             deployment_version=deployment_version,
             report_task_queue_stats=True,
         ),
-        retry=True,
+        retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     )
     task_queues = [

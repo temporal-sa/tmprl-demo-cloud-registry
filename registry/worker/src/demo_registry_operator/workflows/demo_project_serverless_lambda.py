@@ -165,22 +165,20 @@ class DemoProjectServerlessLambdaWorkflow:
             start_to_close_timeout=timedelta(minutes=3),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        ensure_status: dict[str, Any] | None = None
-        if not workflow.patched("serverless-lambda-version-upsert-owns-deployment"):
-            worker_deployment = await workflow.execute_activity(
-                external_resources.ensure_serverless_worker_deployment,
-                external_resources.EnsureServerlessWorkerDeploymentRequest(
-                    project=project,
-                    component=component_name,
-                    temporal_secret_path=resources.temporal_secret_remote_path(
-                        demo_project
-                    ),
-                    deployment_name=deployment_name,
+        worker_deployment = await workflow.execute_activity(
+            external_resources.ensure_serverless_worker_deployment,
+            external_resources.EnsureServerlessWorkerDeploymentRequest(
+                project=project,
+                component=component_name,
+                temporal_secret_path=resources.temporal_secret_remote_path(
+                    demo_project
                 ),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            ensure_status = worker_deployment.status
+                deployment_name=deployment_name,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        ensure_status = worker_deployment.status
 
         worker_version = await workflow.execute_activity(
             external_resources.upsert_serverless_worker_deployment_version,
