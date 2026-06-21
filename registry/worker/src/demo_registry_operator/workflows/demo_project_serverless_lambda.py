@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import UTC, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -60,15 +62,30 @@ class DemoProjectServerlessLambdaWorkflow:
                 }
             )
 
+        compensations: list[Callable[[], Awaitable[Any]]] = []
+        if should_compensate_serverless_lambda(demo_project):
+            register_serverless_lambda_compensation(compensations, demo_project)
+
         component_statuses: dict[str, Any] = {}
-        for component_name, component in sorted(serverless_components.items()):
-            component_statuses[component_name] = await self._reconcile_component(
-                demo_project,
-                component_name,
-                component,
-                images,
-                default_build_id,
+        try:
+            for component_name, component in sorted(serverless_components.items()):
+                component_statuses[component_name] = await self._reconcile_component(
+                    demo_project,
+                    component_name,
+                    component,
+                    images,
+                    default_build_id,
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                asyncio.ensure_future(
+                    run_serverless_lambda_compensations(compensations)
+                )
             )
+            raise
+        except Exception:
+            await run_serverless_lambda_compensations(compensations)
+            raise
 
         return messages.DemoProjectServerlessLambdaResult(
             status={
@@ -453,6 +470,46 @@ def serverless_worker_deployment_status(
                 break
     status["validation"] = validation_status
     return status
+
+
+def should_compensate_serverless_lambda(demo_project: dict[str, Any]) -> bool:
+    status = demo_project.get("status")
+    if not isinstance(status, dict):
+        return True
+    if status.get("activeImageVersion"):
+        return False
+    serverless_status = status.get("serverlessWorkerStatus")
+    return not (
+        isinstance(serverless_status, dict)
+        and serverless_status.get("phase") in {"Ready", "Promoted"}
+    )
+
+
+def register_serverless_lambda_compensation(
+    compensations: list[Callable[[], Awaitable[Any]]],
+    demo_project: dict[str, Any],
+) -> None:
+    compensations.append(
+        lambda: workflow.execute_activity(
+            external_resources.delete_serverless_lambda_resources,
+            external_resources.DeleteServerlessLambdaResourcesRequest(
+                checked_at=workflow.now().astimezone(UTC).isoformat(),
+                demo_project=demo_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+    )
+
+
+async def run_serverless_lambda_compensations(
+    compensations: list[Callable[[], Awaitable[Any]]],
+) -> None:
+    for compensate in reversed(compensations):
+        try:
+            await compensate()
+        except Exception as error:  # noqa: BLE001 - best-effort compensation
+            workflow.logger.error("Serverless Lambda compensation failed: %s", error)
 
 
 def aggregate_phase(statuses: dict[str, Any]) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 
 from temporalio.api.compute.v1 import config_pb2
 from temporalio.api.deployment.v1 import message_pb2 as deployment_pb2
@@ -41,9 +42,13 @@ from demo_registry_operator.activities.external_resources.serverless_worker impo
     create_or_update_worker_deployment_version,
     temporal_service_application_error,
 )
+from demo_registry_operator.workflows import demo_project_serverless_lambda
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
     mtls_file_path_env,
+    register_serverless_lambda_compensation,
+    run_serverless_lambda_compensations,
     serverless_worker_deployment_status,
+    should_compensate_serverless_lambda,
     worker_deployment_env,
 )
 
@@ -629,3 +634,61 @@ def test_serverless_worker_deployment_status_preserves_legacy_ensure_step():
         "setCurrent",
         "describeVersion",
     ]
+
+
+def test_serverless_lambda_compensation_skips_established_projects():
+    assert should_compensate_serverless_lambda({}) is True
+    assert (
+        should_compensate_serverless_lambda(
+            {"status": {"activeImageVersion": "git-active"}}
+        )
+        is False
+    )
+    assert (
+        should_compensate_serverless_lambda(
+            {"status": {"serverlessWorkerStatus": {"phase": "Ready"}}}
+        )
+        is False
+    )
+
+
+def test_serverless_lambda_compensation_deletes_first_time_resources(monkeypatch):
+    demo_project = {
+        "metadata": {"name": "operator-canary-lambda-ffff370e"},
+        "spec": {
+            "components": {
+                "worker": {
+                    "build": "worker",
+                    "serverless": {"provider": "aws-lambda"},
+                }
+            }
+        },
+    }
+    calls = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        calls.append((activity, request, kwargs))
+
+    monkeypatch.setattr(
+        demo_project_serverless_lambda.workflow,
+        "now",
+        lambda: datetime(2026, 6, 21, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_serverless_lambda.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    compensations = []
+    register_serverless_lambda_compensation(compensations, demo_project)
+    asyncio.run(run_serverless_lambda_compensations(compensations))
+
+    [(activity, request, kwargs)] = calls
+    assert (
+        activity
+        is demo_project_serverless_lambda.external_resources.delete_serverless_lambda_resources
+    )
+    assert request.checked_at == "2026-06-21T00:00:00+00:00"
+    assert request.demo_project is demo_project
+    assert kwargs["retry_policy"] == demo_project_serverless_lambda.COMMON_RETRY_POLICY
