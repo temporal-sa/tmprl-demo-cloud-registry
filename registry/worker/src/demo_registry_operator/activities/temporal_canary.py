@@ -197,8 +197,8 @@ async def run_temporal_runtime_canary_attempt(
         # drain, leaving core pollers alive and long-polling the candidate
         # namespace. If that namespace is later deprovisioned, those orphaned
         # pollers spew DNS errors with nothing to tie them back to. shutdown()
-        # is idempotent, so re-drive it (shielded + bounded) to guarantee the
-        # pollers are gone before we return or re-raise.
+        # is idempotent, so re-drive it (bounded) to give the background drain a
+        # chance to finish before we return or re-raise.
         await drain_canary_worker(worker)
         if completed and not temporal_activity_cancel_requested():
             return runtime_canary_passed_status(
@@ -235,19 +235,21 @@ async def drain_canary_worker(
     *,
     timeout_seconds: float = DEFAULT_RUNTIME_CANARY_SHUTDOWN_TIMEOUT_SECONDS,
 ) -> None:
-    """Best-effort, cancellation-proof worker shutdown.
+    """Best-effort, bounded re-drive of the worker shutdown.
 
-    ``Worker.shutdown()`` is idempotent, so this is safe to call even when the
-    ``async with`` block already finished draining. The shutdown is shielded so
-    an inbound cancellation cannot abort the poller drain, and bounded so a hung
-    drain cannot block the activity indefinitely (the shielded task keeps
-    running to completion in the background if the wait times out).
+    ``Worker.shutdown()`` is idempotent and only *waits* for the drain performed
+    by the worker's background run task, so it is safe to call again after the
+    context manager's own shutdown await was interrupted by a cancellation.
+
+    Do NOT wrap this in ``asyncio.shield``: ``wait_for`` cancels and reaps the
+    coroutine it wraps on timeout/cancel, but a shield would protect that inner
+    task from cancellation, orphaning it and producing "Task was destroyed but
+    it is pending" once the loop tears down. Cancelling our *wait* here is
+    harmless — the shutdown event is already set, so the background run task
+    keeps draining the pollers to completion regardless.
     """
     try:
-        await asyncio.wait_for(
-            asyncio.shield(worker.shutdown()),
-            timeout=timeout_seconds,
-        )
+        await asyncio.wait_for(worker.shutdown(), timeout=timeout_seconds)
     except (TimeoutError, asyncio.CancelledError):
         pass
 

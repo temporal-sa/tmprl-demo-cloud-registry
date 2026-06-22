@@ -11,7 +11,9 @@ from typing import Any, Callable
 
 from temporalio.api.batch.v1 import message_pb2 as batch_pb2
 from temporalio.api.common.v1 import message_pb2 as common_pb2
-from temporalio.api.workflowservice.v1 import request_response_pb2 as workflowservice_pb2
+from temporalio.api.workflowservice.v1 import (
+    request_response_pb2 as workflowservice_pb2,
+)
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
 from temporalio.worker import Worker, WorkerDeploymentConfig
@@ -20,6 +22,13 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from demo_registry_operator.activities.builds.codebuild.execution import (
+    start_project_image_build,
+    wait_for_project_image_build,
+)
+from demo_registry_operator.activities.builds.planning import (
+    resolve_project_image_build_plan,
+)
 from demo_registry_operator.activities.canary import (
     apply_registry_operator_canary_project,
     delete_registry_operator_canary_project,
@@ -28,28 +37,20 @@ from demo_registry_operator.activities.canary import (
     rotate_registry_operator_canary_credentials,
     signal_registry_operator_canary_finalize,
     signal_registry_operator_canary_reconcile,
-    wait_registry_operator_canary_cleanup,
     wait_for_registry_operator_canary_promotion,
     wait_for_registry_operator_canary_rotation,
-)
-from demo_registry_operator.activities.builds.codebuild.execution import (
-    start_project_image_build,
-    wait_for_project_image_build,
-)
-from demo_registry_operator.activities.builds.planning import (
-    resolve_project_image_build_plan,
+    wait_registry_operator_canary_cleanup,
 )
 from demo_registry_operator.activities.external_resources import (
+    check_temporal_runtime_secret,
     configure_temporal_cloud_namespace_mtls,
     create_or_verify_ecr_repository,
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_search_attribute,
     create_or_verify_temporal_cloud_service_account,
-    check_temporal_runtime_secret,
     create_temporal_api_key_candidate_secret,
     delete_ecr_repositories,
     delete_serverless_lambda_resources,
-    describe_serverless_worker_deployment_version,
     delete_temporal_cloud_api_key,
     delete_temporal_cloud_api_key_by_id,
     delete_temporal_cloud_mtls_ca_secret,
@@ -60,12 +61,13 @@ from demo_registry_operator.activities.external_resources import (
     delete_temporal_cloud_service_account,
     delete_temporal_cloud_service_account_by_id,
     delete_temporal_runtime_candidate_secret,
+    describe_serverless_worker_deployment_version,
     disable_temporal_cloud_namespace_delete_protection,
     disable_temporal_cloud_namespace_delete_protection_by_name,
     ensure_lambda_execution_role,
     ensure_lambda_function,
-    ensure_temporal_lambda_invoke_role,
     ensure_serverless_worker_deployment,
+    ensure_temporal_lambda_invoke_role,
     mirror_temporal_runtime_secret,
     promote_temporal_mtls_ca,
     promote_temporal_runtime_credential,
@@ -83,16 +85,16 @@ from demo_registry_operator.activities.force_reconcile import (
     load_current_instruqt_course_for_reconcile,
 )
 from demo_registry_operator.activities.instruqt import (
-    delete_instruqt_course_ecr_repositories,
     delete_instruqt_course_content_auth_secret,
     delete_instruqt_course_content_repository,
+    delete_instruqt_course_ecr_repositories,
     delete_instruqt_course_source_auth_secret,
     delete_instruqt_course_source_repository,
     delete_instruqt_course_track,
     deploy_instruqt_course_track,
     load_instruqt_course_finalization_plan,
-    push_instruqt_course_track,
     prepare_instruqt_course_artifact,
+    push_instruqt_course_track,
     reconcile_instruqt_course_ecr_repositories,
     record_instruqt_course_status,
     remove_instruqt_course_finalizer_resource,
@@ -103,10 +105,10 @@ from demo_registry_operator.activities.instruqt import (
 )
 from demo_registry_operator.activities.reconcile import (
     apply_demo_project_resources,
-    delete_runtime_candidate_resources,
     delete_project_namespace_resource,
     delete_project_source_auth_secret,
     delete_project_source_repository,
+    delete_runtime_candidate_resources,
     load_project_finalization_plan,
     promote_candidate_routes,
     prune_stale_runtime_candidates,
@@ -133,10 +135,10 @@ from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.resources import WORKER_LIVENESS_FILE
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
+from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
 from demo_registry_operator.workflows.demo_project_artifact_build import (
     DemoProjectArtifactBuildWorkflow,
 )
-from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
 from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
     DemoProjectKubernetesRuntimeWorkflow,
 )
@@ -144,15 +146,14 @@ from demo_registry_operator.workflows.demo_project_serverless_lambda import (
     DemoProjectServerlessLambdaWorkflow,
 )
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
+from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
+from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
 from demo_registry_operator.workflows.operator_auth_canary import (
     RegistryOperatorAuthCanaryWorkflow,
 )
 from demo_registry_operator.workflows.operator_canary import (
     RegistryOperatorCanaryWorkflow,
 )
-from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
-from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -220,7 +221,9 @@ async def liveness_heartbeat(
             # negotiates ('Decompressor is not installed for grpc-encoding
             # "gzip"'), so it would never refresh on a perfectly healthy worker.
             await client.workflow_service.describe_namespace(
-                workflowservice_pb2.DescribeNamespaceRequest(namespace=client.namespace),
+                workflowservice_pb2.DescribeNamespaceRequest(
+                    namespace=client.namespace
+                ),
                 timeout=timedelta(seconds=timeout_seconds),
             )
             heartbeat.touch()
@@ -363,7 +366,7 @@ async def main() -> None:
                 deployment_config=deployment_config,
             )
             tasks.append(asyncio.create_task(worker.run()))
-            tasks.append(asyncio.create_task(liveness_heartbeat(client)))
+            # tasks.append(asyncio.create_task(liveness_heartbeat(client)))
             if deployment_config is not None:
                 tasks.append(
                     asyncio.create_task(
@@ -593,7 +596,7 @@ def running_entity_workflows_query() -> str:
     workflow_type_query = " OR ".join(
         f'WorkflowType = "{workflow_type}"' for workflow_type in ENTITY_WORKFLOW_TYPES
     )
-    return f"({workflow_type_query}) AND ExecutionStatus = \"Running\""
+    return f'({workflow_type_query}) AND ExecutionStatus = "Running"'
 
 
 def worker_update_batch_job_id() -> str:
