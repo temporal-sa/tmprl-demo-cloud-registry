@@ -19,6 +19,7 @@ IMAGE_REPOSITORY_PREFIX = "tmprl-dem-cld"
 SECRET_PREFIX_ROOT = "tmprl-dem-cld"
 BASE_DOMAIN = "tmprl-demo.cloud"
 
+
 # Kubernetes namespaces cap at 63 chars; Temporal Cloud namespaces (excluding the
 # ``.<account>`` suffix) cap at 39. Longer names are hash-truncated deterministically.
 KUBERNETES_NAMESPACE_MAX_LENGTH = 63
