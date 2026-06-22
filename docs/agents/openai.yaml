@@ -1,0 +1,7 @@
+interface:
+  display_name: "Temporal Python Rules"
+  short_description: "Opinionated Python Temporal design rules"
+  default_prompt: "Use $temporal-python-rules before writing, editing, or reviewing Python Temporal workflow or activity code."
+
+policy:
+  allow_implicit_invocation: true
