@@ -121,21 +121,6 @@ spec:
           enabled: true
           rollout:
             strategy: AllAtOnce
-            gate:
-              workflowType: RegistryOperatorCanaryWorkflow
-              # Canary project templates are external, self-contained YAML files
-              # under demo_registry_operator.canary_templates (api-key.yaml,
-              # mtls.yaml, ...). RegistryOperatorCanaryWorkflow loads them via the
-              # load_canary_templates activity and launches one branch per template
-              # in parallel. Add a new canary type by dropping in a new template
-              # file — no change needed here. The gate input below only carries the
-              # shared run policy (naming, timeouts, cleanup).
-              input:
-                projectNamePrefix: operator-canary
-                timeoutSeconds: 900
-                cleanupTimeoutSeconds: 900
-                pollSeconds: 10
-                cleanupPolicy: Always
           sunset:
             scaledownDelay: 1m
             deleteDelay: 5m
