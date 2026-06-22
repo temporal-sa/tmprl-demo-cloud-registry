@@ -20,6 +20,7 @@ DEFAULT_RUNTIME_CANARY_ATTEMPT_TIMEOUT_SECONDS = 20.0
 DEFAULT_RUNTIME_CANARY_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_RUNTIME_CANARY_WORKFLOW_RPC_TIMEOUT_SECONDS = 10.0
 DEFAULT_RUNTIME_CANARY_WORKFLOW_TASK_TIMEOUT_SECONDS = 10.0
+DEFAULT_RUNTIME_CANARY_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 MIN_RUNTIME_CANARY_TIMEOUT_SECONDS = 0.1
 
 
@@ -163,12 +164,13 @@ async def run_temporal_runtime_canary_attempt(
     original_error: Exception | None = None
     result: Any = None
     completed = False
+    worker = Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[TemporalRuntimeCredentialCanary],
+    )
     try:
-        async with Worker(
-            client,
-            task_queue=task_queue,
-            workflows=[TemporalRuntimeCredentialCanary],
-        ):
+        async with worker:
             try:
                 result = await asyncio.wait_for(
                     client.execute_workflow(
@@ -191,6 +193,13 @@ async def run_temporal_runtime_canary_attempt(
                 original_error = error
                 raise
     except asyncio.CancelledError:
+        # A cancellation here may have cut short the context manager's graceful
+        # drain, leaving core pollers alive and long-polling the candidate
+        # namespace. If that namespace is later deprovisioned, those orphaned
+        # pollers spew DNS errors with nothing to tie them back to. shutdown()
+        # is idempotent, so re-drive it (shielded + bounded) to guarantee the
+        # pollers are gone before we return or re-raise.
+        await drain_canary_worker(worker)
         if completed and not temporal_activity_cancel_requested():
             return runtime_canary_passed_status(
                 auth_mode=auth_mode,
@@ -219,6 +228,28 @@ async def run_temporal_runtime_canary_attempt(
         workflow_task_timeout=workflow_task_timeout,
         result=result,
     )
+
+
+async def drain_canary_worker(
+    worker: Worker,
+    *,
+    timeout_seconds: float = DEFAULT_RUNTIME_CANARY_SHUTDOWN_TIMEOUT_SECONDS,
+) -> None:
+    """Best-effort, cancellation-proof worker shutdown.
+
+    ``Worker.shutdown()`` is idempotent, so this is safe to call even when the
+    ``async with`` block already finished draining. The shutdown is shielded so
+    an inbound cancellation cannot abort the poller drain, and bounded so a hung
+    drain cannot block the activity indefinitely (the shielded task keeps
+    running to completion in the background if the wait times out).
+    """
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(worker.shutdown()),
+            timeout=timeout_seconds,
+        )
+    except (TimeoutError, asyncio.CancelledError):
+        pass
 
 
 def runtime_canary_passed_status(

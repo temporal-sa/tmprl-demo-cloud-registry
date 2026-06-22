@@ -61,6 +61,7 @@ def test_runtime_canary_passes_when_worker_shutdown_cancelled_after_completion(m
         "connect": 0,
         "execute": 0,
         "exit": 0,
+        "shutdown": 0,
     }
 
     class FakeClient:
@@ -85,6 +86,9 @@ def test_runtime_canary_passes_when_worker_shutdown_cancelled_after_completion(m
                 raise asyncio.CancelledError()
             return False
 
+        async def shutdown(self):
+            calls["shutdown"] += 1
+
     monkeypatch.setattr(
         temporal_canary,
         "Client",
@@ -108,6 +112,7 @@ def test_runtime_canary_passes_when_worker_shutdown_cancelled_after_completion(m
         "connect": 1,
         "execute": 1,
         "exit": 1,
+        "shutdown": 1,
     }
 
 
@@ -169,6 +174,9 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
 
         async def __aexit__(self, exc_type, exc, traceback):
             return False
+
+        async def shutdown(self):
+            pass
 
     monkeypatch.setattr(
         temporal_canary,
