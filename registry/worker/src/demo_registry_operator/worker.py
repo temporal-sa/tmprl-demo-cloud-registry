@@ -462,15 +462,15 @@ async def signal_entity_workflows_for_worker_update_when_current(
             "Failed to signal entity workflows for worker version update.",
             exc_info=True,
         )
-    if observed_not_current:
-        logger.warning(
-            "WorkerDeployment version %s/%s became current after this process "
-            "started; exiting so Kubernetes restarts Temporal worker pollers "
-            "with a fresh SDK core.",
-            version.deployment_name,
-            version.build_id,
-        )
-        restart_process()
+    # if observed_not_current:
+    #    logger.warning(
+    #        "WorkerDeployment version %s/%s became current after this process "
+    #        "started; exiting so Kubernetes restarts Temporal worker pollers "
+    #        "with a fresh SDK core.",
+    #        version.deployment_name,
+    #        version.build_id,
+    #    )
+    # restart_process()
 
 
 def restart_process_after_worker_promotion() -> None:
