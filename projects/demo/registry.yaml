@@ -116,7 +116,7 @@ spec:
         # process refreshes the heartbeat file only on a successful Temporal
         # round-trip; the rendered liveness probe restarts the container when it
         # goes stale. Safe to enable here because this worker writes the heartbeat.
-        livenessProbe: false
+        livenessProbe: true
         versioning:
           enabled: true
           rollout:

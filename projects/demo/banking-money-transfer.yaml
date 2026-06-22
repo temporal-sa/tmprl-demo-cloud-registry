@@ -26,7 +26,7 @@ spec:
       dockerfile: docker/backend.Dockerfile
     worker:
       context: .
-      dockerfile: docker/worker-lambda.Dockerfile
+      dockerfile: docker/worker-python.Dockerfile
 
   components:
     # nginx serves the UI and proxies /api -> backend; servicePort 80 makes this
@@ -42,36 +42,22 @@ spec:
       build: backend
       temporalAccess: true
       ports:
-        - name: http
-          containerPort: 8000
+        - containerPort: 8000
           servicePort: 8000
 
-      # Temporal worker; uses the app's default task queue (MoneyTransfer), which
-      # the backend also defaults to, so they match without injecting one.
+    # Temporal worker; uses the app's default task queue (MoneyTransfer), which
+    # the backend also defaults to, so they match without injecting one.
     worker:
       build: worker
+      worker: true
       env:
         - name: BANKING_BACKEND_URL
-          value: https://banking-app.tmprl-demo.cloud
-      serverless:
-        provider: aws-lambda
-        packageType: image
-        architecture: x86_64
-        memoryMb: 512
-        timeoutSeconds: 600
-        workerDeployment:
-          deploymentName: money-transfer
+          value: http://backend:8000
 
   ingress:
     subdomain: banking-app
     temporalAuthRequired: false
-    routes:
-      - pathPrefix: /api
-        component: backend
-        port: http
-      - pathPrefix: /
-        component: frontend
-        port: http
+    # routes default to a catch-all at the servicePort-80 component (frontend)
 
   # Smoke /api/health routes through the frontend nginx proxy to the backend.
   smokeCheck:

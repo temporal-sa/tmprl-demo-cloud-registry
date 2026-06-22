@@ -220,12 +220,12 @@ async def liveness_heartbeat(
             # health service can't decompress the gzip responses the 1.29 client
             # negotiates ('Decompressor is not installed for grpc-encoding
             # "gzip"'), so it would never refresh on a perfectly healthy worker.
-            await client.workflow_service.describe_namespace(
+            """await client.workflow_service.describe_namespace(
                 workflowservice_pb2.DescribeNamespaceRequest(
                     namespace=client.namespace
                 ),
                 timeout=timedelta(seconds=timeout_seconds),
-            )
+            )"""
             heartbeat.touch()
         except Exception:  # noqa: BLE001 - any failure means we can't reach Temporal
             logger.warning(
@@ -366,7 +366,7 @@ async def main() -> None:
                 deployment_config=deployment_config,
             )
             tasks.append(asyncio.create_task(worker.run()))
-            # tasks.append(asyncio.create_task(liveness_heartbeat(client)))
+            tasks.append(asyncio.create_task(liveness_heartbeat(client)))
             if deployment_config is not None:
                 tasks.append(
                     asyncio.create_task(
