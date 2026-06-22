@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-
 DEMO_PROJECT_GROUP = "registry.tmprl-demo.cloud"
 DEMO_PROJECT_VERSION = "v1alpha1"
 DEMO_PROJECT_PLURAL = "demoprojects"
@@ -29,7 +28,11 @@ CUSTOM_RESOURCE_PLURALS = {
     (EXTERNAL_SECRETS_GROUP, EXTERNAL_SECRETS_VERSION, "ExternalSecret"): (
         EXTERNAL_SECRET_PLURAL
     ),
-    (FLUX_SOURCE_GROUP, FLUX_SOURCE_VERSION, "GitRepository"): FLUX_GIT_REPOSITORY_PLURAL,
+    (
+        FLUX_SOURCE_GROUP,
+        FLUX_SOURCE_VERSION,
+        "GitRepository",
+    ): FLUX_GIT_REPOSITORY_PLURAL,
     (
         TEMPORAL_WORKER_CONTROLLER_GROUP,
         TEMPORAL_WORKER_CONTROLLER_VERSION,
@@ -54,6 +57,7 @@ def list_demo_projects() -> list[dict[str, Any]]:
         version=DEMO_PROJECT_VERSION,
         plural=DEMO_PROJECT_PLURAL,
     )
+
     items = response.get("items", []) if isinstance(response, dict) else []
     return [item for item in items if isinstance(item, dict)]
 
@@ -229,8 +233,7 @@ def list_namespaces(*, label_selector: str | None = None) -> list[dict[str, Any]
     load_kubernetes_config()
     response = client.CoreV1Api().list_namespace(label_selector=label_selector)
     summaries = [
-        object_metadata_summary(item)
-        for item in getattr(response, "items", [])
+        object_metadata_summary(item) for item in getattr(response, "items", [])
     ]
     return [item for item in summaries if item.get("name")]
 
@@ -512,7 +515,11 @@ def instruqt_course_deletion_timestamp(
 def demo_project_finalizers(demo_project: dict[str, Any]) -> list[str]:
     metadata = demo_project.get("metadata", {})
     finalizers = metadata.get("finalizers") if isinstance(metadata, dict) else None
-    return [f for f in finalizers if isinstance(f, str)] if isinstance(finalizers, list) else []
+    return (
+        [f for f in finalizers if isinstance(f, str)]
+        if isinstance(finalizers, list)
+        else []
+    )
 
 
 def instruqt_course_finalizers(instruqt_course: dict[str, Any]) -> list[str]:
@@ -589,7 +596,9 @@ def remove_demo_project_finalizer(name: str, *, dry_run: bool = False) -> None:
         if _api_status(error) == 404:
             return
         raise
-    finalizers = [f for f in demo_project_finalizers(obj) if f != DEMO_PROJECT_FINALIZER]
+    finalizers = [
+        f for f in demo_project_finalizers(obj) if f != DEMO_PROJECT_FINALIZER
+    ]
     api.patch_cluster_custom_object(
         DEMO_PROJECT_GROUP,
         DEMO_PROJECT_VERSION,
@@ -659,7 +668,9 @@ def _content_type_api_client(content_type: str) -> Any:
     return api_client
 
 
-def patch_demo_project_status(name: str, status: dict[str, Any], *, dry_run: bool) -> None:
+def patch_demo_project_status(
+    name: str, status: dict[str, Any], *, dry_run: bool
+) -> None:
     if dry_run:
         return
     # JSON merge patch: keys absent from `status` are preserved by the server, so a
@@ -836,9 +847,11 @@ def patch_namespace_owner_references(
     dry_run: bool,
 ) -> str:
     return _patch_owner_references(
-        lambda body, content_type: _client_module()
-        .CoreV1Api(_content_type_api_client(content_type))
-        .patch_namespace(name, body),
+        lambda body, content_type: (
+            _client_module()
+            .CoreV1Api(_content_type_api_client(content_type))
+            .patch_namespace(name, body)
+        ),
         owner_references,
         dry_run=dry_run,
     )
@@ -852,9 +865,11 @@ def patch_deployment_owner_references(
     dry_run: bool,
 ) -> str:
     return _patch_owner_references(
-        lambda body, content_type: _client_module()
-        .AppsV1Api(_content_type_api_client(content_type))
-        .patch_namespaced_deployment(name, namespace, body),
+        lambda body, content_type: (
+            _client_module()
+            .AppsV1Api(_content_type_api_client(content_type))
+            .patch_namespaced_deployment(name, namespace, body)
+        ),
         owner_references,
         dry_run=dry_run,
     )
@@ -868,9 +883,11 @@ def patch_service_owner_references(
     dry_run: bool,
 ) -> str:
     return _patch_owner_references(
-        lambda body, content_type: _client_module()
-        .CoreV1Api(_content_type_api_client(content_type))
-        .patch_namespaced_service(name, namespace, body),
+        lambda body, content_type: (
+            _client_module()
+            .CoreV1Api(_content_type_api_client(content_type))
+            .patch_namespaced_service(name, namespace, body)
+        ),
         owner_references,
         dry_run=dry_run,
     )
@@ -981,8 +998,7 @@ def list_deployments(
         label_selector=label_selector,
     )
     summaries = [
-        object_metadata_summary(item)
-        for item in getattr(response, "items", [])
+        object_metadata_summary(item) for item in getattr(response, "items", [])
     ]
     return [item for item in summaries if item.get("name")]
 
@@ -1013,8 +1029,7 @@ def list_services(
         label_selector=label_selector,
     )
     summaries = [
-        object_metadata_summary(item)
-        for item in getattr(response, "items", [])
+        object_metadata_summary(item) for item in getattr(response, "items", [])
     ]
     return [item for item in summaries if item.get("name")]
 
@@ -1110,7 +1125,9 @@ def read_worker_deployment_status(namespace: str, name: str) -> dict[str, Any]:
     return {
         "name": name,
         "namespace": namespace,
-        "generation": metadata.get("generation") if isinstance(metadata, dict) else None,
+        "generation": metadata.get("generation")
+        if isinstance(metadata, dict)
+        else None,
         "targetVersion": (
             status.get("targetVersion") if isinstance(status, dict) else None
         ),
@@ -1120,7 +1137,9 @@ def read_worker_deployment_status(namespace: str, name: str) -> dict[str, Any]:
         "deprecatedVersions": (
             status.get("deprecatedVersions", []) if isinstance(status, dict) else []
         ),
-        "versionCount": status.get("versionCount") if isinstance(status, dict) else None,
+        "versionCount": status.get("versionCount")
+        if isinstance(status, dict)
+        else None,
         "conditions": worker_deployment_conditions(status),
     }
 
