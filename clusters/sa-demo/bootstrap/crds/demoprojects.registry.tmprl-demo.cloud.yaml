@@ -57,6 +57,12 @@ spec:
                 source:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    repo:
+                      type: string
+                      x-kubernetes-validations:
+                        - rule: "self.startsWith('https://github.com/temporal-sa/') || self.startsWith('https://github.com/temporalio/')"
+                          message: "spec.source.repo must be a https://github.com/temporal-sa/ or https://github.com/temporalio/ repository"
                 registry:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
