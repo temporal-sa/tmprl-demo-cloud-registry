@@ -61,7 +61,7 @@ func main() {
 
 	handler, err := proxy.NewWorkflowServiceProxyServer(proxy.WorkflowServiceProxyOptions{
 		Client:                  workflowservice.NewWorkflowServiceClient(upstream),
-		DisableHeaderForwarding: true,
+		DisableHeaderForwarding: false,
 	})
 	if err != nil {
 		log.Fatalf("failed to create Temporal proxy handler: %v", err)
