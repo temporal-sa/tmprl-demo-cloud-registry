@@ -1,0 +1,24 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: patching-and-recovery-workshop
+spec:
+  source:
+    repo: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery
+    branch: main
+    testingBranch: testing
+    path: instruqt
+
+  images:
+    workstation:
+      container: workstation
+      context:
+        source: source
+        path: .
+      dockerfile:
+        source: source
+        path: instruqt/Dockerfile
+
+  track:
+    organization: temporal
+    slug: patching-and-recovery-workshop
