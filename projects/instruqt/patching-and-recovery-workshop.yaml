@@ -6,6 +6,7 @@ spec:
   source:
     repo: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery
     branch: testing
+    path: instruqt
 
   images:
     workstation:
