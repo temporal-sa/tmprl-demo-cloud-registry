@@ -5,9 +5,7 @@ metadata:
 spec:
   source:
     repo: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery
-    branch: main
-    testingBranch: testing
-    path: instruqt
+    branch: testing
 
   images:
     workstation:
