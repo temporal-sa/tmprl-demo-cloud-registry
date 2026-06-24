@@ -1,0 +1,75 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: durable-banking-skills
+spec:
+  source:
+    repo: https://github.com/temporal-sa/durable-claude-skills
+  builds:
+    app:
+      context: .
+      strategy: buildpack
+      builder: paketobuildpacks/builder-jammy-base
+      env:
+        BP_CPYTHON_VERSION: "3.12.*"
+      processes:
+        # Worker + agent API in ONE container so they share the local SQLite
+        # ledger (banking.db). No repo code changes — both entrypoints already
+        # exist; this only composes them. See caveats below.
+        app: sh -c "python worker.py & python -m uvicorn agent.server:app --host 0.0.0.0 --port 8000"
+    web:
+      context: ./web
+      strategy: buildpack
+      builder: paketobuildpacks/builder-jammy-base
+      env:
+        BP_NODE_RUN_SCRIPTS: "build" # vite build -> web/dist
+        BP_WEB_SERVER: "nginx" # serv
+        BP_WEB_SERVER_ROOT: "dist"
+        BP_WEB_SERVER_ENABLE_PUSH_STATE: "true"
+  components:
+    app:
+      build: app
+      command: ["/cnb/process/app"]
+      worker: true
+      temporalProxy:
+        enabled: true # code only knows plaintext localhost:7233
+      replicas: 1 # sing
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 8000
+      env:
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            inputRef: secrets.anthropic-secret.ANTHROPIC_API_KEY
+        - name: BANK_DB_PATH
+          value: /tmp/banking.db # writable, ephemeral; re-seeds on boot
+        - name: ALLOWED_ORIGINS
+          value: https://durable-banking-skills.tmprl-demo.cloud
+    web:
+      build: web
+      ports:
+        - containerPort: 8080 # nginx default under Paketo web-servers
+          servicePort: 80
+  secrets:
+    anthropic-secret:
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+  ingress:
+    subdomain: durable-banking-skills
+    routes:
+      - pathPrefix: /api
+        component: app
+        port: http
+      - pathPrefix: /
+        component: web
+        port: http
+  registry:
+    title: Durable Banking Skills
+    summary: A Claude agent chats about money transfers while a deterministic Temporal workflow moves the money — plan, a human approval gate, and a withdraw/deposit saga that refunds on failure.
+    tags: [AI, Agents, Banking, Workflows]
+    temporalSdks: [Python]
+    readiness:
+      score: 4
+      maxScore: 5
+      note: Worker and API share an ephemeral SQLite ledger in one pod; re-seeds on start.
