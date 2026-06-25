@@ -6,30 +6,20 @@ spec:
   source:
     repo: https://github.com/temporal-sa/durable-claude-skills
   builds:
+    # Worker + agent API in ONE image so they share the local SQLite ledger
+    # (banking.db). The Dockerfile's CMD runs both entrypoints; the worker moves
+    # money and the API only reports what the worker actually did.
     app:
       context: .
-      strategy: buildpack
-      builder: paketobuildpacks/builder-jammy-base
-      env:
-        BP_CPYTHON_VERSION: "3.12.*"
-      processes:
-        # Worker + agent API in ONE container so they share the local SQLite
-        # ledger (banking.db). No repo code changes — both entrypoints already
-        # exist; this only composes them. See caveats below.
-        app: sh -c "python worker.py & python -m uvicorn agent.server:app --host 0.0.0.0 --port 8000"
+      dockerfile: docker/app.Dockerfile
+    # Static Vite UI built with Node, served by nginx. Context is the repo root
+    # (the Dockerfile prefixes paths with web/).
     web:
-      context: ./web
-      strategy: buildpack
-      builder: paketobuildpacks/builder-jammy-base
-      env:
-        BP_NODE_RUN_SCRIPTS: "build" # vite build -> web/dist
-        BP_WEB_SERVER: "nginx" # serv
-        BP_WEB_SERVER_ROOT: "dist"
-        BP_WEB_SERVER_ENABLE_PUSH_STATE: "true"
+      context: .
+      dockerfile: docker/web.Dockerfile
   components:
     app:
       build: app
-      command: ["/cnb/process/app"]
       worker: true
       temporalProxy:
         enabled: true # code only knows plaintext localhost:7233
@@ -42,14 +32,14 @@ spec:
         - name: ANTHROPIC_API_KEY
           valueFrom:
             inputRef: secrets.anthropic-secret.ANTHROPIC_API_KEY
-        - name: BANK_DB_PATH
-          value: /tmp/banking.db # writable, ephemeral; re-seeds on boot
+        # BANK_DB_PATH defaults to /data/banking.db in the image (writable,
+        # ephemeral; re-seeds on boot) — no override needed.
         - name: ALLOWED_ORIGINS
           value: https://durable-banking-skills.tmprl-demo.cloud
     web:
       build: web
       ports:
-        - containerPort: 8080 # nginx default under Paketo web-servers
+        - containerPort: 8080 # nginx listen port set in web.Dockerfile
           servicePort: 80
   secrets:
     anthropic-secret:
