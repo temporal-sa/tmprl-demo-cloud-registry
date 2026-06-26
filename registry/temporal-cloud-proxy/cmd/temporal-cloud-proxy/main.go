@@ -20,6 +20,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	// Register the gzip codec so the server can decompress incoming gzip
+	// requests. The Temporal SDKs (e.g. Python >= 1.29) gzip-compress gRPC
+	// requests by default; without this the server returns
+	// "Decompressor is not installed for grpc-encoding \"gzip\"".
+	_ "google.golang.org/grpc/encoding/gzip"
 )
 
 const (
