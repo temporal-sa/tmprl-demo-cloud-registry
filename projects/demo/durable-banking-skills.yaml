@@ -36,6 +36,10 @@ spec:
         # ephemeral; re-seeds on boot) — no override needed.
         - name: ALLOWED_ORIGINS
           value: https://durable-banking-skills.tmprl-demo.cloud
+        - name: VITE_TEMPORAL_UI
+          value: https://cloud.temporal.io
+        - name: VITE_TEMPORAL_NAMESPACE
+          value: tmprl-dem-cld-durable-banking-skills.a2dd6
     web:
       build: web
       ports:
