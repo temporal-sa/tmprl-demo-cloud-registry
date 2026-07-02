@@ -11,12 +11,9 @@ spec:
     # money and the API only reports what the worker actually did.
     app:
       context: .
-      dockerfile: docker/app.Dockerfile
+      dockerfile: docker/combined.Dockerfile
     # Static Vite UI built with Node, served by nginx. Context is the repo root
     # (the Dockerfile prefixes paths with web/).
-    web:
-      context: .
-      dockerfile: docker/web.Dockerfile
   components:
     app:
       build: app
@@ -26,8 +23,8 @@ spec:
       replicas: 1 # sing
       ports:
         - name: http
-          containerPort: 8000
-          servicePort: 8000
+          containerPort: 8080
+          servicePort: 80
       env:
         - name: ANTHROPIC_API_KEY
           valueFrom:
@@ -40,16 +37,6 @@ spec:
           value: https://cloud.temporal.io
         - name: VITE_TEMPORAL_NAMESPACE
           value: tmprl-dem-cld-durable-banking-skills.a2dd6
-    web:
-      build: web
-      ports:
-        - containerPort: 8080 # nginx listen port set in web.Dockerfile
-          servicePort: 80
-      env:
-        - name: VITE_TEMPORAL_UI
-          value: https://cloud.temporal.io
-        - name: VITE_TEMPORAL_NAMESPACE
-          value: tmprl-dem-cld-durable-banking-skills.a2dd6
   secrets:
     anthropic-secret:
       requiredProperties:
@@ -57,11 +44,8 @@ spec:
   ingress:
     subdomain: durable-banking-skills
     routes:
-      - pathPrefix: /api
-        component: app
-        port: http
       - pathPrefix: /
-        component: web
+        component: app
         port: http
   registry:
     title: Durable Banking Skills
