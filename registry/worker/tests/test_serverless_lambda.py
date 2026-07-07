@@ -17,6 +17,9 @@ from demo_registry_operator.activities.external_resources.aws_lambda import (
     SECRET_FILE_MANIFEST_ENV,
     TEMPORAL_RUNTIME_SECRET_ARN_ENV,
     TEMPORAL_RUNTIME_SECRET_ID_ENV,
+    ensure_image_lambda,
+    lambda_configuration_needs_update,
+    lambda_description,
     lambda_environment,
 )
 from demo_registry_operator.activities.external_resources.iam import (
@@ -831,3 +834,111 @@ def test_validate_retries_when_compute_provider_unreachable(monkeypatch):
 
     assert excinfo.value.type == errors.PROVIDER_TRANSIENT_ERROR
     assert excinfo.value.non_retryable is False
+
+
+# --- Lambda function update path (no Architectures on update) -----------------
+
+
+class _FakeWaiter:
+    def wait(self, **kwargs):
+        return None
+
+
+class _FakePaginator:
+    def __init__(self, pages):
+        self._pages = pages
+
+    def paginate(self, **kwargs):
+        return self._pages
+
+
+class _FakeLambdaClient:
+    def __init__(self, existing, latest, versions):
+        self._existing = existing
+        self._latest = latest
+        self._versions = versions
+        self.update_config_calls = []
+        self.update_code_calls = []
+        self.publish_calls = []
+
+    def get_function(self, FunctionName):
+        return self._existing
+
+    def update_function_configuration(self, **kwargs):
+        self.update_config_calls.append(kwargs)
+
+    def update_function_code(self, **kwargs):
+        self.update_code_calls.append(kwargs)
+
+    def get_waiter(self, name):
+        return _FakeWaiter()
+
+    def get_function_configuration(self, FunctionName):
+        return self._latest
+
+    def get_paginator(self, name):
+        return _FakePaginator([{"Versions": self._versions}])
+
+    def publish_version(self, **kwargs):
+        self.publish_calls.append(kwargs)
+        return {"FunctionArn": "arn:aws:lambda:us-west-1:123456789012:function:x:99", "Version": "99"}
+
+
+def test_lambda_configuration_needs_update_ignores_architecture():
+    request = lambda_request()
+    base = {
+        "Role": request.execution_role_arn,
+        "Timeout": request.timeout_seconds,
+        "MemorySize": request.memory_mb,
+        "Description": lambda_description(request),
+        "Environment": {"Variables": {"APP_MODE": "demo"}},
+    }
+    env = {"APP_MODE": "demo"}
+
+    # Architecture differing must NOT trigger a configuration update.
+    drift_arch = {**base, "Architectures": ["arm64"]}
+    assert lambda_configuration_needs_update(drift_arch, request, env) is False
+
+    # A real, updatable attribute still triggers.
+    drift_mem = {**base, "Architectures": ["x86_64"], "MemorySize": request.memory_mb + 128}
+    assert lambda_configuration_needs_update(drift_mem, request, env) is True
+
+
+def test_ensure_image_lambda_update_omits_architectures():
+    request = lambda_request()
+    env = {"APP_MODE": "demo"}
+    description = lambda_description(request)
+    # Existing function: same image, but Timeout drifts so the config-update path
+    # fires (this is the path that previously crashed on the Architectures param).
+    existing = {
+        "Configuration": {
+            "Role": request.execution_role_arn,
+            "Timeout": request.timeout_seconds - 60,
+            "MemorySize": request.memory_mb,
+            "Architectures": ["x86_64"],
+            "Description": description,
+            "Environment": {"Variables": env},
+        },
+        "Code": {"ImageUri": request.image_uri},
+    }
+    latest = {
+        "FunctionArn": "arn:aws:lambda:us-west-1:123456789012:function:worker",
+        "CodeSha256": "sha",
+        "Role": request.execution_role_arn,
+        "Timeout": request.timeout_seconds,
+        "MemorySize": request.memory_mb,
+        "Description": description,
+        "Architectures": ["x86_64"],
+        "Environment": {"Variables": env},
+    }
+    published = {**latest, "Version": "1", "FunctionArn": f"{latest['FunctionArn']}:1"}
+    client = _FakeLambdaClient(existing, latest, [published])
+
+    result = ensure_image_lambda(client, request, env)
+
+    assert len(client.update_config_calls) == 1
+    assert "Architectures" not in client.update_config_calls[0]
+    assert client.update_code_calls == []  # same image -> no code update
+    assert client.publish_calls == []  # matching published version reused
+    assert result["action"] == "updated"
+    assert result["functionVersionArn"] == f"{latest['FunctionArn']}:1"
