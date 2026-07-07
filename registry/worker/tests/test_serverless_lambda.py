@@ -4,8 +4,10 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+import pytest
 from temporalio.api.compute.v1 import config_pb2
 from temporalio.api.deployment.v1 import message_pb2 as deployment_pb2
+from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator import errors
@@ -29,6 +31,7 @@ from demo_registry_operator.activities.external_resources.models import (
     EnsureLambdaFunctionRequest,
     LambdaEnvironmentVariable,
     UpsertServerlessWorkerDeploymentVersionRequest,
+    ValidateServerlessWorkerComputeConfigRequest,
 )
 from demo_registry_operator.activities.external_resources.serverless_names import (
     lambda_execution_role_name,
@@ -36,11 +39,15 @@ from demo_registry_operator.activities.external_resources.serverless_names impor
     temporal_invoke_external_id,
     temporal_lambda_invoke_role_name,
 )
+from demo_registry_operator.activities.external_resources import serverless_worker
 from demo_registry_operator.activities.external_resources.serverless_worker import (
     SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     aws_lambda_provider_details_payload,
+    compute_provider_unreachable,
     create_or_update_worker_deployment_version,
     temporal_service_application_error,
+    upsert_serverless_worker_deployment_version,
+    validate_serverless_worker_compute_config,
 )
 from demo_registry_operator.workflows import demo_project_serverless_lambda
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
@@ -692,3 +699,135 @@ def test_serverless_lambda_compensation_deletes_first_time_resources(monkeypatch
     assert request.checked_at == "2026-06-21T00:00:00+00:00"
     assert request.demo_project is demo_project
     assert kwargs["retry_policy"] == demo_project_serverless_lambda.COMMON_RETRY_POLICY
+
+
+# --- compute-provider AssumeRole propagation retryability --------------------
+
+
+COMPUTE_PROVIDER_DENIED_MESSAGE = (
+    "default: cannot connect to the compute provider: failed to assume role "
+    "arn:aws:iam::429214323166:role/x-worker-temporal: operation error STS: "
+    "AssumeRole, https response error StatusCode: 403, api error AccessDenied: "
+    "User: arn:aws:sts::819232936619:assumed-role/wci-lambda-invoke/wci-intermediary "
+    "is not authorized to perform: sts:AssumeRole"
+)
+
+
+def _propagation_upsert_request():
+    return UpsertServerlessWorkerDeploymentVersionRequest(
+        project="operator-canary-lambda",
+        component="worker",
+        temporal_secret_path="tmprl-dem-cld/operator-canary-lambda/temporal",
+        deployment_name="money-transfer",
+        build_id="git-4f38b74a1f16-key-6849b6ac",
+        function_version_arn="arn:aws:lambda:ca-central-1:429214323166:function:worker:3",
+        invoke_role_arn="arn:aws:iam::429214323166:role/x-worker-temporal",
+        invoke_role_external_id="tdc-external",
+    )
+
+
+def _propagation_validate_request():
+    return ValidateServerlessWorkerComputeConfigRequest(
+        project="operator-canary-lambda",
+        component="worker",
+        temporal_secret_path="tmprl-dem-cld/operator-canary-lambda/temporal",
+        deployment_name="money-transfer",
+        build_id="git-4f38b74a1f16-key-6849b6ac",
+        function_version_arn="arn:aws:lambda:ca-central-1:429214323166:function:worker:3",
+        invoke_role_arn="arn:aws:iam::429214323166:role/x-worker-temporal",
+        invoke_role_external_id="tdc-external",
+    )
+
+
+async def _fake_connect(_path):
+    return object(), "money-transfer.acct1"
+
+
+def test_compute_provider_unreachable_matches_assume_role_failure():
+    denied = RPCError(
+        COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+    )
+    unrelated = RPCError("compute config invalid", RPCStatusCode.INVALID_ARGUMENT, b"")
+
+    assert compute_provider_unreachable(denied) is True
+    assert compute_provider_unreachable(unrelated) is False
+
+
+def test_upsert_retries_when_compute_provider_unreachable(monkeypatch):
+    # A freshly-created invoke role whose trust policy has not yet propagated
+    # surfaces as AssumeRole AccessDenied. It must be retryable (transient), not
+    # a permanent ProviderConfigurationError, even though the RPC status would
+    # otherwise map to non-retryable.
+    async def fake_create_or_update(client, **kwargs):
+        raise RPCError(
+            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+        )
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "create_or_update_worker_deployment_version",
+        fake_create_or_update,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            upsert_serverless_worker_deployment_version(_propagation_upsert_request())
+        )
+
+    assert excinfo.value.type == errors.PROVIDER_TRANSIENT_ERROR
+    assert excinfo.value.non_retryable is False
+
+
+def test_upsert_stays_nonretryable_on_real_config_error(monkeypatch):
+    async def fake_create_or_update(client, **kwargs):
+        raise RPCError("compute config invalid", RPCStatusCode.INVALID_ARGUMENT, b"")
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "create_or_update_worker_deployment_version",
+        fake_create_or_update,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            upsert_serverless_worker_deployment_version(_propagation_upsert_request())
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert excinfo.value.type == errors.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_validate_retries_when_compute_provider_unreachable(monkeypatch):
+    async def fake_validate(client, **kwargs):
+        raise RPCError(
+            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+        )
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "validate_worker_deployment_compute_config",
+        fake_validate,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            validate_serverless_worker_compute_config(_propagation_validate_request())
+        )
+
+    assert excinfo.value.type == errors.PROVIDER_TRANSIENT_ERROR
+    assert excinfo.value.non_retryable is False
