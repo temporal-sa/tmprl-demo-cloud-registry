@@ -790,6 +790,16 @@ def test_temporal_cloud_reconcile_delegates_to_named_steps():
     assert "_stage_temporal_runtime_credential" in source
     assert "_promote_temporal_runtime_credential_if_needed" in source
     assert "_mirror_temporal_runtime_secret" in source
+    # Region drift is detected from the create-or-verify result and handled by a
+    # dedicated teardown step (whose activity calls stay out of this method).
+    assert "RegionDrift" in source
+    assert "_teardown_temporal_cloud_namespace_on_region_drift" in source
+
+    teardown_source = inspect.getsource(
+        DemoProjectWorkflow._teardown_temporal_cloud_namespace_on_region_drift
+    )
+    assert "delete_temporal_cloud_namespace" in teardown_source
+    assert "disable_temporal_cloud_namespace_delete_protection" in teardown_source
 
     compensation_source = inspect.getsource(
         DemoProjectWorkflow._compensate_temporal_cloud_reconcile
@@ -1040,3 +1050,51 @@ def test_first_time_compensation_tears_down_full_temporal_stack():
     assert "_compensate_temporal_namespace" in source
     assert "_delete_temporal_runtime_secret" in source
     assert "_delete_temporal_candidate_secret" in source
+
+
+def test_temporal_cloud_reconcile_state_reports_region_migration():
+    state = demo_project_workflow.TemporalCloudReconcileState(
+        namespace=demo_project_workflow.external_resources.TemporalCloudNamespaceResult(
+            status={
+                "phase": "Ready",
+                "namespace": {
+                    "name": "tmprl-dem-cld-demo",
+                    "action": "created",
+                    "region": "aws-ca-central-1",
+                },
+            },
+            namespace="tmprl-dem-cld-demo.acct1",
+            grpc_address="tmprl-dem-cld-demo.acct1.tmprl.cloud:7233",
+            auth_mode="apiKey",
+            created=True,
+            region="aws-ca-central-1",
+        ),
+        region_recreated=True,
+        previous_region="gcp-us-central1",
+        desired_region="aws-ca-central-1",
+    )
+
+    merged = state.merged_status()
+
+    assert merged["regionMigration"] == {
+        "recreated": True,
+        "fromRegion": "gcp-us-central1",
+        "toRegion": "aws-ca-central-1",
+    }
+
+
+def test_temporal_cloud_reconcile_state_omits_region_migration_without_recreate():
+    state = demo_project_workflow.TemporalCloudReconcileState(
+        namespace=demo_project_workflow.external_resources.TemporalCloudNamespaceResult(
+            status={
+                "phase": "Ready",
+                "namespace": {"name": "tmprl-dem-cld-demo", "action": "verified"},
+            },
+            namespace="tmprl-dem-cld-demo.acct1",
+            grpc_address="tmprl-dem-cld-demo.acct1.tmprl.cloud:7233",
+            auth_mode="apiKey",
+            created=False,
+        ),
+    )
+
+    assert "regionMigration" not in state.merged_status()

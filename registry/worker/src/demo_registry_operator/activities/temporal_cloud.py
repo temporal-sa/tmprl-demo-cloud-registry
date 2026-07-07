@@ -68,6 +68,10 @@ class NamespaceInfo:
     web_address: str | None = None
     state: str | None = None
     auth_mode: str | None = None
+    # The region the namespace is actually provisioned in (from the Cloud API
+    # namespace spec). None when unknown; region drift is only acted on when the
+    # current region is known, so an unknown region never triggers a teardown.
+    region: str | None = None
     created: bool = False
 
 
@@ -336,6 +340,7 @@ async def reconcile_temporal_cloud(
             "webAddress": namespace.web_address,
             "state": namespace.state,
             "authMode": auth_mode,
+            "region": namespace.region,
         },
         "searchAttributes": search_attributes_status,
     }
@@ -554,6 +559,29 @@ async def ensure_temporal_cloud_namespace(
                 "authMode": namespace.auth_mode,
             },
             **resources.temporal_auth_runtime_status(demo_project),
+        }
+    # Region is immutable on a Temporal Cloud namespace, so a region change
+    # requires a destructive teardown + recreate (driven by the workflow). Only
+    # signal drift when the current region is known and differs; never act on an
+    # unknown (None) region.
+    if namespace is not None and namespace.region and namespace.region != region:
+        return {
+            **temporal_cloud_base_status(
+                demo_project,
+                checked_at=checked_at,
+                account_id=account_id,
+                region=region,
+                phase="RegionDrift",
+            ),
+            "reason": "RegionDrift",
+            "message": (
+                f"Temporal Cloud namespace {namespace.qualified_name!r} is in "
+                f"region {namespace.region!r}, but the desired region is "
+                f"{region!r}; it must be torn down and recreated."
+            ),
+            "namespace": namespace_status(namespace, False),
+            "currentRegion": namespace.region,
+            "desiredRegion": region,
         }
 
     namespace_created = False
@@ -1606,6 +1634,7 @@ def namespace_status(namespace: NamespaceInfo, created: bool) -> dict[str, Any]:
         "webAddress": namespace.web_address,
         "state": namespace.state,
         "authMode": namespace.auth_mode,
+        "region": namespace.region,
     }
 
 
@@ -1618,6 +1647,7 @@ def namespace_info_from_status(status: dict[str, Any]) -> NamespaceInfo:
         web_address=string_optional(namespace.get("webAddress")),
         state=string_optional(namespace.get("state")),
         auth_mode=string_optional(namespace.get("authMode")),
+        region=string_optional(namespace.get("region")),
         created=namespace.get("action") == "created",
     )
 
@@ -2526,6 +2556,7 @@ class CloudApiReconciler:
             web_address=endpoints.web_address or None,
             state=state,
             auth_mode=namespace_auth_mode(namespace),
+            region=namespace_region(namespace),
             created=created,
         )
 
@@ -2907,3 +2938,13 @@ def namespace_auth_mode(namespace: Any) -> str | None:
     if api_key_auth is not None and getattr(api_key_auth, "enabled", False):
         return resources.TEMPORAL_AUTH_MODE_API_KEY
     return None
+
+
+def namespace_region(namespace: Any) -> str | None:
+    # A demo namespace is single-region; NamespaceSpec.regions carries the region
+    # the namespace was created in (symmetric with create_namespace's write).
+    spec = getattr(namespace, "spec", None)
+    if spec is None:
+        return None
+    regions = list(getattr(spec, "regions", None) or [])
+    return regions[0] if regions else None

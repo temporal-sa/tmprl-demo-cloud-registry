@@ -216,6 +216,11 @@ validation leaves the live Pods on the old key.
 - CodeBuild project `tmprl-dem-cld-build` (region us-west-1).
 - Secrets Manager: `tmprl-dem-cld/platform/temporal-cloud-bootstrap`
   (`TEMPORAL_CLOUD_API_KEY`, `TEMPORAL_CLOUD_ACCOUNT_ID`, `TEMPORAL_CLOUD_REGION`).
+  `TEMPORAL_CLOUD_REGION` is the operator-wide default namespace region; a project
+  can override it with `spec.temporal.region`, and serverless (AWS Lambda) worker
+  projects default to `DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`
+  (`aws-ca-central-1`). Changing a project's resolved region destroys and
+  recreates its namespace.
 - Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
   (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
   watches and CodeBuild checkouts.

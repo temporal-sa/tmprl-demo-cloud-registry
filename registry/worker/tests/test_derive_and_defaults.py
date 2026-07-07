@@ -11,8 +11,10 @@ from demo_registry_operator.resources import (
     ingress_routes,
     project_metadata,
     project_temporal_namespace,
+    resolve_temporal_cloud_region,
     temporal_mtls_status,
     temporal_auth_mode,
+    temporal_region,
     temporal_secret_remote_path,
     temporal_secret_remote_path_with_suffix,
     temporal_search_attributes,
@@ -330,3 +332,45 @@ def test_catalog_payload_sorts_projects_and_sets_base_domain():
     payload = catalog_payload([project("b"), project("a")])
     assert payload["baseDomain"] == "tmprl-demo.cloud"
     assert [p["name"] for p in payload["projects"]] == ["a", "b"]
+
+
+def test_temporal_region_reads_spec_and_defaults_none():
+    assert (
+        temporal_region(project("banking", temporal={"region": "aws-ca-central-1"}))
+        == "aws-ca-central-1"
+    )
+    assert temporal_region(project("banking")) is None
+    assert temporal_region(project("banking", temporal={})) is None
+
+
+def test_resolve_temporal_cloud_region_precedence():
+    # An explicit spec.temporal.region always wins, even for serverless.
+    assert (
+        resolve_temporal_cloud_region(
+            explicit_region="gcp-europe-west1",
+            serverless=True,
+            operator_region="gcp-us-central1",
+            serverless_region="aws-ca-central-1",
+        )
+        == "gcp-europe-west1"
+    )
+    # Serverless projects default to the AWS region.
+    assert (
+        resolve_temporal_cloud_region(
+            explicit_region=None,
+            serverless=True,
+            operator_region="gcp-us-central1",
+            serverless_region="aws-ca-central-1",
+        )
+        == "aws-ca-central-1"
+    )
+    # Everything else defaults to the operator-wide region.
+    assert (
+        resolve_temporal_cloud_region(
+            explicit_region=None,
+            serverless=False,
+            operator_region="gcp-us-central1",
+            serverless_region="aws-ca-central-1",
+        )
+        == "gcp-us-central1"
+    )

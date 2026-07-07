@@ -77,3 +77,21 @@ def test_watch_mode_overrides_legacy_watch_enabled(monkeypatch):
 
     assert config.watch_enabled is True
     assert config.watch_mode == WATCH_MODE_BOOTSTRAP
+
+
+def test_serverless_temporal_cloud_region_defaults_to_aws_ca_central_1(monkeypatch):
+    monkeypatch.delenv("DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION", raising=False)
+
+    config = WorkerConfig.from_env()
+
+    assert config.serverless_temporal_cloud_region == "aws-ca-central-1"
+
+
+def test_serverless_temporal_cloud_region_is_overridable(monkeypatch):
+    monkeypatch.setenv(
+        "DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION", "aws-us-east-1"
+    )
+
+    config = WorkerConfig.from_env()
+
+    assert config.serverless_temporal_cloud_region == "aws-us-east-1"

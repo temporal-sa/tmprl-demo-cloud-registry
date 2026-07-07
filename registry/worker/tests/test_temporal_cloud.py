@@ -18,6 +18,8 @@ from demo_registry_operator.activities.temporal_cloud import (
     delete_temporal_cloud_search_attribute_value,
     ensure_temporal_cloud_namespace,
     finalize_temporal_cloud,
+    namespace_info_from_status,
+    namespace_status,
     promote_temporal_runtime_secret,
     reconcile_temporal_cloud,
     stage_temporal_api_key_candidate,
@@ -98,6 +100,7 @@ class FakeReconciler:
             web_address="https://cloud.temporal.io/namespaces/x",
             state="active",
             auth_mode=auth_mode,
+            region=region,
             created=True,
         )
 
@@ -1280,3 +1283,131 @@ def test_cloud_api_delete_service_account_uses_resource_version():
 
     assert result == "deleted"
     assert service.deleted == [("sa-123", "sa-version-1")]
+
+
+# --- region plumbing + region-drift detection --------------------------------
+
+
+def test_namespace_status_round_trips_region():
+    info = NamespaceInfo(
+        qualified_name="ns.acct1",
+        grpc_address="ns.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region="gcp-us-central1",
+    )
+
+    status = namespace_status(info, created=False)
+    assert status["region"] == "gcp-us-central1"
+
+    rebuilt = namespace_info_from_status({"namespace": status})
+    assert rebuilt.region == "gcp-us-central1"
+
+    # A pre-region status round-trips to None rather than raising.
+    legacy = namespace_info_from_status(
+        {"namespace": {"name": "ns.acct1", "grpcAddress": "ns.acct1.tmprl.cloud:7233"}}
+    )
+    assert legacy.region is None
+
+
+def test_cloud_api_namespace_info_reads_spec_region():
+    reconciler = CloudApiReconciler(None, account_id="acct1")
+    namespace = SimpleNamespace(
+        namespace="ns.acct1",
+        endpoints=SimpleNamespace(web_address="https://web"),
+        state=0,
+        spec=SimpleNamespace(
+            regions=["aws-ca-central-1"],
+            mtls_auth=SimpleNamespace(enabled=False),
+            api_key_auth=SimpleNamespace(enabled=True),
+        ),
+    )
+
+    info = reconciler._namespace_info(namespace, created=False)
+    assert info.region == "aws-ca-central-1"
+    assert info.auth_mode == "apiKey"
+
+    namespace.spec.regions = []
+    assert reconciler._namespace_info(namespace, created=False).region is None
+
+
+def test_ensure_namespace_signals_region_drift_when_region_differs():
+    existing = NamespaceInfo(
+        qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+        grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region="gcp-us-central1",
+    )
+    reconciler = FakeReconciler(existing_namespace=existing)
+
+    status = asyncio.run(
+        ensure_temporal_cloud_namespace(
+            PROJECT,
+            reconciler=reconciler,
+            secret_store=FakeSecretStore(),
+            account_id="acct1",
+            region="aws-ca-central-1",
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "RegionDrift"
+    assert status["reason"] == "RegionDrift"
+    assert status["currentRegion"] == "gcp-us-central1"
+    assert status["desiredRegion"] == "aws-ca-central-1"
+    # Drift must neither create nor adopt; the workflow tears down first.
+    assert reconciler.called("create_namespace") == []
+
+
+def test_ensure_namespace_no_drift_when_region_matches():
+    existing = NamespaceInfo(
+        qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+        grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region="aws-ca-central-1",
+    )
+    reconciler = FakeReconciler(existing_namespace=existing)
+
+    status = asyncio.run(
+        ensure_temporal_cloud_namespace(
+            PROJECT,
+            reconciler=reconciler,
+            secret_store=FakeSecretStore(),
+            account_id="acct1",
+            region="aws-ca-central-1",
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "Ready"
+    assert status["namespace"]["region"] == "aws-ca-central-1"
+    assert reconciler.called("create_namespace") == []
+
+
+def test_ensure_namespace_unknown_region_never_signals_drift():
+    # A namespace whose region is unknown (e.g. provisioned before region
+    # plumbing) is adopted, never destroyed, even if it differs from desired.
+    existing = NamespaceInfo(
+        qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+        grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region=None,
+    )
+    reconciler = FakeReconciler(existing_namespace=existing)
+
+    status = asyncio.run(
+        ensure_temporal_cloud_namespace(
+            PROJECT,
+            reconciler=reconciler,
+            secret_store=FakeSecretStore(),
+            account_id="acct1",
+            region="aws-ca-central-1",
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert status["phase"] == "Ready"
+    assert reconciler.called("create_namespace") == []

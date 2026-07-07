@@ -4172,6 +4172,36 @@ def temporal_auth_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def temporal_region(demo_project: dict[str, Any]) -> str | None:
+    """The explicit spec.temporal.region, or None when the project does not set
+    one (the operator resolves the default region in that case)."""
+    region = temporal_config(demo_project).get("region")
+    if isinstance(region, str) and region.strip():
+        return region.strip()
+    return None
+
+
+def resolve_temporal_cloud_region(
+    *,
+    explicit_region: str | None,
+    serverless: bool,
+    operator_region: str,
+    serverless_region: str,
+) -> str:
+    """Resolve the desired Temporal Cloud namespace region.
+
+    Precedence: an explicit ``spec.temporal.region`` wins; otherwise serverless
+    (AWS Lambda) worker projects default to the AWS region so Temporal's Lambda
+    compute provider can reach the worker, and everything else uses the
+    operator-wide region.
+    """
+    if explicit_region:
+        return explicit_region
+    if serverless:
+        return serverless_region
+    return operator_region
+
+
 def temporal_search_attributes_config(demo_project: dict[str, Any]) -> dict[str, Any]:
     search_attributes = temporal_config(demo_project).get("searchAttributes")
     return search_attributes if isinstance(search_attributes, dict) else {}

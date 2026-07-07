@@ -516,3 +516,40 @@ def test_serverless_lambda_rejects_custom_mtls_file_paths():
             "materialized under /tmp"
         ),
     ]
+
+
+def test_schema_accepts_temporal_region():
+    for region in ("aws-ca-central-1", "gcp-us-central1", "azure-centralus"):
+        spec = base_spec()
+        spec["temporal"] = {"region": region}
+        document = project_document(spec)
+
+        errors = validate_projects.validate_document_schema(
+            validate_projects.load_default_validators(),
+            document,
+        )
+
+        assert errors == [], f"region {region!r} should be accepted: {errors}"
+
+
+def test_schema_rejects_invalid_temporal_region():
+    spec = base_spec()
+    spec["temporal"] = {"region": "us-central1"}
+    document = project_document(spec)
+    validator = validate_projects.load_default_validators()["DemoProject"]
+
+    errors = validate_projects.validate_schema(validator, document)
+
+    assert len(errors) == 1
+    assert "us-central1" in errors[0].message
+
+
+def test_schema_allows_temporal_region_omitted():
+    document = project_document(base_spec())
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []

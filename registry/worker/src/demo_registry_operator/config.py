@@ -15,6 +15,10 @@ DEFAULT_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH = (
 )
 DEFAULT_TEMPORAL_CLOUD_API_VERSION = "v0.17.0"
 DEFAULT_TEMPORAL_CLOUD_OPS_HOST = "saas-api.tmprl.cloud:443"
+# Serverless (AWS Lambda) worker projects need their namespace in an AWS region
+# so Temporal's Lambda compute provider can reach the worker. This is the only
+# AWS region currently available to the demo Temporal Cloud account.
+DEFAULT_SERVERLESS_TEMPORAL_CLOUD_REGION = "aws-ca-central-1"
 DEFAULT_CATALOG_STATUS_NAMESPACE = "tmprl-dem-cld-registry-operator"
 DEFAULT_CATALOG_STATUS_CONFIGMAP = "registry-catalog-status"
 DEFAULT_CATALOG_STATUS_MIRROR_NAMESPACE = "tmprl-dem-cld-registry-operator"
@@ -50,6 +54,7 @@ class WorkerConfig:
     temporal_cloud_bootstrap_secret_path: str
     temporal_cloud_account_id: str | None
     temporal_cloud_region: str | None
+    serverless_temporal_cloud_region: str
     temporal_cloud_mode: str
     temporal_cloud_api_version: str
     temporal_cloud_ops_host: str
@@ -141,6 +146,10 @@ class WorkerConfig:
             temporal_cloud_region=env_first_optional(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_REGION",
                 "TEMPORAL_CLOUD_REGION",
+            ),
+            serverless_temporal_cloud_region=env_first(
+                "DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION",
+                default=DEFAULT_SERVERLESS_TEMPORAL_CLOUD_REGION,
             ),
             temporal_cloud_mode=env_choice(
                 "DEMO_REGISTRY_TEMPORAL_CLOUD_MODE",

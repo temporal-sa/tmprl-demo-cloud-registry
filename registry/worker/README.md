@@ -123,8 +123,13 @@ Environment variables:
   `tmprl-dem-cld/platform/temporal-cloud-bootstrap`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID`, optional status metadata; falls
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
-- `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, optional status metadata; falls back
-  to `TEMPORAL_CLOUD_REGION`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, operator-wide default namespace region
+  (falls back to `TEMPORAL_CLOUD_REGION`, then `gcp-us-central1`); overridden
+  per project by `spec.temporal.region`
+- `DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`, default `aws-ca-central-1`;
+  the default namespace region for projects with serverless (AWS Lambda) workers
+  when `spec.temporal.region` is omitted, so Temporal's Lambda compute provider
+  can reach the worker
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_MODE`, `cloud-api`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION`, default `v0.17.0` (sent as the
   `temporal-cloud-api-version` header to the Cloud Operations API)
@@ -166,10 +171,17 @@ protection), a namespace-scoped service account, and a runtime API key, then
 write `address`/`namespace`/`apiKey`/`tls` to the project's Temporal secret path
 so External Secrets can sync it. Notes:
 
-- The namespace is created in the region from the bootstrap secret's
-  `TEMPORAL_CLOUD_REGION` (default `gcp-us-central1`); the operator queries
-  `GetRegions` and fails fast if that region is not available to the account
-  instead of leaving a namespace stuck in `ACTIVATION_FAILED`.
+- The namespace region is resolved by precedence: `spec.temporal.region` (if
+  set) > the serverless AWS default (`DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`,
+  `aws-ca-central-1`) for projects with AWS Lambda workers > the operator-wide
+  default (`TEMPORAL_CLOUD_REGION`, default `gcp-us-central1`). The operator
+  queries `GetRegions` and fails fast if the resolved region is not available to
+  the account instead of leaving a namespace stuck in `ACTIVATION_FAILED`.
+- A Temporal Cloud namespace's region is immutable, so when the resolved region
+  of an existing project changes the operator tears the namespace down (deleting
+  its data) and recreates it in the new region, then re-mints runtime
+  credentials. The migration is reported under
+  `status.externalResources.temporalCloud.regionMigration`.
 - The runtime address is the per-namespace endpoint
   `<namespace>.tmprl.cloud:7233`.
 - A newly minted API key takes a few seconds to propagate to the data plane.

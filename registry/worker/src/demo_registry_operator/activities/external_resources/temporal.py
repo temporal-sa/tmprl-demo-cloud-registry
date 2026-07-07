@@ -3,7 +3,7 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator import errors
+from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import temporal_cloud
 from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
@@ -56,8 +56,16 @@ def create_or_verify_temporal_cloud_namespace(
             account_id=request.account_id or bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID"),
             region=(
                 request.region
-                or bootstrap.get("TEMPORAL_CLOUD_REGION")
-                or temporal_cloud.DEFAULT_TEMPORAL_CLOUD_REGION
+                or resources.resolve_temporal_cloud_region(
+                    explicit_region=request.project.region,
+                    serverless=request.project.serverless,
+                    operator_region=(
+                        bootstrap.get("TEMPORAL_CLOUD_REGION")
+                        or config.temporal_cloud_region
+                        or temporal_cloud.DEFAULT_TEMPORAL_CLOUD_REGION
+                    ),
+                    serverless_region=config.serverless_temporal_cloud_region,
+                )
             ),
             checked_at=request.checked_at,
             retention_days=request.retention_days,
@@ -821,6 +829,7 @@ def namespace_result(status: dict[str, Any]) -> models.TemporalCloudNamespaceRes
         grpc_address=string_value(namespace.get("grpcAddress")),
         auth_mode=string_value(namespace.get("authMode")),
         created=namespace.get("action") == "created",
+        region=namespace.get("region") if isinstance(namespace.get("region"), str) else None,
     )
 
 

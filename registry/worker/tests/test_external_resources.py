@@ -97,3 +97,57 @@ def test_temporal_cloud_project_plan_uses_explicit_runtime_secret_path():
     assert demo_project["spec"]["temporal"]["runtimeSecretPath"] == (
         "tmprl-dem-cld/dejavu-tacos/temporal-owned"
     )
+
+
+def test_temporal_cloud_project_carries_region_and_serverless():
+    project = {
+        "metadata": {"name": "money-transfer"},
+        "spec": {
+            "temporal": {"region": "aws-ca-central-1"},
+            "components": {
+                "worker": {
+                    "build": "worker",
+                    "worker": True,
+                    "serverless": {"provider": "aws-lambda"},
+                }
+            },
+        },
+    }
+
+    temporal_project = temporal_cloud_project(project)
+
+    assert temporal_project.region == "aws-ca-central-1"
+    assert temporal_project.serverless is True
+    assert (
+        temporal_project.as_demo_project()["spec"]["temporal"]["region"]
+        == "aws-ca-central-1"
+    )
+
+
+def test_temporal_cloud_project_region_omitted_is_none_and_not_serialized():
+    project = {
+        "metadata": {"name": "dejavu-tacos"},
+        "spec": {"components": {"worker": {"build": "worker", "worker": True}}},
+    }
+
+    temporal_project = temporal_cloud_project(project)
+
+    assert temporal_project.region is None
+    assert temporal_project.serverless is False
+    assert "region" not in temporal_project.as_demo_project()["spec"]["temporal"]
+
+
+def test_namespace_result_carries_region():
+    result = temporal.namespace_result(
+        {
+            "phase": "Ready",
+            "namespace": {
+                "name": "ns.acct1",
+                "grpcAddress": "ns.acct1.tmprl.cloud:7233",
+                "authMode": "apiKey",
+                "region": "aws-ca-central-1",
+            },
+        }
+    )
+
+    assert result.region == "aws-ca-central-1"

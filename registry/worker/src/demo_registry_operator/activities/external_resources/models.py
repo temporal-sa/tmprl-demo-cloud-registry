@@ -29,6 +29,11 @@ class TemporalCloudProject:
     # is workflow-owned via runtime_secret_path, not derived from this field.
     uid: str | None = None
     search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
+    # Explicit spec.temporal.region (None when omitted; the operator resolves the
+    # default). ``serverless`` is True when the project has AWS Lambda workers,
+    # which selects the AWS region default when no explicit region is set.
+    region: str | None = None
+    serverless: bool = False
 
     @property
     def component_names(self) -> tuple[str, ...]:
@@ -47,6 +52,8 @@ class TemporalCloudProject:
             "auth": {"mode": self.auth_mode},
             "runtimeSecretPath": self.runtime_secret_path,
         }
+        if self.region:
+            temporal["region"] = self.region
         if self.search_attributes:
             temporal["searchAttributes"] = {
                 attribute.name: {"type": attribute.type}
@@ -322,6 +329,7 @@ class TemporalCloudNamespaceResult:
     grpc_address: str | None
     auth_mode: str | None
     created: bool
+    region: str | None = None
 
     @property
     def phase(self) -> str | None:
