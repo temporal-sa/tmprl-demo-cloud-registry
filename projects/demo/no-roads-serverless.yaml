@@ -47,7 +47,7 @@ spec:
           buildId: "1.0.0"
   ingress:
     subdomain: no-roads-serverless
-    temporalAuthRequired: false
+    temporalAuthRequired: true
     routes:
       - pathPrefix: /
         component: app
