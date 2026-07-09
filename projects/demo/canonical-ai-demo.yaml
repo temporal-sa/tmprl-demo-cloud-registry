@@ -84,9 +84,3 @@ spec:
     temporalAuthRequired: true
     component: app
     port: http
-
-  ingress:
-    subdomain: canonical-ai-demo
-    temporalAuthRequired: true
-    component: app
-    port: http
