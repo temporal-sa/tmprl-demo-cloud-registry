@@ -26,6 +26,7 @@ KUBERNETES_NAMESPACE_MAX_LENGTH = 63
 TEMPORAL_NAMESPACE_MAX_LENGTH = 39
 
 
+
 def _prefixed_truncated(prefix: str, project_name: str, limit: int) -> str:
     raw = f"{prefix}{project_name}"
     if len(raw) <= limit:
