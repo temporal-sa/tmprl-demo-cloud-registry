@@ -1,0 +1,92 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: canonical-ai-demo
+spec:
+  registry:
+    title: Canonical AI Demo — Durable Support Agent
+    summary: >-
+      The canonical 100-level agentic demo. A single-agent ReAct loop on Temporal
+      over a music store: LLM + tools as activities, human-in-the-loop
+      purchase approval via signal, crash-recoverable, replay-safe.
+    tags: [AI, Agents, Single-Agent]
+    temporalSdks: [Python]
+  source:
+    repo: https://github.com/temporal-sa/canonical-ai-demo
+
+  builds:
+    app:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    worker:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    postgres:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+
+  components:
+    postgres:
+      build: postgres
+      replicas: 1
+      ports:
+        - name: db
+          containerPort: 5432
+          servicePort: 5432
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_PASSWORD
+
+    worker:
+      build: worker
+      worker: true
+      secrets:
+        - anthropic-credentials
+      env:
+        - name: LLM_PROVIDER
+          value: anthropic
+        - name: DB_HOST
+          value: postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: music
+        - name: DB_USER
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_PASSWORD
+
+    app:
+      build: app
+      temporalAccess: true
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 80
+
+  secrets:
+    anthropic-credentials:
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+    db-creds:
+      requiredProperties:
+        - POSTGRES_USER
+        - POSTGRES_PASSWORD
+
+  ingress:
+    subdomain: canonical-ai-demo
+    temporalAuthRequired: true
+    component: app
+    port: http
+
+  ingress:
+    subdomain: canonical-ai-demo
+    temporalAuthRequired: true
+    component: app
+    port: http
