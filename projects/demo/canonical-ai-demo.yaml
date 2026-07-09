@@ -18,9 +18,9 @@ spec:
     app:
       context: .
       dockerfile: docker/app.Dockerfile
-    worker-python:
+    worker:
       context: .
-      dockerfile: docker/worker-python.Dockerfile
+      dockerfile: docker/worker.Dockerfile
     postgres:
       context: .
       dockerfile: docker/postgres.Dockerfile
@@ -42,7 +42,7 @@ spec:
             inputRef: secrets.db-creds.POSTGRES_PASSWORD
 
     worker:
-      build: worker-python
+      build: worker
       worker: true
       secrets:
         - anthropic-credentials
