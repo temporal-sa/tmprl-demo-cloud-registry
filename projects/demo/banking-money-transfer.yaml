@@ -12,12 +12,6 @@ spec:
       - Saga
     temporalSdks:
       - Python
-    canonical: true
-    links:
-      slideDeck:
-        url: https://docs.google.com/presentation/d/17Htf4WMbp4s19VxXo2qhlVhsyuw1nh0AGUfty8Y-7mI/edit
-      externalRecording:
-        url: https://www.youtube.com/watch?v=3dTqE2rKZSA
 
   source:
     repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
@@ -62,7 +56,7 @@ spec:
 
   ingress:
     subdomain: banking-app
-    temporalAuthRequired: true
+    temporalAuthRequired: false
     # routes default to a catch-all at the servicePort-80 component (frontend)
 
   # Smoke /api/health routes through the frontend nginx proxy to the backend.
