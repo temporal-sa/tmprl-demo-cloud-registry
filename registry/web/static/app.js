@@ -1,39 +1,591 @@
-const projectGrid = document.querySelector("[data-project-grid]");
-const searchInput = document.querySelector("[data-search]");
-const phaseSelect = document.querySelector("[data-phase]");
-const projectCount = document.querySelector("[data-project-count]");
-const liveStatusCount = document.querySelector("[data-live-status-count]");
-const authCount = document.querySelector("[data-auth-count]");
+// Demo Registry — vanilla JS SPA.
+// Two views over the same catalog JSON:
+//   /         → canonical demos (SA-facing)
+//   /catalog  → ops project grid
+
+const LINK_SOURCES = [
+  { pattern: "github.com", label: "GitHub" },
+  { pattern: "notion.so", label: "Notion" },
+  { pattern: "docs.google.com/document", label: "Google Docs" },
+  { pattern: "docs.google.com/presentation", label: "Google Slides" },
+  { pattern: "drive.google.com", label: "Google Drive" },
+  { pattern: "aws.amazon.com", label: "AWS" },
+  { pattern: "app.gong.io", label: "Gong" },
+  { pattern: "youtube.com", label: "YouTube" },
+  { pattern: "youtu.be", label: "YouTube" },
+];
 
 const state = {
-  catalog: null,
-  search: "",
-  phase: "all",
+  projects: [],
+  demos: [],
+  route: window.location.pathname,
+  demosSearch: "",
+  selectedTags: new Set(),
+  selectedSdks: new Set(),
+  catalogSearch: "",
+  catalogPhase: "all",
 };
 
-function text(value, fallback = "") {
-  return typeof value === "string" && value.trim() ? value : fallback;
+function linkLabel(url) {
+  for (const source of LINK_SOURCES) {
+    if (url && url.includes(source.pattern)) return source.label;
+  }
+  return "View";
+}
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key === "html") node.innerHTML = value;
+    else if (key.startsWith("on") && typeof value === "function") {
+      node.addEventListener(key.slice(2).toLowerCase(), value);
+    } else if (key === "dataset") {
+      Object.assign(node.dataset, value);
+    } else {
+      node.setAttribute(key, value === true ? "" : value);
+    }
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    if (typeof child === "string") node.appendChild(document.createTextNode(child));
+    else if (Array.isArray(child)) child.forEach((c) => c && node.appendChild(c));
+    else node.appendChild(child);
+  }
+  return node;
+}
+
+function normalizeDemo(project) {
+  const links = project.links || {};
+  return {
+    id: project.name,
+    name: project.title || project.name,
+    summary: project.summary || "",
+    canonical: !!project.canonical,
+    tags: Array.isArray(project.tags) ? project.tags : [],
+    sdks: Array.isArray(project.temporalSdks) ? project.temporalSdks : [],
+    technicalAssets: {
+      repo: project.sourceRepo || undefined,
+      appUrl: project.appUrl || undefined,
+      runbook: links.runbook && links.runbook.url,
+    },
+    nonTechnicalAssets: {
+      speakerNotes: links.speakerNotes && links.speakerNotes.url,
+      slideDeck: links.slideDeck && links.slideDeck.url,
+      goldenPath: links.goldenPath && links.goldenPath.url,
+      externalRecording: links.externalRecording && links.externalRecording.url,
+    },
+    additional: Array.isArray(links.additional) ? links.additional : [],
+    cloud: { namespace: project.temporalNamespace },
+    authRequired: !!project.authRequired,
+  };
+}
+
+async function loadData() {
+  const list = document.querySelector("[data-demos-list]");
+  try {
+    const res = await fetch("/api/registry", { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    state.projects = Array.isArray(payload.projects) ? payload.projects : [];
+    state.demos = state.projects.map(normalizeDemo);
+  } catch (err) {
+    list.replaceChildren(
+      el("div", {
+        class: "text-sm text-red-600 py-8 text-center",
+        text: `Failed to load catalog: ${err.message}`,
+      })
+    );
+    throw err;
+  }
+}
+
+function currentView() {
+  return state.route === "/catalog" ? "catalog" : "demos";
+}
+
+function setRoute(target, { replace = false } = {}) {
+  if (target === state.route) return;
+  state.route = target;
+  const url = target + window.location.search + window.location.hash;
+  if (replace) window.history.replaceState(null, "", url);
+  else window.history.pushState(null, "", url);
+  render();
+}
+
+function setupTabs() {
+  document.querySelectorAll("[data-route]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      setRoute(link.getAttribute("data-route"));
+    });
+  });
+  window.addEventListener("popstate", () => {
+    state.route = window.location.pathname;
+    render();
+  });
+}
+
+// ─── Demos view ────────────────────────────────────────────────────────────
+
+function loadDemosFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  state.selectedTags = new Set((params.get("tags") || "").split(",").filter(Boolean));
+  state.selectedSdks = new Set((params.get("sdks") || "").split(",").filter(Boolean));
+  state.demosSearch = params.get("q") || "";
+}
+
+function syncDemosFiltersToUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (state.selectedTags.size) params.set("tags", [...state.selectedTags].join(","));
+  else params.delete("tags");
+  if (state.selectedSdks.size) params.set("sdks", [...state.selectedSdks].join(","));
+  else params.delete("sdks");
+  if (state.demosSearch.trim()) params.set("q", state.demosSearch.trim());
+  else params.delete("q");
+  const q = params.toString();
+  const url = window.location.pathname + (q ? `?${q}` : "") + window.location.hash;
+  window.history.replaceState(null, "", url);
+}
+
+function setupDemosFilters() {
+  const search = document.querySelector("[data-demos-search]");
+  search.value = state.demosSearch;
+  search.addEventListener("input", (event) => {
+    state.demosSearch = event.target.value;
+    syncDemosFiltersToUrl();
+    renderDemosList();
+  });
+  document.querySelector("[data-clear-demos-filters]").addEventListener("click", () => {
+    state.demosSearch = "";
+    state.selectedTags.clear();
+    state.selectedSdks.clear();
+    search.value = "";
+    syncDemosFiltersToUrl();
+    renderDemosFilters();
+    renderDemosList();
+  });
+}
+
+function renderDemosFilters() {
+  const canonical = state.demos.filter((d) => d.canonical);
+  const usedTags = new Set();
+  const usedSdks = new Set();
+  for (const demo of canonical) {
+    demo.tags.forEach((t) => usedTags.add(t));
+    demo.sdks.forEach((s) => usedSdks.add(s));
+  }
+  const tagsRow = document.querySelector("[data-tags-row]");
+  const sdksRow = document.querySelector("[data-sdks-row]");
+  const tagsLabel = tagsRow.firstElementChild;
+  const sdksLabel = sdksRow.firstElementChild;
+  tagsRow.replaceChildren(tagsLabel, ...[...usedTags].sort().map((tag) => chip(tag, "tag")));
+  sdksRow.replaceChildren(sdksLabel, ...[...usedSdks].sort().map((sdk) => chip(sdk, "sdk")));
+  const hasFilters =
+    state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim();
+  document.querySelector("[data-clear-demos-filters]").hidden = !hasFilters;
+}
+
+function chip(value, kind) {
+  const isSelected =
+    kind === "tag" ? state.selectedTags.has(value) : state.selectedSdks.has(value);
+  const base =
+    "inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium cursor-pointer transition-colors border";
+  const selected = "bg-foreground text-background border-foreground";
+  const unselected = "bg-muted text-foreground border-border hover:bg-muted/70";
+  return el(
+    "button",
+    {
+      type: "button",
+      class: `${base} ${isSelected ? selected : unselected}`,
+      onclick: () => {
+        const target = kind === "tag" ? state.selectedTags : state.selectedSdks;
+        if (target.has(value)) target.delete(value);
+        else target.add(value);
+        syncDemosFiltersToUrl();
+        renderDemosFilters();
+        renderDemosList();
+      },
+    },
+    value
+  );
+}
+
+function filteredDemos() {
+  const q = state.demosSearch.trim().toLowerCase();
+  return state.demos
+    .filter((d) => d.canonical)
+    .filter((demo) => {
+      const matchesTags =
+        state.selectedTags.size === 0 ||
+        [...state.selectedTags].every((t) => demo.tags.includes(t));
+      const matchesSdks =
+        state.selectedSdks.size === 0 ||
+        [...state.selectedSdks].some((s) => demo.sdks.includes(s));
+      const matchesSearch =
+        !q ||
+        demo.name.toLowerCase().includes(q) ||
+        demo.summary.toLowerCase().includes(q) ||
+        demo.tags.some((t) => t.toLowerCase().includes(q)) ||
+        demo.sdks.some((s) => s.toLowerCase().includes(q));
+      return matchesTags && matchesSdks && matchesSearch;
+    });
+}
+
+function renderDemosList() {
+  const list = document.querySelector("[data-demos-list]");
+  const totalCanonical = state.demos.filter((d) => d.canonical).length;
+  const demos = filteredDemos();
+  const count = document.querySelector("[data-demos-count]");
+  const hasFilters =
+    state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim();
+  if (hasFilters) {
+    count.hidden = false;
+    count.textContent = `Showing ${demos.length} of ${totalCanonical} demo${
+      totalCanonical === 1 ? "" : "s"
+    }`;
+  } else {
+    count.hidden = true;
+  }
+  if (demos.length === 0) {
+    list.replaceChildren(
+      el(
+        "div",
+        { class: "text-center py-8 space-y-2" },
+        el("p", {
+          class: "text-sm text-muted-foreground",
+          text: totalCanonical === 0
+            ? "No canonical demos yet. Mark a project canonical in its YAML to list it here."
+            : "No demos match the selected filters.",
+        })
+      )
+    );
+    return;
+  }
+  list.replaceChildren(...demos.map(renderDemoRow));
+  if (window.location.hash) {
+    const id = window.location.hash.slice(1);
+    requestAnimationFrame(() => {
+      const node = document.getElementById(id);
+      if (node) {
+        const details = node.querySelector("details");
+        if (details) details.open = true;
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  }
+}
+
+function authRequiredChip() {
+  return el(
+    "span",
+    {
+      class:
+        "group/auth relative inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 cursor-help",
+      tabindex: "0",
+      "aria-label": "Auth required: sign in with a @temporal.io email to access this demo",
+      onclick: (event) => event.preventDefault(),
+    },
+    el("span", { class: "select-none", text: "🔒" }),
+    el("span", { text: "Auth required" }),
+    el("span", {
+      class:
+        "pointer-events-none absolute left-0 top-full z-10 mt-1.5 w-60 rounded-md bg-foreground px-2.5 py-1.5 text-xs font-normal leading-snug text-background opacity-0 shadow-md transition-opacity duration-150 group-hover/auth:opacity-100 group-focus/auth:opacity-100",
+      text: "Requires signing in with a @temporal.io email to access this demo.",
+    })
+  );
+}
+
+function summaryTags(tags) {
+  if (!tags.length) return null;
+  return el(
+    "div",
+    { class: "flex flex-wrap gap-1.5 mt-2" },
+    ...tags.map((tag) =>
+      el("span", {
+        class:
+          "inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground",
+        text: tag,
+      })
+    )
+  );
+}
+
+function renderDemoRow(demo) {
+  const titleRow = el(
+    "div",
+    { class: "flex items-center gap-3 mb-1" },
+    el("h2", { class: "text-lg font-semibold", text: demo.name }),
+    copyLinkButton(demo.id),
+    demo.authRequired ? authRequiredChip() : null
+  );
+  const summary = el(
+    "summary",
+    { class: "px-6 py-4 cursor-pointer list-none flex items-start gap-4" },
+    el(
+      "div",
+      { class: "flex-1 min-w-0" },
+      titleRow,
+      el("p", { class: "text-sm text-muted-foreground", text: demo.summary }),
+      summaryTags(demo.tags)
+    ),
+    el("span", {
+      class:
+        "text-muted-foreground text-xl select-none transition-transform duration-200 group-open:rotate-90",
+      text: "›",
+    })
+  );
+
+  const quickLaunch = el(
+    "div",
+    { class: "grid grid-cols-1 md:grid-cols-3 gap-3 mb-6" },
+    quickLaunchTile("App UI", demo.technicalAssets.appUrl, "Open Demo"),
+    quickLaunchTile(
+      "Temporal Cloud",
+      demo.cloud.namespace
+        ? `https://cloud.temporal.io/namespaces/${demo.cloud.namespace}`
+        : null,
+      "Open Namespace"
+    ),
+    quickLaunchTile("Speaker Notes", demo.nonTechnicalAssets.speakerNotes, "View Notes")
+  );
+
+  const tagsAndSdks = el(
+    "div",
+    { class: "mb-6" },
+    el("h3", {
+      class: "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3",
+      text: "Temporal SDKs",
+    }),
+    el(
+      "div",
+      { class: "flex flex-wrap gap-1.5" },
+      ...demo.sdks.map((sdk) =>
+        el("span", {
+          class:
+            "inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs font-medium",
+          text: sdk,
+        })
+      )
+    )
+  );
+
+  const technicalAdditional = demo.additional.filter((a) => a.audience === "technical");
+  const nonTechnicalAdditional = demo.additional.filter((a) => a.audience === "nonTechnical");
+
+  const assets = el(
+    "div",
+    { class: "grid grid-cols-1 md:grid-cols-2 gap-8" },
+    el(
+      "div",
+      {},
+      el("h3", {
+        class: "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3",
+        text: "Technical Assets",
+      }),
+      el(
+        "div",
+        { class: "divide-y divide-border" },
+        linkItem("Repository", demo.technicalAssets.repo),
+        linkItem("Local Runbook", demo.technicalAssets.runbook),
+        ...technicalAdditional.map((a) => linkItem(a.label, a.url))
+      )
+    ),
+    el(
+      "div",
+      {},
+      el("h3", {
+        class: "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3",
+        text: "Non-Technical Assets",
+      }),
+      el(
+        "div",
+        { class: "divide-y divide-border" },
+        linkItem("Slide Deck", demo.nonTechnicalAssets.slideDeck),
+        linkItem("Golden Path Recording", demo.nonTechnicalAssets.goldenPath),
+        linkItem("External Recording", demo.nonTechnicalAssets.externalRecording),
+        ...nonTechnicalAdditional.map((a) => linkItem(a.label, a.url))
+      )
+    )
+  );
+
+  const body = el(
+    "div",
+    { class: "px-6 pb-6 details-body" },
+    el("hr", { class: "border-border mb-5" }),
+    quickLaunch,
+    tagsAndSdks,
+    assets
+  );
+  const details = el("details", { class: "group" }, summary, body);
+  summary.addEventListener("click", () => {
+    if (details.open) return; // about to close — no open animation
+    // Arm the slide-down before the browser paints the opened state, so the
+    // content never flashes at full opacity first. Re-trigger on every open.
+    body.classList.remove("details-animate");
+    void body.offsetWidth; // force reflow so the animation restarts
+    body.classList.add("details-animate");
+  });
+
+  return el(
+    "article",
+    {
+      id: demo.id,
+      class: "rounded-lg border border-border bg-card shadow-sm scroll-mt-4",
+    },
+    details
+  );
+}
+
+function quickLaunchTile(label, url, activeText) {
+  const base =
+    "flex flex-col items-center justify-center rounded-lg border p-4 text-center transition-colors";
+  if (url) {
+    return el(
+      "a",
+      {
+        href: url,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        class: `${base} border-primary/30 bg-primary-soft hover:bg-primary/10`,
+      },
+      el("span", {
+        class:
+          "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1",
+        text: label,
+      }),
+      el("span", { class: "text-sm font-medium", text: activeText })
+    );
+  }
+  return el(
+    "div",
+    { class: `${base} border-border bg-muted/30 opacity-50` },
+    el("span", {
+      class:
+        "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1",
+      text: label,
+    }),
+    el("span", { class: "text-sm font-medium", text: "Not Available" })
+  );
+}
+
+function linkItem(label, url) {
+  if (!url) {
+    return el(
+      "div",
+      { class: "flex items-center justify-between gap-4 py-1.5" },
+      el("span", { class: "text-sm text-muted-foreground truncate", text: label }),
+      el("span", { class: "text-xs text-muted-foreground italic shrink-0", text: "—" })
+    );
+  }
+  return el(
+    "div",
+    { class: "flex items-center justify-between gap-4 py-1.5" },
+    el("span", { class: "text-sm truncate", title: label, text: label }),
+    el(
+      "a",
+      {
+        href: url,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        class:
+          "text-xs text-primary underline underline-offset-2 hover:text-primary/80 shrink-0",
+      },
+      linkLabel(url)
+    )
+  );
+}
+
+function copyLinkButton(id) {
+  const icon = el("span", { class: "text-sm leading-none", text: "🔗" });
+  const label = el("span", { class: "text-xs font-medium", text: "Copy Registry Link" });
+  const button = el(
+    "button",
+    {
+      type: "button",
+      class:
+        "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground hover:border-foreground/30 cursor-pointer transition-colors",
+      title: "Copy deep link to this demo",
+      "aria-label": "Copy deep link to this demo",
+    },
+    icon,
+    label
+  );
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const url = `${window.location.origin}/#${id}`;
+    window.history.replaceState(null, "", `/#${id}`);
+    if (navigator.clipboard) navigator.clipboard.writeText(url);
+    icon.textContent = "✓";
+    label.textContent = "Copied!";
+    button.classList.add("text-accent", "border-accent/40");
+    setTimeout(() => {
+      icon.textContent = "🔗";
+      label.textContent = "Copy link";
+      button.classList.remove("text-accent", "border-accent/40");
+    }, 1500);
+  });
+  return button;
+}
+
+// ─── Catalog view ──────────────────────────────────────────────────────────
+
+function loadCatalogFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  state.catalogSearch = params.get("q") || "";
+  state.catalogPhase = params.get("phase") || "all";
+}
+
+function syncCatalogFiltersToUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (state.catalogSearch.trim()) params.set("q", state.catalogSearch.trim());
+  else params.delete("q");
+  if (state.catalogPhase && state.catalogPhase !== "all") params.set("phase", state.catalogPhase);
+  else params.delete("phase");
+  const q = params.toString();
+  const url = window.location.pathname + (q ? `?${q}` : "") + window.location.hash;
+  window.history.replaceState(null, "", url);
+}
+
+function setupCatalogFilters() {
+  const search = document.querySelector("[data-catalog-search]");
+  search.value = state.catalogSearch;
+  search.addEventListener("input", (event) => {
+    state.catalogSearch = event.target.value;
+    syncCatalogFiltersToUrl();
+    renderCatalogList();
+  });
+  document.querySelector("[data-catalog-phase]").addEventListener("change", (event) => {
+    state.catalogPhase = event.target.value;
+    syncCatalogFiltersToUrl();
+    renderCatalogList();
+  });
 }
 
 function projectPhase(project) {
-  return text(project.status?.phase, "Catalogued");
+  const phase = project.status && project.status.phase;
+  return typeof phase === "string" && phase.trim() ? phase : "Catalogued";
 }
 
-function statusClass(phase) {
-  return phase.toLowerCase().replace(/[^a-z0-9]+/g, "");
+function renderCatalogPhaseOptions() {
+  const select = document.querySelector("[data-catalog-phase]");
+  const phases = [...new Set(state.projects.map(projectPhase))].sort();
+  select.replaceChildren(
+    new Option("All phases", "all"),
+    ...phases.map((phase) => new Option(phase, phase))
+  );
+  select.value = state.catalogPhase;
 }
 
-function matches(project) {
-  const phase = projectPhase(project);
-  if (state.phase !== "all" && phase !== state.phase) {
+function matchesCatalog(project) {
+  if (state.catalogPhase !== "all" && projectPhase(project) !== state.catalogPhase) {
     return false;
   }
-
-  const query = state.search.trim().toLowerCase();
-  if (!query) {
-    return true;
-  }
-
+  const q = state.catalogSearch.trim().toLowerCase();
+  if (!q) return true;
   const haystack = [
     project.name,
     project.title,
@@ -45,125 +597,135 @@ function matches(project) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-
-  return haystack.includes(query);
+  return haystack.includes(q);
 }
 
-function renderStats(projects, catalog) {
-  projectCount.textContent = String(projects.length);
-  liveStatusCount.textContent = String(catalog?.liveStatusCount ?? 0);
-  authCount.textContent = String(projects.filter((project) => project.authRequired).length);
-}
-
-function renderPhaseOptions(projects) {
-  const phases = [...new Set(projects.map(projectPhase))].sort();
-  phaseSelect.replaceChildren(
-    new Option("All phases", "all"),
-    ...phases.map((phase) => new Option(phase, phase)),
-  );
-  phaseSelect.value = state.phase;
-}
-
-function renderProjects(projects) {
-  const visible = projects.filter(matches);
+function renderCatalogList() {
+  const list = document.querySelector("[data-catalog-list]");
+  const visible = state.projects.filter(matchesCatalog);
+  const count = document.querySelector("[data-catalog-count]");
+  if (state.catalogSearch.trim() || state.catalogPhase !== "all") {
+    count.hidden = false;
+    count.textContent = `Showing ${visible.length} of ${state.projects.length} project${
+      state.projects.length === 1 ? "" : "s"
+    }`;
+  } else {
+    count.hidden = true;
+  }
   if (visible.length === 0) {
-    renderEmpty("No matching projects.");
+    list.replaceChildren(
+      el("div", {
+        class: "text-sm text-muted-foreground py-8 text-center col-span-full",
+        text: "No matching projects.",
+      })
+    );
     return;
   }
-
-  projectGrid.replaceChildren(...visible.map(renderProject));
+  list.replaceChildren(...visible.map(renderProjectCard));
 }
 
-function renderEmpty(message) {
-  const empty = document.createElement("div");
-  empty.className = "empty";
-  empty.textContent = message;
-  projectGrid.replaceChildren(empty);
-}
-
-function renderProject(project) {
+function renderProjectCard(project) {
   const phase = projectPhase(project);
-  const article = document.createElement("article");
-  article.className = "project";
-
-  const body = document.createElement("div");
-  const title = document.createElement("h2");
-  title.className = "project-title";
-  title.textContent = text(project.title, project.name);
-
-  const summary = document.createElement("p");
-  summary.className = "project-summary";
-  summary.textContent = text(project.status?.message, text(project.summary, "No summary provided."));
-
-  const tags = document.createElement("div");
-  tags.className = "tags";
-  for (const tag of project.tags ?? []) {
-    const chip = document.createElement("span");
-    chip.className = "tag";
-    chip.textContent = tag;
-    tags.append(chip);
-  }
-
-  body.append(title, summary, tags);
-
-  const meta = document.createElement("aside");
-  meta.className = "meta";
-
-  const status = document.createElement("span");
-  status.className = `status ${statusClass(phase)}`;
-  status.textContent = phase;
-
-  const links = document.createElement("div");
-  links.className = "links";
-  appendLink(links, "App", project.appUrl);
-  appendLink(links, "Source", project.sourceRepo);
-
-  const namespace = document.createElement("div");
-  namespace.className = "detail";
-  namespace.textContent = `Temporal namespace: ${text(project.temporalNamespace, "unassigned")}`;
-
-  const sdks = document.createElement("div");
-  sdks.className = "detail";
-  sdks.textContent = `SDKs: ${(project.temporalSdks ?? []).join(", ") || "unspecified"}`;
-
-  meta.append(status, links, namespace, sdks);
-  article.append(body, meta);
-  return article;
+  const title = project.title || project.name;
+  const summary =
+    (project.status && project.status.message && project.status.message.trim()) ||
+    project.summary ||
+    "No summary provided.";
+  return el(
+    "article",
+    { class: "rounded-lg border border-border bg-card shadow-sm p-5 flex flex-col gap-3" },
+    el(
+      "div",
+      { class: "flex items-start justify-between gap-3" },
+      el("h2", { class: "text-base font-semibold", text: title }),
+      el("span", {
+        class: "inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+        text: phase,
+      })
+    ),
+    el("p", { class: "text-sm text-muted-foreground", text: summary }),
+    Array.isArray(project.tags) && project.tags.length
+      ? el(
+          "div",
+          { class: "flex flex-wrap gap-1.5" },
+          ...project.tags.map((tag) =>
+            el("span", {
+              class: "inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs",
+              text: tag,
+            })
+          )
+        )
+      : null,
+    el(
+      "div",
+      { class: "flex items-center gap-4 text-xs text-muted-foreground mt-auto pt-2" },
+      project.host
+        ? el(
+            "a",
+            {
+              href: project.appUrl || `https://${project.host}`,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              class: "text-primary underline underline-offset-2 hover:text-primary/80",
+            },
+            project.host
+          )
+        : el("span", { text: "—" }),
+      project.sourceRepo
+        ? el(
+            "a",
+            {
+              href: project.sourceRepo,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              class: "underline underline-offset-2 hover:text-foreground",
+            },
+            "Source"
+          )
+        : null,
+      project.authRequired
+        ? el("span", { class: "ml-auto text-[11px]", text: "Auth required" })
+        : null
+    )
+  );
 }
 
-function appendLink(parent, label, url) {
-  if (!url) {
-    return;
+// ─── Render orchestration ─────────────────────────────────────────────────
+
+function render() {
+  document.querySelectorAll("[data-view]").forEach((section) => {
+    section.hidden = section.getAttribute("data-view") !== currentView();
+  });
+  document.querySelectorAll("[data-route]").forEach((link) => {
+    if (link.getAttribute("data-route") === state.route) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+  if (currentView() === "demos") {
+    renderDemosFilters();
+    renderDemosList();
+  } else {
+    renderCatalogPhaseOptions();
+    renderCatalogList();
   }
-  const link = document.createElement("a");
-  link.href = url;
-  link.textContent = label;
-  link.rel = "noreferrer";
-  parent.append(link);
 }
 
-async function loadCatalog() {
-  const response = await fetch("/api/catalog", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Catalog request failed with ${response.status}`);
-  }
-  state.catalog = await response.json();
-  const projects = state.catalog.projects ?? [];
-  renderStats(projects, state.catalog.catalog);
-  renderPhaseOptions(projects);
-  renderProjects(projects);
+// ─── Boot ─────────────────────────────────────────────────────────────────
+
+async function init() {
+  loadDemosFiltersFromUrl();
+  loadCatalogFiltersFromUrl();
+  setupTabs();
+  setupDemosFilters();
+  setupCatalogFilters();
+  await loadData();
+  render();
 }
 
-searchInput.addEventListener("input", (event) => {
-  state.search = event.target.value;
-  renderProjects(state.catalog?.projects ?? []);
-});
-
-phaseSelect.addEventListener("change", (event) => {
-  state.phase = event.target.value;
-  renderProjects(state.catalog?.projects ?? []);
-});
-
-loadCatalog().catch((error) => {
-  renderEmpty(`Catalog unavailable: ${error.message}`);
-});
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

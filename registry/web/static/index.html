@@ -1,44 +1,92 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Demo Cloud Registry</title>
-    <link rel="stylesheet" href="/static/app.css">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Temporal Demo Registry</title>
+    <link rel="stylesheet" href="/static/app.css" />
   </head>
-  <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Temporal demo platform</p>
-          <h1>Demo Cloud Registry</h1>
-          <p class="summary">Reviewed demos, owned routes, and lifecycle state from the registry operator.</p>
-        </div>
-        <section class="stats" aria-label="Catalog summary">
-          <div class="stat">
-            <span class="stat-value" data-project-count>0</span>
-            <span class="stat-label">Projects</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" data-live-status-count>0</span>
-            <span class="stat-label">Live Status</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" data-auth-count>0</span>
-            <span class="stat-label">Protected</span>
-          </div>
-        </section>
+  <body class="min-h-screen bg-background text-foreground antialiased">
+    <main class="mx-auto max-w-5xl px-4 py-10">
+      <header class="mb-8">
+        <p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+          Temporal demo platform
+        </p>
+        <h1 class="text-3xl font-bold tracking-tight mb-2">Demo Registry</h1>
+        <p class="text-sm text-muted-foreground max-w-2xl">
+          Canonical demos and platform catalog, served from the same source of truth.
+          Engineers contribute project configs; the registry operator publishes ops state.
+        </p>
       </header>
 
-      <section class="toolbar" aria-label="Catalog filters">
-        <input class="input" data-search type="search" placeholder="Search projects">
-        <select class="select" data-phase aria-label="Filter by phase">
-          <option value="all">All phases</option>
-        </select>
+      <nav class="flex gap-1 border-b border-border mb-6" data-tabs>
+        <a
+          href="/"
+          data-route="/"
+          class="tab-link px-4 py-2 text-sm font-medium border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors aria-[current=page]:border-primary aria-[current=page]:text-foreground"
+        >
+          Canonical Demos
+        </a>
+        <a
+          href="/catalog"
+          data-route="/catalog"
+          class="tab-link px-4 py-2 text-sm font-medium border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors aria-[current=page]:border-primary aria-[current=page]:text-foreground"
+        >
+          Catalog
+        </a>
+      </nav>
+
+      <section data-view="demos" hidden>
+        <div class="mb-4">
+          <input
+            type="search"
+            data-demos-search
+            placeholder="Search demos by name, description, tag, or SDK..."
+            class="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+        <div class="mb-6 space-y-3" data-demos-filters>
+          <div class="flex flex-wrap items-center gap-1.5" data-tags-row>
+            <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mr-2">Tags</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5" data-sdks-row>
+            <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mr-2">SDKs</span>
+          </div>
+          <button
+            type="button"
+            data-clear-demos-filters
+            class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground cursor-pointer"
+            hidden
+          >
+            Clear filters
+          </button>
+        </div>
+        <p class="text-xs text-muted-foreground mb-3" data-demos-count hidden></p>
+        <div class="space-y-4" data-demos-list>
+          <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+        </div>
       </section>
 
-      <section class="project-grid" data-project-grid aria-live="polite">
-        <div class="empty">Loading catalog.</div>
+      <section data-view="catalog" hidden>
+        <div class="mb-4 flex flex-col sm:flex-row gap-3">
+          <input
+            type="search"
+            data-catalog-search
+            placeholder="Search projects"
+            class="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <select
+            data-catalog-phase
+            aria-label="Filter by phase"
+            class="rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            <option value="all">All phases</option>
+          </select>
+        </div>
+        <p class="text-xs text-muted-foreground mb-3" data-catalog-count hidden></p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" data-catalog-list>
+          <div class="text-sm text-muted-foreground py-8 text-center col-span-full">Loading…</div>
+        </div>
       </section>
     </main>
     <script src="/static/app.js" defer></script>

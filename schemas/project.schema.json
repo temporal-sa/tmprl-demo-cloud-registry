@@ -402,6 +402,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "canonical": {
+          "type": "boolean",
+          "default": false
+        },
         "readiness": {
           "$ref": "#/$defs/registryReadiness"
         },
@@ -483,6 +487,41 @@
       "properties": {
         "speakerNotes": {
           "$ref": "#/$defs/registryLink"
+        },
+        "slideDeck": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "runbook": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "goldenPathRecording": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "externalRecording": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "additional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/registryAdditionalLink"
+          }
+        }
+      }
+    },
+    "registryAdditionalLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "audience"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "audience": {
+          "type": "string",
+          "enum": ["technical", "nonTechnical"]
         }
       }
     },

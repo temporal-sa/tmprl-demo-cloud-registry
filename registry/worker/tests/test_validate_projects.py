@@ -553,3 +553,139 @@ def test_schema_allows_temporal_region_omitted():
     )
 
     assert errors == []
+
+
+def test_schema_accepts_registry_canonical_flag():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "canonical": True,
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_rejects_non_boolean_registry_canonical():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "canonical": "yes",
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "canonical" in error.message for error in errors
+    ), [error.message for error in errors]
+
+
+def test_schema_accepts_named_registry_link_slots():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "speakerNotes": {"url": "https://example.com/notes"},
+            "slideDeck": {"url": "https://example.com/slides"},
+            "runbook": {"url": "https://example.com/runbook"},
+            "goldenPathRecording": {"url": "https://example.com/recording"},
+            "externalRecording": {"url": "https://example.com/external"},
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_accepts_registry_additional_links():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "additional": [
+                {
+                    "label": "Architecture diagram",
+                    "url": "https://example.com/arch.png",
+                    "audience": "technical",
+                },
+                {
+                    "label": "FAQ",
+                    "url": "https://example.com/faq",
+                    "audience": "nonTechnical",
+                },
+            ],
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_rejects_unknown_registry_link_slot():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {"randomLink": {"url": "https://example.com"}},
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "randomLink" in error.message for error in errors
+    ), [error.message for error in errors]
+
+
+def test_schema_rejects_invalid_additional_link_audience():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "additional": [
+                {
+                    "label": "Item",
+                    "url": "https://example.com",
+                    "audience": "internal",
+                }
+            ],
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "audience" in error.message or "internal" in error.message
+        for error in errors
+    ), [error.message for error in errors]
