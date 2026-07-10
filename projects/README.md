@@ -268,6 +268,15 @@ Rules:
 - Switching between `apiKey` and `mtls` is destructive because Temporal Cloud
   namespaces cannot enable both at once. Finalize the project first so the
   existing namespace is deleted, then deploy it again with the new auth mode.
+- Projects may pin the Temporal Cloud namespace region with `spec.temporal.region`
+  in Temporal's provider notation (`aws-*`, `gcp-*`, `azure-*`, e.g.
+  `aws-ca-central-1`, `gcp-us-central1`, `azure-centralus`). When omitted, the
+  namespace uses the operator-wide default region, except that projects with
+  serverless (AWS Lambda) workers default to an AWS region so Temporal's Lambda
+  compute provider can reach the worker. Changing the region of an existing
+  namespace is destructive: because a Temporal Cloud namespace's region is
+  immutable, the operator tears the namespace down (deleting its data) and
+  recreates it in the new region.
 - Projects can declare Temporal Cloud namespace search attributes with
   `spec.temporal.searchAttributes`. Each attribute defaults to `keyword` when
   `type` is omitted; supported types are `text`, `keyword`, `int`, `double`,

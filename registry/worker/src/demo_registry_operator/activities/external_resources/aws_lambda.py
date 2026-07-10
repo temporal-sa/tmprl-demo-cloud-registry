@@ -234,10 +234,13 @@ def ensure_image_lambda(
         configuration = existing.get("Configuration", {})
         code = existing.get("Code", {})
         if lambda_configuration_needs_update(configuration, request, environment):
+            # Architecture is immutable for an existing function and is not a
+            # valid update_function_configuration parameter (it is set at
+            # create_function and otherwise follows the image via
+            # update_function_code); passing it here fails parameter validation.
             lambda_client.update_function_configuration(
                 FunctionName=request.function_name,
                 Role=request.execution_role_arn,
-                Architectures=[request.architecture],
                 MemorySize=request.memory_mb,
                 Timeout=request.timeout_seconds,
                 Environment={"Variables": environment},
@@ -293,12 +296,13 @@ def lambda_configuration_needs_update(
     request: models.EnsureLambdaFunctionRequest,
     environment: dict[str, str],
 ) -> bool:
+    # Architecture is intentionally excluded: it cannot be changed via
+    # update_function_configuration, so it must not drive a configuration update.
     return any(
         (
             configuration.get("Role") != request.execution_role_arn,
             configuration.get("Timeout") != request.timeout_seconds,
             configuration.get("MemorySize") != request.memory_mb,
-            configuration.get("Architectures") != [request.architecture],
             configuration.get("Description") != lambda_description(request),
             configuration.get("Environment", {}).get("Variables", {}) != environment,
         )

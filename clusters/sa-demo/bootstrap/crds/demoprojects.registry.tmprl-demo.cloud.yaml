@@ -116,6 +116,12 @@ spec:
                 temporal:
                   type: object
                   properties:
+                    region:
+                      type: string
+                      pattern: "^(aws|gcp|azure)-[a-z0-9-]+$"
+                      x-kubernetes-validations:
+                        - rule: "self.startsWith('aws-') || self.startsWith('gcp-') || self.startsWith('azure-')"
+                          message: "spec.temporal.region must use Temporal Cloud provider notation (aws-*, gcp-*, azure-*), e.g. aws-ca-central-1, gcp-us-central1, azure-centralus"
                     auth:
                       type: object
                       properties:

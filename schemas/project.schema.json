@@ -670,6 +670,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "region": {
+          "$ref": "#/$defs/temporalRegion"
+        },
         "auth": {
           "$ref": "#/$defs/temporalAuth"
         },
@@ -683,6 +686,12 @@
           }
         }
       }
+    },
+    "temporalRegion": {
+      "type": "string",
+      "pattern": "^(aws|gcp|azure)-[a-z0-9-]+$",
+      "minLength": 5,
+      "maxLength": 63
     },
     "temporalAuth": {
       "type": "object",

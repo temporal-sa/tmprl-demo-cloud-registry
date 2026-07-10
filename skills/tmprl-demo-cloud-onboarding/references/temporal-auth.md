@@ -30,6 +30,24 @@ Switching between `apiKey` and `mtls` is destructive for the Temporal Cloud
 namespace because the namespace cannot run both auth modes at once. Finalize and
 recreate the project when changing modes.
 
+## Namespace Region
+
+Pin the Temporal Cloud namespace region with `spec.temporal.region` in Temporal's
+provider notation (`aws-*`, `gcp-*`, `azure-*`):
+
+```yaml
+spec:
+  temporal:
+    region: aws-ca-central-1
+```
+
+When omitted, the namespace uses the operator-wide default region, except that
+projects with serverless (AWS Lambda) workers default to an AWS region
+(`aws-ca-central-1`) so Temporal's Lambda compute provider can reach the worker.
+Like an auth-mode switch, changing the region of an existing namespace is
+destructive: a Temporal Cloud namespace's region is immutable, so the operator
+tears the namespace down (deleting its data) and recreates it in the new region.
+
 The operator creates the project runtime secret at:
 
 ```text

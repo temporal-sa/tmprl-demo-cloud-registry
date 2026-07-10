@@ -299,6 +299,15 @@ The Lambda execution role is scoped to project secrets under
 `tmprl-dem-cld/<project>/*` and the runtime secret paths the operator knows
 about. Do not design demos that need cross-project secrets or broad AWS access.
 
+## Namespace Region
+
+Serverless (AWS Lambda) worker projects default their Temporal Cloud namespace to
+an AWS region (`aws-ca-central-1`) rather than the operator-wide default, so
+Temporal's Lambda compute provider can reach the worker. Override per project
+with `spec.temporal.region` (Temporal provider notation, e.g. `aws-ca-central-1`).
+Changing the region of an existing namespace is destructive — the operator
+destroys and recreates the namespace, since a namespace's region is immutable.
+
 ## Backend/API Access From Lambda
 
 Lambda workers do not get Kubernetes service DNS. If a worker needs to call a

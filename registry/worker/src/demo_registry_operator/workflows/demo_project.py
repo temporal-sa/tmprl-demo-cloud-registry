@@ -78,12 +78,18 @@ class TemporalCloudReconcileState:
     mirror: external_resources.TemporalCloudStatusResult | None = None
     ca_promoted: bool = False
     promoted: bool = False
+    # Region-drift bookkeeping: when the namespace was destroyed and recreated in
+    # a new region this reconcile, report it in status so the migration (and data
+    # loss) is visible rather than looking like a plain first-time create.
+    desired_region: str | None = None
+    previous_region: str | None = None
+    region_recreated: bool = False
 
     def merged_status(self) -> dict[str, Any]:
         if self.namespace is None:
             return {}
         credential = self.promote if self.promote is not None else self.stage
-        return merge_temporal_cloud_status(
+        merged = merge_temporal_cloud_status(
             self.namespace.status,
             ca_status=self.ca.status if self.ca else None,
             mtls_config_status=(
@@ -96,6 +102,13 @@ class TemporalCloudReconcileState:
             credential_status=credential.status if credential else None,
             mirror_status=self.mirror.status if self.mirror else None,
         )
+        if self.region_recreated:
+            merged["regionMigration"] = {
+                "recreated": True,
+                "fromRegion": self.previous_region,
+                "toRegion": self.desired_region,
+            }
+        return merged
 
 
 @dataclass
@@ -1015,6 +1028,22 @@ class DemoProjectWorkflow:
             )
             namespace = state.namespace
             assert namespace is not None
+            if namespace.phase == "RegionDrift":
+                # The namespace exists in a different region than desired. Region
+                # is immutable, so tear it down and recreate it in the new region
+                # (destroys the namespace's data — driven by the region change).
+                await self._teardown_temporal_cloud_namespace_on_region_drift(
+                    external_plan,
+                    state,
+                    candidate_secret_token,
+                )
+                await self._create_or_verify_temporal_cloud_namespace(
+                    external_plan,
+                    state,
+                    candidate_secret_token,
+                )
+                namespace = state.namespace
+                assert namespace is not None
             if namespace.phase != "Ready":
                 await self._delete_mtls_ca_candidate_secret_if_needed(
                     external_plan,
@@ -1104,6 +1133,73 @@ class DemoProjectWorkflow:
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )
+
+    async def _teardown_temporal_cloud_namespace_on_region_drift(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+        candidate_secret_token: str,
+    ) -> None:
+        namespace = state.namespace
+        assert namespace is not None
+        state.previous_region = namespace.region
+        state.desired_region = namespace.status.get("desiredRegion")
+        # Destroy the drifted namespace with the same steps (and order) as project
+        # finalize. The namespace name is derived from the project and is unchanged
+        # by a region change, so these target exactly the old namespace; each step
+        # is idempotent and tolerates "already gone" on retry/replay.
+        temporal_delete_request = external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
+            checked_at=external_plan.checked_at,
+            project=external_plan.temporal_project,
+            candidate_secret_token=candidate_secret_token,
+        )
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_api_key,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_service_account,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        await workflow.execute_activity(
+            external_resources.disable_temporal_cloud_namespace_delete_protection,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_namespace,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_runtime_secret,
+            temporal_delete_request,
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        await workflow.execute_activity(
+            external_resources.delete_temporal_cloud_mtls_ca_secret,
+            external_resources.DeleteTemporalCloudMtlsCaSecretRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+        # The old namespace and its credentials are gone; the caller recreates the
+        # namespace in the new region and the reconcile continues, minting fresh
+        # runtime credentials.
+        state.region_recreated = True
 
     async def _delete_mtls_ca_candidate_secret_if_needed(
         self,

@@ -4,8 +4,10 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+import pytest
 from temporalio.api.compute.v1 import config_pb2
 from temporalio.api.deployment.v1 import message_pb2 as deployment_pb2
+from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator import errors
@@ -15,6 +17,9 @@ from demo_registry_operator.activities.external_resources.aws_lambda import (
     SECRET_FILE_MANIFEST_ENV,
     TEMPORAL_RUNTIME_SECRET_ARN_ENV,
     TEMPORAL_RUNTIME_SECRET_ID_ENV,
+    ensure_image_lambda,
+    lambda_configuration_needs_update,
+    lambda_description,
     lambda_environment,
 )
 from demo_registry_operator.activities.external_resources.iam import (
@@ -29,6 +34,7 @@ from demo_registry_operator.activities.external_resources.models import (
     EnsureLambdaFunctionRequest,
     LambdaEnvironmentVariable,
     UpsertServerlessWorkerDeploymentVersionRequest,
+    ValidateServerlessWorkerComputeConfigRequest,
 )
 from demo_registry_operator.activities.external_resources.serverless_names import (
     lambda_execution_role_name,
@@ -36,11 +42,15 @@ from demo_registry_operator.activities.external_resources.serverless_names impor
     temporal_invoke_external_id,
     temporal_lambda_invoke_role_name,
 )
+from demo_registry_operator.activities.external_resources import serverless_worker
 from demo_registry_operator.activities.external_resources.serverless_worker import (
     SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
     aws_lambda_provider_details_payload,
+    compute_provider_unreachable,
     create_or_update_worker_deployment_version,
     temporal_service_application_error,
+    upsert_serverless_worker_deployment_version,
+    validate_serverless_worker_compute_config,
 )
 from demo_registry_operator.workflows import demo_project_serverless_lambda
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
@@ -692,3 +702,243 @@ def test_serverless_lambda_compensation_deletes_first_time_resources(monkeypatch
     assert request.checked_at == "2026-06-21T00:00:00+00:00"
     assert request.demo_project is demo_project
     assert kwargs["retry_policy"] == demo_project_serverless_lambda.COMMON_RETRY_POLICY
+
+
+# --- compute-provider AssumeRole propagation retryability --------------------
+
+
+COMPUTE_PROVIDER_DENIED_MESSAGE = (
+    "default: cannot connect to the compute provider: failed to assume role "
+    "arn:aws:iam::429214323166:role/x-worker-temporal: operation error STS: "
+    "AssumeRole, https response error StatusCode: 403, api error AccessDenied: "
+    "User: arn:aws:sts::819232936619:assumed-role/wci-lambda-invoke/wci-intermediary "
+    "is not authorized to perform: sts:AssumeRole"
+)
+
+
+def _propagation_upsert_request():
+    return UpsertServerlessWorkerDeploymentVersionRequest(
+        project="operator-canary-lambda",
+        component="worker",
+        temporal_secret_path="tmprl-dem-cld/operator-canary-lambda/temporal",
+        deployment_name="money-transfer",
+        build_id="git-4f38b74a1f16-key-6849b6ac",
+        function_version_arn="arn:aws:lambda:ca-central-1:429214323166:function:worker:3",
+        invoke_role_arn="arn:aws:iam::429214323166:role/x-worker-temporal",
+        invoke_role_external_id="tdc-external",
+    )
+
+
+def _propagation_validate_request():
+    return ValidateServerlessWorkerComputeConfigRequest(
+        project="operator-canary-lambda",
+        component="worker",
+        temporal_secret_path="tmprl-dem-cld/operator-canary-lambda/temporal",
+        deployment_name="money-transfer",
+        build_id="git-4f38b74a1f16-key-6849b6ac",
+        function_version_arn="arn:aws:lambda:ca-central-1:429214323166:function:worker:3",
+        invoke_role_arn="arn:aws:iam::429214323166:role/x-worker-temporal",
+        invoke_role_external_id="tdc-external",
+    )
+
+
+async def _fake_connect(_path):
+    return object(), "money-transfer.acct1"
+
+
+def test_compute_provider_unreachable_matches_assume_role_failure():
+    denied = RPCError(
+        COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+    )
+    unrelated = RPCError("compute config invalid", RPCStatusCode.INVALID_ARGUMENT, b"")
+
+    assert compute_provider_unreachable(denied) is True
+    assert compute_provider_unreachable(unrelated) is False
+
+
+def test_upsert_retries_when_compute_provider_unreachable(monkeypatch):
+    # A freshly-created invoke role whose trust policy has not yet propagated
+    # surfaces as AssumeRole AccessDenied. It must be retryable (transient), not
+    # a permanent ProviderConfigurationError, even though the RPC status would
+    # otherwise map to non-retryable.
+    async def fake_create_or_update(client, **kwargs):
+        raise RPCError(
+            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+        )
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "create_or_update_worker_deployment_version",
+        fake_create_or_update,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            upsert_serverless_worker_deployment_version(_propagation_upsert_request())
+        )
+
+    assert excinfo.value.type == errors.PROVIDER_TRANSIENT_ERROR
+    assert excinfo.value.non_retryable is False
+
+
+def test_upsert_stays_nonretryable_on_real_config_error(monkeypatch):
+    async def fake_create_or_update(client, **kwargs):
+        raise RPCError("compute config invalid", RPCStatusCode.INVALID_ARGUMENT, b"")
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "create_or_update_worker_deployment_version",
+        fake_create_or_update,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            upsert_serverless_worker_deployment_version(_propagation_upsert_request())
+        )
+
+    assert excinfo.value.non_retryable is True
+    assert excinfo.value.type == errors.PROVIDER_CONFIGURATION_ERROR
+
+
+def test_validate_retries_when_compute_provider_unreachable(monkeypatch):
+    async def fake_validate(client, **kwargs):
+        raise RPCError(
+            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+        )
+
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        _fake_connect,
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "validate_worker_deployment_compute_config",
+        fake_validate,
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(
+            validate_serverless_worker_compute_config(_propagation_validate_request())
+        )
+
+    assert excinfo.value.type == errors.PROVIDER_TRANSIENT_ERROR
+    assert excinfo.value.non_retryable is False
+
+
+# --- Lambda function update path (no Architectures on update) -----------------
+
+
+class _FakeWaiter:
+    def wait(self, **kwargs):
+        return None
+
+
+class _FakePaginator:
+    def __init__(self, pages):
+        self._pages = pages
+
+    def paginate(self, **kwargs):
+        return self._pages
+
+
+class _FakeLambdaClient:
+    def __init__(self, existing, latest, versions):
+        self._existing = existing
+        self._latest = latest
+        self._versions = versions
+        self.update_config_calls = []
+        self.update_code_calls = []
+        self.publish_calls = []
+
+    def get_function(self, FunctionName):
+        return self._existing
+
+    def update_function_configuration(self, **kwargs):
+        self.update_config_calls.append(kwargs)
+
+    def update_function_code(self, **kwargs):
+        self.update_code_calls.append(kwargs)
+
+    def get_waiter(self, name):
+        return _FakeWaiter()
+
+    def get_function_configuration(self, FunctionName):
+        return self._latest
+
+    def get_paginator(self, name):
+        return _FakePaginator([{"Versions": self._versions}])
+
+    def publish_version(self, **kwargs):
+        self.publish_calls.append(kwargs)
+        return {"FunctionArn": "arn:aws:lambda:us-west-1:123456789012:function:x:99", "Version": "99"}
+
+
+def test_lambda_configuration_needs_update_ignores_architecture():
+    request = lambda_request()
+    base = {
+        "Role": request.execution_role_arn,
+        "Timeout": request.timeout_seconds,
+        "MemorySize": request.memory_mb,
+        "Description": lambda_description(request),
+        "Environment": {"Variables": {"APP_MODE": "demo"}},
+    }
+    env = {"APP_MODE": "demo"}
+
+    # Architecture differing must NOT trigger a configuration update.
+    drift_arch = {**base, "Architectures": ["arm64"]}
+    assert lambda_configuration_needs_update(drift_arch, request, env) is False
+
+    # A real, updatable attribute still triggers.
+    drift_mem = {**base, "Architectures": ["x86_64"], "MemorySize": request.memory_mb + 128}
+    assert lambda_configuration_needs_update(drift_mem, request, env) is True
+
+
+def test_ensure_image_lambda_update_omits_architectures():
+    request = lambda_request()
+    env = {"APP_MODE": "demo"}
+    description = lambda_description(request)
+    # Existing function: same image, but Timeout drifts so the config-update path
+    # fires (this is the path that previously crashed on the Architectures param).
+    existing = {
+        "Configuration": {
+            "Role": request.execution_role_arn,
+            "Timeout": request.timeout_seconds - 60,
+            "MemorySize": request.memory_mb,
+            "Architectures": ["x86_64"],
+            "Description": description,
+            "Environment": {"Variables": env},
+        },
+        "Code": {"ImageUri": request.image_uri},
+    }
+    latest = {
+        "FunctionArn": "arn:aws:lambda:us-west-1:123456789012:function:worker",
+        "CodeSha256": "sha",
+        "Role": request.execution_role_arn,
+        "Timeout": request.timeout_seconds,
+        "MemorySize": request.memory_mb,
+        "Description": description,
+        "Architectures": ["x86_64"],
+        "Environment": {"Variables": env},
+    }
+    published = {**latest, "Version": "1", "FunctionArn": f"{latest['FunctionArn']}:1"}
+    client = _FakeLambdaClient(existing, latest, [published])
+
+    result = ensure_image_lambda(client, request, env)
+
+    assert len(client.update_config_calls) == 1
+    assert "Architectures" not in client.update_config_calls[0]
+    assert client.update_code_calls == []  # same image -> no code update
+    assert client.publish_calls == []  # matching published version reused
+    assert result["action"] == "updated"
+    assert result["functionVersionArn"] == f"{latest['FunctionArn']}:1"

@@ -1,0 +1,57 @@
+# Serverless Workers demo (temporal-serverless-no-roads): a Go web UI/API on
+# Kubernetes that starts DemoWorkflows, plus a Temporal worker running on AWS
+# Lambda. Because the project has a serverless (AWS Lambda) worker, the operator
+# defaults its Temporal Cloud namespace region to the AWS region
+# (aws-ca-central-1) so Temporal's Lambda compute provider can reach the worker.
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: no-roads-serverless
+spec:
+  source:
+    repo: https://github.com/temporal-sa/temporal-serverless-no-roads
+  temporal:
+    auth:
+      mode: apiKey
+  builds:
+    app:
+      context: .
+      dockerfile: demo-app/Dockerfile
+    worker:
+      context: .
+      dockerfile: lambda-worker/Dockerfile
+  components:
+    # Web UI + API (Go HTTP server). Serves the audience UI at / and the
+    # /api/submit, /api/seed, /api/metrics endpoints on the same port, and needs
+    # a Temporal client to start workflows and read metrics.
+    app:
+      build: app
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+      temporalAccess: true
+    # Temporal worker on AWS Lambda. The app code pins the Worker Deployment to
+    # serverless-webinar / 1.0.0, so the platform manages that exact deployment
+    # version (fixed buildId) rather than a generated rollout build ID.
+    worker:
+      build: worker
+      serverless:
+        provider: aws-lambda
+        packageType: image
+        architecture: x86_64
+        memoryMb: 512
+        timeoutSeconds: 600
+        workerDeployment:
+          deploymentName: serverless-webinar
+          buildId: "1.0.0"
+  ingress:
+    subdomain: no-roads-serverless
+    temporalAuthRequired: true
+    routes:
+      - pathPrefix: /
+        component: app
+        port: http
+  smokeCheck:
+    expectedStatus: 200
+    path: /

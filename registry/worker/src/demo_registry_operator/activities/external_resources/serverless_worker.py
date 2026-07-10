@@ -83,7 +83,7 @@ async def upsert_serverless_worker_deployment_version(
             identity=identity,
         )
     except RPCError as error:
-        if error.status == RPCStatusCode.NOT_FOUND:
+        if error.status == RPCStatusCode.NOT_FOUND or compute_provider_unreachable(error):
             raise errors.retryable_provider_error(
                 f"{operation} failed: {error}"
             ) from error
@@ -122,6 +122,10 @@ async def validate_serverless_worker_compute_config(
     )
     scaling_group = compute_scaling_group(request)
 
+    operation = (
+        "Validate Temporal Serverless Worker Deployment Version "
+        f"{request.deployment_name}.{request.build_id}"
+    )
     try:
         await validate_worker_deployment_compute_config(
             client,
@@ -131,12 +135,13 @@ async def validate_serverless_worker_compute_config(
             identity=identity,
         )
     except RPCError as error:
+        if compute_provider_unreachable(error):
+            raise errors.retryable_provider_error(
+                f"{operation} failed: {error}"
+            ) from error
         raise temporal_service_application_error(
             error,
-            operation=(
-                "Validate Temporal Serverless Worker Deployment Version "
-                f"{request.deployment_name}.{request.build_id}"
-            ),
+            operation=operation,
         ) from error
 
     return models.ValidateServerlessWorkerComputeConfigResult(
@@ -513,6 +518,16 @@ def task_queue_type(value: int) -> str:
         2: "activity",
         3: "nexus",
     }.get(value, "unspecified")
+
+
+def compute_provider_unreachable(error: RPCError) -> bool:
+    # A freshly-created cross-account invoke role is not immediately assumable
+    # while its IAM trust policy propagates, so Temporal's compute provider can
+    # fail the AssumeRole (e.g. STS AccessDenied) on the first attempt. Temporal
+    # surfaces this as a "cannot connect to the compute provider" error. Treat it
+    # as transient so the activity retries until propagation completes, rather
+    # than failing the reconcile as a permanent configuration error.
+    return "cannot connect to the compute provider" in str(error)
 
 
 def temporal_service_application_error(
