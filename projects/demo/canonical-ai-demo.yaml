@@ -9,6 +9,7 @@ spec:
       The canonical 100-level agentic demo. A single-agent ReAct loop on Temporal
       over a music store: LLM + tools as activities, human-in-the-loop
       purchase approval via signal, crash-recoverable, replay-safe.
+    canonical: true
     tags: [AI, Agents, Single-Agent]
     temporalSdks: [Python]
   source:
