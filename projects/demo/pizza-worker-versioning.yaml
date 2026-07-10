@@ -13,6 +13,7 @@ spec:
       - Workflows
     temporalSdks:
       - Go
+    canonical: true
 
   source:
     repo: https://github.com/temporal-sa/temporal-versioning-demo

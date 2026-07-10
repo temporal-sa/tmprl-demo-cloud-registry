@@ -1,0 +1,13 @@
+{
+  "name": "registry-web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tailwind CSS build for the demo cloud registry web frontend.",
+  "scripts": {
+    "build": "tailwindcss -i src/styles.css -o static/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0",
+    "tailwindcss": "^4.0.0"
+  }
+}

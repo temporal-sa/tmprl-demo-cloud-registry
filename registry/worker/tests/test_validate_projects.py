@@ -516,3 +516,176 @@ def test_serverless_lambda_rejects_custom_mtls_file_paths():
             "materialized under /tmp"
         ),
     ]
+
+
+def test_schema_accepts_temporal_region():
+    for region in ("aws-ca-central-1", "gcp-us-central1", "azure-centralus"):
+        spec = base_spec()
+        spec["temporal"] = {"region": region}
+        document = project_document(spec)
+
+        errors = validate_projects.validate_document_schema(
+            validate_projects.load_default_validators(),
+            document,
+        )
+
+        assert errors == [], f"region {region!r} should be accepted: {errors}"
+
+
+def test_schema_rejects_invalid_temporal_region():
+    spec = base_spec()
+    spec["temporal"] = {"region": "us-central1"}
+    document = project_document(spec)
+    validator = validate_projects.load_default_validators()["DemoProject"]
+
+    errors = validate_projects.validate_schema(validator, document)
+
+    assert len(errors) == 1
+    assert "us-central1" in errors[0].message
+
+
+def test_schema_allows_temporal_region_omitted():
+    document = project_document(base_spec())
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_accepts_registry_canonical_flag():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "canonical": True,
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_rejects_non_boolean_registry_canonical():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "canonical": "yes",
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "canonical" in error.message for error in errors
+    ), [error.message for error in errors]
+
+
+def test_schema_accepts_named_registry_link_slots():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "speakerNotes": {"url": "https://example.com/notes"},
+            "slideDeck": {"url": "https://example.com/slides"},
+            "runbook": {"url": "https://example.com/runbook"},
+            "goldenPathRecording": {"url": "https://example.com/recording"},
+            "externalRecording": {"url": "https://example.com/external"},
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_accepts_registry_additional_links():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "additional": [
+                {
+                    "label": "Architecture diagram",
+                    "url": "https://example.com/arch.png",
+                    "audience": "technical",
+                },
+                {
+                    "label": "FAQ",
+                    "url": "https://example.com/faq",
+                    "audience": "nonTechnical",
+                },
+            ],
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_schema_rejects_unknown_registry_link_slot():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {"randomLink": {"url": "https://example.com"}},
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "randomLink" in error.message for error in errors
+    ), [error.message for error in errors]
+
+
+def test_schema_rejects_invalid_additional_link_audience():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "links": {
+            "additional": [
+                {
+                    "label": "Item",
+                    "url": "https://example.com",
+                    "audience": "internal",
+                }
+            ],
+        },
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "audience" in error.message or "internal" in error.message
+        for error in errors
+    ), [error.message for error in errors]

@@ -18,6 +18,10 @@ __pycache__/
 venv/
 node_modules/
 
+# local dev data
+registry/web/data/
+registry/web/status/
+
 # local secrets / environment (never commit)
 .env
 .env.*
@@ -26,3 +30,6 @@ node_modules/
 # generated build output
 dist/
 build/
+
+# tailwind-compiled css (built by the registry/web Dockerfile)
+registry/web/static/app.css

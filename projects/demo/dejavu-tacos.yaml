@@ -17,6 +17,7 @@ spec:
       - TypeScript
       - Java
       - .NET
+    canonical: true
 
   source:
     repo: https://github.com/temporal-sa/demo-dejavu-tacos
