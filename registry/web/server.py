@@ -54,7 +54,15 @@ class GoogleIdentity:
 
 
 def configured_path(env_name: str, default: Path) -> Path:
-    return Path(os.environ.get(env_name, str(default))).resolve()
+    # Do NOT resolve() symlinks here. REGISTRY_DATA_PATH / CATALOG_STATUS_DIR are
+    # Kubernetes ConfigMap volume mounts, which update via an atomic symlink swap
+    # (registry.json -> ..data -> ..<timestamp>/). resolve() would bake in the
+    # timestamped realpath at startup; when the operator republishes the catalog,
+    # Kubernetes swaps ..data to a new dir and deletes the old one, leaving the
+    # resolved path pointing at a deleted directory — so the server would serve
+    # the empty fallback forever. abspath() normalizes without following symlinks,
+    # so each open() re-follows the stable path to the current target.
+    return Path(os.path.abspath(os.environ.get(env_name, str(default))))
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
