@@ -10,7 +10,7 @@ spec:
       over a music store: LLM + tools as activities, human-in-the-loop
       purchase approval via signal, crash-recoverable, replay-safe.
     canonical: true
-    registryLinks:
+    links:
       speakerNotes:
         url: https://docs.google.com/document/d/1sPlLnnrNiIiJCAI4jE5NCVRCA4QuOnApOmePm55xapM/edit?tab=t.0
       slideDeck:
