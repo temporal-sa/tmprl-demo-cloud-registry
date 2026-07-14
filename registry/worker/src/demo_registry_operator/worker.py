@@ -121,6 +121,14 @@ from demo_registry_operator.activities.reconcile import (
     wait_for_candidate_readiness,
     wait_for_worker_deployment_rollouts,
 )
+from demo_registry_operator.activities.crashable_workspace import (
+    apply_workspace_resource,
+    build_workspace_plan,
+    crash_workspace_pods,
+    delete_workspace_namespace,
+    resolve_source_images,
+    wait_workspace_ready,
+)
 from demo_registry_operator.activities.revision import (
     adopt_active_revision_resources,
     delete_revision,
@@ -145,6 +153,9 @@ from demo_registry_operator.workflows.demo_project_kubernetes_runtime import (
 from demo_registry_operator.workflows.demo_project_serverless_lambda import (
     DemoProjectServerlessLambdaWorkflow,
 )
+from demo_registry_operator.workflows.crashable_workspace import (
+    CrashableWorkspaceWorkflow,
+)
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
 from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
@@ -165,13 +176,16 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.builds.planning",
     "demo_registry_operator.activities.builds.status",
     "demo_registry_operator.activities.canary",
+    "demo_registry_operator.activities.crashable_workspace",
     "demo_registry_operator.activities.external_resources",
     "demo_registry_operator.activities.external_resources.serverless_names",
     "demo_registry_operator.activities.force_reconcile",
     "demo_registry_operator.activities.instruqt",
     "demo_registry_operator.activities.reconcile",
+    "demo_registry_operator.derive",
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
+    "demo_registry_operator.workflows.crashable_workspace_messages",
     "demo_registry_operator.workflows.demo_project_artifact_build",
     "demo_registry_operator.workflows.demo_project_kubernetes_runtime",
     "demo_registry_operator.workflows.demo_project_serverless_lambda",
@@ -266,6 +280,7 @@ async def main() -> None:
                     DemoRolloutWorkflow,
                     RegistryOperatorCanaryWorkflow,
                     RegistryOperatorAuthCanaryWorkflow,
+                    CrashableWorkspaceWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -361,6 +376,12 @@ async def main() -> None:
                     record_catalog_project_status,
                     wait_for_candidate_readiness,
                     wait_for_worker_deployment_rollouts,
+                    resolve_source_images,
+                    build_workspace_plan,
+                    apply_workspace_resource,
+                    wait_workspace_ready,
+                    crash_workspace_pods,
+                    delete_workspace_namespace,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,

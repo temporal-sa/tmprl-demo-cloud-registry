@@ -3593,9 +3593,11 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
     source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
     name = project_name(demo_project)
     host = project_host(demo_project)
+    crashable = registry.get("crashable") if isinstance(registry.get("crashable"), dict) else {}
     return {
         "name": name,
         "title": registry.get("title") or humanized_title(name),
+        "crashable": {"enabled": bool(crashable.get("enabled"))},
         "summary": registry.get("summary", ""),
         "host": host,
         "appUrl": f"https://{host}",
