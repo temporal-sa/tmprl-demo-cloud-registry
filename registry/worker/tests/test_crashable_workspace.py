@@ -117,15 +117,15 @@ def test_catalog_entry_marks_crashable_when_enabled_with_task_queue_env():
     assert entry["crashable"] == {"enabled": True}
 
 
-def test_catalog_entry_crashable_reflects_enabled_flag_only():
-    # Per the fixed contract the catalog flag is bool(spec.registry.crashable.enabled)
-    # and does not depend on taskQueueEnv (task-queue isolation is enforced at
-    # render time, not gated here).
+def test_catalog_entry_crashable_requires_task_queue_env():
+    # Opt-in isolation only: the button (catalog flag) appears only when the demo
+    # declares BOTH enabled AND the task-queue env var used to isolate the clone,
+    # matching the workflow's provision gate so a visible button never fails.
     demo = _crashable_demo()
     demo["spec"]["registry"]["crashable"] = {"enabled": True}  # no taskQueueEnv
-    assert catalog_entry(demo)["crashable"] == {"enabled": True}
+    assert catalog_entry(demo)["crashable"] == {"enabled": False}
 
-    demo["spec"]["registry"]["crashable"] = {"enabled": False}
+    demo["spec"]["registry"]["crashable"] = {"enabled": False, "taskQueueEnv": "TQ"}
     assert catalog_entry(demo)["crashable"] == {"enabled": False}
 
 

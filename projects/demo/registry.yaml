@@ -52,9 +52,20 @@ spec:
   components:
     web:
       build: web
+      # The catalog UI drives the CrashableWorkspaceWorkflow via an untyped
+      # Temporal client. The platform Temporal connection
+      # (TEMPORAL_ADDRESS/NAMESPACE/API_KEY/TLS) is injected via the operator's
+      # own registry-worker-temporal secret — the catalog web component is
+      # special-cased for that in resources.env_from_refs (alongside shared-auth)
+      # so the web pod talks to the same namespace + task queue where the
+      # operator runs the crashable-workspace workflows. We deliberately do NOT
+      # use temporalAccess here: that would mount a per-project temporal-credentials
+      # secret for a namespace this project doesn't provision.
       env:
         - name: AUTH_MODE
           value: google
+        - name: DEMO_REGISTRY_TASK_QUEUE
+          value: registry-management
       # single unnamed port -> name "http"; servicePort 80 -> public catch-all
       ports:
         - containerPort: 8080

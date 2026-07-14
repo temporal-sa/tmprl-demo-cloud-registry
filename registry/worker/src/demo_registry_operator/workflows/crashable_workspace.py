@@ -183,6 +183,29 @@ class CrashableWorkspaceWorkflow:
             if remaining <= timedelta(0):
                 return
 
+            # Bound history growth for a long-lived workspace (repeated extends
+            # and/or crashes — extends have no cap) by continuing-as-new when the
+            # server suggests it, carrying enough state to resume the TTL loop
+            # without re-provisioning. Only when settled (no pending crash/delete).
+            if (
+                self._status.phase == "Active"
+                and not self._crash_requested
+                and not self._delete_requested
+                and workflow.info().is_continue_as_new_suggested()
+            ):
+                workflow.continue_as_new(
+                    EnsureWorkspaceRequest(
+                        demo_name=self._status.demo,
+                        owner_email=request.owner_email,
+                        ttl_seconds=request.ttl_seconds,
+                        carried_already_provisioned=True,
+                        carried_expires_at=self._status.expires_at,
+                        carried_created_at=self._status.created_at,
+                        carried_task_queue=self._status.task_queue,
+                        carried_workspace_id=self._workspace_id,
+                    )
+                )
+
             deadline_snapshot = self._deadline_version
             try:
                 await workflow.wait_condition(
@@ -210,19 +233,7 @@ class CrashableWorkspaceWorkflow:
                 )
                 self._status.phase = "Active"
                 self._status.step = "Ready"
-                if workflow.info().is_continue_as_new_suggested():
-                    workflow.continue_as_new(
-                        EnsureWorkspaceRequest(
-                            demo_name=self._status.demo,
-                            owner_email=request.owner_email,
-                            ttl_seconds=request.ttl_seconds,
-                            carried_already_provisioned=True,
-                            carried_expires_at=self._status.expires_at,
-                            carried_created_at=self._status.created_at,
-                            carried_task_queue=self._status.task_queue,
-                            carried_workspace_id=self._workspace_id,
-                        )
-                    )
+                # Loops back to the top, where the continue-as-new check runs.
             # Otherwise the deadline changed (extend): recompute and wait again.
 
     @workflow.update
