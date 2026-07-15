@@ -11,7 +11,9 @@ provider "aws" {
     tags = {
       ManagedBy = "opentofu"
       Project   = "tmprl-demo-cloud"
-      Repo      = "cluster-gitops-config"
+      # The local checkout dir is cluster-gitops-config, but the GitHub repo (and
+      # the CI role's OIDC trust) is temporal-sa/tmprl-demo-cloud-registry.
+      Repo = "temporal-sa/tmprl-demo-cloud-registry"
     }
   }
 }
