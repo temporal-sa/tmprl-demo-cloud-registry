@@ -66,6 +66,10 @@ spec:
         - name: http
           containerPort: 8000
           servicePort: 8000
+      env:
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
 
     temporal-worker:
       build: temporal
@@ -118,6 +122,9 @@ spec:
       env:
         - name: LANGGRAPH_TEMPORAL_TASK_QUEUE
           value: support-agent-temporal-langgraph
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
 
     temporal-langgraph-worker:
       build: temporal-langgraph
