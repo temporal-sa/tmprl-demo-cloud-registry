@@ -13,9 +13,19 @@
 # records are written by external-dns, never by Tofu.
 #
 # Providers cannot be for_each'd the way module.cluster is, so each color's ELB
-# hostname is read through that color's aliased kubernetes provider explicitly
-# (blue now; green adds a second data source + map entry at P6, alongside the
-# providers.tf / flux.tf color blocks).
+# hostname is read through that color's aliased kubernetes provider explicitly.
+#
+# ORDERING (important): the data source below reads a LIVE Traefik Service that
+# Flux reconciles inside the cluster — Tofu does not create it. So a color's DNS
+# records can only be applied AFTER that color's Traefik ELB exists. That is why
+# blue's DNS lands here in P4, a separate apply after P1-P3 stood up the cluster
+# and Traefik. Adding green at P6 is therefore NOT a single from-nothing apply:
+# apply 1 stands up green's cluster + Flux (green NOT yet in this file's data
+# source/map), then once green's Traefik ELB is up, apply 2 adds green's data
+# source + map entry to wire green.<domain> (and, at the flip, active_color).
+# A single apply that both creates a fresh color and reads its Traefik Service
+# would abort ("services \"traefik\" not found"); the same applies to a color
+# destroy+rebuild. This is documented in the migration plan's P6 notes.
 
 # Canonical hosted-zone id for Classic ELBs in this region — the alias target zone
 # for every record below (all colors' Traefik LBs are Classic ELBs, P3).
