@@ -33,6 +33,22 @@ output "public_subnet_ids" {
   value       = module.network.public_subnet_ids
 }
 
+output "irsa_role_arns" {
+  description = "Shared blue/green IRSA role ARNs, for the Flux overlays' service-account annotations (P3). registry-operator is added in P6."
+  value = {
+    external_secrets        = aws_iam_role.external_secrets.arn
+    cert_manager            = aws_iam_role.cert_manager.arn
+    cluster_autoscaler      = aws_iam_role.cluster_autoscaler.arn
+    traefik                 = aws_iam_role.traefik.arn
+    instruqt_litellm_broker = aws_iam_role.instruqt_litellm_broker.arn
+  }
+}
+
+output "acm_wildcard_certificate_arn" {
+  description = "ARN of the reused *.<domain> ACM wildcard cert (P4 attaches it to the load balancer)."
+  value       = data.aws_acm_certificate.wildcard.arn
+}
+
 output "clusters" {
   description = "Per-color cluster facts consumed by later phases (IRSA, routing) and by operators."
   value = {
