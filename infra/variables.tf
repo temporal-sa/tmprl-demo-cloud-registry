@@ -15,6 +15,17 @@ variable "colors" {
   default     = ["blue"]
 }
 
+variable "active_color" {
+  description = "The color the live.<domain> swing record points at. Managed demos all CNAME `live`, so flipping this and re-applying cuts every demo over to the other color (P6). Must be a member of var.colors."
+  type        = string
+  default     = "blue"
+
+  validation {
+    condition     = contains(var.colors, var.active_color)
+    error_message = "active_color must be one of the colors in var.colors."
+  }
+}
+
 variable "kubernetes_version" {
   description = "EKS control-plane version for all colors. Defaults to the latest GA — a fresh stack is the upgrade vehicle (stand up latest, validate, roll to it)."
   type        = string

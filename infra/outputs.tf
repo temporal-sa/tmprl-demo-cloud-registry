@@ -40,6 +40,7 @@ output "irsa_role_arns" {
     cert_manager            = aws_iam_role.cert_manager.arn
     cluster_autoscaler      = aws_iam_role.cluster_autoscaler.arn
     traefik                 = aws_iam_role.traefik.arn
+    external_dns            = aws_iam_role.external_dns.arn
     instruqt_litellm_broker = aws_iam_role.instruqt_litellm_broker.arn
   }
 }
@@ -63,6 +64,17 @@ output "flux" {
       git_url       = local.flux_git_url
       git_branch    = var.flux_git_branch
     }
+  }
+}
+
+output "dns" {
+  description = "Routing records Tofu owns (P4). Per-demo <demo> -> live CNAMEs are written by external-dns, not here; the pet's * wildcard is intentionally absent (not Tofu-managed)."
+  value = {
+    active_color         = var.active_color
+    live_fqdn            = aws_route53_record.live.fqdn
+    live_target          = local.traefik_elb_hostnames[var.active_color]
+    color_fqdns          = { for color, r in aws_route53_record.color : color => r.fqdn }
+    traefik_elb_by_color = local.traefik_elb_hostnames
   }
 }
 
