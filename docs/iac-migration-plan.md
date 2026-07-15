@@ -267,10 +267,13 @@ Each phase has an explicit test gate before moving on.
   TLS before the DNS swing. P2 creates the per-color cert-manager IRSA role;
   bringing cert-manager + the issuers into Flux is P3 (they are installed
   out-of-band today, not in the repo).
-- **Classic ELB vs NLB.** The in-tree classic ELB works but is deprecated.
-  Prefer letting k8s create an **NLB via service annotations** and having Tofu
-  data-source its hostname, avoiding the need to install the AWS LB Controller.
-  Decide in P4.
+- **Classic ELB vs NLB. ✅ RESOLVED (P4) — kept the Classic ELB.** Tofu
+  data-sources the live Traefik Service via the per-color kubernetes provider and
+  builds the `live`/`<color>` ALIAS A records against the Classic-ELB canonical
+  zone (`data.aws_elb_hosted_zone_id` → `Z368ELLRRE2KJ0` in us-west-1). No AWS LB
+  Controller, no NLB migration — the in-tree provider's ELB is sufficient for the
+  swing design and an NLB would only add churn. Revisit only if the classic ELB is
+  actually retired by AWS.
 - **Node group sizing.** Match current capacity (4 nodes) as a starting point;
   cluster-autoscaler tuning carries over from the existing addon.
 
@@ -282,7 +285,7 @@ Each phase has an explicit test gate before moving on.
 | P1 — Network + cluster | ✅ Done (gate passed: nodes Ready + clean destroy + clean re-create) |
 | P2 — Identity + AWS platform | ✅ Done (gate passed: 5 IRSA roles assumable on blue + cert validated; shared substrate adopted, 0 destroys) |
 | P3 — Flux bootstrap | ✅ Done (gate passed: Flux on blue via Tofu; 10 platform Kustomizations Ready; Traefik Classic ELB live + serving; external-secrets store Valid + cert-manager issuers Ready = IRSA proven; `tofu plan` idempotent) |
-| P4 — Routing + DNS | Not started |
+| P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | Not started |
 | P6 — Blue/green cutover | Not started |
 | P7 — Migrate + retire the pet | Not started |
@@ -290,6 +293,64 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P4 GATE PASSED — routing + DNS live on blue.** Tofu now owns the swing +
+  per-color records; external-dns turns Traefik IngressRoutes into per-demo
+  Route53 records. `tofu apply`: **4 added, 0 changed, 0 destroyed**; re-`plan` =
+  "No changes" (idempotent; pet + all P1–P3 resources untouched). Commits
+  `cf92a0a` (IRSA role) + `16d85c1` (DNS records) + `a5b0ada` (external-dns addon)
+  + `5e3529a` (review follow-up), pushed; Flux reconciled external-dns on blue.
+  - **Live P4 records** (read from `tofu output dns` / the zone — ELB rotates on
+    rebuild, do not hardcode): `live.tmprl-demo.cloud` **A ALIAS →** active color's
+    Traefik ELB (blue: `a65d2de6…`), `blue.tmprl-demo.cloud` A ALIAS → same. Pet
+    `*.tmprl-demo.cloud` **untouched** (still CNAME → pet ELB `a7372c66…`, TTL 300);
+    `registry` untouched. Classic-ELB alias zone `Z368ELLRRE2KJ0`.
+  - **external-dns 1.21.1 / app 0.21.0 Ready on blue.** Config verified from the
+    running pod: `Sources:[traefik-proxy]`, `Provider:aws`, `DomainFilter:
+    [tmprl-demo.cloud]`, `Policy:sync`, `Registry:txt`, `TXTOwnerID:blue`,
+    `TXTPrefix:extdns-`, `TraefikEnableLegacy:false` (reads Traefik v3 `traefik.io`
+    natively), `DryRun:false`. **IRSA proven** (`tmprl-dem-cld-external-dns`): it
+    listed + wrote the live zone with zero auth errors.
+  - **Gate evidence (throwaway smoke, now torn down):** a whoami Deployment +
+    Traefik v3 IngressRoute carrying `external-dns.alpha.kubernetes.io/target:
+    live.tmprl-demo.cloud` → external-dns created exactly `p4-smoke → CNAME → live`
+    + an ownership TXT at `extdns-cname-p4-smoke` (`owner=blue`, distinct name → no
+    clash). `p4-smoke` resolved (authoritative NS) to blue's ELB IPs, and a plain
+    `curl` **relying on public DNS** reached the whoami pod (blue VPC 10.20.x) via
+    blue's Traefik — the full DNS→ELB→Traefik→pod path. An **unmanaged** host and
+    `*` still resolved to the pet ELB (wildcard undisturbed; exact record beats
+    wildcard, as designed). Deleting the IngressRoute → external-dns **retracted
+    the CNAME + TXT within ~40s** (`policy=sync`) — also proves the P7 demo-teardown
+    path. Smoke namespace fully deleted; zone back to steady state.
+  - **Pre-apply adversarial review** (workflow `wf_efc8d145-d65`, 6 dims → per-
+    finding adversarial verify): 2 medium confirmed, 1 rejected. (1) **Chicken-and-
+    egg ordering** — `dns.tf`'s `data.kubernetes_service` reads a *Flux-reconciled*
+    Traefik Service Tofu does not create, so a color's DNS can only be applied
+    AFTER that color's ELB exists. Blue was safe (P3 built Traefik; P4 adds DNS as a
+    separate apply — the correct order). Fixed the misleading `dns.tf` header
+    comment (`5e3529a`) + the P6 ordering note below; **did NOT** add a gating
+    abstraction (anti-abstraction rule; phased apply already matches reality). (2)
+    **Gate needs a smoke artifact** (no annotated IngressRoute on blue until P5) —
+    exactly the throwaway above; done + cleaned up. Rejected: `active_color`
+    validation checks `var.colors` not the ELB map — fails safe/loud, DX nit.
+  - **CROSS-PHASE flags for P5/P6:**
+    - **P5:** the operator must stamp `external-dns.alpha.kubernetes.io/target:
+      live.tmprl-demo.cloud` on **every** IngressRoute it generates (Traefik v3
+      `traefik.io/v1alpha1` + v3 matcher syntax). The smoke test proved this exact
+      annotation is the working mechanism. The operator needs **no** Route53 perms
+      (external-dns holds them). Without the annotation the traefik source emits
+      nothing (spike-confirmed).
+    - **P6 ORDERING TRAP (from the review):** bringing up green is **two applies**,
+      not one. Apply 1: add the green provider-alias block (`providers.tf`) + green
+      `module.flux_*` block (`flux.tf`) + `"green"` to `var.colors` → stands up
+      green's cluster + Flux (green NOT yet in `dns.tf`). Wait for green's Traefik
+      ELB. Apply 2: add green's `data.kubernetes_service.traefik_green` + map entry
+      in `dns.tf` → creates `green.` (and, at the flip, set `active_color=green` to
+      repoint `live`). A single from-nothing color apply — or a color destroy+
+      rebuild — aborts on the absent Traefik Service. `dns.tf` header documents this.
+    - external-dns runs on the **active** color (blue today). At P6 green's tree
+      (duplicated from `clusters/blue/`) carries the same addon with
+      `txtOwnerId: green`; identical `→ live` records make coexistence benign.
 
 - **P4/P5 DNS + cutover design locked (with external-dns spike).** New model,
   driven by a user requirement to NOT disrupt manual pet deployments: keep the
