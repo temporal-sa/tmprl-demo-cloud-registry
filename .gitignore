@@ -33,3 +33,20 @@ build/
 
 # tailwind-compiled css (built by the registry/web Dockerfile)
 registry/web/static/app.css
+
+# opentofu / terraform (infra/)
+# state never gets committed; the S3 backend is the source of truth.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# real tfvars can hold secrets; the .example is committed instead.
+*.tfvars
+!*.tfvars.example
+# NB: .terraform.lock.hcl IS committed (pins provider versions) — not ignored.
