@@ -234,6 +234,15 @@ Newest first. One entry per meaningful step so a fresh session can resume.
   - **DEFERRED to P6:** the `registry-operator` IRSA role (pet holds the clean name;
     blue operator scaled-to-zero until cutover). **DEFERRED (user):** secret values
     (out of band) and ECR lifecycle expiry.
+  - **GOTCHA fixed — subnet tag stripping.** The `Repo` default_tags change made
+    `aws_subnet` reconcile its full tag set and strip the per-color
+    `kubernetes.io/cluster/<name>=shared` tags added by the separate `aws_ec2_tag`
+    resources (the classic aws_subnet/aws_ec2_tag coexistence conflict) — which
+    would break LB subnet discovery in P4. Fixed with `lifecycle { ignore_changes =
+    [tags, tags_all] }` on both subnet resources in `modules/network` (commit
+    `0053a7b`); tags restored, `tofu plan` now **clean/idempotent**. Any future
+    resource that adds tags to these shared subnets must go through `aws_ec2_tag`,
+    not the subnet's inline `tags`.
 
 - **P2 STARTED — approach locked** after an 8-way live-AWS + GitOps discovery
   sweep (account 429214323166, us-west-1). Repo GitHub slug is
