@@ -113,6 +113,8 @@ resource "aws_iam_role_policy" "ci_tofu" {
           "iam:CreatePolicyVersion",
           "iam:DeletePolicyVersion",
           "iam:ListPolicyVersions",
+          "iam:TagPolicy",
+          "iam:UntagPolicy",
         ]
         Resource = [
           "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*",
@@ -236,6 +238,7 @@ resource "aws_iam_role_policy" "ci_tofu" {
           "route53:GetChange",
           "route53:ListHostedZones",
           "route53:ListHostedZonesByName",
+          "route53:ListTagsForResource",
         ]
         Resource = "*"
       },
