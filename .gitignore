@@ -52,3 +52,5 @@ override.tf.json
 *.tfvars.json
 !*.tfvars.example
 # NB: .terraform.lock.hcl IS committed (pins provider versions) — not ignored.
+# Tofu-emitted per-cluster kubeconfigs (exec-auth, but still machine-local).
+infra/kubeconfig-*.yaml

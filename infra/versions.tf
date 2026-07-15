@@ -7,5 +7,15 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    # OIDC provider thumbprint is derived from the issuer's TLS chain, not hardcoded.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+    # Emits a ready-to-use kubeconfig per cluster (the P1 gate).
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
   }
 }

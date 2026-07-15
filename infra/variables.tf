@@ -9,8 +9,44 @@ variable "region" {
   default     = "us-west-1"
 }
 
+variable "colors" {
+  description = "Cluster colors to stand up on the shared VPC. Blue only until a green sibling is added for a cutover; the wildcard record swings between them in a later phase."
+  type        = list(string)
+  default     = ["blue"]
+}
+
+variable "kubernetes_version" {
+  description = "EKS control-plane version for all colors. Defaults to the latest GA — a fresh stack is the upgrade vehicle (stand up latest, validate, roll to it)."
+  type        = string
+  default     = "1.36"
+}
+
+variable "single_nat_gateway" {
+  description = "One shared NAT gateway instead of one per AZ. Defaults to per-AZ HA (matches the pet); set true to halve NAT baseline cost on the shared demo VPC."
+  type        = bool
+  default     = false
+}
+
+variable "endpoint_public_access_cidrs" {
+  description = "CIDRs allowed to reach the clusters' public API endpoints. Open by default for frictionless bring-up (auth is still IAM/access-entry gated); tighten to an operator allowlist via tfvars as a hardening step."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "cluster_admin_principal_arns" {
+  description = "IAM principals granted durable cluster-admin on every color, on top of the bootstrap cluster-creator. Set a stable break-glass/CI role ARN here so kubectl admin survives SSO permission-set re-provisioning (the SSO role ARN churns)."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_secrets_encryption" {
+  description = "Envelope-encrypt Kubernetes Secrets with a customer-managed KMS CMK per cluster. On by default; escape hatch if KMS setup ever blocks bring-up."
+  type        = bool
+  default     = true
+}
+
 variable "aws_account_id" {
-  description = "AWS account the platform lives in. Guards against applying to the wrong account (see the check block in main.tf)."
+  description = "AWS account the platform lives in. Guards against applying to the wrong account via allowed_account_ids on the aws provider (providers.tf), which errors at provider-config time."
   type        = string
   default     = "429214323166"
 }
