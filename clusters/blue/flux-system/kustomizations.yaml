@@ -1,0 +1,197 @@
+# Blue cluster (tmprl-dem-cld-blue) root sync — P3 platform layer.
+#
+# Duplicated from clusters/sa-demo/ with paths repointed to ./clusters/blue/ and
+# IRSA annotations moved to the tmprl-dem-cld-* roles (P2). cert-manager +
+# ClusterIssuers are new here (installed out-of-band on the pet). The app layer
+# (instruqt-litellm) and the registry layer (CRDs, operator, projects, courses)
+# are intentionally NOT wired yet — they land in later phases (operator runs
+# scaled-to-zero until the P6 cutover).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./clusters/blue/flux-system
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: node-local-dns
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/node-local-dns/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: DaemonSet
+      name: node-local-dns
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: metrics-server
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/metrics-server/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: metrics-server
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cluster-autoscaler
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/cluster-autoscaler/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: cluster-autoscaler
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-install
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/external-secrets/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-stores
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-install
+  interval: 5m
+  path: ./clusters/blue/addons/external-secrets/stores
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/cert-manager/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: cert-manager
+      namespace: cert-manager
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cert-manager-issuers
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager
+  interval: 5m
+  path: ./clusters/blue/addons/cert-manager/issuers
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: temporal-worker-controller
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: cert-manager
+  interval: 5m
+  path: ./clusters/blue/addons/temporal-worker-controller/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller-crds
+      namespace: tmprl-dem-cld-worker-controller
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller
+      namespace: tmprl-dem-cld-worker-controller
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: traefik
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/addons/traefik/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: traefik
+      namespace: traefik
