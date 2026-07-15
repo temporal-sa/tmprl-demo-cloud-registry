@@ -1,0 +1,186 @@
+# IaC + Blue/Green Migration Plan
+
+Plan for making the `tmprl-demo.cloud` demo environment fully deployable with
+OpenTofu, and for running blue/green clusters where cutover is a single DNS
+change. Pairs with [architecture.md](architecture.md) (what the platform is) and
+[operations.md](operations.md) (runbook). This doc is the phase tracker for the
+infrastructure-as-code work specifically.
+
+## Goal
+
+`tofu apply` stands up a complete demo environment from nothing: a new EKS
+cluster, its networking, load balancing, IAM/IRSA, Flux, and the wildcard DNS
+routing — with the existing registry operator taking over demo provisioning from
+there. A second cluster can be stood up alongside the first, and the "base" DNS
+entry (`*.tmprl-demo.cloud`) can be swung from one to the other for a blue/green
+cutover.
+
+## Working conventions
+
+How this feature is built. These are hard constraints, not preferences.
+
+### Coding
+
+- **Abstraction is the enemy of human understanding.** Helper code is fine, but
+  do not stack multiple layers of abstraction. Someone reading the stack cold
+  should follow it without peeling back indirection.
+- **No stringified/piped code.** Never write a bash script that pipes stringified
+  Python (or any language) into an interpreter. If Python is the right fit, write
+  a proper Python program; if Go is, write proper Go. The language choice is open
+  — the requirement is that it is a real, readable program, not glue-stringified
+  source.
+- **Optimize for low cognitive load.** Prefer a simple, obvious stack over a
+  clever one. OpenTofu HCL is the primary tool; reach for a real program only
+  when HCL genuinely cannot express the step.
+
+### Commits & branch
+
+- Work happens on the `feat/full-e2e-iac` feature branch.
+- **Commit concisely as we go.** Small, self-contained commits that each make one
+  reviewable change. **No huge one-shot commits** that land a whole phase at once
+  — the change history must stay cleanly trackable.
+
+### Progress tracking (context is cleared between phases)
+
+Context is wiped between phases, so **this doc is the durable memory.** Keep the
+Phase status table and the Progress log below current as work lands — record what
+is done, what is in flight, and any decision or gotcha the next session needs.
+Update them in the same commits as the work.
+
+## Explicitly NOT automated (configured at deploy time)
+
+- **Domain registration.** `tmprl-demo.cloud` and its Route53 hosted zone
+  (`Z08792403SH7ADUAH7X5X`) already exist; Tofu takes the zone id as an input,
+  it does not register domains.
+- **Secret values.** Tofu creates the AWS Secrets Manager *containers* it needs
+  (bootstrap Temporal Cloud creds, GitHub read-only PAT, Instruqt CLI token),
+  but the sensitive values are populated out-of-band, exactly as today.
+
+## Decisions (locked)
+
+| Decision | Choice |
+| --- | --- |
+| Region | **us-west-1** (reuse existing ACM wildcard cert, Route53 zone, Secrets Manager, CodeBuild) |
+| Cluster provisioning | **Greenfield + migrate** — build a new Tofu-managed cluster alongside the hand-built `sa-demo` pet, never import the pet |
+| VPC | **New Tofu-managed VPC**, shared by blue + green |
+| Blue/green operator model | **Standby** — only the active color's operator polls Temporal; the other runs scaled to zero until cutover |
+| Cutover mechanism | **Declarative** — a Tofu `active_color` variable repoints the wildcard record. No imperative scripts. |
+| Operator multi-cluster safety | **Add a cluster/color dimension** to the operator (task queue + workflow id + reconcile key) |
+
+## Current state (as inspected)
+
+- `sa-demo` EKS in **us-west-1**, control plane 1.30 / nodes 1.29.15, in
+  `vpc-00bb9a602ae4bad2c` (4 subnets). Hand-built 2023, no IaC.
+- Ingress: **Traefik → a Classic ELB** (`a7372c66…elb.amazonaws.com`),
+  provisioned by the in-tree cloud provider (no AWS LB Controller installed).
+  Traefik terminates TLS.
+- **`*.tmprl-demo.cloud` is a single wildcard CNAME → the Traefik ELB, TTL 300.**
+  This one record is the entire blue/green swing point. `registry.tmprl-demo.cloud`
+  is a separate CloudFront alias and does **not** move on cutover.
+- ACM `*.tmprl-demo.cloud` exists (us-west-1, ISSUED).
+- Everything above Flux is GitOps (`clusters/sa-demo/`). The IaC seam was always
+  intended — see architecture.md §"Flux Kustomizations are self-managed".
+
+## Tofu / Flux boundary
+
+Tofu owns AWS primitives + the Flux install + the first root sync. Flux keeps
+owning in-cluster addons, the operator, and projects exactly as today.
+
+Tofu owns: VPC, EKS control plane, managed node group, OIDC provider, IRSA roles
+(`registry-operator`, `traefik-ingress-role`, cluster-autoscaler,
+external-secrets, CodeBuild service role), ECR, CodeBuild project, Secrets
+Manager containers, ACM wildcard (data-source the existing cert), the Route53
+wildcard record, and `flux install` + the root `GitRepository`/`Kustomization`.
+
+## The operator multi-cluster problem (root of the design)
+
+The registry operator is a Temporal worker whose entity workflows live in
+Temporal Cloud, and it has **zero cluster-awareness**:
+
+- Task queue is a single fixed default `registry-management` (`config.py:79`).
+- Entity workflow id is `demo-project/<name>` — no cluster
+  (`watch.py:662`); reconcile identity is a pure spec/source hash with no cluster
+  component (`resources.py:601`).
+- K8s client is in-cluster only (`kube.py:1223`).
+
+So two clusters on the same Temporal namespace would (a) cross-route k8s-applying
+activities to whichever worker polls first, and (b) treat green's demos as
+"already synced" from blue's completed workflows, leaving green empty.
+
+**Fix (Phase 5):** a single `DEMO_REGISTRY_CLUSTER` (color) env var, injected
+per-cluster by the Flux overlay, folded into:
+
+- **task queue** → `registry-management-<color>` (green's workers only poll
+  green's queue — no cross-routing);
+- **workflow id** → `demo-project/<color>/<name>` (green starts fresh workflows
+  that reconcile onto green, idempotently re-adopting shared Temporal Cloud
+  namespaces / ECR);
+- **reconcile key** (belt-and-suspenders).
+
+This is one new dimension, not a new abstraction layer, and fits the existing
+level-triggered / derive-from-name design. Shared global resources stay safe
+because in standby only one color's operator is ever running.
+
+## Phases (test as we go)
+
+Each phase has an explicit test gate before moving on.
+
+- **P0 — Foundations.** `infra/` Tofu layout, S3 + DynamoDB state backend,
+  provider config, input variables (domain, zone id, region, account,
+  bootstrap-cred references). *Gate: clean `init`/`plan`, only the state bucket
+  exists.*
+- **P1 — Network + cluster.** New VPC, EKS control plane, managed node group,
+  OIDC provider. *Gate: nodes Ready via Tofu-emitted kubeconfig; cluster
+  destroys cleanly.*
+- **P2 — Identity + AWS platform.** IRSA roles, ECR, CodeBuild project, Secrets
+  Manager containers, ACM wildcard (data source). *Gate: roles assumable, cert
+  validated.*
+- **P3 — Flux bootstrap.** Tofu installs Flux + the root sync against a
+  **per-color cluster path** (`clusters/<color>/`, parametrizing today's
+  hardcoded `sa-demo`). *Gate: addons reconcile, Traefik LB provisioned.*
+- **P4 — Routing + DNS.** Tofu reads the Traefik LB hostname back and writes the
+  wildcard record. Decide classic ELB vs NLB-via-annotation here. *Gate: DNS
+  resolves to the cluster; a demo is reachable.*
+- **P5 — Operator cluster dimension.** Implement the color dimension above.
+  *Gate: two clusters, no activity cross-routing, green reconciles its demos
+  independently of blue.*
+- **P6 — Blue/green cutover.** `active_color` variable swings the wildcard.
+  *Gate: stand up green, flip, verify, roll back.*
+- **P7 — Migrate + retire the pet.** Point the new stack at real `projects/`,
+  validate demos, swing DNS off the old `sa-demo` ELB, decommission it.
+
+## Open items to resolve early
+
+- **cert-manager challenge type.** Promotion issues a Let's Encrypt cert per
+  route. If the issuer uses **HTTP-01**, a standby green cluster cannot obtain
+  certs before the DNS swing (challenge needs traffic), which breaks pre-warming.
+  Verify the issuer; if HTTP-01, move to **DNS-01 (Route53)** so green can get
+  valid TLS before cutover. Resolve during P3/P4.
+- **Classic ELB vs NLB.** The in-tree classic ELB works but is deprecated.
+  Prefer letting k8s create an **NLB via service annotations** and having Tofu
+  data-source its hostname, avoiding the need to install the AWS LB Controller.
+  Decide in P4.
+- **Node group sizing.** Match current capacity (4 nodes) as a starting point;
+  cluster-autoscaler tuning carries over from the existing addon.
+
+## Phase status
+
+| Phase | Status |
+| --- | --- |
+| P0 — Foundations | Not started |
+| P1 — Network + cluster | Not started |
+| P2 — Identity + AWS platform | Not started |
+| P3 — Flux bootstrap | Not started |
+| P4 — Routing + DNS | Not started |
+| P5 — Operator cluster dimension | Not started |
+| P6 — Blue/green cutover | Not started |
+| P7 — Migrate + retire the pet | Not started |
+
+## Progress log
+
+Newest first. One entry per meaningful step so a fresh session can resume.
+
+- Plan authored: environment inspected, decisions locked, operator
+  multi-cluster problem confirmed against code, phases defined. No code yet.
+</content>
+</invoke>
