@@ -25,6 +25,7 @@ locals {
     cert-manager            = "system:serviceaccount:cert-manager:cert-manager"
     cluster-autoscaler      = "system:serviceaccount:kube-system:cluster-autoscaler"
     traefik                 = "system:serviceaccount:traefik:traefik"
+    external-dns            = "system:serviceaccount:external-dns:external-dns"
     instruqt-litellm-broker = "system:serviceaccount:${var.name_prefix}-instruqt-litellm:instruqt-litellm-broker"
   }
 
@@ -179,6 +180,49 @@ resource "aws_iam_role_policy" "cluster_autoscaler" {
 resource "aws_iam_role" "traefik" {
   name               = "${var.name_prefix}-traefik"
   assume_role_policy = local.irsa_assume_role_policies["traefik"]
+}
+
+# --- external-dns -----------------------------------------------------------
+# Writes the per-demo <demo> -> CNAME -> live records (+ ownership TXTs) from the
+# operator-generated IngressRoutes (P4/P5). Change is scoped to the one demo zone;
+# it can only ever touch records carrying its own extdns- TXT ownership marker, so
+# it can never modify the pet's * wildcard, the live swing, or registry. Runs on
+# every color (identical records -> live), which is safe by design — see the DNS
+# section of the migration plan. Modeled on the cert-manager Route53 role.
+resource "aws_iam_role" "external_dns" {
+  name               = "${var.name_prefix}-external-dns"
+  assume_role_policy = local.irsa_assume_role_policies["external-dns"]
+}
+
+resource "aws_iam_role_policy" "external_dns" {
+  name = "${var.name_prefix}-external-dns-route53"
+  role = aws_iam_role.external_dns.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ChangeRecordsInZone"
+        Effect   = "Allow"
+        Action   = ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
+        Resource = "arn:${local.partition}:route53:::hostedzone/${data.aws_route53_zone.this.zone_id}"
+      },
+      {
+        Sid      = "GetChangeStatus"
+        Effect   = "Allow"
+        Action   = "route53:GetChange"
+        Resource = "arn:${local.partition}:route53:::change/*"
+      },
+      {
+        # external-dns enumerates zones on startup to resolve the domain filter to
+        # a zone id; ListHostedZones cannot be resource-scoped.
+        Sid      = "ListZonesForFilter"
+        Effect   = "Allow"
+        Action   = ["route53:ListHostedZones", "route53:ListHostedZonesByName"]
+        Resource = "*"
+      },
+    ]
+  })
 }
 
 # --- instruqt-litellm broker ------------------------------------------------
