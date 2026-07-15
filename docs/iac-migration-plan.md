@@ -170,11 +170,14 @@ Each phase has an explicit test gate before moving on.
     both admit the CI role (it assumes into 429214323166); confirm the bucket
     policy allows it.
   - The local credential-bridge stays only as a break-glass / dev convenience.
-- **cert-manager challenge type.** Promotion issues a Let's Encrypt cert per
-  route. If the issuer uses **HTTP-01**, a standby green cluster cannot obtain
-  certs before the DNS swing (challenge needs traffic), which breaks pre-warming.
-  Verify the issuer; if HTTP-01, move to **DNS-01 (Route53)** so green can get
-  valid TLS before cutover. Resolve during P3/P4.
+- **cert-manager challenge type. ✅ RESOLVED (P2 discovery).** The live
+  `letsencrypt`/`letsencrypt-staging` ClusterIssuers already use **DNS-01 via
+  Route53** (`hostedZoneID Z08792403SH7ADUAH7X5X`, region us-west-1, empty
+  `secretAccessKeySecretRef` → ambient IRSA on `cert-manager/cert-manager`). No
+  HTTP-01→DNS-01 migration needed — a standby green cluster *can* pre-warm valid
+  TLS before the DNS swing. P2 creates the per-color cert-manager IRSA role;
+  bringing cert-manager + the issuers into Flux is P3 (they are installed
+  out-of-band today, not in the repo).
 - **Classic ELB vs NLB.** The in-tree classic ELB works but is deprecated.
   Prefer letting k8s create an **NLB via service annotations** and having Tofu
   data-source its hostname, avoiding the need to install the AWS LB Controller.
@@ -188,7 +191,7 @@ Each phase has an explicit test gate before moving on.
 | --- | --- |
 | P0 — Foundations | ✅ Done |
 | P1 — Network + cluster | ✅ Done (gate passed: nodes Ready + clean destroy + clean re-create) |
-| P2 — Identity + AWS platform | Not started |
+| P2 — Identity + AWS platform | 🔨 In progress (approach locked; see log) |
 | P3 — Flux bootstrap | Not started |
 | P4 — Routing + DNS | Not started |
 | P5 — Operator cluster dimension | Not started |
@@ -198,6 +201,61 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P2 STARTED — approach locked** after an 8-way live-AWS + GitOps discovery
+  sweep (account 429214323166, us-west-1). Repo GitHub slug is
+  **`temporal-sa/tmprl-demo-cloud-registry`** (not the local dir name). Blue is
+  live now (49 tofu state resources). Decisions, all confirmed with the user:
+  - **IRSA roles → greenfield-fresh, pet untouched.** Create NEW blue/green
+    roles whose trust is a `union` over `var.colors` against
+    `module.cluster[*].oidc_provider_arn/url` (never a literal OIDC id — it
+    rotates). Leave every hand-built pet IRSA role alone (honors "never import the
+    pet" + "change nothing live"). The clean `tmprl-dem-cld-*` name is FREE for
+    all of these: `external-secrets`, `cert-manager`, `cluster-autoscaler`,
+    `traefik` (trust-only — Traefik's Classic ELB comes from the in-tree provider,
+    no AWS perms), `instruqt-litellm-broker`. Policy bodies reproduced verbatim
+    from the pet roles; cert-manager Route53 scoped tighter to the one zone;
+    cluster-autoscaler tag condition retargeted per color
+    (`k8s.io/cluster-autoscaler/tmprl-dem-cld-<color>=owned`).
+  - **`registry-operator` IRSA DEFERRED to cutover (P6).** Its clean name
+    `tmprl-dem-cld-registry-operator` is held by the live pet, and blue's operator
+    runs **scaled-to-zero until cutover**, so it isn't needed in P2. Minting an
+    interim distinct-named role now would force a rename later. The "roles
+    assumable" gate is proven by the other five roles.
+  - **Shared platform substrate → in-place adoption (`tofu import`), no
+    mutation.** Import with `prevent_destroy`, config matched exactly so `plan` is
+    clean: CodeBuild project `tmprl-dem-cld-build` + role `tmprl-dem-cld-codebuild`
+    (NO_SOURCE, `standard:7.0`, privileged, 2 inline policies), the
+    `tmprl-dem-cld-serverless-worker-boundary` managed policy (v2), the 10
+    `…/platform/*` secret **containers**, and the 3
+    `…/registry-operator/{web,worker,temporal-cloud-proxy}` ECR repos
+    (MUTABLE/AES256/scanOnPush). These are shared/color-agnostic singletons the
+    operator addresses by fixed name; the operator's ECR verify branch is
+    tag/policy-blind so Tofu ownership won't fight it (`registry.yaml` uses
+    `finalization-policy: retain`). **One consequence:** adoption adds the provider
+    `default_tags` (ManagedBy/Project/Repo) to these live resources — the only
+    change; functional config untouched.
+  - **DEFERRED per user (no live override now):** secret **values** (Tofu owns
+    containers only; values stay out-of-band, **never** in Tofu state) and **ECR
+    lifecycle expiry** (no net-new policy on the live operator repos).
+  - **Data sources (never created — singletons):** ACM wildcard
+    `…certificate/a6daea0d-6517-4f54-9f34-d82165f22949` (ISSUED, DNS-validated,
+    InUseBy empty), Route53 zone `Z08792403SH7ADUAH7X5X`, GitHub OIDC provider
+    `token.actions.githubusercontent.com` (exists since 2025-01-04).
+  - **CI Tofu role (new):** `tmprl-dem-cld-ci-tofu` — GitHub OIDC, trust
+    `StringLike sub` = [`repo:temporal-sa/tmprl-demo-cloud-registry:ref:refs/heads/main`,
+    `…:ref:refs/heads/feat/full-e2e-iac`], `aud=sts.amazonaws.com`; least-priv
+    apply surface incl. S3 state bucket (bucket policy needs no change — same-acct
+    IAM governs). Register its ARN in `cluster_admin_principal_arns` (resolves the
+    P1 churning-SSO-admin finding — blue's only human admin today is the churning
+    `_a19b698aaece921e`). Also fix `providers.tf` `default_tags.Repo`
+    (`cluster-gitops-config` → `temporal-sa/tmprl-demo-cloud-registry`).
+  - **SAFETY — no destroy-gate in P2+.** Unlike P1, the root stack now owns
+    adopted live-prod resources; `prevent_destroy` guards them and we do NOT run a
+    destroy/recreate cycle while the pet is live. Verify by clean `plan` + IRSA
+    assume checks instead.
+  - Verbatim policy bodies captured during discovery; the committed `infra/*.tf`
+    files are the durable record (workflow run `wf_2eea2aaf-f2b`).
 
 - **P1 gate PASSED — blue is live** for P2 to build on. Full cycle run:
   `apply` (42 res) → 4 nodes Ready via emitted `kubeconfig-blue.yaml` (v1.36.2,
