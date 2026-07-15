@@ -153,6 +153,23 @@ Each phase has an explicit test gate before moving on.
 
 ## Open items to resolve early
 
+- **Execution model: local SSO now → GitHub Actions later.** Today `tofu` runs
+  locally under the operator's SSO admin session (hence the credential-bridge
+  gotcha below). The intended end state is Tofu running in a **GitHub Action
+  that assumes a cross-account role** via GitHub OIDC federation
+  (`token.actions.githubusercontent.com` — the account already federates it,
+  e.g. `tmprl-dem-cld-instruqt-broker-github-actions`). Design P2+ so this lands
+  cleanly:
+  - Create the CI **assume-role** (GitHub OIDC trust scoped to this repo/branch;
+    permissions for EKS/EC2/IAM/ECR/etc. + the state bucket) as part of P2's
+    identity work. It becomes the standing Tofu apply identity.
+  - That same CI role ARN is the **durable `cluster_admin_principal_arns`
+    entry** — it is stable (does not churn like the SSO role), so it resolves the
+    P1 review finding properly rather than needing a separate break-glass role.
+  - The S3 state backend (`…-tofu-state-…`) and `allowed_account_ids` guard must
+    both admit the CI role (it assumes into 429214323166); confirm the bucket
+    policy allows it.
+  - The local credential-bridge stays only as a break-glass / dev convenience.
 - **cert-manager challenge type.** Promotion issues a Let's Encrypt cert per
   route. If the issuer uses **HTTP-01**, a standby green cluster cannot obtain
   certs before the DNS swing (challenge needs traffic), which breaks pre-warming.
@@ -201,17 +218,22 @@ Newest first. One entry per meaningful step so a fresh session can resume.
     OIDC id (IRSA trust policies must consume `module.cluster[*].oidc_provider_*`
     outputs, never a literal id). The first apply's KMS key `6e78a433…` is in
     PendingDeletion (7-day window) and self-cleans; the live key is a new one.
-  - **P2 first task (carried from review):** set a stable break-glass/CI role in
+  - **P2 first task (carried from review):** set a stable principal in
     `cluster_admin_principal_arns` (root var already wired) so kubectl admin
     survives SSO permission-set re-provisioning. Today only the bootstrap-creator
-    (churning SSO role) is admin.
-  - **GOTCHA — Tofu vs SSO creds:** `tofu` (AWS SDK) can fail to refresh SSO role
-    creds mid-session (`GetRoleCredentials 403 / No valid credential sources`)
-    even while the `aws` CLI still works. Bridge it: prefix tofu commands with
+    (churning SSO role) is admin. The **CI assume-role** (see "Execution model"
+    in Open items) is the intended durable entry — build it in P2 and register it
+    here, no separate break-glass role needed.
+  - **GOTCHA — Tofu vs SSO creds (interim; goes away with CI):** while running
+    locally, `tofu` (AWS SDK) can fail to refresh SSO role creds mid-session
+    (`GetRoleCredentials 403 / No valid credential sources`) even while the `aws`
+    CLI still works. Bridge it: prefix tofu commands with
     `eval "$(aws configure export-credentials --format env)"` (exports the CLI's
     working temp creds into the process). Run long `apply`/`destroy` in the
     background — each captures static creds at launch and is immune to the
-    interactive session expiring. Use `tofu -chdir=infra …` to avoid `cd`.
+    interactive session expiring. Use `tofu -chdir=infra …` to avoid `cd`. Once
+    Tofu runs in the GitHub Action (see "Execution model" in Open items), it
+    assumes the CI role directly and this bridge is no longer needed.
 
 - **P1 code authored + reviewed** (commits `330c484` network,
   `2641d68` cluster). Two shallow local modules: `infra/modules/network` (ONE
