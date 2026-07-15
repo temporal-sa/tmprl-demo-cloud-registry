@@ -1,0 +1,4 @@
+# The catalog server is stdlib-only except for the Temporal client, which powers
+# the crashable-workspace endpoints. Keep the pin aligned with the worker
+# (registry/worker/requirements.txt) so both talk to the same Temporal Cloud.
+temporalio>=1.29,<2

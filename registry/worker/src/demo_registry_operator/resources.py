@@ -120,6 +120,10 @@ FINALIZATION_POLICY_RETAIN = "retain"
 REGISTRY_CATALOG_ANNOTATION = "registry.tmprl-demo.cloud/catalog"
 REGISTRY_SHARED_AUTH_SECRET_NAME = "shared-auth"
 REGISTRY_SHARED_AUTH_SECRET_PATH = "tmprl-dem-cld/platform/shared-auth"
+# The catalog web pod starts crashable-workspace workflows, so it needs the same
+# platform Temporal connection the operator uses. That secret is created in the
+# operator namespace by clusters/.../registry-operator/external-secrets.yaml.
+REGISTRY_WORKER_TEMPORAL_SECRET_NAME = "registry-worker-temporal"
 SOURCE_AUTH_SECRET_SUFFIX = "auth"
 RUNTIME_NAMESPACE_LABEL = "platform.temporal.io/runtime-namespace"
 RUNTIME_NAMESPACE_SUFFIX_LENGTH = 5
@@ -2438,6 +2442,12 @@ def env_from_refs(
         component_name == REGISTRY_WEB_COMPONENT_NAME
     ):
         refs.append({"secretRef": {"name": REGISTRY_SHARED_AUTH_SECRET_NAME}})
+        # Give the catalog web the platform Temporal connection
+        # (TEMPORAL_ADDRESS/NAMESPACE/API_KEY/TLS) so it can start crashable
+        # workspace workflows on the operator's task queue.
+        refs.append(
+            {"secretRef": {"name": REGISTRY_WORKER_TEMPORAL_SECRET_NAME}}
+        )
     if registry_operator_component_enabled(
         demo_project
     ) and component_name == project_name(demo_project):
@@ -3593,9 +3603,18 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
     source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
     name = project_name(demo_project)
     host = project_host(demo_project)
+    crashable = registry.get("crashable") if isinstance(registry.get("crashable"), dict) else {}
     return {
         "name": name,
         "title": registry.get("title") or humanized_title(name),
+        # Opt-in isolation only: the "Create Crashable Environment" button appears
+        # only when the demo declares both that it is crashable AND the task-queue
+        # env var used to isolate the clone. This matches the workflow's provision
+        # gate (activities._crashable_enabled), so a visible button never fails.
+        "crashable": {
+            "enabled": bool(crashable.get("enabled"))
+            and bool(crashable.get("taskQueueEnv")),
+        },
         "summary": registry.get("summary", ""),
         "host": host,
         "appUrl": f"https://{host}",

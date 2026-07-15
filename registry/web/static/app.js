@@ -80,6 +80,7 @@ function normalizeDemo(project) {
     additional: Array.isArray(links.additional) ? links.additional : [],
     cloud: { namespace: project.temporalNamespace },
     authRequired: !!project.authRequired,
+    crashable: !!(project.crashable && project.crashable.enabled),
   };
 }
 
@@ -264,6 +265,7 @@ function renderDemosList() {
     );
     return;
   }
+  clearAllWorkspaceTimers();
   list.replaceChildren(...demos.map(renderDemoRow));
   if (window.location.hash) {
     const id = window.location.hash.slice(1);
@@ -416,6 +418,7 @@ function renderDemoRow(demo) {
     { class: "px-6 pb-6 details-body" },
     el("hr", { class: "border-border mb-5" }),
     quickLaunch,
+    demo.crashable ? crashableWorkspaceCard(demo) : null,
     tagsAndSdks,
     assets
   );
@@ -529,6 +532,359 @@ function copyLinkButton(id) {
     }, 1500);
   });
   return button;
+}
+
+// ─── Crashable workspace ───────────────────────────────────────────────────
+// A per-(user, demo) ephemeral clone of the demo's Kubernetes namespace, driven
+// by a Temporal entity workflow. The card renders from a client-side cache of
+// the workflow's status query and re-arms its own poll/countdown timers on each
+// render. Because renderDemosList() rebuilds every row (destroying nodes) on any
+// filter change, timers are keyed by demo id and cleared centrally there; each
+// re-rendered card looks itself up in the DOM via [data-workspace=<id>].
+
+const workspaceState = new Map(); // demoId -> last known status object
+const workspaceTimers = new Map(); // demoId -> [intervalId, ...]
+const workspaceFetching = new Set(); // demoIds with an in-flight initial fetch
+
+function clearWorkspaceTimers(id) {
+  const timers = workspaceTimers.get(id);
+  if (timers) {
+    timers.forEach((timerId) => clearInterval(timerId));
+    workspaceTimers.delete(id);
+  }
+}
+
+function clearAllWorkspaceTimers() {
+  for (const id of [...workspaceTimers.keys()]) clearWorkspaceTimers(id);
+}
+
+function setWorkspaceTimer(id, timerId) {
+  const timers = workspaceTimers.get(id) || [];
+  timers.push(timerId);
+  workspaceTimers.set(id, timers);
+}
+
+function workspaceContainer(id) {
+  return document.querySelector(`[data-workspace="${id}"]`);
+}
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = {};
+  }
+  if (!res.ok) {
+    const error = new Error(data.message || data.error || `HTTP ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
+  return data;
+}
+
+async function fetchWorkspaceStatus(demoId) {
+  const res = await fetch(
+    `/api/crashable-workspace?demo=${encodeURIComponent(demoId)}`,
+    { credentials: "same-origin" }
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+function workspaceSpinner() {
+  return el("span", {
+    class:
+      "inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent",
+  });
+}
+
+function workspaceButton(label, cls, onclick) {
+  return el(
+    "button",
+    {
+      type: "button",
+      class: `inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors cursor-pointer ${cls}`,
+      onclick: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onclick();
+      },
+    },
+    label
+  );
+}
+
+async function workspaceAction(demo, url) {
+  try {
+    const status = await postJSON(url, { demo: demo.id });
+    workspaceState.set(demo.id, status);
+  } catch (err) {
+    const prev = workspaceState.get(demo.id) || { phase: "None", demo: demo.id };
+    workspaceState.set(demo.id, { ...prev, lastActionError: err.message });
+  }
+  const node = workspaceContainer(demo.id);
+  if (node) renderWorkspaceInto(demo, node);
+}
+
+function pollWorkspaceOnce(demo) {
+  fetchWorkspaceStatus(demo.id)
+    .then((status) => workspaceState.set(demo.id, status))
+    .catch(() => {})
+    .finally(() => {
+      const node = workspaceContainer(demo.id);
+      if (node) renderWorkspaceInto(demo, node);
+    });
+}
+
+// Poll while the workflow is doing async work (Provisioning/Crashing/Deleting).
+function armWorkspacePolling(demo) {
+  return setInterval(() => {
+    const node = workspaceContainer(demo.id);
+    if (!node) {
+      clearWorkspaceTimers(demo.id);
+      return;
+    }
+    fetchWorkspaceStatus(demo.id)
+      .then((status) => {
+        const prev = workspaceState.get(demo.id) || {};
+        workspaceState.set(demo.id, status);
+        const current = workspaceContainer(demo.id);
+        if (!current) {
+          clearWorkspaceTimers(demo.id);
+          return;
+        }
+        if (status.phase !== prev.phase) {
+          renderWorkspaceInto(demo, current); // re-arms timers for the new phase
+        } else {
+          const stepNode = current.querySelector("[data-workspace-step]");
+          if (stepNode && status.step) stepNode.textContent = status.step;
+        }
+      })
+      .catch(() => {});
+  }, 2000);
+}
+
+// Tick the visible countdown once per second while Active; re-check status when
+// it reaches zero (the workflow auto-deletes on expiry).
+function armWorkspaceCountdown(demo, expiresAt) {
+  return setInterval(() => {
+    const node = workspaceContainer(demo.id);
+    if (!node) {
+      clearWorkspaceTimers(demo.id);
+      return;
+    }
+    if (!expiresAt) return;
+    const remaining = expiresAt - Date.now();
+    const cd = node.querySelector("[data-workspace-countdown]");
+    if (cd) cd.textContent = formatCountdown(remaining);
+    if (remaining <= 0) {
+      clearWorkspaceTimers(demo.id);
+      pollWorkspaceOnce(demo);
+    }
+  }, 1000);
+}
+
+function crashableWorkspaceCard(demo) {
+  const container = el("div", {
+    class: "mb-6",
+    dataset: { workspace: demo.id },
+  });
+  renderWorkspaceInto(demo, container);
+  if (!workspaceState.has(demo.id) && !workspaceFetching.has(demo.id)) {
+    workspaceFetching.add(demo.id);
+    fetchWorkspaceStatus(demo.id)
+      .then((status) => workspaceState.set(demo.id, status))
+      .catch(() => workspaceState.set(demo.id, { phase: "None", demo: demo.id }))
+      .finally(() => {
+        workspaceFetching.delete(demo.id);
+        const node = workspaceContainer(demo.id);
+        if (node) renderWorkspaceInto(demo, node);
+      });
+  }
+  return container;
+}
+
+function renderWorkspaceInto(demo, container) {
+  clearWorkspaceTimers(demo.id);
+  const status = workspaceState.get(demo.id) || null;
+  const phase = status
+    ? status.phase
+    : workspaceFetching.has(demo.id)
+    ? "Loading"
+    : "None";
+
+  const heading = el(
+    "h3",
+    {
+      class:
+        "text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3",
+      text: "Crashable Environment",
+    }
+  );
+  const children = [el("hr", { class: "border-border mb-5" }), heading];
+  const note = (text) =>
+    el("p", { class: "text-sm text-muted-foreground", text });
+
+  if (phase === "Loading") {
+    children.push(note("Checking for an existing environment…"));
+  } else if (phase === "None") {
+    children.push(
+      note(
+        "Spin up a private, time-limited copy of this demo’s Kubernetes workers that you can crash to watch Temporal recover. Auto-deletes after 1 hour."
+      ),
+      el(
+        "div",
+        { class: "mt-3" },
+        workspaceButton(
+          "Create Crashable Environment",
+          "bg-foreground text-background hover:bg-foreground/90",
+          () => workspaceAction(demo, "/api/crashable-workspace")
+        )
+      )
+    );
+  } else if (phase === "Provisioning") {
+    children.push(
+      el(
+        "div",
+        { class: "flex items-center gap-3" },
+        workspaceSpinner(),
+        el(
+          "div",
+          {},
+          el("p", { class: "text-sm font-medium", text: "Creating your environment…" }),
+          el("p", {
+            class: "text-xs text-muted-foreground",
+            dataset: { workspaceStep: "" },
+            text: (status && status.step) || "Starting…",
+          })
+        )
+      )
+    );
+    setWorkspaceTimer(demo.id, armWorkspacePolling(demo));
+  } else if (phase === "Crashing") {
+    children.push(
+      el(
+        "div",
+        { class: "flex items-center gap-3" },
+        workspaceSpinner(),
+        el("p", {
+          class: "text-sm font-medium",
+          dataset: { workspaceStep: "" },
+          text: (status && status.step) || "Crashing workers…",
+        })
+      )
+    );
+    setWorkspaceTimer(demo.id, armWorkspacePolling(demo));
+  } else if (phase === "Deleting") {
+    children.push(
+      el(
+        "div",
+        { class: "flex items-center gap-3" },
+        workspaceSpinner(),
+        el("p", { class: "text-sm font-medium", text: "Deleting environment…" })
+      )
+    );
+    setWorkspaceTimer(demo.id, armWorkspacePolling(demo));
+  } else if (phase === "Failed") {
+    children.push(
+      el("p", {
+        class: "text-sm text-red-600",
+        text: (status && status.last_error) || "Environment provisioning failed.",
+      }),
+      el(
+        "div",
+        { class: "mt-3 flex flex-wrap gap-2" },
+        workspaceButton(
+          "Try Again",
+          "bg-foreground text-background hover:bg-foreground/90",
+          () => workspaceAction(demo, "/api/crashable-workspace")
+        ),
+        workspaceButton(
+          "Dismiss",
+          "border border-border bg-background text-muted-foreground hover:text-foreground",
+          () => workspaceAction(demo, "/api/crashable-workspace/delete")
+        )
+      )
+    );
+  } else if (phase === "Active") {
+    const appUrl = (status && status.app_url) || null;
+    const expiresAt =
+      status && status.expires_at ? Date.parse(status.expires_at) : null;
+    children.push(
+      el(
+        "div",
+        { class: "flex flex-wrap items-center gap-2" },
+        appUrl
+          ? el(
+              "a",
+              {
+                href: appUrl,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                class:
+                  "inline-flex items-center justify-center rounded-md border border-primary/30 bg-primary-soft px-3 py-2 text-sm font-medium hover:bg-primary/10",
+              },
+              "Open Environment"
+            )
+          : null,
+        workspaceButton("Crash Workers", "bg-red-600 text-white hover:bg-red-700", () =>
+          workspaceAction(demo, "/api/crashable-workspace/crash")
+        ),
+        workspaceButton(
+          "Extend +1h",
+          "border border-border bg-background hover:bg-muted",
+          () => workspaceAction(demo, "/api/crashable-workspace/extend")
+        ),
+        workspaceButton(
+          "Delete",
+          "border border-border bg-background text-muted-foreground hover:text-foreground",
+          () => workspaceAction(demo, "/api/crashable-workspace/delete")
+        )
+      ),
+      el(
+        "div",
+        { class: "mt-2 text-xs text-muted-foreground" },
+        "Auto-deletes in ",
+        el("span", {
+          class: "font-mono font-medium text-foreground",
+          dataset: { workspaceCountdown: "" },
+          text: expiresAt ? formatCountdown(expiresAt - Date.now()) : "—",
+        })
+      ),
+      status && status.namespace
+        ? el("p", {
+            class: "mt-1 text-[11px] text-muted-foreground font-mono",
+            text: status.namespace,
+          })
+        : null
+    );
+    setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));
+  }
+
+  if (status && status.lastActionError) {
+    children.push(
+      el("p", { class: "mt-2 text-xs text-red-600", text: status.lastActionError })
+    );
+  }
+
+  container.replaceChildren(...children.filter(Boolean));
 }
 
 // ─── Catalog view ──────────────────────────────────────────────────────────

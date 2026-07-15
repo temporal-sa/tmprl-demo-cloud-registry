@@ -420,6 +420,27 @@
         },
         "assets": {
           "$ref": "#/$defs/registryAssets"
+        },
+        "crashable": {
+          "$ref": "#/$defs/registryCrashable"
+        }
+      }
+    },
+    "registryCrashable": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "taskQueueEnv": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseTaskQueue": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
