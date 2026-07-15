@@ -66,6 +66,8 @@ Update them in the same commits as the work.
 | Blue/green operator model | **Standby** — only the active color's operator polls Temporal; the other runs scaled to zero until cutover |
 | Cutover mechanism | **Declarative** — a Tofu `active_color` variable repoints the wildcard record. No imperative scripts. |
 | Operator multi-cluster safety | **Add a cluster/color dimension** to the operator (task queue + workflow id + reconcile key) |
+| State backend | **Dedicated S3 bucket** `tmprl-dem-cld-tofu-state-429214323166-us-west-1` (versioning, SSE-S3, public access blocked, TLS-only policy) |
+| State locking | **Native S3 lockfile** (`use_lockfile`, OpenTofu ≥ 1.10) — no DynamoDB table |
 
 ## Current state (as inspected)
 
@@ -125,10 +127,10 @@ because in standby only one color's operator is ever running.
 
 Each phase has an explicit test gate before moving on.
 
-- **P0 — Foundations.** `infra/` Tofu layout, S3 + DynamoDB state backend,
-  provider config, input variables (domain, zone id, region, account,
-  bootstrap-cred references). *Gate: clean `init`/`plan`, only the state bucket
-  exists.*
+- **P0 — Foundations.** `infra/` Tofu layout, S3 state backend with native
+  lockfile locking (`use_lockfile`, no DynamoDB), provider config, input
+  variables (domain, zone id, region, account, bootstrap-cred references).
+  *Gate: clean `init`/`plan`, only the state bucket exists.*
 - **P1 — Network + cluster.** New VPC, EKS control plane, managed node group,
   OIDC provider. *Gate: nodes Ready via Tofu-emitted kubeconfig; cluster
   destroys cleanly.*
@@ -167,7 +169,7 @@ Each phase has an explicit test gate before moving on.
 
 | Phase | Status |
 | --- | --- |
-| P0 — Foundations | Not started |
+| P0 — Foundations | ✅ Done |
 | P1 — Network + cluster | Not started |
 | P2 — Identity + AWS platform | Not started |
 | P3 — Flux bootstrap | Not started |
@@ -180,6 +182,29 @@ Each phase has an explicit test gate before moving on.
 
 Newest first. One entry per meaningful step so a fresh session can resume.
 
+- **P0 done** (branch `feat/full-e2e-iac`). `infra/bootstrap/` created the
+  dedicated state bucket `tmprl-dem-cld-tofu-state-429214323166-us-west-1`
+  (versioning, SSE-S3, public access blocked, TLS-only policy, 90d noncurrent
+  expiry, `prevent_destroy`) with its own state migrated into it. Root `infra/`
+  stack: aws provider pinned to us-west-1 with an `allowed_account_ids` guard,
+  S3 backend (native lockfile, no DynamoDB), default_tags, and input variables
+  defaulting to the live env (region, account, `name_prefix=tmprl-dem-cld`,
+  domain, zone id, bootstrap secret names). `tofu init/validate/plan/apply` all
+  clean — 0 AWS resources beyond the state bucket. An adversarial review pass
+  drove the fresh-bootstrap runbook fix (committed `backend.tf` breaks a
+  brand-new `init`; see `infra/bootstrap/README.md`) plus TLS-only/account-guard
+  hardening.
+- Live env confirmed for later phases: account **429214323166**, EKS `sa-demo`
+  cp 1.30 in `vpc-00bb9a602ae4bad2c` (10.0.0.0/16), OIDC id `A19A2DDF…`,
+  Route53 zone `Z08792403SH7ADUAH7X5X`, ACM wildcard
+  `arn:aws:acm:us-west-1:429214323166:certificate/a6daea0d-6517-4f54-9f34-d82165f22949`
+  (ISSUED), CodeBuild `tmprl-dem-cld-build`, roles `tmprl-dem-cld-codebuild` /
+  `tmprl-dem-cld-registry-operator`, bootstrap secrets under
+  `tmprl-dem-cld/platform/`. Two operator-code corrections for P5: k8s client is
+  in-cluster-*first* with a `load_kube_config()` fallback (kube.py:1223), not
+  strictly in-cluster; multi-cluster facts otherwise confirmed (task queue
+  `registry-management` config.py:79, workflow id `demo-project/<name>`
+  watch.py:662, sha256 reconcile key resources.py:601).
 - Plan authored: environment inspected, decisions locked, operator
   multi-cluster problem confirmed against code, phases defined. No code yet.
 </content>
