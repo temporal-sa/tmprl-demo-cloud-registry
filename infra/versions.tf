@@ -17,5 +17,22 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    # P3 Flux install: helm installs the flux2 controllers; kubernetes creates the
+    # namespace + git-auth Secret; kubectl (alekc, the maintained fork) applies the
+    # two CRD-typed root-sync objects (GitRepository + Kustomization) — kubectl_manifest
+    # does no plan-time server dry-run, so it avoids the CRD-chicken/egg that
+    # kubernetes_manifest hits on a cluster whose CRDs are installed in the same apply.
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.17"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.31"
+    }
+    kubectl = {
+      source  = "alekc/kubectl"
+      version = "~> 2.1"
+    }
   }
 }

@@ -17,3 +17,49 @@ provider "aws" {
     }
   }
 }
+
+# --- In-cluster providers for the Flux install (P3) -------------------------
+#
+# Terraform/OpenTofu forbid for_each on provider blocks, while module.cluster IS
+# for_each'd over var.colors. So the Flux layer uses a STATIC per-color aliased
+# provider set (blue now; green adds a second block at P6). Referencing
+# module.cluster["blue"] is safe because "blue" is always a key of var.colors.
+#
+# Auth is the same `aws eks get-token` exec plugin the emitted kubeconfig uses
+# (clusters.tf) — no static kubeconfig/token on disk, re-fetched at apply time.
+
+provider "kubernetes" {
+  alias                  = "blue"
+  host                   = module.cluster["blue"].cluster_endpoint
+  cluster_ca_certificate = base64decode(module.cluster["blue"].cluster_ca)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["blue"].cluster_name, "--output", "json"]
+  }
+}
+
+provider "helm" {
+  alias = "blue"
+  kubernetes {
+    host                   = module.cluster["blue"].cluster_endpoint
+    cluster_ca_certificate = base64decode(module.cluster["blue"].cluster_ca)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["blue"].cluster_name, "--output", "json"]
+    }
+  }
+}
+
+provider "kubectl" {
+  alias                  = "blue"
+  host                   = module.cluster["blue"].cluster_endpoint
+  cluster_ca_certificate = base64decode(module.cluster["blue"].cluster_ca)
+  load_config_file       = false
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["blue"].cluster_name, "--output", "json"]
+  }
+}

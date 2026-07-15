@@ -1,0 +1,43 @@
+# Helm values for the fluxcd-community/flux2 chart.
+#
+# Consumed by OpenTofu via a helm_release (translate into the release
+# `values`/`set`); this is NOT a Flux HelmRelease. Flux itself is installed by
+# Tofu, then Flux reconciles everything else in the repo.
+#
+# Chart:      fluxcd-community/flux2
+# Version:    2.19.0            (PIN EXACTLY — do not use a range)
+# appVersion: Flux 2.9.1
+# Cluster:    tmprl-dem-cld-blue (account 429214323166, us-west-1, k8s 1.36)
+#
+# Doctrine: fresh stack is the upgrade vehicle — latest-GA, not pet-parity.
+#
+# --------------------------------------------------------------------------
+# Controller topology (must match the pet's 6 controllers)
+# --------------------------------------------------------------------------
+# In chart 2.19.0 the following are ON by default and are intentionally left
+# at their defaults (create: true):
+#   - sourceController        (source.toolkit.fluxcd.io/v1)
+#   - kustomizeController      (kustomize.toolkit.fluxcd.io/v1)
+#   - helmController           (helm.toolkit.fluxcd.io/v2)
+#   - notificationController
+#
+# The two image-automation controllers are enabled EXPLICITLY below. They back
+# the repo's image-automation addon, which authors ImageRepository / ImagePolicy
+# / ImageUpdateAutomation (image.toolkit.fluxcd.io). Setting them explicitly
+# keeps intent obvious and stays correct even if a future chart flips the
+# default. NOTE the chart key is `imageReflectionController` (reflectION), not
+# `imageReflectorController`; this chart has no values.schema.json, so a
+# misspelled key would silently no-op instead of erroring.
+#
+# Everything else (watchAllNamespaces: true, installCRDs: true, RBAC + view/
+# edit/admin aggregation, cluster-admin roleRef, per-controller resource
+# requests, sourceWatcher.create: false, crds.migration.enabled: false) is left
+# at chart defaults, matching the pet's `flux install` topology.
+
+# image-reflector-controller
+imageReflectionController:
+  create: true
+
+# image-automation-controller
+imageAutomationController:
+  create: true

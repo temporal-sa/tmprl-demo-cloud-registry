@@ -21,6 +21,18 @@ variable "kubernetes_version" {
   default     = "1.36"
 }
 
+variable "flux_chart_version" {
+  description = "fluxcd-community/flux2 Helm chart version installed on each cluster (P3). Latest-GA per the upgrade-vehicle doctrine (appVersion Flux 2.9.1); pin exactly, never float."
+  type        = string
+  default     = "2.19.0"
+}
+
+variable "flux_git_branch" {
+  description = "Branch of var.github_repo each cluster's Flux root sync tracks. P3 uses the feature branch (the only branch with clusters/blue/); flip to main at merge / P7."
+  type        = string
+  default     = "feat/full-e2e-iac"
+}
+
 variable "single_nat_gateway" {
   description = "One shared NAT gateway instead of one per AZ. Defaults to per-AZ HA (matches the pet); set true to halve NAT baseline cost on the shared demo VPC."
   type        = bool

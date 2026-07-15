@@ -54,6 +54,18 @@ output "acm_wildcard_certificate_arn" {
   value       = data.aws_acm_certificate.wildcard.arn
 }
 
+output "flux" {
+  description = "Flux install facts per color (P3)."
+  value = {
+    blue = {
+      namespace     = module.flux_blue.namespace
+      chart_version = var.flux_chart_version
+      git_url       = local.flux_git_url
+      git_branch    = var.flux_git_branch
+    }
+  }
+}
+
 output "clusters" {
   description = "Per-color cluster facts consumed by later phases (IRSA, routing) and by operators."
   value = {
