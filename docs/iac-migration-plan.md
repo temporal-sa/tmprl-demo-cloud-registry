@@ -170,7 +170,7 @@ Each phase has an explicit test gate before moving on.
 | Phase | Status |
 | --- | --- |
 | P0 — Foundations | ✅ Done |
-| P1 — Network + cluster | 🚧 Code authored + reviewed, `plan` clean (42 res); `apply`/gate pending |
+| P1 — Network + cluster | ✅ Done (gate passed: nodes Ready + clean destroy + clean re-create) |
 | P2 — Identity + AWS platform | Not started |
 | P3 — Flux bootstrap | Not started |
 | P4 — Routing + DNS | Not started |
@@ -182,7 +182,38 @@ Each phase has an explicit test gate before moving on.
 
 Newest first. One entry per meaningful step so a fresh session can resume.
 
-- **P1 code authored + reviewed; `apply` pending** (commits `330c484` network,
+- **P1 gate PASSED — blue is live** for P2 to build on. Full cycle run:
+  `apply` (42 res) → 4 nodes Ready via emitted `kubeconfig-blue.yaml` (v1.36.2,
+  AL2023, private-only) → `destroy` (42 destroyed, **zero orphans**: VPC/ENI/NAT/
+  EIP/IAM/OIDC/log group all gone, KMS key → PendingDeletion, empty state) →
+  `apply` again (42 res, no name collisions — the Tofu-owned log group + fresh
+  OIDC/KMS alias prove clean re-create). Pet `sa-demo` stayed ACTIVE throughout
+  (structurally impossible to touch — separate VPC, separate names, and it is
+  not in this Tofu state). Hardening confirmed on live nodes: IMDSv2 required,
+  encrypted gp3 root volumes, CMK secret envelope encryption.
+  - **Live blue facts for P2** (recreated during re-apply, so different from the
+    first apply): VPC `vpc-052e367ac19c5ce90`, cluster `tmprl-dem-cld-blue`
+    (endpoint `https://69916084F4D99A6F859FED98F848601D.sk1.us-west-1.eks.amazonaws.com`),
+    OIDC provider `oidc.eks.us-west-1.amazonaws.com/id/69916084F4D99A6F859FED98F848601D`
+    (arn `arn:aws:iam::429214323166:oidc-provider/…/69916084F4D99A6F859FED98F848601D`),
+    node role `tmprl-dem-cld-blue-node`. Read current values any time from
+    `tofu output clusters` — do not hardcode; a destroy/re-create rotates the
+    OIDC id (IRSA trust policies must consume `module.cluster[*].oidc_provider_*`
+    outputs, never a literal id). The first apply's KMS key `6e78a433…` is in
+    PendingDeletion (7-day window) and self-cleans; the live key is a new one.
+  - **P2 first task (carried from review):** set a stable break-glass/CI role in
+    `cluster_admin_principal_arns` (root var already wired) so kubectl admin
+    survives SSO permission-set re-provisioning. Today only the bootstrap-creator
+    (churning SSO role) is admin.
+  - **GOTCHA — Tofu vs SSO creds:** `tofu` (AWS SDK) can fail to refresh SSO role
+    creds mid-session (`GetRoleCredentials 403 / No valid credential sources`)
+    even while the `aws` CLI still works. Bridge it: prefix tofu commands with
+    `eval "$(aws configure export-credentials --format env)"` (exports the CLI's
+    working temp creds into the process). Run long `apply`/`destroy` in the
+    background — each captures static creds at launch and is immune to the
+    interactive session expiring. Use `tofu -chdir=infra …` to avoid `cd`.
+
+- **P1 code authored + reviewed** (commits `330c484` network,
   `2641d68` cluster). Two shallow local modules: `infra/modules/network` (ONE
   shared VPC for all colors) and `infra/modules/cluster` (per-color, instantiated
   by `for_each = toset(var.colors)`, default `["blue"]`; adding `"green"` later
@@ -217,9 +248,9 @@ Newest first. One entry per meaningful step so a fresh session can resume.
     Center re-provisioning (the pet accreted ~54 stale entries). Set a stable
     break-glass/CI role ARN in `cluster_admin_principal_arns` in **P2** so kubectl
     admin survives re-provisioning; the root knob is already wired.
-  - **Gate not yet met:** `apply` + confirm nodes Ready via the emitted
-    kubeconfig + prove clean destroy still to run. `endpoint_public_access_cidrs`
-    defaults `0.0.0.0/0` for bring-up (auth still IAM-gated) — tighten later.
+  - Gate run and passed — see the newer entry above. Note
+    `endpoint_public_access_cidrs` defaults `0.0.0.0/0` for bring-up (auth still
+    IAM-gated) — tighten to an operator allowlist via tfvars later.
 
 - **P0 done** (branch `feat/full-e2e-iac`). `infra/bootstrap/` created the
   dedicated state bucket `tmprl-dem-cld-tofu-state-429214323166-us-west-1`
