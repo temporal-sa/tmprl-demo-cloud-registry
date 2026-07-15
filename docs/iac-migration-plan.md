@@ -170,7 +170,7 @@ Each phase has an explicit test gate before moving on.
 | Phase | Status |
 | --- | --- |
 | P0 — Foundations | ✅ Done |
-| P1 — Network + cluster | Not started |
+| P1 — Network + cluster | 🚧 Code authored + reviewed, `plan` clean (42 res); `apply`/gate pending |
 | P2 — Identity + AWS platform | Not started |
 | P3 — Flux bootstrap | Not started |
 | P4 — Routing + DNS | Not started |
@@ -181,6 +181,45 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P1 code authored + reviewed; `apply` pending** (commits `330c484` network,
+  `2641d68` cluster). Two shallow local modules: `infra/modules/network` (ONE
+  shared VPC for all colors) and `infra/modules/cluster` (per-color, instantiated
+  by `for_each = toset(var.colors)`, default `["blue"]`; adding `"green"` later
+  is conflict-free with zero state moves — verified in review). Raw AWS
+  resources, no community EKS module (keeps it readable per the coding rules).
+  - **Version strategy (decision, per user):** a fresh stack is the *upgrade
+    vehicle* — it always deploys the latest GA EKS (`kubernetes_version` default
+    `1.36`) with addon versions auto-resolved to latest-for-that-version; you
+    never in-place upgrade the pet. Upgrade = stand up a new latest-version
+    color, validate, roll DNS to it.
+  - **Network:** VPC `10.20.0.0/16` (distinct from pet `10.0.0.0/16` so both live
+    during P7), 2 AZs (us-west-1b/1c — only ones this account exposes), per-AZ
+    NAT (HA, matches pet), S3 gateway endpoint, and the k8s subnet role tags the
+    pet lacked. Per-cluster `kubernetes.io/cluster/<name>=shared` tags applied by
+    the cluster module via `aws_ec2_tag` (shared subnets, no ownership fight).
+  - **Cluster (per color, name `tmprl-dem-cld-<color>`):** fresh IAM roles,
+    `authentication_mode=API` + bootstrap-creator admin, Tofu-owned CloudWatch
+    log group (clean destroy + no re-create clash), IRSA OIDC provider (issuer
+    thumbprint via `data.tls_certificate`), node group matching the pet
+    (t3.large, min3/desired4/max10) but AL2023 in **private** subnets, core
+    addons (vpc-cni/kube-proxy/coredns) at auto-latest, ASG cluster-autoscaler
+    discovery tags. Emits `infra/kubeconfig-<color>.yaml` (exec auth, gitignored).
+  - **Pre-apply adversarial review** (5 dims → per-finding verify; 7 confirmed /
+    9 rejected) drove hardening that is now in the code: node **launch template**
+    forcing encrypted gp3 root volumes + IMDSv2 required (account has
+    EBS-default-encryption OFF); **KMS envelope encryption** for Secrets
+    (`enable_secrets_encryption`, default on); and root knobs
+    `endpoint_public_access_cidrs`, `cluster_admin_principal_arns`,
+    `single_nat_gateway`. blue/green forward-compat dimension passed clean.
+  - **Known follow-up (review finding, medium):** the only durable cluster-admin
+    is the SSO AdministratorAccess role, whose ARN suffix *churns* on Identity
+    Center re-provisioning (the pet accreted ~54 stale entries). Set a stable
+    break-glass/CI role ARN in `cluster_admin_principal_arns` in **P2** so kubectl
+    admin survives re-provisioning; the root knob is already wired.
+  - **Gate not yet met:** `apply` + confirm nodes Ready via the emitted
+    kubeconfig + prove clean destroy still to run. `endpoint_public_access_cidrs`
+    defaults `0.0.0.0/0` for bring-up (auth still IAM-gated) — tighten later.
 
 - **P0 done** (branch `feat/full-e2e-iac`). `infra/bootstrap/` created the
   dedicated state bucket `tmprl-dem-cld-tofu-state-429214323166-us-west-1`
