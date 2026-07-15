@@ -48,6 +48,15 @@ resource "aws_subnet" "public" {
     # Lets the AWS cloud provider auto-discover subnets for internet-facing LBs.
     "kubernetes.io/role/elb" = "1"
   }
+
+  # These subnets are shared across colors; each cluster stamps its own
+  # kubernetes.io/cluster/<name> tag via a separate aws_ec2_tag resource. Without
+  # this, any update here (e.g. a default_tags change) reconciles the full tag set
+  # and strips those externally-managed per-color tags. Ignore tag drift so the
+  # aws_ec2_tag resources own their keys and coexist. (Create still sets tags.)
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 # Private subnets: EKS nodes and pods (VPC CNI hands out real VPC IPs, so these
@@ -63,6 +72,13 @@ resource "aws_subnet" "private" {
     Name = "${var.name_prefix}-private-${each.key}"
     # Lets the AWS cloud provider auto-discover subnets for internal LBs.
     "kubernetes.io/role/internal-elb" = "1"
+  }
+
+  # Shared across colors; see the note on aws_subnet.public. aws_ec2_tag resources
+  # own the per-color kubernetes.io/cluster/<name> keys — ignore tag drift here so a
+  # tag update never strips them.
+  lifecycle {
+    ignore_changes = [tags, tags_all]
   }
 }
 
