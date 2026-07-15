@@ -191,7 +191,7 @@ Each phase has an explicit test gate before moving on.
 | --- | --- |
 | P0 — Foundations | ✅ Done |
 | P1 — Network + cluster | ✅ Done (gate passed: nodes Ready + clean destroy + clean re-create) |
-| P2 — Identity + AWS platform | 🔨 In progress (approach locked; see log) |
+| P2 — Identity + AWS platform | ✅ Done (gate passed: 5 IRSA roles assumable on blue + cert validated; shared substrate adopted, 0 destroys) |
 | P3 — Flux bootstrap | Not started |
 | P4 — Routing + DNS | Not started |
 | P5 — Operator cluster dimension | Not started |
@@ -201,6 +201,39 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P2 GATE PASSED — identity layer live on blue, shared substrate adopted.**
+  `tofu apply`: **18 imported, 13 added, 41 changed, 0 destroyed** (every change
+  tag-only). Adversarial diff review ran first (fixed: CI role needed
+  `iam:Tag/UntagPolicy` + `route53:ListTagsForResource`); no other issues.
+  - **Roles assumable (proven on blue via throwaway IRSA pods, now cleaned up):**
+    all five fresh roles assumed their exact `assumed-role/tmprl-dem-cld-<role>`
+    identity and their scoped perms worked — external-secrets → `describe-secret`
+    on `…/platform/temporal-cloud-bootstrap`; cert-manager → Route53
+    `list-resource-record-sets` on the zone; cluster-autoscaler →
+    `describe-auto-scaling-groups`; instruqt-litellm-broker → `dynamodb:GetItem/PutItem`
+    `allowed` (iam simulate); traefik → assume only (trust-only by design).
+  - **Cert validated:** `data.aws_acm_certificate.wildcard` resolved to the ISSUED
+    `…certificate/a6daea0d-6517-4f54-9f34-d82165f22949`.
+  - **Live P2 ARNs** (from `tofu output`): CI role
+    `arn:aws:iam::429214323166:role/tmprl-dem-cld-ci-tofu` (durable cluster admin on
+    blue); IRSA roles `tmprl-dem-cld-{external-secrets,cert-manager,cluster-autoscaler,
+    traefik,instruqt-litellm-broker}`. Read current values from `tofu output
+    irsa_role_arns` / `ci_tofu_role_arn` — do not hardcode.
+  - **Adopted in place (import + prevent_destroy, +default_tags only):** boundary
+    policy, CodeBuild project + role (+2 inline policies), 10 `…/platform/*` secret
+    containers (values NOT managed), 3 operator ECR repos. Pet untouched throughout.
+  - **P3 MUST DO:** the fresh IRSA role names differ from the pet's, so the new
+    `clusters/<color>/` overlays must annotate the NEW names — external-secrets SA
+    → `tmprl-dem-cld-external-secrets` (pet used `tmprl-demo-cloud-external-secrets`),
+    cert-manager → `tmprl-dem-cld-cert-manager`, cluster-autoscaler →
+    `tmprl-dem-cld-cluster-autoscaler` (+ set `autoDiscovery.clusterName` /
+    `awsRegion` for blue), traefik → `tmprl-dem-cld-traefik`, litellm-broker →
+    `tmprl-dem-cld-instruqt-litellm-broker`. Also install cert-manager + the DNS-01
+    `letsencrypt`/`letsencrypt-staging` ClusterIssuers into Flux (out-of-band today).
+  - **DEFERRED to P6:** the `registry-operator` IRSA role (pet holds the clean name;
+    blue operator scaled-to-zero until cutover). **DEFERRED (user):** secret values
+    (out of band) and ECR lifecycle expiry.
 
 - **P2 STARTED — approach locked** after an 8-way live-AWS + GitOps discovery
   sweep (account 429214323166, us-west-1). Repo GitHub slug is
