@@ -192,7 +192,7 @@ Each phase has an explicit test gate before moving on.
 | P0 — Foundations | ✅ Done |
 | P1 — Network + cluster | ✅ Done (gate passed: nodes Ready + clean destroy + clean re-create) |
 | P2 — Identity + AWS platform | ✅ Done (gate passed: 5 IRSA roles assumable on blue + cert validated; shared substrate adopted, 0 destroys) |
-| P3 — Flux bootstrap | Not started |
+| P3 — Flux bootstrap | ✅ Done (gate passed: Flux on blue via Tofu; 10 platform Kustomizations Ready; Traefik Classic ELB live + serving; external-secrets store Valid + cert-manager issuers Ready = IRSA proven; `tofu plan` idempotent) |
 | P4 — Routing + DNS | Not started |
 | P5 — Operator cluster dimension | Not started |
 | P6 — Blue/green cutover | Not started |
@@ -201,6 +201,82 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P3 GATE PASSED — Flux live on blue, full platform layer reconciled.** Tofu
+  installs Flux; Flux syncs `clusters/blue/` from the feature branch. All 10
+  platform Kustomizations `Ready` at `feat/full-e2e-iac@2498f55`; 7 HelmReleases
+  installed clean; **Traefik Classic ELB provisioned + serving** (curl → Traefik
+  404 for unmatched host, i.e. LB→pod path works). **IRSA proven on blue end to
+  end**: external-secrets `ClusterSecretStore platform-secrets` = Valid/ReadWrite
+  (the `tmprl-dem-cld-external-secrets` role reads Secrets Manager), both
+  cert-manager `ClusterIssuer`s Ready (the `tmprl-dem-cld-cert-manager` role
+  registered ACME accounts via DNS-01 Route53). **`tofu apply`: 5 added, 0
+  changed, 0 destroyed; re-`plan` = "No changes"** (idempotent — pet + all P1/P2
+  resources untouched). Commits `0d89241` (blue tree) + `2498f55` (Tofu), pushed.
+  - **Decisions locked with the user:** (1) **full duplication** — `clusters/blue/`
+    is a self-contained copy of the pet tree, never an overlay (zero indirection;
+    matches the anti-abstraction rule; lets blue/green run different versions as
+    the upgrade vehicle intends); (2) **latest-GA versions** (upgrade-vehicle
+    doctrine), NOT pet parity; (3) **reuse the read-only PAT over HTTPS** — the
+    `…/github-temporal-sa-readonly` secret is `{username,password}` JSON, exactly
+    Flux's basic-auth shape; Tofu `jsondecode`s it into the git-auth Secret. No new
+    deploy key, no repo-admin step.
+  - **Latest-GA versions deployed (differ from the pet by design):** flux2 chart
+    `2.19.0`/Flux `2.9.1`, cert-manager `v1.21.0`, external-secrets `2.7.0`,
+    Traefik chart `41.0.2`/**Traefik v3.7.6** (major v2→v3 from the pet), cluster-
+    autoscaler chart `9.58.0`/image `v1.36.0` (matched to k8s 1.36), temporal-
+    worker-controller `0.27.0`/app `1.8.0`, metrics-server `3.13.1`,
+    k8s-dns-node-cache `1.26.8`. Every value reconciled against each chart's
+    latest schema + `helm template`-validated before apply (workflow
+    `wf_051453b3-71a`); notable value-schema fixes: cert-manager `installCRDs`→
+    `crds.enabled`/`keep`; Traefik `logs.general.level`→`log.level`
+    (serviceAccountAnnotations stays top-level); flux2 key is
+    `imageReflectionController` (not …Reflector…).
+  - **Tofu structure:** `helm`/`kubernetes`/`kubectl`(alekc) providers, aliased
+    per color (`*.blue`), exec `aws eks get-token` auth. `modules/flux`:
+    `helm_release flux2` + `kubernetes_secret` git-auth + `GitRepository` + root
+    `Kustomization` via `kubectl_manifest` (`server_side_apply` → clean Flux
+    co-ownership, no drift; no plan-time CRD dry-run). Root objects carry no Helm
+    owner so Flux ADOPTS the byte-identical committed `source.yaml`/
+    `kustomizations.yaml` — mirrors the pet's hand-bootstrap. **Providers can't be
+    `for_each`'d** like `module.cluster`, so **green at P6 = a second provider-
+    alias block (providers.tf) + a second `module` block (flux.tf)** — the one
+    place adding a color is not a pure `var.colors` edit.
+  - **Live blue Flux facts** (read from `tofu output flux` / the cluster; ELB
+    rotates on rebuild — do not hardcode): GitRepository `cluster-gitops-config`
+    (HTTPS, branch `feat/full-e2e-iac`), git-auth Secret `cluster-gitops-config-auth`;
+    Traefik Classic ELB `a65d2de6…-…​.us-west-1.elb.amazonaws.com` (ports 80/443).
+  - **CROSS-PHASE flags the next phases MUST honor:**
+    - **Traefik v3 CRD group** changed `traefik.containo.us`→`traefik.io`. Porting
+      instruqt-litellm + the operator-generated `IngressRoute`/`Middleware` (P5)
+      MUST use `traefik.io/v1alpha1` + v3 matcher syntax, or v3 silently ignores
+      them.
+    - **Flux image CRDs are `image.toolkit.fluxcd.io/v1`-only** in 2.9. The pet's
+      `instruqt-litellm/install/image-automation.yaml` uses `v1beta2` → rewrite to
+      `v1` when porting. (All other repo Flux apiVersions are fine.)
+    - **worker-controller `certmanager.install=false`** on blue (pet had `true`);
+      `install: true` deploys a whole *second* cert-manager subchart. Blue relies
+      on its own cert-manager addon, so worker-controller `dependsOn: cert-manager`.
+    - **node-local-dns** DaemonSet is Ready but only actually caches if the kubelet
+      `--cluster-dns` is the link-local `169.254.20.10` (a P1 launch-template
+      concern) — verify the cache is truly in-path on blue (not a gate blocker).
+    - **LE prod rate limits:** do NOT pre-warm blue against hostnames the pet
+      already serves; use `letsencrypt-staging` or distinct hosts until cutover.
+  - **Deferred to later phases (NOT wired in blue yet):** instruqt-litellm (app
+    layer), registry layer (CRDs/operator/projects/instruqt-courses; operator runs
+    scaled-to-zero until P6), and the `registry-operator` IRSA role (P6).
+  - **P4 pre-decision (user asked):** to test blue behind its ELB before the DNS
+    swing, add a per-color test record independent of the wildcard
+    (e.g. `blue.tmprl-demo.cloud` → blue ELB) + a Traefik `IngressRoute` matching
+    that host; cert-manager DNS-01 can pre-mint its cert with zero inbound traffic.
+    For demo hostnames use `curl --connect-to <host>:443:<blue-elb>:443`. Raw ELB
+    name alone 404s (Traefik is Host-routed) — confirmed live.
+  - **GOTCHA — local aws CLI default region is us-west-2.** Bare `aws` calls
+    silently hit the wrong region (a Secrets Manager lookup 404s as
+    ResourceNotFound). Always pass `--region us-west-1` / export `AWS_REGION`.
+    (providers.tf already pins the Tofu aws provider to var.region for this reason.)
+    Also: this env's `kubectl` rejects flags before the subcommand — use the
+    `KUBECONFIG` env var, not `--kubeconfig`.
 
 - **P2 GATE PASSED — identity layer live on blue, shared substrate adopted.**
   `tofu apply`: **18 imported, 13 added, 41 changed, 0 destroyed** (every change
