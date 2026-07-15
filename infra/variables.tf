@@ -69,6 +69,18 @@ variable "route53_zone_id" {
   default     = "Z08792403SH7ADUAH7X5X"
 }
 
+variable "github_repo" {
+  description = "GitHub repo slug (org/name) the CI Tofu apply role trusts via GitHub OIDC. NB: this is the real GitHub repo, which differs from the local checkout dir name."
+  type        = string
+  default     = "temporal-sa/tmprl-demo-cloud-registry"
+}
+
+variable "ci_branch_refs" {
+  description = "Git refs on var.github_repo allowed to assume the CI Tofu role. Least-privilege: exact branch subs, not a refs/heads/* wildcard."
+  type        = list(string)
+  default     = ["refs/heads/main", "refs/heads/feat/full-e2e-iac"]
+}
+
 variable "bootstrap_secret_names" {
   description = "Names of the pre-existing AWS Secrets Manager entries the operator reads. Tofu manages the containers (P2); the sensitive values are populated out of band."
   type = object({

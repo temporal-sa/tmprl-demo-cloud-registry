@@ -44,6 +44,11 @@ output "irsa_role_arns" {
   }
 }
 
+output "ci_tofu_role_arn" {
+  description = "GitHub Actions OIDC role for Tofu apply — the durable cluster admin and future CI identity."
+  value       = aws_iam_role.ci_tofu.arn
+}
+
 output "acm_wildcard_certificate_arn" {
   description = "ARN of the reused *.<domain> ACM wildcard cert (P4 attaches it to the load balancer)."
   value       = data.aws_acm_certificate.wildcard.arn
