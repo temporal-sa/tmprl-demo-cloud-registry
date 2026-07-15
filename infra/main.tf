@@ -3,14 +3,7 @@
 # only the state bucket existing). Real resources arrive in later phases:
 # P1 network + EKS, P2 IAM/ECR/CodeBuild/Secrets/ACM, P3 Flux, P4 routing/DNS.
 
+# The wrong-account guard is enforced by allowed_account_ids on the aws
+# provider (providers.tf) — a hard error on plan/apply, not a soft warning.
+# This data source just feeds the aws_account_id output.
 data "aws_caller_identity" "current" {}
-
-# Surface a wrong-account mistake loudly without adding anything to the plan.
-# (Resource-level preconditions take over as a hard gate once later phases add
-# real resources.)
-check "correct_account" {
-  assert {
-    condition     = data.aws_caller_identity.current.account_id == var.aws_account_id
-    error_message = "Wrong AWS account: expected ${var.aws_account_id}, got ${data.aws_caller_identity.current.account_id}. Check your AWS credentials/profile."
-  }
-}

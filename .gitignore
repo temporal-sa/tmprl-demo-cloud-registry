@@ -47,6 +47,8 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 # real tfvars can hold secrets; the .example is committed instead.
+# covers both HCL (*.tfvars, *.auto.tfvars) and JSON (*.tfvars.json) var files.
 *.tfvars
+*.tfvars.json
 !*.tfvars.example
 # NB: .terraform.lock.hcl IS committed (pins provider versions) — not ignored.
