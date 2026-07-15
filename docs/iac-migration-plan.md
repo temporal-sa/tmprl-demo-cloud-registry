@@ -64,7 +64,7 @@ Update them in the same commits as the work.
 | Cluster provisioning | **Greenfield + migrate** — build a new Tofu-managed cluster alongside the hand-built `sa-demo` pet, never import the pet |
 | VPC | **New Tofu-managed VPC**, shared by blue + green |
 | Blue/green operator model | **Standby** — only the active color's operator polls Temporal; the other runs scaled to zero until cutover |
-| Cutover mechanism | **Declarative** — a Tofu `active_color` variable repoints the wildcard record. No imperative scripts. |
+| Cutover mechanism | **Declarative base-record swing** — a Tofu `active_color` variable repoints one `live.tmprl-demo.cloud` record; managed demos CNAME `live` (created by external-dns), while the pet keeps the `*` wildcard as its manual catch-all. See [DNS + cutover design](#dns--cutover-design-p4p6p7). No imperative scripts. |
 | Operator multi-cluster safety | **Add a cluster/color dimension** to the operator (task queue + workflow id + reconcile key) |
 | State backend | **Dedicated S3 bucket** `tmprl-dem-cld-tofu-state-429214323166-us-west-1` (versioning, SSE-S3, public access blocked, TLS-only policy) |
 | State locking | **Native S3 lockfile** (`use_lockfile`, OpenTofu ≥ 1.10) — no DynamoDB table |
@@ -123,6 +123,86 @@ This is one new dimension, not a new abstraction layer, and fits the existing
 level-triggered / derive-from-name design. Shared global resources stay safe
 because in standby only one color's operator is ever running.
 
+## DNS + cutover design (P4/P6/P7)
+
+How managed demos get stable per-demo DNS that swings atomically between colors
+**without disrupting the pet's manual traffic**. Supersedes the earlier
+raw-wildcard-swing and per-color-prefix ideas.
+
+### The records
+
+| Record | Points at | Owner | Notes |
+| --- | --- | --- | --- |
+| `*.tmprl-demo.cloud` | pet Traefik ELB | Tofu (leave as-is) | The **manual/legacy catch-all** — never moved. Everything users deploy by hand on the pet keeps resolving here. |
+| `live.tmprl-demo.cloud` | **active color's** Traefik ELB (ALIAS A) | Tofu, via `active_color` | The **single swing point.** Low TTL (~60s). This is the only thing that moves on cutover. |
+| `<demo>.tmprl-demo.cloud` | CNAME → `live` | **external-dns** (per cluster) | One per managed demo. An exact record **overrides the wildcard** (verified live: `registry` beats `*`), so managed demos route to the active color while everything else falls through to the pet. |
+| `blue.` / `green.tmprl-demo.cloud` | that color's ELB | Tofu | Stable per-color names for pre-cutover validation (`curl`, browser). cert-manager can pre-mint their certs via DNS-01 with zero inbound traffic. |
+
+### Why it's multi-cluster-safe (the key property)
+
+Per-demo records are **cluster-agnostic** — they always target `live`, never a
+specific ELB. So blue's and green's external-dns write the *identical* record;
+there is no Route53 ownership fight. The color lives in exactly one place: the
+`live` record (Tofu-managed). This is what makes running external-dns on two
+clusters against one zone safe.
+
+### Ownership split
+
+- **Tofu:** `live` (the swing), the `blue.`/`green.` names, and it leaves the `*`
+  wildcard on the pet. Data-sources each Traefik ELB hostname.
+- **external-dns** (new addon, per cluster): the per-demo `<demo> → live` CNAMEs
+  + ownership TXTs, generated from the operator's IngressRoutes. Config:
+  `--source=traefik-proxy` (reads Traefik **v3** `traefik.io` natively),
+  `--provider=aws`, `--domain-filter=tmprl-demo.cloud`, `--registry=txt`,
+  `--txt-prefix=extdns-`, a per-color `--txt-owner-id`, `--policy=sync`. It can
+  **never** touch `*`/`live`/`registry` (it owns only records carrying its TXT).
+  New IRSA role `tmprl-dem-cld-external-dns` (route53 Change/List on the zone;
+  model on the cert-manager role).
+- **Operator [P5]:** stamps `external-dns.alpha.kubernetes.io/target:
+  live.tmprl-demo.cloud` on every IngressRoute it generates. This is the **only**
+  operator DNS change and it needs **no** Route53 permissions (external-dns holds
+  the creds).
+
+### The flip (blue → green → blue)
+
+1. Warm the target color fully — its operator reconciles all demos (IngressRoutes
+   + certs; cert-manager pre-mints via DNS-01, no traffic needed). Validate via
+   `green.tmprl-demo.cloud` while prod still flows to blue.
+2. `active_color=green` → `tofu apply` repoints `live` → green's ELB. All managed
+   demos follow within the TTL (they all CNAME `live`).
+3. Rollback = `active_color=blue`, apply again. Instant — blue never moved.
+
+The pet wildcard is untouched throughout, so manual users are never disrupted.
+Because every managed demo CNAMEs `live`, they swing **together** — the target
+color must have *all* demos before the flip. Gradual per-demo migration is
+possible instead: a demo shifts to blue the moment blue's external-dns creates
+its explicit record (exact record beats the pet wildcard).
+
+### Spike findings (external-dns v0.21.0, dry-run against blue's live Traefik v3)
+
+- external-dns reads Traefik **v3** IngressRoutes natively (`traefik.io/v1alpha1`;
+  `TraefikEnableLegacy:false` by default). Confirmed: it discovered a real v3
+  IngressRoute on blue.
+- The traefik source needs a **target** on the IngressRoute — it emits *no*
+  endpoint without one. `--default-targets` and `--force-default-targets` do
+  **not** help the traefik source (proven: still "No endpoints could be
+  generated"). The working mechanism is the per-IngressRoute
+  `external-dns.alpha.kubernetes.io/target` annotation → hence the operator change.
+- With the annotation it produced exactly `spike-demo → CNAME → live` + an
+  ownership TXT at `extdns-cname-spike-demo` (different name → no CNAME/TXT clash).
+
+### Gotchas to honour
+
+- **Bootstrap order:** `live` (Tofu) must exist before demo CNAMEs resolve.
+- **LE rate limits:** both colors issuing certs for the same demo hosts during
+  coexistence can hit Let's Encrypt duplicate-cert limits — use staging while
+  iterating / mind repeated flips.
+- **Name shadowing:** an explicit managed-demo record shadows the wildcard for
+  that exact name; add a naming guard so a managed demo can't collide with a
+  manual pet host.
+- external-dns runs on the active color (standby); during a transition both may
+  run, but records are identical (→ `live`) so it's benign.
+
 ## Phases (test as we go)
 
 Each phase has an explicit test gate before moving on.
@@ -140,16 +220,25 @@ Each phase has an explicit test gate before moving on.
 - **P3 — Flux bootstrap.** Tofu installs Flux + the root sync against a
   **per-color cluster path** (`clusters/<color>/`, parametrizing today's
   hardcoded `sa-demo`). *Gate: addons reconcile, Traefik LB provisioned.*
-- **P4 — Routing + DNS.** Tofu reads the Traefik LB hostname back and writes the
-  wildcard record. Decide classic ELB vs NLB-via-annotation here. *Gate: DNS
-  resolves to the cluster; a demo is reachable.*
-- **P5 — Operator cluster dimension.** Implement the color dimension above.
-  *Gate: two clusters, no activity cross-routing, green reconciles its demos
-  independently of blue.*
-- **P6 — Blue/green cutover.** `active_color` variable swings the wildcard.
+- **P4 — Routing + DNS.** Tofu data-sources each color's Traefik LB hostname and
+  creates the `live.tmprl-demo.cloud` swing record (ALIAS → active color) plus the
+  per-color `blue.`/`green.` validation names; adds the **external-dns** addon
+  (+ IRSA role). The pet keeps the `*` wildcard untouched (manual catch-all).
+  Classic ELB already confirmed in P3. See
+  [DNS + cutover design](#dns--cutover-design-p4p6p7). *Gate: a per-demo record
+  resolves to blue and a demo is reachable there, with the pet wildcard undisturbed.*
+- **P5 — Operator cluster dimension.** Implement the color dimension above, AND
+  have the operator stamp the `external-dns.alpha.kubernetes.io/target:
+  live.tmprl-demo.cloud` annotation on every generated IngressRoute (the only
+  operator DNS change; no Route53 perms on the operator). *Gate: two clusters, no
+  activity cross-routing, green reconciles its demos independently of blue.*
+- **P6 — Blue/green cutover.** `active_color` swings the single `live` record; all
+  managed demos follow (they CNAME `live`); the pet wildcard never moves.
   *Gate: stand up green, flip, verify, roll back.*
-- **P7 — Migrate + retire the pet.** Point the new stack at real `projects/`,
-  validate demos, swing DNS off the old `sa-demo` ELB, decommission it.
+- **P7 — Migrate + retire the pet.** Move managed demos onto the new stack —
+  explicit `live`-CNAME records override the pet wildcard per demo, so migration
+  is gradual and reversible. The pet can then persist as the `*` wildcard/manual
+  catch-all or be decommissioned (a separate, unforced decision).
 
 ## Open items to resolve early
 
@@ -201,6 +290,31 @@ Each phase has an explicit test gate before moving on.
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P4/P5 DNS + cutover design locked (with external-dns spike).** New model,
+  driven by a user requirement to NOT disrupt manual pet deployments: keep the
+  `*` wildcard on the pet as the manual catch-all; add a Tofu-managed
+  `live.tmprl-demo.cloud` swing record (ALIAS → active color, `active_color`); each
+  managed demo gets an explicit `<demo> → CNAME → live` record (exact record beats
+  the wildcard — verified live: `registry` resolves to CloudFront, not the pet ELB
+  via `*`). Per-demo records are **cluster-agnostic** (always → `live`), so two
+  colors' external-dns can't fight over the zone. Full design + record table in
+  [DNS + cutover design](#dns--cutover-design-p4p6p7).
+  - **external-dns spike (v0.21.0, dry-run/inmemory against blue's live Traefik
+    v3) — all confirmed:** reads Traefik v3 `traefik.io/v1alpha1` natively (legacy
+    off by default); the traefik source needs a target on the IngressRoute
+    (`--default-targets`/`--force-default-targets` do NOT work for it — both
+    proven to emit no endpoint); the working mechanism is the per-IngressRoute
+    `external-dns.alpha.kubernetes.io/target: live.tmprl-demo.cloud` annotation,
+    which produced exactly `<demo> CNAME → live` + an ownership TXT at
+    `extdns-cname-<demo>` (different name, no clash). Spike ran dry-run/inmemory →
+    zero Route53 writes, resources cleaned up.
+  - **Impact:** P4 adds the external-dns addon + `tmprl-dem-cld-external-dns` IRSA
+    role + the `live`/`blue.`/`green.` records (pet wildcard untouched). P5 adds
+    one operator change: stamp the target annotation on generated IngressRoutes
+    (no Route53 perms on the operator). Cutover (P6) = swing the single `live`
+    record. Classic ELB (P3) stands; no NLB. Pet can persist as the manual
+    wildcard catch-all past P7.
 
 - **P3 GATE PASSED — Flux live on blue, full platform layer reconciled.** Tofu
   installs Flux; Flux syncs `clusters/blue/` from the feature branch. All 10
