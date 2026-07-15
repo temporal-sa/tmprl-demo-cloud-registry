@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars ONLY to override a default. Every variable already
+# defaults to the live tmprl-demo.cloud environment (see variables.tf), so the
+# normal case is no terraform.tfvars file at all. Real terraform.tfvars is
+# gitignored; this .example is committed.
+
+# region          = "us-west-1"
+# aws_account_id  = "429214323166"
+# name_prefix     = "tmprl-dem-cld"
+# domain          = "tmprl-demo.cloud"
+# route53_zone_id = "Z08792403SH7ADUAH7X5X"
