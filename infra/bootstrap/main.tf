@@ -37,6 +37,29 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# Refuse any request to this state bucket that isn't over TLS. A Deny-only
+# conditional policy is not a "public" grant, so it coexists with the public
+# access block above.
+resource "aws_s3_bucket_policy" "state" {
+  bucket = aws_s3_bucket.state.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.state.arn,
+        "${aws_s3_bucket.state.arn}/*",
+      ]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
   # Noncurrent-version rules only make sense once versioning is on.
   depends_on = [aws_s3_bucket_versioning.state]
