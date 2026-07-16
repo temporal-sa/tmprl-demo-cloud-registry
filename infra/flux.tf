@@ -34,3 +34,23 @@ module "flux_blue" {
   git_password            = local.github_creds.password
   root_kustomization_path = "./clusters/blue/flux-system"
 }
+
+# green (P6): same module, green providers, syncing ./clusters/green/. Same repo +
+# branch + read-only PAT as blue — each cluster runs its own Flux against its own
+# color path, so there is no cross-cluster conflict.
+module "flux_green" {
+  source = "./modules/flux"
+  providers = {
+    helm       = helm.green
+    kubernetes = kubernetes.green
+    kubectl    = kubectl.green
+  }
+
+  flux_chart_version = var.flux_chart_version
+
+  git_url                 = local.flux_git_url
+  git_branch              = var.flux_git_branch
+  git_username            = local.github_creds.username
+  git_password            = local.github_creds.password
+  root_kustomization_path = "./clusters/green/flux-system"
+}

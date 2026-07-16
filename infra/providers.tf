@@ -22,8 +22,9 @@ provider "aws" {
 #
 # Terraform/OpenTofu forbid for_each on provider blocks, while module.cluster IS
 # for_each'd over var.colors. So the Flux layer uses a STATIC per-color aliased
-# provider set (blue now; green adds a second block at P6). Referencing
-# module.cluster["blue"] is safe because "blue" is always a key of var.colors.
+# provider set — one block per color (blue + green as of P6). Referencing
+# module.cluster["<color>"] is safe because each color is always a key of
+# var.colors. Adding another color = another block here (the one non-for_each edit).
 #
 # Auth is the same `aws eks get-token` exec plugin the emitted kubeconfig uses
 # (clusters.tf) — no static kubeconfig/token on disk, re-fetched at apply time.
@@ -61,5 +62,44 @@ provider "kubectl" {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
     args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["blue"].cluster_name, "--output", "json"]
+  }
+}
+
+# --- green (P6): the cutover sibling. Identical to the blue set above, pointed at
+# module.cluster["green"]. Safe because "green" is a key of var.colors.
+
+provider "kubernetes" {
+  alias                  = "green"
+  host                   = module.cluster["green"].cluster_endpoint
+  cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
+  }
+}
+
+provider "helm" {
+  alias = "green"
+  kubernetes {
+    host                   = module.cluster["green"].cluster_endpoint
+    cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
+    }
+  }
+}
+
+provider "kubectl" {
+  alias                  = "green"
+  host                   = module.cluster["green"].cluster_endpoint
+  cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
+  load_config_file       = false
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
   }
 }

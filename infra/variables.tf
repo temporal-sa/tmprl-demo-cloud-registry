@@ -10,9 +10,9 @@ variable "region" {
 }
 
 variable "colors" {
-  description = "Cluster colors to stand up on the shared VPC. Blue only until a green sibling is added for a cutover; the wildcard record swings between them in a later phase."
+  description = "Cluster colors to stand up on the shared VPC. Blue + green as of the P6 cutover; the live.<domain> swing record (var.active_color) repoints between them. Green is torn down after the P6 gate — drop it back to [\"blue\"] then (removing its providers.tf/flux.tf blocks + dns.tf entry) to destroy it."
   type        = list(string)
-  default     = ["blue"]
+  default     = ["blue", "green"]
 }
 
 variable "active_color" {
