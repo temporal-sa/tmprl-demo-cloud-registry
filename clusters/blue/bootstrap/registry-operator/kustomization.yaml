@@ -11,9 +11,9 @@ generatorOptions:
 configMapGenerator:
   - name: registry-operator-common-config
     literals:
-      # Base queue stays uncolored; the operator derives registry-management-blue
-      # from DEMO_REGISTRY_CLUSTER. This one var is the whole P5 color dimension.
-      - DEMO_REGISTRY_TASK_QUEUE=registry-management
+      # The color IS the task queue: the operator derives registry-management-blue
+      # from DEMO_REGISTRY_CLUSTER. Do NOT set DEMO_REGISTRY_TASK_QUEUE here — an
+      # explicit value overrides the color derivation and yields an uncolored queue.
       - DEMO_REGISTRY_CLUSTER=blue
       - DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws
       - DEMO_REGISTRY_TEMPORAL_CLOUD_MODE=cloud-api
@@ -34,11 +34,11 @@ configMapGenerator:
       - DEMO_REGISTRY_SOURCE_WATCH_NAMESPACE=tmprl-dem-cld-registry-operator
       - DEMO_REGISTRY_SOURCE_WATCH_INTERVAL=1m
       - DEMO_REGISTRY_ACTIVITY_WORKERS=20
-  # Blue runs ONE worker+watch process (no self-rendered worker handoff), so watch
-  # mode is "always" (watch continuously) and the worker is enabled in-process.
+  # Blue runs ONE worker+watch process (no self-rendered worker handoff). WATCH_MODE
+  # truthy = "always" (watch continuously); the parser maps true/1/yes/on -> always,
+  # NOT the literal string "always". Worker is enabled in-process.
   - name: registry-operator-config
     literals:
       - DEMO_REGISTRY_WORKER_ENABLED=true
-      - DEMO_REGISTRY_WATCH_ENABLED=true
-      - DEMO_REGISTRY_WATCH_MODE=always
+      - DEMO_REGISTRY_WATCH_MODE=true
       - DEMO_REGISTRY_WATCH_INTERVAL_SECONDS=15
