@@ -184,7 +184,7 @@ spec:
         - DB_URL
 
   ingress:
-    subdomain: langgraph-temporal
+    subdomain: langgraph
     temporalAuthRequired: true
     component: frontend
     port: http
