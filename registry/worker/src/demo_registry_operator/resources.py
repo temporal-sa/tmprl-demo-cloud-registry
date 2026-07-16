@@ -1369,9 +1369,14 @@ def promotion_resources(
             )
         )
     if ingress_routes(demo_project):
-        resources.append(
-            certificate_resource(demo_project, namespace=route_namespace)
-        )
+        # Per-host Let's Encrypt cert only on the uncolored pet. Colored clusters
+        # serve demos from a single wildcard cert via Traefik's default TLSStore
+        # (see ingress_route_tls), so no per-rollout-namespace cert is minted —
+        # avoiding LE duplicate-cert rate-limit burn on rapid deploys.
+        if not operator_cluster():
+            resources.append(
+                certificate_resource(demo_project, namespace=route_namespace)
+            )
         resources.append(
             https_redirect_middleware(demo_project, namespace=route_namespace)
         )
@@ -2266,6 +2271,21 @@ def traefik_api_version() -> str:
     return TRAEFIK_API_VERSION_V3 if operator_cluster() else TRAEFIK_API_VERSION_V2
 
 
+def ingress_route_tls(demo_project: dict[str, Any]) -> dict[str, Any]:
+    """TLS config for a demo's websecure IngressRoute.
+
+    Colored clusters (blue/green) serve every demo from ONE wildcard cert via
+    Traefik's default TLSStore, so this is an empty block (= "terminate TLS with
+    the default store's cert"). That means a new per-rollout namespace does NOT
+    mint a fresh Let's Encrypt cert — critical because rapid deploys would
+    otherwise burn LE's duplicate-certificate rate limit. The uncolored pet keeps
+    its per-host cert secret (its Traefik v2 has no wildcard default store).
+    """
+    if operator_cluster():
+        return {}
+    return {"secretName": f"{project_name(demo_project)}-tls"}
+
+
 def platform_env_vars(
     demo_project: dict[str, Any],
     component_name: str,
@@ -2712,9 +2732,7 @@ def ingress_resources(
         "spec": {
             "entryPoints": ["websecure"],
             "routes": routes,
-            "tls": {
-                "secretName": f"{project_name(demo_project)}-tls",
-            },
+            "tls": ingress_route_tls(demo_project),
         },
     }
 

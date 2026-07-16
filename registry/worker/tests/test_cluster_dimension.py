@@ -140,6 +140,31 @@ def test_ingress_colored_emits_v3_and_external_dns_target(monkeypatch):
         ] == "live.tmprl-demo.cloud"
 
 
+def _websecure_route(routes):
+    return next(r for r in routes if r["spec"]["entryPoints"] == ["websecure"])
+
+
+def test_tls_uncolored_uses_per_host_cert(monkeypatch):
+    # The pet keeps its per-host Let's Encrypt cert: the websecure route names a
+    # secret and promotion_resources emits a matching Certificate.
+    monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    base = _websecure_route(resources.ingress_resources(banking_project()))
+    assert base["spec"]["tls"] == {"secretName": "banking-money-transfer-tls"}
+    rendered = resources.promotion_resources(banking_project())
+    assert any(r["kind"] == "Certificate" for r in rendered)
+
+
+def test_tls_colored_uses_wildcard_default_store(monkeypatch):
+    # Colored clusters serve the wildcard cert via Traefik's default TLSStore:
+    # the websecure route has an EMPTY tls block and NO per-host Certificate is
+    # minted (so a new per-rollout namespace never triggers a fresh LE issuance).
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    base = _websecure_route(resources.ingress_resources(banking_project()))
+    assert base["spec"]["tls"] == {}
+    rendered = resources.promotion_resources(banking_project())
+    assert not any(r["kind"] == "Certificate" for r in rendered)
+
+
 # --- self-canary color propagation ------------------------------------------
 
 def test_self_canary_inherits_color_into_rendered_worker(monkeypatch):
