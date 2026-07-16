@@ -295,11 +295,106 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | Not started |
+| P7 — Migrate + retire the pet | 🔄 In progress — approach locked (big-bang standby; all demos incl Lambda in one cutover; instruqt-litellm ported; durable green deferred) |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7 STARTED — approach locked** after a live-AWS + repo discovery sweep (workflow
+  `wf_f2ad0e0a-b1b`, 5 parallel readers: catalog / Flux wiring / operator concurrency
+  audit / infra surface / litellm port) plus direct kubectl/aws probes of both clusters.
+  **Locked decisions (with the user):** (1) **big-bang standby** cutover — scale the
+  pet operator to 0, then wire the full catalog to blue so blue is the *sole* reconciler
+  and adopts every existing Temporal Cloud namespace; no operator code change; reversible.
+  (2) **all demos in one cutover**, incl. the Lambda demo (`no-roads-serverless`) —
+  validate its serverless path explicitly, don't defer it. (3) **port instruqt-litellm**
+  to blue now (author `clusters/blue/addons/instruqt-litellm/`). (4) **durable green
+  deferred** — migrate + retire on blue only; green rebuild is a later, separate task.
+  - **Live state (2026-07-16).** Pet `sa-demo` (tracks `main`) carries the entire real
+    catalog: **8 DemoProjects** — banking-money-transfer (Promoted), canonical-ai-demo
+    (⚠️ WorkerRolloutFailed), dejavu-tacos (Promoted), durable-banking-skills (Ready),
+    langgraph-temporal (Promoted), no-roads-serverless (Promoted), pizza-worker-versioning
+    (Promoted), registry-operator/self-demo (Promoted) — **+ 2 InstruqtCourses**
+    (durable-ad-campaign… Ready, patching-and-recovery… ⚠️ TestFailed). Pet operator is
+    RUNNING (`registry-operator-git-…` 1/1; old `registry-operator-watch` at 0/0). Blue
+    (`tmprl-dem-cld-blue`, tracks `feat/full-e2e-iac`, k8s 1.36.2) is a fully-built EMPTY
+    target: all 14 platform+registry Kustomizations Ready at `1a024c9`, operator 1/1
+    (`DEMO_REGISTRY_CLUSTER=blue`) but **zero demoprojects**. DNS: `live`+`blue`→blue ELB,
+    pet `*` wildcard untouched, **no per-demo CNAMEs yet** (real demos resolve via the pet
+    wildcard). Green fully torn down.
+  - **Discovery reframes (change the plan's earlier assumptions):**
+    - **Same account/region/TC-account/domain.** Blue is the SAME AWS account 429214323166 /
+      us-west-1 / Temporal Cloud `a2dd6` / `tmprl-demo.cloud` as the pet. So the hardcoded
+      literals in `registry.yaml` (account/region/`a2dd6`/`gcp-us-central1`/CodeBuild
+      `tmprl-dem-cld-build`) and `durable-banking-skills` (public FQDN + `a2dd6`) are
+      **already correct for blue** — no re-homing edits. It's a same-account takeover.
+    - **Adopt-existing WORKS (no operator fix needed just to adopt).** The TC namespace
+      path is find-first-then-create (`temporal_cloud.py:525→629`), so blue can adopt the
+      pet's existing per-demo namespaces. The P6 "CreateNamespace non-retryable, no adopt"
+      wording was wrong. **All required Secrets Manager secrets already exist** (same
+      account): `canonical-ai-demo/{anthropic-credentials,db-creds}`,
+      `durable-banking-skills/anthropic-secret`, `platform/instruqt-cli`,
+      `platform/instruqt-litellm/*`, `platform/temporal-cloud-bootstrap`,
+      `registry-operator/{source-auth,temporal,temporal-cloud-bootstrap}`. **No secret
+      staging needed.**
+    - **Concurrency verdict (file:line-verified) — standby is REQUIRED, and sufficient.**
+      Color is folded ONLY into task queue / workflow id / injected env — NOT into shared
+      external-resource names. Two genuine, non-self-healing hazards if both operators
+      reconcile the SAME demo at once: (i) the TC **runtime service account**
+      (`{project}-runtime`, `temporal_auth.py:97-106`) has no atomic dedup — Cloud keys SAs
+      by id not name → concurrent create leaks a duplicate namespace-WRITE credential; (ii)
+      the **runtime-secret** write (`tmprl-dem-cld/{project}/temporal`,
+      `resources.py:4751`) is color-blind last-writer-wins during first-provision/rotation.
+      ECR (`ecr.py:91`) + both k8s SAs converge harmlessly. Steady-state re-reconcile takes
+      the `verified` branch (no write). ⇒ scaling the pet operator to 0 (single writer)
+      removes the window entirely — no code change.
+    - **The 2 migrated courses do NOT use litellm** (neither is in the broker `tracks.yaml`,
+      neither references it). litellm is being ported for platform parity/future LLM tracks,
+      not because these courses need it.
+    - **Migrating onto blue + retiring the pet need ZERO Tofu change.** `live`→blue already;
+      demos ride the `live` CNAME via external-dns; the pet `*` wildcard isn't in Tofu state
+      (retirement is out-of-band). Only a durable-green rebuild would touch infra (deferred).
+    - **Catalog drift + self-demo wrinkle.** `langgraph-temporal` is live on the pet but
+      absent from this branch's `projects/demo/` (lives on `origin/add-langgraph-demo-to-registry`
+      as `projects/demo/langgraph-temporal.yaml`) → include it for "everything". And
+      `projects/demo/registry.yaml` is the operator self-managing itself (`name:
+      registry-operator`, `finalization-policy: retain`); blue's operator is instead
+      Flux-bootstrapped into `tmprl-dem-cld-registry-operator`, so blue must **exclude
+      registry.yaml** from its catalog or it would stand up a second, colliding operator.
+      `projects/demo` + `projects/instruqt` have **no kustomization.yaml** (Flux applies the
+      whole dir) — so the exclusion needs a dedicated path/overlay, not a resources filter.
+  - **Build sequence (each an explicit gate; test as we go):**
+    - **P7.0 Prereqs (safe, mostly done):** secrets confirmed present; add
+      `langgraph-temporal` to `projects/demo/`; decide the `registry.yaml` exclusion
+      mechanism for blue (dedicated Kustomization/path, pet keeps self-managing on `main`).
+    - **P7.1 Author blue catalog + app layer (feature branch, NOT applied to prod yet):**
+      add `registry-projects` (`./projects/demo`, minus the self-demo) + `registry-instruqt-courses`
+      (`./projects/instruqt`) Kustomizations to `clusters/blue/flux-system/kustomizations.yaml`;
+      author `clusters/blue/addons/instruqt-litellm/` (port from the pet with the P3 rewrites:
+      Traefik `traefik.containo.us`→`traefik.io/v1alpha1`; Flux image-automation
+      `image.toolkit.fluxcd.io/v1beta2`→`v1` + repoint `update.path` to the blue tree;
+      IRSA SA → `tmprl-dem-cld-instruqt-litellm-broker`; add the external-dns `target:
+      live.tmprl-demo.cloud` annotation; adopt the wildcard cert / `tls: {}` and drop the
+      per-host Certificate) + its `instruqt-litellm` Kustomization. `kustomize build`-validate all.
+    - **⛔ GATED — P7.1 cutover (irreversible-ish, needs explicit go):** scale the PET
+      operator to 0 (stop pet reconciling; pet workloads keep serving via the wildcard),
+      then let blue reconcile/adopt. This is the standby handoff. Reversible by scaling the
+      pet back up + unwiring blue.
+    - **P7.2 Validate on blue:** each demo adopts its existing TC namespace, reconciles to
+      Promoted, publishes `<demo>→CNAME→live`→blue, serves HTTP 200 on the wildcard cert;
+      exercise feature demos (pizza versioning UX + `PizzaSessionID` search attr, temporalProxy
+      sidecars, the **Lambda/serverless path for no-roads-serverless**, Instruqt reconcile
+      incl. the `live-test` testing-branch machinery). Watch the pet's image-automation
+      `instruqt-litellm-broker` name collision (flux-system) — pet must not double-push once
+      blue's is live.
+    - **⛔ GATED — P7.3 Retire the pet:** flip `var.flux_git_branch`→`main` / merge the
+      feature branch; drain + decommission the pet; leave `*` wildcard as manual catch-all
+      or remove it (out-of-band, not Tofu). Separate explicit decision.
+  - **CROSS-PHASE facts to honour:** pet=`main` / blue=`feat/full-e2e-iac` — feature-branch
+    edits are pet-safe until merge, so the whole catalog+litellm tree can be staged and
+    reviewed before the standby handoff. The gated scale-down + branch-flip/merge + pet
+    decommission are the only irreversible steps and each stops for explicit go.
 
 - **P6 GATE PASSED — blue/green cutover proven end-to-end, green torn down clean.**
   Stood up a full green sibling, warmed it, swung `live` blue→green and back, and
