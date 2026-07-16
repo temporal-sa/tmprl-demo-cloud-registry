@@ -357,6 +357,13 @@ Newest first. One entry per meaningful step so a fresh session can resume.
       standby model wants the non-active color scaled to zero until cutover; whether
       to return blue to standby now (set the Deployment replicas to 0) or leave it
       running is an open P6 operational decision.
+    - **GOTCHA (fixed `ba72b00`):** a hand-written standalone operator Deployment
+      MUST carry the same `dnsConfig` the operator stamps on rendered workloads
+      (`resources.workload_dns_config`: `ndots:2` + `single-request-reopen`). Blue's
+      first cut omitted it, so the 4-dot Temporal Cloud endpoint resolved via cluster
+      search domains first (default `ndots:5`) and a dropped lookup wedged the
+      worker's gRPC resolver in a permanent "dns error" poll loop (only a restart
+      clears it). Any future per-color operator Deployment needs this dnsConfig.
     - **Merge-apply gotcha:** an existing demo that already carries a per-host cert
       keeps it (an empty `tls: {}` merge doesn't clear a set `secretName`); only
       newly-created/re-created demos pick up the wildcard. Harmless (old certs just
