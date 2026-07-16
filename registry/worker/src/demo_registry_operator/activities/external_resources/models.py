@@ -424,6 +424,26 @@ class CreateOrVerifyTemporalCloudNamespaceRequest:
 
 
 @dataclass(frozen=True)
+class EnsureTemporalCloudNamespaceTagsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    # (key, value) pairs rather than a dict so the payload stays an immutable,
+    # order-stable tuple like the sibling search_attributes field.
+    tags: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class TemporalCloudNamespaceTagsResult:
+    status: dict[str, Any]
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None
+
+
+@dataclass(frozen=True)
 class ConfigureTemporalCloudNamespaceMtlsRequest:
     checked_at: str
     project: TemporalCloudProject

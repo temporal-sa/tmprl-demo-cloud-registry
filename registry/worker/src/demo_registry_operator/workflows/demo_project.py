@@ -1052,6 +1052,8 @@ class DemoProjectWorkflow:
                 )
                 return namespace.status
 
+            await self._ensure_temporal_cloud_namespace_tags(external_plan, state)
+
             await self._reconcile_temporal_cloud_search_attributes(
                 external_plan,
                 state,
@@ -1130,6 +1132,32 @@ class DemoProjectWorkflow:
                 candidate_secret_token=candidate_secret_token,
             ),
             start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _ensure_temporal_cloud_namespace_tags(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
+        namespace = state.namespace
+        assert namespace is not None
+        tags = resources.namespace_tags(external_plan.demo_project)
+        if not tags:
+            return
+        # Tags are namespace metadata with no independent lifecycle (they vanish
+        # with the namespace), so there is nothing to compensate or surface —
+        # just converge them.
+        await workflow.execute_activity(
+            external_resources.ensure_temporal_cloud_namespace_tags,
+            external_resources.EnsureTemporalCloudNamespaceTagsRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+                namespace=namespace,
+                tags=tuple(tags.items()),
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )

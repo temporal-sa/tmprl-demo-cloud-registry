@@ -681,6 +681,45 @@ def source_repo(
     return repo.strip() if isinstance(repo, str) and repo.strip() else None
 
 
+def source_repo_slug(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    """The ``owner/repo`` slug from ``spec.<source>.repo``, or None.
+
+    Accepts the GitHub URL forms the catalog uses (https/ssh/scp-style) and a bare
+    ``owner/repo`` slug; e.g. ``https://github.com/temporal-sa/canonical-ai-demo``
+    -> ``temporal-sa/canonical-ai-demo``.
+    """
+    repo = source_repo(demo_project, source_key)
+    if not repo:
+        return None
+    value = repo.strip()
+    if value.endswith(".git"):
+        value = value[: -len(".git")]
+    if "://" not in value and "@" in value and ":" in value:
+        # scp-style: git@github.com:owner/repo
+        value = value.split(":", 1)[1]
+    else:
+        parsed = urlparse(value)
+        if parsed.scheme:  # https:// or ssh:// — drop scheme + host, keep the path
+            value = parsed.path
+    return value.strip("/") or None
+
+
+def namespace_tags(demo_project: dict[str, Any]) -> dict[str, str]:
+    """Owner/repo tags to stamp on the demo's Temporal Cloud namespace.
+
+    ``owner`` marks every managed namespace as ours; ``repo`` records the source
+    repo so a namespace is traceable back to the demo that created it.
+    """
+    tags = {"owner": derive.BASE_DOMAIN}
+    slug = source_repo_slug(demo_project)
+    if slug:
+        tags["repo"] = slug
+    return tags
+
+
 def content_source_config(instruqt_course: dict[str, Any]) -> dict[str, Any]:
     return source_config_block(instruqt_course, "content")
 

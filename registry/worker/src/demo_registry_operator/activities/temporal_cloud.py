@@ -119,6 +119,12 @@ class TemporalCloudReconciler(Protocol):
         name: str,
     ) -> dict[str, str | None]: ...
 
+    async def update_namespace_tags(
+        self,
+        qualified_name: str,
+        tags: dict[str, str],
+    ) -> dict[str, Any]: ...
+
     async def find_service_account(self, name: str) -> str | None: ...
 
     async def create_service_account(
@@ -834,6 +840,33 @@ async def ensure_temporal_cloud_service_account(
             "id": service_account_id,
             "name": name,
             "action": "created" if created else "verified",
+        },
+    }
+
+
+async def ensure_temporal_cloud_namespace_tags(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    tags: tuple[tuple[str, str], ...],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+) -> dict[str, Any]:
+    if not resources.temporal_namespace_required(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    desired = {key: value for key, value in tags}
+    result = await reconciler.update_namespace_tags(namespace.qualified_name, desired)
+    return {
+        "phase": "Ready",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "namespace": {"name": namespace.qualified_name},
+        "tags": {
+            "action": result.get("action"),
+            "desired": desired,
         },
     }
 
@@ -2258,6 +2291,37 @@ class CloudApiReconciler:
             label=f"delete-search-attribute:{qualified_name}:{name}",
             mutate=mutate,
         )
+
+    async def update_namespace_tags(
+        self,
+        qualified_name: str,
+        tags: dict[str, str],
+    ) -> dict[str, Any]:
+        # Namespace tags live on the Namespace (not its spec) and are managed by a
+        # dedicated RPC, so this does not go through _update_namespace_spec. Read
+        # first and upsert only the drifted keys so a steady-state reconcile makes
+        # no change (and starts no async operation).
+        from temporalio.api.cloud.cloudservice.v1 import (
+            GetNamespaceRequest,
+            UpdateNamespaceTagsRequest,
+        )
+
+        got = await self._cs.get_namespace(GetNamespaceRequest(namespace=qualified_name))
+        current = dict(got.namespace.tags)
+        to_upsert = {key: value for key, value in tags.items() if current.get(key) != value}
+        if not to_upsert:
+            return {"action": "verified", "tags": dict(tags)}
+        response = await self._cs.update_namespace_tags(
+            UpdateNamespaceTagsRequest(
+                namespace=qualified_name,
+                tags_to_upsert=to_upsert,
+            )
+        )
+        await self._await_operation(
+            response.async_operation,
+            label=f"update-namespace-tags:{qualified_name}",
+        )
+        return {"action": "updated", "tags": to_upsert}
 
     async def _update_namespace_spec(
         self,
