@@ -1,0 +1,287 @@
+# Green cluster (tmprl-dem-cld-green) root sync — P6 blue/green sibling.
+#
+# Duplicated from clusters/blue/ with paths repointed to ./clusters/green/ and the
+# per-color deltas applied (external-dns txtOwnerId, DEMO_REGISTRY_CLUSTER,
+# cluster-autoscaler clusterName). Versions are byte-identical to blue: latest-GA
+# had not moved when green was stood up. The platform + registry operator ARE
+# wired (operator on registry-management-green); the app layer (instruqt-litellm)
+# and the real projects/ catalog are intentionally NOT wired — green is warmed with
+# a throwaway p6-smoke DemoProject for the cutover gate, never the pet's demos.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./clusters/green/flux-system
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: node-local-dns
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/node-local-dns/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: DaemonSet
+      name: node-local-dns
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: metrics-server
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/metrics-server/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: metrics-server
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cluster-autoscaler
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/cluster-autoscaler/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: cluster-autoscaler
+      namespace: kube-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-install
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/external-secrets/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-stores
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: external-secrets-install
+  interval: 5m
+  path: ./clusters/green/addons/external-secrets/stores
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/cert-manager/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: cert-manager
+      namespace: cert-manager
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cert-manager-issuers
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager
+  interval: 5m
+  path: ./clusters/green/addons/cert-manager/issuers
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: temporal-worker-controller
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: cert-manager
+  interval: 5m
+  path: ./clusters/green/addons/temporal-worker-controller/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller-crds
+      namespace: tmprl-dem-cld-worker-controller
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: temporal-worker-controller
+      namespace: tmprl-dem-cld-worker-controller
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: traefik
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/addons/traefik/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: traefik
+      namespace: traefik
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-dns
+  namespace: flux-system
+spec:
+  # Reads Traefik IngressRoutes, so it follows traefik.
+  dependsOn:
+    - name: traefik
+  interval: 5m
+  path: ./clusters/green/addons/external-dns/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: external-dns
+      namespace: external-dns
+---
+# Wildcard TLS (P5). One *.tmprl-demo.cloud cert + a Traefik default TLSStore so
+# managed demos are served a shared wildcard cert and never mint per-host Let's
+# Encrypt certs (rate-limit avoidance). Needs the letsencrypt issuer + traefik.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: wildcard-cert
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager-issuers
+    - name: traefik
+  interval: 5m
+  path: ./clusters/green/addons/wildcard-cert/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+---
+# Registry layer (P5). CRDs + the operator itself. The operator runs as one
+# worker+watch Deployment on task queue registry-management-green (color set in its
+# configMap). NOTE: the real projects/ catalog is deliberately NOT wired onto green
+# here — for the P6 cutover gate a single throwaway p6-smoke DemoProject is applied
+# directly so green never co-manages the pet's shared demos.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-crds
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/green/bootstrap/crds
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-operator
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: external-secrets-stores
+    - name: registry-crds
+    - name: temporal-worker-controller
+  interval: 5m
+  path: ./clusters/green/bootstrap/registry-operator
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: registry-operator
+      namespace: tmprl-dem-cld-registry-operator

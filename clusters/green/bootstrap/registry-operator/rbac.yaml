@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry-operator
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+  annotations:
+    # Blue/green greenfield operator role (P5). The clean name is held by the pet
+    # until P7, so green uses the -bg role (trust federates green's OIDC).
+    eks.amazonaws.com/role-arn: arn:aws:iam::429214323166:role/tmprl-dem-cld-registry-operator-bg
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+rules:
+  - apiGroups:
+      - registry.tmprl-demo.cloud
+    resources:
+      - demoprojects
+      - demoprojectrevisions
+      - instruqtcourses
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - registry.tmprl-demo.cloud
+    resources:
+      - demoprojects/status
+      - demoprojectrevisions/status
+      - instruqtcourses/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - registry.tmprl-demo.cloud
+    resources:
+      - demoprojectrevisions/finalizers
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - serviceaccounts
+      - services
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - external-secrets.io
+    resources:
+      - externalsecrets
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - temporal.io
+    resources:
+      - connections
+      - workerdeployments
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - source.toolkit.fluxcd.io
+    resources:
+      - gitrepositories
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - delete
+  # Traefik v3 on green serves the CRDs under traefik.io (the pet's v2 uses
+  # traefik.containo.us). The operator emits traefik.io IngressRoute/Middleware
+  # when colored, so the grant must match or create/patch is RBAC-denied.
+  - apiGroups:
+      - traefik.io
+    resources:
+      - ingressroutes
+      - middlewares
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - certificates
+    verbs:
+      - get
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+subjects:
+  - kind: ServiceAccount
+    name: registry-operator
+    namespace: tmprl-dem-cld-registry-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: registry-operator
