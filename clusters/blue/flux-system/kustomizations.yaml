@@ -240,11 +240,9 @@ spec:
   timeout: 10m
   wait: true
 ---
-# Registry layer (P5). CRDs + the operator itself. The operator runs as one
-# worker+watch Deployment on task queue registry-management-blue (color set in its
-# configMap). NOTE: the real projects/ catalog is deliberately NOT wired onto blue
-# here — for the P5 e2e a single throwaway p5-smoke DemoProject is applied directly
-# so blue never co-manages the pet's shared demos.
+# Registry layer. CRDs + the operator itself (P5) + the real catalog (P7). The
+# operator runs as one worker+watch Deployment on task queue
+# registry-management-blue (color set in its configMap).
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -284,3 +282,52 @@ spec:
       kind: Deployment
       name: registry-operator
       namespace: tmprl-dem-cld-registry-operator
+---
+# Real demo catalog (P7). DemoProject CRs under ./projects/demo. The operator
+# self-demo (registry.yaml, name: registry-operator) was split out to
+# ./projects/operator and is intentionally NOT wired here — blue's operator is
+# Flux-bootstrapped, so reconciling the self-demo would stand up a second,
+# colliding operator. Mirrors the pet's registry-projects.
+#
+# ⛔ STANDBY: once this reaches blue, blue's operator reconciles the SAME demos
+# the pet manages, sharing each demo's color-agnostic Temporal Cloud namespace /
+# runtime service account / runtime secret. Concurrent reconcile is NOT safe
+# (audit: TC service-account dup + runtime-secret last-writer-wins). The pet
+# operator MUST be scaled to 0 before this is pushed, so blue is the sole
+# reconciler. See docs/iac-migration-plan.md (P7 big-bang standby).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-projects
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: registry-operator
+    - name: temporal-worker-controller
+  interval: 5m
+  path: ./projects/demo
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-instruqt-courses
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: registry-operator
+  interval: 5m
+  path: ./projects/instruqt
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
