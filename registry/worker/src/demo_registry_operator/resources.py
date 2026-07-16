@@ -707,16 +707,33 @@ def source_repo_slug(
     return value.strip("/") or None
 
 
+# Temporal Cloud namespace tag values are 1-63 chars from [a-z0-9._-@] only
+# (lowercase; no '/', which a GitHub owner/repo slug contains). Coerce disallowed
+# characters to '_' so e.g. temporal-sa/canonical-ai-demo -> temporal-sa_canonical-ai-demo.
+_TEMPORAL_CLOUD_TAG_VALUE_ALLOWED = set(
+    "abcdefghijklmnopqrstuvwxyz0123456789._-@"
+)
+
+
+def _temporal_cloud_tag_value(value: str) -> str:
+    lowered = value.strip().lower()
+    coerced = "".join(
+        char if char in _TEMPORAL_CLOUD_TAG_VALUE_ALLOWED else "_" for char in lowered
+    )
+    return coerced[:63]
+
+
 def namespace_tags(demo_project: dict[str, Any]) -> dict[str, str]:
     """Owner/repo tags to stamp on the demo's Temporal Cloud namespace.
 
     ``owner`` marks every managed namespace as ours; ``repo`` records the source
-    repo so a namespace is traceable back to the demo that created it.
+    repo so a namespace is traceable back to the demo that created it. Values are
+    coerced to Temporal Cloud's tag charset (see _temporal_cloud_tag_value).
     """
-    tags = {"owner": derive.BASE_DOMAIN}
+    tags = {"owner": _temporal_cloud_tag_value(derive.BASE_DOMAIN)}
     slug = source_repo_slug(demo_project)
     if slug:
-        tags["repo"] = slug
+        tags["repo"] = _temporal_cloud_tag_value(slug)
     return tags
 
 

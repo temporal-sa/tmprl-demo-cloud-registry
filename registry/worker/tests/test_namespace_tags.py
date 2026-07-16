@@ -50,9 +50,10 @@ def test_namespace_tags_owner_and_repo():
     tags = resources.namespace_tags(
         _project_with_repo("https://github.com/temporal-sa/canonical-ai-demo")
     )
+    # Temporal Cloud tag values forbid '/', so the owner/repo slug is coerced.
     assert tags == {
         "owner": "tmprl-demo.cloud",
-        "repo": "temporal-sa/canonical-ai-demo",
+        "repo": "temporal-sa_canonical-ai-demo",
     }
 
 
@@ -61,6 +62,16 @@ def test_namespace_tags_owner_only_without_repo():
     assert resources.namespace_tags({"metadata": {"name": "d"}, "spec": {}}) == {
         "owner": "tmprl-demo.cloud",
     }
+
+
+def test_tag_value_coerced_to_temporal_cloud_charset():
+    # Temporal Cloud allows only [a-z0-9._-@], <=63 chars. Uppercase is lowered and
+    # every other disallowed character (/, spaces, etc.) becomes '_'.
+    tags = resources.namespace_tags(
+        _project_with_repo("https://github.com/Temporal-SA/Canonical_AI/Demo")
+    )
+    assert tags["repo"] == "temporal-sa_canonical_ai_demo"
+    assert all(c.islower() or not c.isalpha() for c in tags["repo"])
 
 
 # --- ensure activity (idempotent converge) ----------------------------------
