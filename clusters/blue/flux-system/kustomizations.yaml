@@ -219,6 +219,27 @@ spec:
       name: external-dns
       namespace: external-dns
 ---
+# Wildcard TLS (P5). One *.tmprl-demo.cloud cert + a Traefik default TLSStore so
+# managed demos are served a shared wildcard cert and never mint per-host Let's
+# Encrypt certs (rate-limit avoidance). Needs the letsencrypt issuer + traefik.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: wildcard-cert
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager-issuers
+    - name: traefik
+  interval: 5m
+  path: ./clusters/blue/addons/wildcard-cert/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+---
 # Registry layer (P5). CRDs + the operator itself. The operator runs as one
 # worker+watch Deployment on task queue registry-management-blue (color set in its
 # configMap). NOTE: the real projects/ catalog is deliberately NOT wired onto blue
