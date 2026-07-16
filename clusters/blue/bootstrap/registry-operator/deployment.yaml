@@ -26,6 +26,17 @@ spec:
         app.kubernetes.io/component: operator
     spec:
       serviceAccountName: registry-operator
+      # Same dnsConfig the operator stamps on every workload it renders
+      # (resources.workload_dns_config). The Temporal Cloud endpoint is a 4-dot
+      # FQDN; with the default ndots:5 glibc tries cluster search domains first,
+      # and a dropped lookup wedges the worker's gRPC DNS resolver in a permanent
+      # "dns error" poll-retry loop. ndots:2 resolves the FQDN absolute-first;
+      # single-request-reopen serializes A/AAAA to dodge the conntrack race.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+          - name: single-request-reopen
       containers:
         - name: operator
           image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/worker:git-7fe0dc2a3047
