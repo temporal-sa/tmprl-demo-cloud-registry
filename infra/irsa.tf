@@ -5,9 +5,11 @@
 # derived from the P1 cluster module's OIDC outputs, never a literal id (the id
 # rotates on cluster re-create).
 #
-# NOT here: the registry-operator role. Its clean name is held by the live pet and
-# blue's operator runs scaled-to-zero until cutover, so it is created in P6 rather
-# than minting an interim name we would have to rename. See the migration plan.
+# The registry-operator role IS here (P5): blue's operator must actually run to
+# reconcile demos (the e2e gate + cutover prep). The clean name
+# `<name_prefix>-registry-operator` is still held by the live pet until it retires
+# (P7), so this greenfield shared role takes a `-bg` (blue/green) suffix; the SA
+# annotation points at this ARN. Policy is reproduced verbatim from the pet role.
 
 locals {
   # Per-color IRSA OIDC facts from the cluster module.
@@ -27,6 +29,7 @@ locals {
     traefik                 = "system:serviceaccount:traefik:traefik"
     external-dns            = "system:serviceaccount:external-dns:external-dns"
     instruqt-litellm-broker = "system:serviceaccount:${var.name_prefix}-instruqt-litellm:instruqt-litellm-broker"
+    registry-operator       = "system:serviceaccount:${var.name_prefix}-registry-operator:registry-operator"
   }
 
   # One assume-role-with-web-identity statement per color for a given SA. Adding a
@@ -249,5 +252,174 @@ resource "aws_iam_role_policy" "instruqt_litellm_broker" {
       ]
       Resource = "arn:${local.partition}:dynamodb:${var.region}:${local.account_id}:table/temporal-instruqt-litellm-broker"
     }]
+  })
+}
+
+# --- registry-operator ------------------------------------------------------
+# Blue/green demo provisioner. Reconciles demos onto its color's cluster and
+# manages the shared external plane (ECR, CodeBuild, Secrets Manager, serverless
+# Lambda workers, Temporal Cloud namespace tags). Policy reproduced verbatim from
+# the pet's tmprl-dem-cld-registry-operator role, split into the same four inline
+# policies. Standby model still holds: only the active color's operator polls
+# Temporal, so a shared identity across colors is safe.
+resource "aws_iam_role" "registry_operator" {
+  name               = "${var.name_prefix}-registry-operator-bg"
+  assume_role_policy = local.irsa_assume_role_policies["registry-operator"]
+}
+
+resource "aws_iam_role_policy" "registry_operator_perms" {
+  name = "${var.name_prefix}-registry-operator-perms"
+  role = aws_iam_role.registry_operator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuth"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrProjectRepos"
+        Effect = "Allow"
+        Action = [
+          "ecr:CreateRepository",
+          "ecr:DescribeRepositories",
+          "ecr:GetRepositoryPolicy",
+          "ecr:SetRepositoryPolicy",
+          "ecr:TagResource",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:DeleteRepository",
+        ]
+        Resource = "arn:${local.partition}:ecr:${var.region}:${local.account_id}:repository/${var.name_prefix}/*"
+      },
+      {
+        Sid    = "SecretsManagerProjectAndPlatform"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:TagResource",
+          "secretsmanager:DeleteSecret",
+        ]
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "registry_operator_codebuild" {
+  name = "${var.name_prefix}-registry-operator-codebuild"
+  role = aws_iam_role.registry_operator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["codebuild:StartBuild", "codebuild:BatchGetBuilds"]
+      Resource = "arn:${local.partition}:codebuild:${var.region}:${local.account_id}:project/${var.name_prefix}-build"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "registry_operator_instruqt_public_ecr" {
+  name = "${var.name_prefix}-registry-operator-instruqt-public-ecr"
+  role = aws_iam_role.registry_operator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "ManagedInstruqtPublicEcrRepositories"
+      Effect = "Allow"
+      Action = [
+        "ecr-public:DescribeRepositories",
+        "ecr-public:CreateRepository",
+        "ecr-public:DeleteRepository",
+        "ecr-public:TagResource",
+      ]
+      Resource = "arn:${local.partition}:ecr-public::${local.account_id}:repository/${var.name_prefix}/*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "registry_operator_serverless" {
+  name = "${var.name_prefix}-registry-operator-serverless"
+  role = aws_iam_role.registry_operator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ManageServerlessLambdaFunctions"
+        Effect = "Allow"
+        Action = [
+          "lambda:CreateFunction",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:UpdateFunctionCode",
+          "lambda:PublishVersion",
+          "lambda:ListVersionsByFunction",
+          "lambda:DeleteFunction",
+          "lambda:TagResource",
+        ]
+        Resource = [
+          "arn:${local.partition}:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*",
+          "arn:${local.partition}:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*:*",
+        ]
+      },
+      {
+        Sid      = "CreateBoundedServerlessRoles"
+        Effect   = "Allow"
+        Action   = "iam:CreateRole"
+        Resource = [
+          "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*-lambda",
+          "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*-temporal",
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PermissionsBoundary" = "arn:${local.partition}:iam::${local.account_id}:policy/${var.name_prefix}-serverless-worker-boundary"
+          }
+        }
+      },
+      {
+        Sid    = "ManageServerlessRoles"
+        Effect = "Allow"
+        Action = [
+          "iam:GetRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:TagRole",
+          "iam:GetRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:DeleteRolePolicy",
+          "iam:DeleteRole",
+        ]
+        Resource = [
+          "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*-lambda",
+          "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*-temporal",
+        ]
+      },
+      {
+        Sid      = "PassServerlessLambdaExecutionRoles"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
+        Resource = "arn:${local.partition}:iam::${local.account_id}:role/${var.name_prefix}-*-lambda"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
+      },
+    ]
   })
 }

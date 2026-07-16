@@ -34,7 +34,7 @@ output "public_subnet_ids" {
 }
 
 output "irsa_role_arns" {
-  description = "Shared blue/green IRSA role ARNs, for the Flux overlays' service-account annotations (P3). registry-operator is added in P6."
+  description = "Shared blue/green IRSA role ARNs, for the Flux overlays' service-account annotations."
   value = {
     external_secrets        = aws_iam_role.external_secrets.arn
     cert_manager            = aws_iam_role.cert_manager.arn
@@ -42,6 +42,7 @@ output "irsa_role_arns" {
     traefik                 = aws_iam_role.traefik.arn
     external_dns            = aws_iam_role.external_dns.arn
     instruqt_litellm_broker = aws_iam_role.instruqt_litellm_broker.arn
+    registry_operator       = aws_iam_role.registry_operator.arn
   }
 }
 
