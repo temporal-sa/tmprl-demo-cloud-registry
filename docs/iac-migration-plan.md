@@ -286,13 +286,89 @@ Each phase has an explicit test gate before moving on.
 | P2 — Identity + AWS platform | ✅ Done (gate passed: 5 IRSA roles assumable on blue + cert validated; shared substrate adopted, 0 destroys) |
 | P3 — Flux bootstrap | ✅ Done (gate passed: Flux on blue via Tofu; 10 platform Kustomizations Ready; Traefik Classic ELB live + serving; external-secrets store Valid + cert-manager issuers Ready = IRSA proven; `tofu plan` idempotent) |
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
-| P5 — Operator cluster dimension | Not started |
+| P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | Not started |
 | P7 — Migrate + retire the pet | Not started |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P5 GATE PASSED — operator cluster dimension live + validated on blue.** The
+  registry operator is now color-safe and was proven end-to-end on blue against a
+  throwaway demo, with the pet undisturbed. **The killer evidence:** in the ONE
+  shared Temporal Cloud control-plane namespace (`tmprl-dem-cld-registry-operator`),
+  blue's `demo-project/blue/p5-smoke` (task queue `registry-management-blue`) ran
+  alongside the pet's uncolored `demo-project/<name>` (task queue
+  `registry-management`) with zero cross-routing — the pet IS the "second cluster"
+  that proves the gate. Every changed behavior is a byte-identical no-op when
+  `DEMO_REGISTRY_CLUSTER` is unset, so the live pet is untouched.
+  - **Operator code (all color-gated on `DEMO_REGISTRY_CLUSTER`):** commit `799f7ec`
+    — one `DEMO_REGISTRY_CLUSTER` env folded into the task queue
+    (`registry-management-<color>`), entity workflow ids
+    (`demo-project/<color>/<name>`, `instruqt-course/<color>/<name>` via new
+    single-source `derive` helpers used by every producer/consumer incl. the 4
+    inline canary sites), and the `worker.py` worker-update **batch-signal** query
+    (color-scoped `WorkflowId STARTS_WITH`, so a colored operator can't signal the
+    pet's running workflows in the shared namespace — a hazard the pre-impl mapping
+    caught). Traefik v2→v3: emits `traefik.io/v1alpha1` when colored (pet stays
+    `traefik.containo.us`); `kube.py` plural map carries both. external-dns target
+    annotation (`live.tmprl-demo.cloud`) stamped on generated IngressRoutes when
+    colored. `c9ed297` — Temporal Cloud namespace tags `owner=tmprl-demo.cloud` +
+    `repo=<owner/repo>` (own idempotent `UpdateNamespaceTags` activity, per the
+    one-side-effect rule). `55abf3b` — colored clusters serve demos from a single
+    per-cluster **wildcard cert** via Traefik's default `TLSStore` (`tls: {}`, no
+    per-host `Certificate`) so rapid rollouts stop minting per-host LE certs.
+  - **Two review-driven fixes (both surfaced by adversarial review / live run):**
+    `56b488e` — namespace tagging is **best-effort** (a tag failure must never
+    propagate into the reconcile's compensating try and tear down the just-created
+    namespace); `509031d` — coerce tag values to TC's charset `[a-z0-9._-@]`
+    (lowercase, `/`→`_`; TC rejects `/`, so `temporal-sa/x` → `temporal-sa_x`).
+  - **Deploy (blue):** `039388a` un-defers the operator IRSA role as
+    `tmprl-dem-cld-registry-operator-bg` (greenfield, color-union trust; clean name
+    held by the pet until P7; policy verbatim from the pet). `3962054` the blue
+    registry layer — CRDs + a **single worker+watch** operator Deployment on
+    `registry-management-blue` (NOT the pet's split watch/self-render model);
+    `DEMO_REGISTRY_CLUSTER=blue` in its configMap; traefik.io RBAC. `7fe0dc2` the
+    wildcard cert addon (`*.tmprl-demo.cloud` cert-manager Certificate DNS-01 +
+    `TLSStore/default` in the traefik ns). The real `projects/` catalog is
+    deliberately NOT wired to blue — only a throwaway `p5-smoke` demo was applied.
+  - **e2e evidence (throwaway `p5-smoke`, now torn down):** operator logged
+    `task_queue=registry-management-blue watch_mode=always`; reconciled
+    `p5-smoke` → v3 IngressRoute (`tls: {}`, 0 per-host certs) + external-dns
+    `p5-smoke → CNAME → live` + `owner=blue` TXT + Temporal namespace
+    `tmprl-dem-cld-p5-smoke` (tagged owner+repo); **`https://p5-smoke.tmprl-demo.cloud`
+    → HTTP 200** with the `CN=*.tmprl-demo.cloud` wildcard cert (verified on both
+    blue ELB IPs + public resolvers 1.1.1.1/8.8.8.8). An unmanaged host still
+    resolved to the pet ELB (wildcard undisturbed). **Delete → clean finalize:**
+    namespace terminated + external-dns retracted the CNAME/TXT (proves the P7
+    teardown/retract path). **459 tests pass** (+ new `test_cluster_dimension.py`,
+    `test_namespace_tags.py`; 2 pre-existing env-only failures unrelated).
+  - **Decisions (locked with the user):** (1) **reconcile-key color-fold SKIPPED**
+    — per-color workflow ids already isolate each color's state; folding color into
+    the key is redundant AND risks a permanent reconcile hot-loop (it's recomputed
+    in deterministic workflow + activity code with no color in scope). (2) tag
+    separator **`_`** (TC forbids `/`). (3) **wildcard default cert** for demo TLS
+    (kills the LE rate-limit class + gives blue/green cert independence) over
+    per-host-cert reuse.
+  - **CROSS-PHASE flags for P6/P7:**
+    - **Blue's operator is currently RUNNING (replicas 1), scaled up for the P5
+      e2e** — it is a standalone worker+watch, not the pet's split model. The locked
+      standby model wants the non-active color scaled to zero until cutover; whether
+      to return blue to standby now (set the Deployment replicas to 0) or leave it
+      running is an open P6 operational decision.
+    - **Merge-apply gotcha:** an existing demo that already carries a per-host cert
+      keeps it (an empty `tls: {}` merge doesn't clear a set `secretName`); only
+      newly-created/re-created demos pick up the wildcard. Harmless (old certs just
+      renew), but the P7 migration re-creates demos so they land on the wildcard.
+    - **`-bg` IRSA role name** is interim; at P7 (pet retired) the clean
+      `tmprl-dem-cld-registry-operator` name frees up (rename/adopt is optional).
+    - The operator self-canary inherits color via `platform_env_vars` injecting
+      `DEMO_REGISTRY_CLUSTER` into the rendered WorkerDeployment (the per-cluster
+      configMap only feeds the bootstrap pod). Live blue facts (read from `tofu
+      output` / the cluster — do not hardcode): IRSA role
+      `tmprl-dem-cld-registry-operator-bg`; operator image tag is pinned in
+      `clusters/blue/bootstrap/registry-operator/deployment.yaml`.
 
 - **P4 GATE PASSED — routing + DNS live on blue.** Tofu now owns the swing +
   per-color records; external-dns turns Traefik IngressRoutes into per-demo
