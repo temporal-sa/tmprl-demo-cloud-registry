@@ -40,6 +40,10 @@ from demo_registry_operator.resources import (
     source_watch_resources,
 )
 from demo_registry_operator import reconcile_payloads as _reconcile_payloads
+from demo_registry_operator.derive import (
+    demo_project_workflow_id,
+    instruqt_course_workflow_id,
+)
 from demo_registry_operator.reconcile_payloads import (
     active_version_status,
     cleanup_instruqt_testing_source_watches,
@@ -512,7 +516,7 @@ async def reconcile_one(
     if status_observed:
         workflow_running = await entity_workflow_running(
             temporal_client,
-            demo_project_workflow_id(name),
+            demo_project_workflow_id(name, config.cluster),
         )
         if workflow_running:
             seen[name] = key
@@ -581,7 +585,7 @@ async def reconcile_instruqt_course_resource(
     if status_observed:
         workflow_running = await entity_workflow_running(
             temporal_client,
-            instruqt_course_workflow_id(name),
+            instruqt_course_workflow_id(name, config.cluster),
         )
         if workflow_running:
             seen[seen_name] = key
@@ -609,7 +613,7 @@ async def signal_workflow(
     await temporal_client.start_workflow(
         DemoProjectWorkflow.run,
         args=[DemoProjectRunRequest(project_name=name)],
-        id=demo_project_workflow_id(name),
+        id=demo_project_workflow_id(name, config.cluster),
         task_queue=config.task_queue,
         start_signal=signal_name,
         start_signal_args=[signal_arg],
@@ -629,7 +633,7 @@ async def signal_instruqt_course_workflow(
     await temporal_client.start_workflow(
         InstruqtCourseWorkflow.run,
         args=[InstruqtCourseRunRequest(course_name=name)],
-        id=instruqt_course_workflow_id(name),
+        id=instruqt_course_workflow_id(name, config.cluster),
         task_queue=config.task_queue,
         start_signal=signal_name,
         start_signal_args=[signal_arg],
@@ -657,14 +661,6 @@ def instruqt_course_signal_request(
     if signal_name == "finalize":
         return InstruqtCourseFinalizeSignal(instruqtCourse=instruqt_course)
     raise ValueError(f"Unsupported InstruqtCourse signal {signal_name!r}")
-
-
-def demo_project_workflow_id(name: str) -> str:
-    return f"demo-project/{name}"
-
-
-def instruqt_course_workflow_id(name: str) -> str:
-    return f"instruqt-course/{name}"
 
 
 async def entity_workflow_running(

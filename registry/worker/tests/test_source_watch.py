@@ -403,7 +403,7 @@ def test_signal_workflow_starts_without_versioning_override():
     asyncio.run(
         watch.signal_workflow(
             TemporalClient(),
-            SimpleNamespace(task_queue="registry-management"),
+            SimpleNamespace(task_queue="registry-management", cluster=None),
             project(),
             "reconcile",
         )
@@ -450,7 +450,7 @@ def test_watch_skips_gate_owned_operator_canary_reconcile(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             canary_project,
             {},
         )
@@ -493,7 +493,7 @@ def test_watch_does_not_adopt_control_plane_project(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             control_plane_project,
             {},
         )
@@ -549,7 +549,7 @@ def test_watch_skips_source_digest_already_observed_in_status(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             demo_project,
             seen,
         )
@@ -620,7 +620,7 @@ def test_watch_skips_reconcile_key_already_observed_in_status(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             demo_project,
             seen,
         )
@@ -691,7 +691,7 @@ def test_watch_skips_base_reconcile_key_observed_after_force_reconcile(monkeypat
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             demo_project,
             seen,
         )
@@ -753,7 +753,7 @@ def test_watch_resignals_current_status_when_workflow_is_missing(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             demo_project,
             seen,
         )
@@ -815,7 +815,7 @@ def test_watch_resignals_failed_observed_reconcile(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             demo_project,
             seen,
         )
@@ -866,7 +866,7 @@ def test_watch_removes_control_plane_finalizer_on_delete(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             control_plane_project,
             seen,
         )
@@ -893,7 +893,7 @@ def test_watch_still_finalizes_gate_owned_operator_canary(monkeypatch):
     asyncio.run(
         watch.reconcile_one(
             None,
-            SimpleNamespace(),
+            SimpleNamespace(cluster=None),
             canary_project,
             {},
         )

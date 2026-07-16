@@ -1179,7 +1179,7 @@ def test_signal_instruqt_course_workflow_starts_without_versioning_override():
     asyncio.run(
         watch.signal_instruqt_course_workflow(
             TemporalClient(),
-            SimpleNamespace(task_queue="registry-management"),
+            SimpleNamespace(task_queue="registry-management", cluster=None),
             course(),
             "reconcile",
         )

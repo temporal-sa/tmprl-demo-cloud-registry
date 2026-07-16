@@ -75,7 +75,14 @@ INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY = "testing-source"
 INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
-TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+# Traefik's CRD group changed between major versions: v2 served
+# traefik.containo.us, v3 serves traefik.io. The hand-built pet (sa-demo) runs
+# Traefik v2; the Tofu-managed blue/green stack runs v3. The operator emits the
+# group matching the cluster it runs on, selected by the color env var so
+# uncolored (pet) output stays byte-identical to today.
+TRAEFIK_API_VERSION_V2 = "traefik.containo.us/v1alpha1"
+TRAEFIK_API_VERSION_V3 = "traefik.io/v1alpha1"
+EXTERNAL_DNS_TARGET_ANNOTATION = "external-dns.alpha.kubernetes.io/target"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
@@ -2186,6 +2193,23 @@ def temporal_proxy_image(
     )
 
 
+def operator_cluster() -> str | None:
+    """The cluster/color this operator process runs as, or None (uncolored pet).
+
+    Read from the same env var config.WorkerConfig reads; the resource-rendering
+    layer reads it directly (as it already does for image env vars) rather than
+    threading it through every builder signature. It is a process-lifetime
+    constant, so a single read is safe and keeps the render call graph flat.
+    """
+    value = os.getenv("DEMO_REGISTRY_CLUSTER")
+    return value.strip() or None if value else None
+
+
+def traefik_api_version() -> str:
+    """v3 CRD group when colored (blue/green run Traefik v3), else v2 (the pet)."""
+    return TRAEFIK_API_VERSION_V3 if operator_cluster() else TRAEFIK_API_VERSION_V2
+
+
 def platform_env_vars(
     demo_project: dict[str, Any],
     component_name: str,
@@ -2198,6 +2222,13 @@ def platform_env_vars(
         proxy_image = image_overrides.get(TEMPORAL_PROXY_BUILD_NAME)
         if proxy_image:
             env.append({"name": TEMPORAL_PROXY_IMAGE_ENV, "value": proxy_image})
+        # Propagate our own color into the self-rendered operator WorkerDeployment
+        # so the reconciler (and its self-canary) polls this color's task queue.
+        # The per-cluster configMap only feeds the bootstrap/watch pod, not this
+        # rendered worker, whose env comes entirely from the shared catalog spec.
+        cluster = operator_cluster()
+        if cluster:
+            env.append({"name": "DEMO_REGISTRY_CLUSTER", "value": cluster})
     return env
 
 
@@ -2604,8 +2635,17 @@ def ingress_resources(
     }
     if version:
         annotations["platform.temporal.io/rollout-version"] = version
+    if operator_cluster():
+        # external-dns (per color cluster) turns this into <demo> CNAME -> live so
+        # the demo follows the active color's swing record. The traefik source emits
+        # NO endpoint without a per-IngressRoute target, so this annotation is the
+        # mechanism, not a hint. Gated on color: the pet has no external-dns and its
+        # generated IngressRoutes must stay byte-identical. Both the base (websecure)
+        # and the derived http variant share this dict, so one insertion covers both;
+        # external-dns dedups the identical endpoints to a single record.
+        annotations[EXTERNAL_DNS_TARGET_ANNOTATION] = derive.LIVE_SWING_HOST
     base = {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "IngressRoute",
         "metadata": {
             "name": project_name(demo_project),
@@ -2797,7 +2837,7 @@ def auth_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_MIDDLEWARE_NAME,
@@ -2828,7 +2868,7 @@ def https_redirect_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
@@ -2853,7 +2893,7 @@ def auth_header_strip_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
