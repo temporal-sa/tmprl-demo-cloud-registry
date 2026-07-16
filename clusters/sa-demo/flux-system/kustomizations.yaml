@@ -255,3 +255,30 @@ spec:
     name: cluster-gitops-config
   timeout: 5m
   wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-self
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+    - name: registry-operator
+    - name: temporal-worker-controller
+  interval: 5m
+  # The operator's self-managing DemoProject (registry.yaml, name:
+  # registry-operator). P7 moved it out of ./projects/demo into ./projects/operator
+  # so a sibling cluster (blue) whose operator is Flux-bootstrapped does not
+  # reconcile a second, colliding operator from the shared catalog. Only the pet
+  # self-manages. prune:false so the running operator survives; at the P7.3
+  # pet-retirement merge, sequence the registry-projects handoff (this CR leaves
+  # registry-projects' inventory) to avoid a self-demo teardown flap — or let the
+  # pet operator wind down as the cluster is decommissioned.
+  path: ./projects/operator
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true

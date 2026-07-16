@@ -1,0 +1,197 @@
+# Copy this declaration to the same path in tmprl-demo-cloud-registry.
+# The frontend is the only public service; it proxies three same-origin API
+# prefixes to the three internal support-agent implementations.
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: langgraph-temporal
+
+spec:
+  registry:
+    title: Temporal and LangGraph Support Agent Comparison
+    summary: >-
+      Side-by-side music-store support agents comparing a hand-written
+      Temporal workflow, standalone LangGraph, and Temporal-backed LangGraph,
+      including tool use, human approval, retries, and worker recovery.
+    tags: [AI, Agents, LangGraph, Human-in-the-Loop, Comparison]
+    temporalSdks: [Python]
+
+  source:
+    repo: https://github.com/temporal-sa/langgraph-temporal-demo
+
+  builds:
+    temporal:
+      context: .
+      dockerfile: docker/temporal.Dockerfile
+    langgraph:
+      context: .
+      dockerfile: docker/langgraph.Dockerfile
+    temporal-langgraph:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    frontend:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    postgres:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+
+  components:
+    # One ephemeral seeded database is shared so every implementation sees the
+    # same catalog and customer. Replacing the pod resets demo purchases.
+    postgres:
+      build: postgres
+      replicas: 1
+      ports:
+        - name: db
+          containerPort: 5432
+          servicePort: 5432
+      env:
+        - name: POSTGRES_DB
+          value: postgres
+        - name: POSTGRES_USER
+          valueFrom:
+            inputRef: secrets.database.POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            inputRef: secrets.database.POSTGRES_PASSWORD
+
+    # Original hand-written Temporal workflow: stateless API plus worker.
+    temporal-api:
+      build: temporal
+      replicas: 1
+      temporalAccess: true
+      command: [python, -m, uvicorn, api:app, --host, 0.0.0.0, --port, "8000"]
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 8000
+      env:
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
+
+    temporal-worker:
+      build: temporal
+      replicas: 1
+      worker: true
+      command: [python, worker.py]
+      env:
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
+        - name: LLM_PROVIDER
+          value: openai
+        - name: OPENAI_MODEL
+          value: gpt-5.6-sol
+      secrets:
+        - llm-credentials
+
+    # Standalone LangGraph keeps conversation state in memory, so it must stay
+    # at one replica unless a durable checkpointer/store is added later.
+    langgraph-api:
+      build: langgraph
+      replicas: 1
+      command: [python, -m, uvicorn, api:app, --host, 0.0.0.0, --port, "8001"]
+      ports:
+        - name: http
+          containerPort: 8001
+          servicePort: 8001
+      env:
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
+        - name: LLM_PROVIDER
+          value: openai
+        - name: OPENAI_MODEL
+          value: gpt-5.6-sol
+      secrets:
+        - llm-credentials
+
+    # Temporal's LangGraph integration also separates API and worker so a
+    # worker restart demonstrates recovery without interrupting HTTP service.
+    temporal-langgraph-api:
+      build: temporal-langgraph
+      replicas: 1
+      temporalAccess: true
+      command: [python, -m, uvicorn, api:app, --host, 0.0.0.0, --port, "8002"]
+      ports:
+        - name: http
+          containerPort: 8002
+          servicePort: 8002
+      env:
+        - name: LANGGRAPH_TEMPORAL_TASK_QUEUE
+          value: support-agent-temporal-langgraph
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
+
+    temporal-langgraph-worker:
+      build: temporal-langgraph
+      replicas: 1
+      worker: true
+      command: [python, worker.py]
+      env:
+        - name: LANGGRAPH_TEMPORAL_TASK_QUEUE
+          value: support-agent-temporal-langgraph
+        - name: DB_URL
+          valueFrom:
+            inputRef: secrets.database.DB_URL
+        - name: LLM_PROVIDER
+          value: openai
+        - name: OPENAI_MODEL
+          value: gpt-5.6-sol
+      secrets:
+        - llm-credentials
+
+    # Nginx serves the selector and strips each API prefix before forwarding to
+    # the corresponding internal service. It is the only ingress target.
+    frontend:
+      build: frontend
+      replicas: 1
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+      env:
+        - name: WEB_PORT
+          value: "8080"
+        - name: DEFAULT_AGENT_BACKEND
+          value: temporal-langgraph
+        - name: BACKEND_URL
+          value: http://temporal-langgraph-api:8002
+        - name: TEMPORAL_BACKEND_URL
+          value: /api/temporal
+        - name: LANGGRAPH_BACKEND_URL
+          value: /api/langgraph
+        - name: TEMPORAL_LANGGRAPH_BACKEND_URL
+          value: /api/temporal-langgraph
+        - name: TEMPORAL_API_UPSTREAM
+          value: http://temporal-api:8000
+        - name: LANGGRAPH_API_UPSTREAM
+          value: http://langgraph-api:8001
+        - name: TEMPORAL_LANGGRAPH_API_UPSTREAM
+          value: http://temporal-langgraph-api:8002
+
+  secrets:
+    llm-credentials:
+      requiredProperties:
+        - OPENAI_API_KEY
+    database:
+      requiredProperties:
+        - POSTGRES_USER
+        - POSTGRES_PASSWORD
+        - DB_URL
+
+  ingress:
+    subdomain: langgraph-temporal
+    temporalAuthRequired: true
+    component: frontend
+    port: http
+
+  # This flows through Nginx to the Temporal + LangGraph API, verifying both
+  # the public frontend and an internal API route before rollout promotion.
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
+    timeoutSeconds: 10
