@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: instruqt-litellm-config
+  namespace: tmprl-dem-cld-instruqt-litellm
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: litellm
+data:
+  config.yaml: |
+    model_list:
+      - model_name: anthropic/*
+        litellm_params:
+          model: anthropic/*
+          api_key: os.environ/ANTHROPIC_API_KEY
+      - model_name: openai/*
+        litellm_params:
+          model: openai/*
+          api_key: os.environ/OPENAI_API_KEY
+      - model_name: gpt-4o
+        litellm_params:
+          model: openai/gpt-4o
+          api_key: os.environ/OPENAI_API_KEY
+      - model_name: gpt-3.5-turbo
+        litellm_params:
+          model: openai/gpt-3.5-turbo
+          api_key: os.environ/OPENAI_API_KEY
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/DATABASE_URL
+      disable_master_key_return: true
+
+    router_settings:
+      routing_strategy: simple-shuffle
+      redis_host: instruqt-litellm-redis.tmprl-dem-cld-instruqt-litellm.svc.cluster.local
+      redis_port: 6379
+      cache_params:
+        type: redis
+        max_connections: 1000
+
+    litellm_settings:
+      drop_params: true
+      request_timeout: 120
+      upperbound_key_generate_params:
+        max_budget: 25
+        duration: 2d
+        rpm_limit: 120
+        tpm_limit: 400000
+        max_parallel_requests: 8
