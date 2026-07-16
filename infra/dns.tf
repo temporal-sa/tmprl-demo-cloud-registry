@@ -41,9 +41,15 @@ data "kubernetes_service" "traefik_blue" {
   }
 }
 
+# A green cutover sibling adds its own data.kubernetes_service.traefik_green (via the
+# green kubernetes provider) + a green entry in the map below — but only in Apply 2,
+# AFTER green's cluster + Flux + Traefik ELB exist. Reading it before green's Traefik
+# Service is provisioned aborts with "services \"traefik\" not found" (the two-apply
+# ordering the header documents). P6 validated this, then removed it before destroying
+# green (this data source + the green map entry come out BEFORE the cluster).
+
 locals {
-  # color -> that color's Traefik ELB DNS name. One entry per color; extend when
-  # green is added.
+  # color -> that color's Traefik ELB DNS name. One entry per color.
   traefik_elb_hostnames = {
     blue = data.kubernetes_service.traefik_blue.status[0].load_balancer[0].ingress[0].hostname
   }

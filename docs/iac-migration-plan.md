@@ -202,6 +202,13 @@ its explicit record (exact record beats the pet wildcard).
   manual pet host.
 - external-dns runs on the active color (standby); during a transition both may
   run, but records are identical (→ `live`) so it's benign.
+- **Teardown-retract (P6-confirmed):** the "identical records → no fight" property
+  holds for the CNAME *value* but NOT for the ownership TXT — the two colors write
+  the same `extdns-cname-<demo>` name with different `owner=<color>` values, and a
+  color only ever retracts records it owns. So before destroying a color, delete its
+  demos and **confirm external-dns retracted their CNAME + TXT while that color is
+  still alive**; otherwise the surviving color (different owner id) can never reap
+  them and they orphan in the shared zone.
 
 ## Phases (test as we go)
 
@@ -287,12 +294,102 @@ Each phase has an explicit test gate before moving on.
 | P3 — Flux bootstrap | ✅ Done (gate passed: Flux on blue via Tofu; 10 platform Kustomizations Ready; Traefik Classic ELB live + serving; external-secrets store Valid + cert-manager issuers Ready = IRSA proven; `tofu plan` idempotent) |
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
-| P6 — Blue/green cutover | Not started |
+| P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
 | P7 — Migrate + retire the pet | Not started |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P6 GATE PASSED — blue/green cutover proven end-to-end, green torn down clean.**
+  Stood up a full green sibling, warmed it, swung `live` blue→green and back, and
+  destroyed green with zero orphans — the pet wildcard never moved and blue was
+  untouched throughout. Green was **ephemeral** (locked decision): the gate proves the
+  mechanism; P7 rebuilds green for the real-demo migration.
+  - **Green build = byte-identical to blue.** Latest-GA today (locked decision) is
+    **EKS 1.36** — already what blue runs (no 1.37 yet) — and every addon chart's
+    latest == blue's pin (checked live: cert-manager v1.21.0, cluster-autoscaler
+    9.58.0, external-dns 1.21.1, external-secrets 2.7.0, metrics-server 3.13.1, traefik
+    41.0.2, temporal-worker-controller 0.27.0, flux2 2.19.0, node-local-dns 1.26.8).
+    So `clusters/green/` is a faithful dup of `clusters/blue/`; `diff -r` = exactly the
+    4 per-color deltas (autoscaler `clusterName`, external-dns `txtOwnerId: green`,
+    operator `DEMO_REGISTRY_CLUSTER=green`, the 14 Flux `path:`s) + comments/README.
+    Shared `tmprl-dem-cld-*` IRSA ARNs (color-union trust auto-covers green), operator
+    image, wildcard cert, and `ndots:2` dnsConfig copy verbatim. All 14 green
+    kustomizations `kustomize build`-validated before apply. Commit `91ad118`.
+  - **Bootstrap ordering — the P6 note was WRONG; a color needs THREE applies, not
+    two.** A single "add green everywhere" apply FAILS at plan: the `alekc/kubectl`
+    green provider cannot configure against `module.cluster["green"]`'s unknown endpoint
+    before the cluster exists (blue only dodged this because P1 built the cluster before
+    P3 added the provider). Correct sequence: **(1a)** `tofu apply
+    -target='module.cluster["green"]'` → creates green's cluster only (endpoint then
+    known in state; NB this errors at the very end on the `clusters` output because
+    `local_file.kubeconfig["green"]` is outside the target — benign, cluster is made).
+    **(1b)** full `tofu apply` → green Flux + IRSA green-trust + kubeconfig. **(2)** add
+    green's `dns.tf` data source + map entry → `green.` record. Commit `04fe41e`.
+  - **Pre-apply adversarial review** (workflow `wf_ca04e24e-12a`, 5 dims → per-finding
+    adversarial verify): **6 confirmed / 5 rejected.** No issue with green bring-up; all
+    findings were about the demo gate + teardown and were resolved by **gate design, not
+    code** (anti-abstraction honored): (A) **concurrent dual-operator reconcile of the
+    SAME demo** (findings 2/3/6) — running both colored operators on one `p6-smoke` races
+    them on the shared, color-agnostic Temporal Cloud namespace / runtime service-account
+    / runtime secret (non-retryable `CreateNamespace`, duplicate SAs, last-writer-wins
+    secret clobber); P5 never exercised two colored operators at once. Fix: warm green
+    with a **green-ONLY `p6-smoke`** (single writer). (B) **external-dns per-color TXT
+    ownership** (findings 1/4/5) — the "identical records → no fight" invariant holds for
+    the CNAME value but NOT the ownership TXT; if green owns `extdns-cname-p6-smoke`
+    (owner=green) and green is destroyed before retracting, blue can never reap an
+    owner=green record. Fix: **delete the demo + confirm external-dns retracts BEFORE
+    destroying** the owning color.
+  - **Gate evidence (throwaway `p6-smoke`, green-only, now gone):** green reconciled it
+    → 3 pods (backend/frontend/worker), 2 IngressRoutes stamped `target:
+    live.tmprl-demo.cloud`, external-dns `p6-smoke → CNAME → live` + `owner=green` TXT,
+    demo's own HTTP-200 smoke check passed (phase `Promoted`), served with the
+    `CN=*.tmprl-demo.cloud` wildcard cert (green pre-minted it via DNS-01, zero traffic).
+    **Pre-flip** (`live`→blue): green serves `p6-smoke` directly (`--resolve` → 200);
+    public DNS → live → blue → 404 (prod undisturbed, not cut over); pet + registry
+    unmoved. **Flip** `active_color=green` (in-place alias UPSERT, `0 add/1 change/0
+    destroy`): within ~10s `p6-smoke` via public DNS (1.1.1.1 + 8.8.8.8) → green → **HTTP
+    200**. **Rollback** `active_color=blue` (in-place): public DNS → blue → 404 (traffic
+    reversed); green cluster untouched (still served directly). Used `-var active_color=`
+    for flip/rollback so the committed steady-state stays blue.
+  - **Teardown (reverse order; hit + recovered a data-source provider trap):** (1) delete
+    `p6-smoke` from green, external-dns retracted CNAME+TXT in ~75s (re-proves the P7
+    retract path). (2) `tofu destroy -target='module.flux_green'` (Flux off green while
+    its providers + cluster still exist). (3) remove ALL green config (colors→`["blue"]`,
+    providers/flux/dns blocks) + `tofu init` + apply. **Gotcha:** removing the green
+    providers left `data.kubernetes_service.traefik_green` (and 2 straggler
+    `module.flux_green` in-cluster resources) in state referencing the now-absent
+    providers → "Provider configuration not present" at plan. Fix: `tofu state rm` those
+    3 (a read-only data source + in-cluster objects the EKS teardown reaps anyway) — then
+    the plan was a clean green-only destroy: **`0 add / 8 change / 27 destroy`** (the 8
+    changes = the 7 IRSA roles + autoscaler policy reverting green's trust statement;
+    blue's trust intact). 0 orphans (no green OIDC/KMS-alias/log-group/subnet-tags);
+    blue's external-secrets store still `Valid`, operator 1/1; `tofu plan` idempotent.
+    Config reverts + this closeout in one commit.
+  - **CROSS-PHASE flags for P7 (real-demo migration):**
+    - **The concurrency hazard is REAL for P7, not deferrable.** P7 moves the real
+      `projects/` catalog onto the new stack; if both blue's and green's operators run
+      and reconcile the same demos, the shared-external-plane races above (findings
+      2/3/6) apply to REAL namespaces/SAs/secrets. P6 sidestepped it with a green-only
+      demo; P7 must EITHER honor standby (only the active color's operator runs —
+      scale the other to 0), OR the operator's create/adopt + compensation activities
+      (`create_namespace`, `create_service_account`, runtime-secret write at
+      `<project>/temporal`, ECR/CodeBuild) must be verified concurrency-idempotent in
+      the `tmprl-demo-cloud-registry` operator repo (they are NOT today: `CreateNamespace`
+      raises non-retryable on AlreadyExists; SA create has no dedup; runtime secret path
+      has no color). Sequential apply (one color creates, the other adopts) avoids the
+      cold-start create race but NOT the steady-state re-reconcile clobber.
+    - **Adding/removing a color is a fixed 3-apply dance** (see bootstrap ordering above):
+      cluster via `-target` → full apply for Flux → `dns.tf` apply for the record; and in
+      reverse for teardown, with a `tofu state rm` of the orphaned `traefik_<color>` data
+      source after the providers are removed. Bake this into any P7 green rebuild.
+    - **Standby:** blue stayed the active + running color throughout P6 (correct per the
+      model — `live`→blue); green was ephemeral so no standby scaling was needed. The
+      "return blue to standby" question is moot until a second color is standing again.
+    - **`flux` / some root outputs are blue-only shaped** (the `flux` output map only
+      emitted `blue`); harmless, but if a durable green is added in P7 the outputs may
+      need widening to be per-color.
 
 - **P5 GATE PASSED — operator cluster dimension live + validated on blue.** The
   registry operator is now color-safe and was proven end-to-end on blue against a

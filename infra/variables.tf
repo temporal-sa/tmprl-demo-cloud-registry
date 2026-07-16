@@ -10,9 +10,9 @@ variable "region" {
 }
 
 variable "colors" {
-  description = "Cluster colors to stand up on the shared VPC. Blue + green as of the P6 cutover; the live.<domain> swing record (var.active_color) repoints between them. Green is torn down after the P6 gate — drop it back to [\"blue\"] then (removing its providers.tf/flux.tf blocks + dns.tf entry) to destroy it."
+  description = "Cluster colors to stand up on the shared VPC. Blue only in steady state; a green sibling is added for a blue/green cutover (P6 validated the full swing + rollback with an ephemeral green, then tore it down). Adding a color = this list + a providers.tf alias block + a flux.tf module block + a dns.tf data source/map entry (the four non-for_each edits), applied in the documented order."
   type        = list(string)
-  default     = ["blue", "green"]
+  default     = ["blue"]
 }
 
 variable "active_color" {

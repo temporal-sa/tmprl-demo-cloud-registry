@@ -65,41 +65,10 @@ provider "kubectl" {
   }
 }
 
-# --- green (P6): the cutover sibling. Identical to the blue set above, pointed at
-# module.cluster["green"]. Safe because "green" is a key of var.colors.
-
-provider "kubernetes" {
-  alias                  = "green"
-  host                   = module.cluster["green"].cluster_endpoint
-  cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
-  }
-}
-
-provider "helm" {
-  alias = "green"
-  kubernetes {
-    host                   = module.cluster["green"].cluster_endpoint
-    cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
-    }
-  }
-}
-
-provider "kubectl" {
-  alias                  = "green"
-  host                   = module.cluster["green"].cluster_endpoint
-  cluster_ca_certificate = base64decode(module.cluster["green"].cluster_ca)
-  load_config_file       = false
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["--region", var.region, "eks", "get-token", "--cluster-name", module.cluster["green"].cluster_name, "--output", "json"]
-  }
-}
+# A green cutover sibling adds a matching kubernetes/helm/kubectl alias block here
+# pointed at module.cluster["green"] (P6 validated this, then removed it with green).
+# ORDERING: the alekc/kubectl provider cannot configure against a not-yet-created
+# cluster's (unknown) endpoint, so a new color's CLUSTER must exist before these
+# blocks can plan — bootstrap it with `tofu apply -target='module.cluster["<color>"]'`
+# first, then a full apply installs its Flux. On teardown, destroy module.flux_<color>
+# (needs these providers + the live cluster) BEFORE removing these blocks.
