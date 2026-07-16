@@ -1146,21 +1146,32 @@ class DemoProjectWorkflow:
         tags = resources.namespace_tags(external_plan.demo_project)
         if not tags:
             return
-        # Tags are namespace metadata with no independent lifecycle (they vanish
-        # with the namespace), so there is nothing to compensate or surface —
-        # just converge them.
-        await workflow.execute_activity(
-            external_resources.ensure_temporal_cloud_namespace_tags,
-            external_resources.EnsureTemporalCloudNamespaceTagsRequest(
-                checked_at=external_plan.checked_at,
-                project=external_plan.temporal_project,
-                namespace=namespace,
-                tags=tuple(tags.items()),
-            ),
-            start_to_close_timeout=timedelta(minutes=5),
-            heartbeat_timeout=timedelta(minutes=1),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
+        # BEST-EFFORT. Tags are non-critical namespace metadata with no independent
+        # lifecycle. This runs inside the reconcile's compensating try and BEFORE
+        # credential promotion, so if a tag failure propagated it would trigger
+        # _compensate_temporal_cloud_reconcile and TEAR DOWN the just-created
+        # namespace. Swallow + log instead: a tagging problem must never fail the
+        # demo or roll back its namespace. (CancelledError is a BaseException, so
+        # cooperative cancellation still propagates.)
+        try:
+            await workflow.execute_activity(
+                external_resources.ensure_temporal_cloud_namespace_tags,
+                external_resources.EnsureTemporalCloudNamespaceTagsRequest(
+                    checked_at=external_plan.checked_at,
+                    project=external_plan.temporal_project,
+                    namespace=namespace,
+                    tags=tuple(tags.items()),
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+        except Exception as error:  # noqa: BLE001
+            workflow.logger.warning(
+                "Namespace tag convergence failed for %s (non-fatal): %s",
+                namespace.namespace,
+                error,
+            )
 
     async def _teardown_temporal_cloud_namespace_on_region_drift(
         self,
