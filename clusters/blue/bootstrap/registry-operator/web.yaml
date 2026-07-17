@@ -134,8 +134,11 @@ metadata:
     app.kubernetes.io/name: registry-operator
     app.kubernetes.io/component: web
 spec:
+  # websecure-only + tls: {} — matches the operator's working demo IngressRoutes so
+  # Traefik binds the *.tmprl-demo.cloud wildcard from the default TLSStore. A route
+  # that mixes the web (:80) and websecure entrypoints under one tls: {} makes
+  # Traefik serve its self-signed TRAEFIK DEFAULT CERT instead.
   entryPoints:
-    - web
     - websecure
   routes:
     - kind: Rule
