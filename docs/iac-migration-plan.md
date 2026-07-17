@@ -295,11 +295,32 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login serving on blue; pet registry layer scaled down; remaining: litellm DB follow-up, branch flip to main, pet teardown |
+| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login serving on blue; **pet STAYS as a manual/testing cluster** (managed-demo systems removed, not torn down); remaining: strip pet's registry layers in clusters/sa-demo, litellm DB, branch flip to main |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7.3 MODEL CORRECTED (with the user): the pet is NOT torn down.** `sa-demo` STAYS as
+  a user-accessible manual/testing cluster behind the `*` wildcard (Traefik up, `*` → pet
+  ELB); "retire the pet" means REMOVE the managed-demo systems from it (operator, managed
+  demos, web/catalog, instruqt-litellm) — all of which now live on blue. This matches the
+  original DNS design (pet = manual catch-all). Consequences that override earlier notes:
+  - **`registry-self` added to `clusters/sa-demo` (commit `d8fe53a`) is WRONG** and must be
+    removed: it was meant to keep the pet self-managing, but the pet must NOT run the
+    operator. Left in, a merge to `main` would resurrect the pet operator → dual-reconcile
+    hazard with blue. P7.3 instead STRIPS the pet's managed layers from `clusters/sa-demo`
+    (registry-crds, registry-operator, registry-projects, registry-instruqt-courses,
+    instruqt-litellm, registry-self), keeping only base platform (traefik, external-secrets,
+    cluster-autoscaler, metrics-server, node-local-dns, temporal-worker-controller) so the
+    pet is a clean manual cluster. Pruned by Flux when merged to main. `projects/operator/
+    registry.yaml` (the self-demo) is then used by NO cluster — vestigial, keep or drop.
+  - **litellm: the pet VPC + RDS PERSIST** (cluster stays), so "dies with the pet" was wrong.
+    Options to restore litellm on blue: (a) VPC-peer blue's VPC ↔ the pet VPC to reach the
+    existing RDS (durable now that the pet stays; reuses the DB), or (b) a new RDS in blue's
+    VPC. Still a follow-up; courses don't use it.
+  - Pet's managed demo namespaces already deleted (by the user); pet Traefik/base platform
+    still serving manual traffic via `*`.
 
 - **P7.3 IN PROGRESS — `catalog.tmprl-demo.cloud` (login) moved to blue; pet scaled down.**
   Commits `b7b261a`+`f26d765` (pushed). The pet's `web` was scaled down (out-of-band by
