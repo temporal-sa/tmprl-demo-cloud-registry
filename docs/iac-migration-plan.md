@@ -295,11 +295,29 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login serving on blue; **pet STAYS as a manual/testing cluster** (managed-demo systems removed, not torn down); remaining: strip pet's registry layers in clusters/sa-demo, litellm DB, branch flip to main |
+| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login live on blue; pet stripped to base-platform manual cluster + shared LiteLLM RDS **staged on feature branch** (not merged/applied); remaining LIVE steps: litellm snapshot-migration, merge to main, blue branch flip, login spot-check |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7.3 STAGED (feature branch, not merged/applied): pet→manual + shared LiteLLM RDS.**
+  Two reviewable pieces staged; both take effect only on merge/apply:
+  - **Pet stripped to base platform** (`clusters/sa-demo/flux-system/kustomizations.yaml`,
+    commit `59a921c`): removed the managed-demo layers (instruqt-litellm, registry-crds/
+    operator/projects/instruqt-courses, and the wrong registry-self); kept traefik,
+    external-secrets, cluster-autoscaler, metrics-server, node-local-dns,
+    temporal-worker-controller. Pruned on the pet when merged to main.
+  - **Shared LiteLLM RDS staged** (`infra/litellm_rds.tf`, commit `eb4e61f`): a Postgres in
+    the Tofu VPC (blue+green), restored from a snapshot of the legacy pet RDS so master +
+    virtual API keys migrate intact; DB instance gated on `var.litellm_db_snapshot_identifier`
+    (empty → not created; `tofu plan` = 3 networking adds only). Runbook in the tf header.
+  - **REMAINING LIVE steps (each needs an explicit go):** (1) litellm migration — snapshot
+    the legacy DB, `tofu apply -var litellm_db_snapshot_identifier=<snap>`, repoint the SM
+    `DATABASE_URL` host, re-wire `clusters/blue/addons/instruqt-litellm`; (2) merge
+    `feat/full-e2e-iac` → `main` (user-driven); (3) POST-merge flip blue + litellm
+    image-automation to track `main` (can't stage early — blue would track a main without
+    the P7 changes); (4) human login spot-check; (5) `patching-and-recovery` course.
 
 - **P7.3 MODEL CORRECTED (with the user): the pet is NOT torn down.** `sa-demo` STAYS as
   a user-accessible manual/testing cluster behind the `*` wildcard (Traefik up, `*` → pet
