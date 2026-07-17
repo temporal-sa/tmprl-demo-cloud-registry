@@ -60,10 +60,21 @@ resource "aws_db_instance" "litellm" {
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.name_prefix}-litellm-final"
 
-  # snapshot_identifier only matters at creation; ignore afterward so the instance
-  # becomes a normal managed DB (no replacement on later applies).
+  # This instance was seeded from a snapshot, so its encryption (storage_encrypted
+  # + kms_key_id) and DB identity (engine/version/db_name/username) are inherited
+  # and immutable — not declared in config above. Ignore them (and snapshot_identifier,
+  # which only matters at creation) so Tofu treats it as a normal managed DB and never
+  # plans a replacement on later applies.
   lifecycle {
-    ignore_changes = [snapshot_identifier]
+    ignore_changes = [
+      snapshot_identifier,
+      storage_encrypted,
+      kms_key_id,
+      engine,
+      engine_version,
+      db_name,
+      username,
+    ]
   }
 
   tags = { Name = "${var.name_prefix}-litellm" }
