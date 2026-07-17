@@ -6,7 +6,13 @@ resources:
   - rbac.yaml
   - external-secrets.yaml
   - deployment.yaml
-  - web.yaml
+  # web.yaml removed (P8): the catalog web is now rendered by the registry.yaml
+  # self-demo's web component, not hand-authored here.
+  # NB: no image-automation for the watch yet — the operator self-build tags images
+  # git-<sha> (unorderable), so Flux ImagePolicy can't pick "newest". The watch image
+  # is pinned (setter marker is a ready hook); auto-bump needs the build to emit an
+  # orderable tag first (P8 open item). The self-rendered worker still auto-rolls
+  # (canary-gated) via the self-build.
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
@@ -41,11 +47,16 @@ configMapGenerator:
       # "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE is required when temporalProxy is enabled".
       # Latest proxy build (== the pet's proven tag).
       - DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE=429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/temporal-cloud-proxy:git-bb9b9839e384
-  # Blue runs ONE worker+watch process (no self-rendered worker handoff). WATCH_MODE
-  # truthy = "always" (watch continuously); the parser maps true/1/yes/on -> always,
-  # NOT the literal string "always". Worker is enabled in-process.
-  - name: registry-operator-config
+  # P8 self-managing split: the bootstrap pod is WATCH-ONLY (no in-process worker).
+  # In WATCH_MODE=bootstrap it reconciles the registry.yaml self-demo, which
+  # self-renders the REAL operator as the versioned WorkerDeployment named in
+  # WATCH_HANDOFF_DEPLOYMENT, then this watch scales itself back to 0. The handoff
+  # name MUST match the self-rendered WD name, which GAP-2 color-suffixes to
+  # registry-operator-blue.
+  - name: registry-operator-watch-config
     literals:
-      - DEMO_REGISTRY_WORKER_ENABLED=true
-      - DEMO_REGISTRY_WATCH_MODE=true
+      - DEMO_REGISTRY_WORKER_ENABLED=false
+      - DEMO_REGISTRY_WATCH_ENABLED=true
+      - DEMO_REGISTRY_WATCH_MODE=bootstrap
+      - DEMO_REGISTRY_WATCH_HANDOFF_DEPLOYMENT=tmprl-dem-cld-registry-operator/registry-operator-blue
       - DEMO_REGISTRY_WATCH_INTERVAL_SECONDS=15
