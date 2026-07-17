@@ -295,11 +295,36 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login + **litellm** live on blue; pet strip staged (feature branch); remaining: merge to main, post-merge blue branch flip, login spot-check, patching course |
+| P7 — Migrate + retire the pet | 🔄 In progress — squash-merged to main (#13); blue flipped to track `main` (tofu plan clean); litellm live on shared RDS; remaining: pet's own prune to manual cluster (pending its poll), crashable operator-image build, human spot-checks |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7.3 — SQUASH-MERGED to main (#13) + blue flipped to track `main`.** The feature
+  branch was squash-merged (main squash `2f96bf0`), then a few post-merge fixes on main:
+  - **litellm `tofu apply` footgun fixed** (`87a50de` + `0fecf45`): the RDS instance is
+    count-gated on `var.litellm_db_snapshot_identifier`, so an apply without the var would
+    drop the live DB — defaulted the var to the migration snapshot; and the snapshot-restored
+    instance was planning a REPLACEMENT (`storage_encrypted true->null # forces replacement`),
+    so added `ignore_changes = [snapshot_identifier, storage_encrypted, kms_key_id, engine,
+    engine_version, db_name, username]`. `tofu plan` is now clean (No changes).
+  - **Blue branch flip (feat→main).** Tofu could NOT force it: Flux co-owns the GitRepository
+    `spec.ref.branch` (it adopted the committed source.yaml per P3), so `tofu apply` hit an SSA
+    conflict trying feat→main. The Flux-native flip works: committed `branch: main` to
+    `clusters/blue/flux-system/source.yaml` on the RETIRING feat branch (`00e77e1`) — blue,
+    still reading feat, reconciled it and re-pointed its GitRepository to `main`; blue now
+    reconciles `main` (whose source.yaml also says main, so Tofu var=main + Flux agree, no
+    fight). Then `tofu apply` reconciled state (same value, no conflict) → `tofu plan` = No
+    changes. Also flipped `var.flux_git_branch`→main and the litellm image-automation→main.
+    Blue: 17/17 kustomizations Ready on `main@0fecf45`, stable (no ping-pong).
+  - **STILL OPEN:** (1) the **pet** is still on OLD main (`1354b8c`) — its prune to a
+    base-platform manual cluster happens on its own next GitRepository poll (it has suspended
+    registry Kustomizations from the standby handoff; watch they prune cleanly). (2) **crashable
+    on blue needs a merged-code OPERATOR image** — none exists (no operator self-builds now:
+    pet operator down, blue Flux-bootstrapped), so a build from main must be triggered, then
+    bump `clusters/blue/bootstrap/registry-operator/deployment.yaml`. (3) delete the `feat`
+    branch. (4) human spot-checks: full Google login; a litellm request with a migrated key.
 
 - **P7.3 — litellm MIGRATED to the shared RDS + live on blue (step 1 done).** Commits
   `27a2a17` (SG desc fix) + `039dcd5` (re-wire). Ran the runbook:
