@@ -6,6 +6,7 @@ resources:
   - rbac.yaml
   - external-secrets.yaml
   - deployment.yaml
+  - web.yaml
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
