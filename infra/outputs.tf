@@ -94,3 +94,8 @@ output "clusters" {
     }
   }
 }
+
+output "litellm_db_endpoint" {
+  description = "Endpoint (host:port) of the shared LiteLLM Postgres; null until the migration apply creates it. Repoint the SM DATABASE_URL host at this."
+  value       = try(aws_db_instance.litellm[0].address, null)
+}

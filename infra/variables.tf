@@ -117,3 +117,9 @@ variable "bootstrap_secret_names" {
     instruqt_cli             = "tmprl-dem-cld/platform/instruqt-cli"
   }
 }
+
+variable "litellm_db_snapshot_identifier" {
+  description = "RDS snapshot to restore the shared LiteLLM Postgres from (a snapshot of the legacy temporal-instruqt-litellm DB). Empty = do not create the instance yet (keeps plan clean pre-migration). Set at apply time during the P7 litellm migration."
+  type        = string
+  default     = ""
+}
