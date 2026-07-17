@@ -295,11 +295,30 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — squash-merged to main (#13); blue flipped to track `main` (tofu plan clean); litellm live on shared RDS; remaining: pet's own prune to manual cluster (pending its poll), crashable operator-image build, human spot-checks |
+| P7 — Migrate + retire the pet | ✅ Done — everything managed on blue (tracking `main`); litellm on shared RDS; pet reduced to a base-platform manual cluster (managed namespaces pruned) + its orphaned uncolored control-plane workflows terminated (10, on the dead `registry-management` queue). Follow-ups moved to P8. |
+| P8 — Restore operator self-management on blue | 🔄 In progress — decision: **Option A** (color-aware self-render + versioning + canary), restoring what the pet's `registry.yaml` self-demo did (self-build operator/web images + e2e canary-gated version rollout), which the P5 hand-bootstrapped model dropped. Discovery in flight (`wf_a13e08f7-b04`); design next. |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7 CLOSED + P8 OPENED (restore operator self-management on blue).** P7 done: managed
+  platform fully on blue (tracking `main`), litellm on the shared RDS, the pet reduced to a
+  base-platform manual cluster — its managed namespaces (`flux-system`, `external-secrets`,
+  `tmprl-dem-cld-registry-operator`, `tmprl-dem-cld-worker-controller`) were stuck Terminating
+  on orphaned `finalizers.fluxcd.io` + `temporal.io/delete-protection` (controllers already
+  gone); removed those finalizers and they cleared. Then terminated the pet's 10 orphaned
+  uncolored control-plane workflows (batch query `TaskQueue='registry-management'` — exact, can't
+  hit blue's `registry-management-blue`); the shared TC namespace now holds only blue's 9
+  `/blue/` entities. **Gap that opened P8:** blue's operator is a static hand-bootstrapped
+  Deployment (P5) — it does NOT self-build/deploy the operator or catalog-frontend (`web`) on
+  code changes, and has NO operator-rollout canary. The pet's `registry.yaml` self-demo did
+  both (self-render versioned WorkerDeployment + `RegistryOperatorCanaryWorkflow` gate).
+  **Decision: Option A** — restore self-management on blue, color-aware. Discovery workflow
+  `wf_a13e08f7-b04` running (self-mgmt topology / self-render+versioning / canary / color gaps /
+  blue bootstrap delta); design + phased implementation to follow. NB catalog *content* +
+  demo-app image builds already work on blue; the gap is specifically the operator's own
+  self-CD + canary.
 
 - **P7.3 — SQUASH-MERGED to main (#13) + blue flipped to track `main`.** The feature
   branch was squash-merged (main squash `2f96bf0`), then a few post-merge fixes on main:
