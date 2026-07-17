@@ -1,8 +1,6 @@
 # Flux 2.9 on blue serves image CRDs at image.toolkit.fluxcd.io/v1 (pet used
-# v1beta2). update.path points at blue's tree, and checkout/push target blue's
-# tracked branch (feat/full-e2e-iac) so blue's broker-image bumps are independent
-# of the pet's automation on main. NOTE: flip these branches to main at the P7.3
-# merge, together with var.flux_git_branch / clusters/blue source.yaml.
+# v1beta2). update.path points at blue's tree; checkout/push target main (blue's
+# Flux branch after the P7 squash-merge), so broker-image bumps commit to main.
 apiVersion: image.toolkit.fluxcd.io/v1
 kind: ImageRepository
 metadata:
@@ -54,7 +52,7 @@ spec:
   git:
     checkout:
       ref:
-        branch: feat/full-e2e-iac
+        branch: main
     commit:
       author:
         name: flux-image-automation

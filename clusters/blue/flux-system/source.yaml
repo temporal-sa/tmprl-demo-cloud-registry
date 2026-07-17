@@ -11,4 +11,4 @@ spec:
   ref:
     # P3: blue syncs the feature branch, the only branch where clusters/blue/
     # exists. Flip to `main` at merge / P7 (also update flux_git_branch in infra).
-    branch: feat/full-e2e-iac
+    branch: main
