@@ -295,11 +295,37 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — standby handoff DONE; all 7 DemoProjects serving on blue (adopt proven); instruqt-litellm deferred (cross-VPC DB); pet retirement (P7.3) gated |
+| P7 — Migrate + retire the pet | 🔄 In progress — all 7 DemoProjects + catalog/login serving on blue; pet registry layer scaled down; remaining: litellm DB follow-up, branch flip to main, pet teardown |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7.3 IN PROGRESS — `catalog.tmprl-demo.cloud` (login) moved to blue; pet scaled down.**
+  Commits `b7b261a`+`f26d765` (pushed). The pet's `web` was scaled down (out-of-band by
+  the user), which broke `catalog.tmprl-demo.cloud` — the login page + OAuth flow +
+  `/_auth/verify` forward-auth endpoint the auth-gated demos redirect to — so no one could
+  complete login. Fixed by making blue own `catalog`:
+  - Added a public IngressRoute on blue routing `catalog.tmprl-demo.cloud` → blue's `web`
+    (external-dns published `catalog → live → blue`). Blue's `web` reuses the shared OAuth
+    client (`shared-auth`, callback already registered), so the flow works on blue.
+  - **GOTCHA:** the first cut mixed the `web` (:80) + `websecure` entrypoints under one
+    `tls: {}`, which made Traefik serve its self-signed `TRAEFIK DEFAULT CERT` for catalog
+    (public TLS failed). Fix = **websecure-only + `tls: {}`** (matches the operator's demo
+    IngressRoutes so the `*.tmprl-demo.cloud` wildcard binds from the default TLSStore).
+  - **Verified:** `catalog/auth/login` → HTTP 200 with `CN=*.tmprl-demo.cloud` via public
+    DNS; all 7 demos still good (3×200, 4×302→login). Login page loads on blue — the full
+    Google OAuth round-trip still needs a human spot-check.
+  - **NEW STATE:** the pet's registry layer (operator + `web`) is scaled down, so litellm
+    (which I'd reverted to the pet) is now **hard-down** — its records fall through the
+    wildcard to a pet that no longer serves them. litellm stays down until the DB follow-up
+    (own RDS in blue's VPC). Not blocking (courses don't use it), but litellm consumers of
+    the agent-harness tracks are affected.
+  - **REMAINING for P7 done:** (1) human-verify a full login → auth-gated demo access;
+    (2) litellm blue-side DB + re-wire; (3) `patching-and-recovery-workshop` course
+    (pre-existing broken); (4) branch flip blue + litellm image-automation → `main` and
+    merge; (5) formal pet teardown (cluster/VPC/RDS) once nothing depends on it. Keep the
+    pet operator DOWN throughout.
 
 - **P7.1/P7.2 — standby handoff EXECUTED; all 7 DemoProjects serving on blue.**
   Commits `c8e45a5`→`6dd8dcf` (pushed). The big-bang standby cutover is done and
