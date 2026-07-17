@@ -1,3 +1,15 @@
+# sa-demo is now a user-accessible MANUAL / self-serve cluster (P7). The managed
+# demo systems (registry CRDs + operator + the projects/instruqt catalogs + the
+# instruqt-litellm app layer) moved to the Tofu-managed "blue" cluster and were
+# removed here, so this tree carries only the base platform users need to deploy
+# their own workloads by hand: ingress (traefik), external-secrets, autoscaling,
+# metrics, node-local-dns, and the temporal-worker-controller. sa-demo keeps the
+# `*.tmprl-demo.cloud` wildcard as the manual catch-all; managed demos ride the
+# per-demo `<demo> -> live -> blue` records that override it.
+#
+# Do NOT re-add a registry-operator / registry-projects / registry-self layer here:
+# a second operator on this cluster would race blue's on the shared per-demo
+# Temporal Cloud namespaces (the P7 concurrency hazard).
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -149,136 +161,3 @@ spec:
       kind: HelmRelease
       name: traefik
       namespace: traefik
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: instruqt-litellm
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: external-secrets-stores
-  interval: 5m
-  path: ./clusters/sa-demo/addons/instruqt-litellm/install
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
-  healthChecks:
-    - apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      name: instruqt-litellm-runtime
-      namespace: tmprl-dem-cld-instruqt-litellm
-    - apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      name: instruqt-litellm-broker
-      namespace: tmprl-dem-cld-instruqt-litellm
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-crds
-  namespace: flux-system
-spec:
-  interval: 5m
-  path: ./clusters/sa-demo/bootstrap/crds
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-operator
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: external-secrets-stores
-    - name: registry-crds
-    - name: temporal-worker-controller
-  interval: 5m
-  path: ./clusters/sa-demo/bootstrap/registry-operator
-  # The operator WorkerDeployment is now rendered by the registry-operator
-  # DemoProject. Keep bootstrap non-pruning so the existing worker survives the
-  # handoff when Flux stops owning that object.
-  prune: false
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-projects
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: registry-operator
-    - name: temporal-worker-controller
-  interval: 5m
-  # DemoProject CRs authored directly under projects/demo/. Keep this
-  # Kustomization name stable so existing DemoProject inventory is not handed to
-  # a deleted Kustomization during the folder split.
-  path: ./projects/demo
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-instruqt-courses
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: registry-operator
-  interval: 5m
-  # InstruqtCourse CRs authored directly under projects/instruqt/.
-  path: ./projects/instruqt
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-self
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: registry-operator
-    - name: temporal-worker-controller
-  interval: 5m
-  # The operator's self-managing DemoProject (registry.yaml, name:
-  # registry-operator). P7 moved it out of ./projects/demo into ./projects/operator
-  # so a sibling cluster (blue) whose operator is Flux-bootstrapped does not
-  # reconcile a second, colliding operator from the shared catalog. Only the pet
-  # self-manages. prune:false so the running operator survives; at the P7.3
-  # pet-retirement merge, sequence the registry-projects handoff (this CR leaves
-  # registry-projects' inventory) to avoid a self-demo teardown flap — or let the
-  # pet operator wind down as the cluster is decommissioned.
-  path: ./projects/operator
-  prune: false
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
