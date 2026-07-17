@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from . import derive
+
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -85,7 +87,7 @@ class WorkerConfig:
             temporal_namespace=os.getenv("TEMPORAL_NAMESPACE", "default"),
             task_queue=os.getenv(
                 "DEMO_REGISTRY_TASK_QUEUE",
-                f"registry-management-{cluster}" if cluster else "registry-management",
+                derive.registry_task_queue(cluster),
             ),
             cluster=cluster,
             temporal_api_key=os.getenv("TEMPORAL_API_KEY"),

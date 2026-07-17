@@ -2297,18 +2297,32 @@ def platform_env_vars(
     image_overrides: dict[str, str],
 ) -> list[dict[str, str]]:
     env: list[dict[str, str]] = []
-    if is_registry_catalog_project(demo_project) and component_name == "registry-operator":
+    if not is_registry_catalog_project(demo_project):
+        return env
+    cluster = operator_cluster()
+    if component_name == "registry-operator":
         env.append({"name": "DEMO_REGISTRY_OPERATOR_IMAGE", "value": image})
         proxy_image = image_overrides.get(TEMPORAL_PROXY_BUILD_NAME)
         if proxy_image:
             env.append({"name": TEMPORAL_PROXY_IMAGE_ENV, "value": proxy_image})
-        # Propagate our own color into the self-rendered operator WorkerDeployment
-        # so the reconciler (and its self-canary) polls this color's task queue.
-        # The per-cluster configMap only feeds the bootstrap/watch pod, not this
-        # rendered worker, whose env comes entirely from the shared catalog spec.
-        cluster = operator_cluster()
+        # Propagate our own color into the self-rendered operator worker. Its own
+        # config.from_env derives the task queue from DEMO_REGISTRY_CLUSTER, so this
+        # is what makes the self-rendered operator poll registry-management-<color>.
+        # REQUIRES the self-demo NOT set an explicit DEMO_REGISTRY_TASK_QUEUE (an
+        # explicit value wins over the color-derived default in config.py).
         if cluster:
             env.append({"name": "DEMO_REGISTRY_CLUSTER", "value": cluster})
+    elif component_name == REGISTRY_WEB_COMPONENT_NAME:
+        # The catalog web does NOT run config.from_env; it reads
+        # DEMO_REGISTRY_TASK_QUEUE directly to start CrashableWorkspaceWorkflow on
+        # the operator's queue. Inject the SAME color-derived queue so those starts
+        # land where this color's operator polls. (Single source: derive.)
+        env.append(
+            {
+                "name": "DEMO_REGISTRY_TASK_QUEUE",
+                "value": derive.registry_task_queue(cluster),
+            }
+        )
     return env
 
 
