@@ -39,9 +39,9 @@ variable "flux_chart_version" {
 }
 
 variable "flux_git_branch" {
-  description = "Branch of var.github_repo each cluster's Flux root sync tracks. P3 uses the feature branch (the only branch with clusters/blue/); flip to main at merge / P7."
+  description = "Branch of var.github_repo each cluster's Flux root sync tracks. Flipped to main after the P7 squash-merge (#13); the feature branch is retired."
   type        = string
-  default     = "feat/full-e2e-iac"
+  default     = "main"
 }
 
 variable "single_nat_gateway" {
@@ -119,7 +119,7 @@ variable "bootstrap_secret_names" {
 }
 
 variable "litellm_db_snapshot_identifier" {
-  description = "RDS snapshot to restore the shared LiteLLM Postgres from (a snapshot of the legacy temporal-instruqt-litellm DB). Empty = do not create the instance yet (keeps plan clean pre-migration). Set at apply time during the P7 litellm migration."
+  description = "RDS snapshot the shared LiteLLM Postgres was restored from (the P7 migration seed from the legacy temporal-instruqt-litellm DB). Created from it once; ignore_changes then keeps the instance stable and deletion_protection prevents replacement. Kept as the default so a routine `tofu apply` does NOT drop the live RDS (empty would set count=0)."
   type        = string
-  default     = ""
+  default     = "litellm-migrate-blue-20260717"
 }
