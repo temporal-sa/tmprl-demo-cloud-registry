@@ -296,7 +296,7 @@ Each phase has an explicit test gate before moving on.
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
 | P7 — Migrate + retire the pet | ✅ Done — everything managed on blue (tracking `main`); litellm on shared RDS; pet reduced to a base-platform manual cluster (managed namespaces pruned) + its orphaned uncolored control-plane workflows terminated (10, on the dead `registry-management` queue). Follow-ups moved to P8. |
-| P8 — Restore operator self-management on blue | 🔄 In progress — decision: **Option A** (color-aware self-render + versioning + canary), restoring what the pet's `registry.yaml` self-demo did (self-build operator/web images + e2e canary-gated version rollout), which the P5 hand-bootstrapped model dropped. Discovery in flight (`wf_a13e08f7-b04`); design next. |
+| P8 — Restore operator self-management on blue | 🔄 In progress — Option A. Staged on `feat/p8-operator-self-management` (4 commits, not merged): GAP-1 (color operator+web queues) + GAP-2 (color the operator WorkerDeployment name) + bootstrap split (watch→self-render, self-demo Kustomization, web.yaml removed). Adversarial review running (`wf_afecf490-e91`); then the ⛔ gated cutover (seed build + cold-start + prune). |
 
 ## Progress log
 
@@ -328,7 +328,28 @@ Newest first. One entry per meaningful step so a fresh session can resume.
     `git-<sha>` and the builder is the operator we're bootstrapping, so exactly ONE out-of-band
     **seed** CodeBuild from `main` is still needed; after that the operator self-builds + automation
     keeps the watch current + the self-rendered worker rolls out canary-gated.
-  - **REMAINING P8:** GAP-2/3 code; keep `registry.yaml` color-agnostic + wire it to blue via a
+  - **GAP-2 DONE (`ae78119`)** + **bootstrap split STAGED (`9b542bd`)**: blue's
+    `deployment.yaml` → `registry-operator-watch` (watch-only, replicas:0, ndots kept),
+    `kustomization.yaml` → `registry-operator-watch-config` (WORKER_ENABLED=false, WATCH_MODE=
+    bootstrap, `WATCH_HANDOFF_DEPLOYMENT=…/registry-operator-blue` — must match the GAP-2 colored
+    self-rendered WD), a `registry-operator-self` Flux Kustomization (→ `./projects/operator`),
+    healthCheck repointed to the watch, hand-authored `web.yaml` removed. All builds; 472 tests pass.
+  - **OPEN — watch image auto-bump.** Operator self-build tags `git-<sha>` (unorderable), so Flux
+    ImagePolicy can't pick "newest" — the watch is pinned (setter marker is a ready hook). To honor
+    "no manual pin," the operator build must emit an orderable tag (e.g. `<ts>-<sha>`) first, THEN
+    add the ImagePolicy/Automation. The self-rendered worker still auto-rolls (canary-gated) via the
+    self-build. Deferred; decision pending. GAP-3 (uncolored canary `projectNamePrefix`) also deferred
+    (low risk: per-run digests + standby).
+  - **⛔ GATED CUTOVER (live, needs go) — procedure:** (1) **seed build**: build the GAP-fixed operator
+    worker/web/proxy images from the P8 merge commit (out-of-band CodeBuild) → set the watch pin.
+    (2) merge P8 → main. (3) On blue, prune the old static `registry-operator` Deployment and cold-start
+    the watch: `kubectl scale deploy/registry-operator-watch --replicas=1` → it reconciles the self-demo
+    → self-renders the versioned `registry-operator-blue` WorkerDeployment → canary gate → promote →
+    watch scales back to 0. The old static Deployment MUST be gone before/as the self-rendered worker
+    polls (two full workers on `registry-management-blue` = the shared-plane concurrency hazard).
+    (4) verify: self-build works (push a trivial operator change → build + canary + rollout), catalog/
+    login intact, canary green. Only one active color today (no green) → no cross-color double-operator.
+  - **REMAINING P8 (superseded — see above):** GAP-2/3 code; keep `registry.yaml` color-agnostic + wire it to blue via a
     dedicated `registry-operator-self` Flux Kustomization; switch blue bootstrap from the static
     `registry-operator` Deployment to the `registry-operator-watch` split (remove hand-authored
     `web.yaml` — the self-demo renders web; add the `source-auth` ExternalSecret); image-automation
