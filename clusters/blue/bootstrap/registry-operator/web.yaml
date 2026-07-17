@@ -114,3 +114,34 @@ spec:
     - name: http
       port: 80
       targetPort: 8080
+---
+# catalog.tmprl-demo.cloud -> blue's web (P7). This is the login page + OAuth
+# flow (/auth/login, /auth/callback) AND the /_auth/verify forward-auth endpoint
+# the auth-gated demos redirect to. It MUST be public (no temporal-auth-required
+# middleware) or nobody could reach login. external-dns publishes
+# catalog -> CNAME -> live -> blue; blue's web uses the shared OAuth client
+# (shared-auth) whose redirect_uri (catalog.tmprl-demo.cloud/auth/callback) is
+# already registered, so the flow works once catalog resolves to blue. Wildcard
+# TLS via the default TLSStore (tls: {}).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: catalog
+  namespace: tmprl-dem-cld-registry-operator
+  annotations:
+    external-dns.alpha.kubernetes.io/target: live.tmprl-demo.cloud
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`catalog.tmprl-demo.cloud`)
+      services:
+        - name: web
+          port: 80
+          passHostHeader: true
+  tls: {}
