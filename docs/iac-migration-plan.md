@@ -302,6 +302,39 @@ Each phase has an explicit test gate before moving on.
 
 Newest first. One entry per meaningful step so a fresh session can resume.
 
+- **P8 IN PROGRESS on `feat/p8-operator-self-management`.** Discovery (`wf_a13e08f7-b04`)
+  mapped the pet's self-managing split (a `registry-operator-watch` bootstrap Deployment,
+  `replicas:0`, `WATCH_MODE=bootstrap`, `WATCH_HANDOFF_DEPLOYMENT=…/registry-operator`, that
+  reconciles `projects/operator/registry.yaml` → a self-rendered **versioned** WorkerDeployment
+  `registry-operator` with a `RegistryOperatorCanaryWorkflow` gate + sunset, then scales to 0;
+  self-builds web/worker/proxy from an SSH-deploy-key source). It found **two operator code
+  gaps** the self-management path (only ever run uncolored on the pet) has for a colored cluster:
+  - **GAP-1 (blue-critical) — DONE (commit `2174df0`).** `registry.yaml` hardcoded
+    `DEMO_REGISTRY_TASK_QUEUE=registry-management` on both the operator + web components, and an
+    explicit queue wins over the color-derived default — so a self-rendered blue operator would
+    poll the UNCOLORED queue while its `demo-project/blue/registry-operator` entity has no poller.
+    Fixed single-sourced via `derive.registry_task_queue(cluster)`: config.py uses it; registry.yaml
+    drops the hardcoded queue; `platform_env_vars` injects `DEMO_REGISTRY_CLUSTER` into the operator
+    (its config derives `registry-management-<color>`) and injects the derived
+    `DEMO_REGISTRY_TASK_QUEUE` into the web (reads it directly). 470 tests pass (2 pre-existing env
+    failures unrelated).
+  - **GAP-2 (latent for blue-only; must fix before a durable green) — TODO.** The self-rendered
+    operator WorkerDeployment is named `registry-operator` for every color in the shared Temporal
+    namespace → two colors fight over worker-versioning "current version." Color-suffix it
+    (`registry-operator-<color>`). (GAP-3 minor: color the canary `projectNamePrefix`.)
+  - **Design adjustment (answering "why pin the watch?"):** the watch bootstrap will NOT be
+    hand-pinned — use **Flux image-automation** (like the litellm broker) so its image auto-bumps
+    to the newest operator build (pinned-in-git, reproducible). Images are content-addressed
+    `git-<sha>` and the builder is the operator we're bootstrapping, so exactly ONE out-of-band
+    **seed** CodeBuild from `main` is still needed; after that the operator self-builds + automation
+    keeps the watch current + the self-rendered worker rolls out canary-gated.
+  - **REMAINING P8:** GAP-2/3 code; keep `registry.yaml` color-agnostic + wire it to blue via a
+    dedicated `registry-operator-self` Flux Kustomization; switch blue bootstrap from the static
+    `registry-operator` Deployment to the `registry-operator-watch` split (remove hand-authored
+    `web.yaml` — the self-demo renders web; add the `source-auth` ExternalSecret); image-automation
+    on the watch; seed build; then the ⛔ gated cutover (prune old static Deployment atomically with
+    the self-render to avoid a double `registry-operator` in the namespace).
+
 - **P7 CLOSED + P8 OPENED (restore operator self-management on blue).** P7 done: managed
   platform fully on blue (tracking `main`), litellm on the shared RDS, the pet reduced to a
   base-platform manual cluster — its managed namespaces (`flux-system`, `external-secrets`,
