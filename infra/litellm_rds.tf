@@ -25,7 +25,7 @@ resource "aws_db_subnet_group" "litellm" {
 
 resource "aws_security_group" "litellm_db" {
   name        = "${var.name_prefix}-litellm-db"
-  description = "LiteLLM Postgres - ingress 5432 from each color's EKS cluster SG"
+  description = "LiteLLM Postgres - ingress 5432 from each cluster color EKS SG"
   vpc_id      = module.network.vpc_id
   tags        = { Name = "${var.name_prefix}-litellm-db" }
 }
