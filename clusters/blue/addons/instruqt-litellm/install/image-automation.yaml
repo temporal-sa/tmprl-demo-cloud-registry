@@ -1,0 +1,72 @@
+# Flux 2.9 on blue serves image CRDs at image.toolkit.fluxcd.io/v1 (pet used
+# v1beta2). update.path points at blue's tree, and checkout/push target blue's
+# tracked branch (feat/full-e2e-iac) so blue's broker-image bumps are independent
+# of the pet's automation on main. NOTE: flip these branches to main at the P7.3
+# merge, together with var.flux_git_branch / clusters/blue source.yaml.
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/temporal-instruqt-litellm-broker
+  interval: 1m
+  provider: aws
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImagePolicy
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  imageRepositoryRef:
+    name: instruqt-litellm-broker
+  filterTags:
+    pattern: '^main-(?P<ts>[0-9]{14})-[a-f0-9]{7,40}$'
+    extract: '$ts'
+  policy:
+    numerical:
+      order: asc
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageUpdateAutomation
+metadata:
+  name: instruqt-litellm-broker
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: broker
+spec:
+  interval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  policySelector:
+    matchLabels:
+      app.kubernetes.io/name: instruqt-litellm
+      app.kubernetes.io/component: broker
+  git:
+    checkout:
+      ref:
+        branch: feat/full-e2e-iac
+    commit:
+      author:
+        name: flux-image-automation
+        email: flux-image-automation@tmprl-demo.cloud
+      messageTemplate: |
+        Update LiteLLM broker image
+
+        {{ range .Updated.Images -}}
+        - {{ . }}
+        {{ end -}}
+    push:
+      branch: feat/full-e2e-iac
+  update:
+    path: ./clusters/blue/addons/instruqt-litellm/install
+    strategy: Setters

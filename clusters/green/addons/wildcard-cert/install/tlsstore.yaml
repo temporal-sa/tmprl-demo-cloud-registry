@@ -1,0 +1,15 @@
+# Traefik's default TLS store. Any IngressRoute that terminates TLS without its
+# own secretName (all operator-generated demo routes on colored clusters emit
+# `tls: {}`) is served this wildcard cert. Traefik uses the TLSStore named
+# `default`; it lives in the traefik namespace alongside the wildcard secret
+# (defaultCertificate.secretName is resolved in this TLSStore's namespace).
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: wildcard-cert
+spec:
+  defaultCertificate:
+    secretName: wildcard-tmprl-demo-cloud-tls

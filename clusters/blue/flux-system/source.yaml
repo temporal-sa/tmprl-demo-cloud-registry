@@ -1,0 +1,14 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: cluster-gitops-config
+  namespace: flux-system
+spec:
+  interval: 1m
+  secretRef:
+    name: cluster-gitops-config-auth
+  url: https://github.com/temporal-sa/tmprl-demo-cloud-registry.git
+  ref:
+    # P3: blue syncs the feature branch, the only branch where clusters/blue/
+    # exists. Flip to `main` at merge / P7 (also update flux_git_branch in infra).
+    branch: feat/full-e2e-iac

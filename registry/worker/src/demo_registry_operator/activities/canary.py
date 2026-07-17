@@ -19,7 +19,7 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 from temporalio.service import RPCError, RPCStatusCode
 
-from demo_registry_operator import errors, kube, resources
+from demo_registry_operator import derive, errors, kube, resources
 from demo_registry_operator.activities.builds import definitions as build_definitions
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.temporal_client import connect
@@ -734,7 +734,9 @@ async def signal_registry_operator_canary_force_reconcile_async(
     reason: str,
 ) -> dict[str, Any]:
     config = WorkerConfig.from_env()
-    workflow_id = f"demo-project/{string_field(plan, 'project')}"
+    workflow_id = derive.demo_project_workflow_id(
+        string_field(plan, "project"), config.cluster
+    )
     client = await connect(config)
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(
@@ -762,7 +764,12 @@ def canary_workflow_terminal_failure(
 ) -> dict[str, Any] | None:
     workflow_id = plan.get("workflowID")
     if not isinstance(workflow_id, str) or not workflow_id:
-        workflow_id = f"demo-project/{string_field(plan, 'project')}"
+        # Fallback when the plan carried no id: derive the same color-scoped id the
+        # producer used, or describe() would target a nonexistent id, hit NOT_FOUND,
+        # and silently report "not failed" for a genuinely failed canary.
+        workflow_id = derive.demo_project_workflow_id(
+            string_field(plan, "project"), WorkerConfig.from_env().cluster
+        )
     run_id = plan.get("runID")
     run_id = run_id if isinstance(run_id, str) and run_id else None
     return asyncio.run(canary_workflow_terminal_failure_async(workflow_id, run_id))
@@ -927,7 +934,7 @@ async def signal_registry_operator_canary_finalize_async(
     request: SignalRegistryOperatorCanaryFinalizeRequest,
 ) -> dict[str, Any]:
     config = WorkerConfig.from_env()
-    workflow_id = f"demo-project/{request.project}"
+    workflow_id = derive.demo_project_workflow_id(request.project, config.cluster)
     client = await connect(config)
     handle = client.get_workflow_handle(workflow_id)
     try:
@@ -1130,7 +1137,7 @@ async def signal_registry_operator_canary_reconcile_async(
     build_id = request.target_build_id
     demo_project = request.demo_project
     name = resources.project_name(demo_project)
-    workflow_id = f"demo-project/{name}"
+    workflow_id = derive.demo_project_workflow_id(name, config.cluster)
     client = await connect(config)
     handle = await client.start_workflow(
         "DemoProjectWorkflow",

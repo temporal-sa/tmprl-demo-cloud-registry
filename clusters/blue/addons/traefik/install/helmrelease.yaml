@@ -1,0 +1,96 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  chart:
+    spec:
+      chart: traefik
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+        namespace: flux-system
+      version: 41.0.2
+  interval: 30m
+  releaseName: traefik
+  storageNamespace: traefik
+  targetNamespace: traefik
+  driftDetection:
+    mode: enabled
+  values:
+    autoscaling:
+      behavior:
+        scaleDown:
+          policies:
+            - periodSeconds: 60
+              type: Pods
+              value: 1
+          stabilizationWindowSeconds: 300
+        scaleUp:
+          policies:
+            - periodSeconds: 60
+              type: Pods
+              value: 2
+          stabilizationWindowSeconds: 60
+      enabled: true
+      maxReplicas: 6
+      metrics:
+        - resource:
+            name: cpu
+            target:
+              averageUtilization: 60
+              type: Utilization
+          type: Resource
+        - resource:
+            name: memory
+            target:
+              averageUtilization: 70
+              type: Utilization
+          type: Resource
+      minReplicas: 2
+    # NOTE: with autoscaling.enabled the chart omits spec.replicas from the
+    # Deployment (HPA owns replica count). Kept for intent/parity with the pet.
+    deployment:
+      replicas: 2
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+    ingressRoute:
+      dashboard:
+        enabled: true
+    # Traefik v3 (chart 41) renamed logs.general.level -> log.level.
+    log:
+      level: DEBUG
+    providers:
+      kubernetesCRD:
+        allowExternalNameServices: true
+        enabled: true
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    # IRSA annotation kept for parity; tmprl-dem-cld-traefik is trust-only.
+    # Key is still top-level serviceAccountAnnotations in chart 41 (NOT
+    # serviceAccount.annotations, which the schema rejects).
+    serviceAccountAnnotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::429214323166:role/tmprl-dem-cld-traefik
+      eks.amazonaws.com/sts-regional-endpoints: "true"
+    topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: traefik-traefik
+            app.kubernetes.io/name: traefik
+        maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: traefik-traefik
+            app.kubernetes.io/name: traefik
+        maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule

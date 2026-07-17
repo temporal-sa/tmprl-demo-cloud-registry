@@ -43,8 +43,15 @@ CUSTOM_RESOURCE_PLURALS = {
         TEMPORAL_WORKER_CONTROLLER_VERSION,
         "WorkerDeployment",
     ): TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+    # Traefik v2 (traefik.containo.us) is served on the pet; v3 (traefik.io) on the
+    # blue/green stack. apply_custom_resource looks up the plural by the emitted
+    # (group, version, kind), so BOTH groups must map or a color's applies raise
+    # "unsupported custom resource". Keep both — the operator emits whichever group
+    # matches the cluster it runs on (see resources.traefik_api_version).
     ("traefik.containo.us", "v1alpha1", "IngressRoute"): "ingressroutes",
     ("traefik.containo.us", "v1alpha1", "Middleware"): "middlewares",
+    ("traefik.io", "v1alpha1", "IngressRoute"): "ingressroutes",
+    ("traefik.io", "v1alpha1", "Middleware"): "middlewares",
 }
 
 

@@ -1,0 +1,63 @@
+# Traefik v3 on blue: group is traefik.io/v1alpha1 (pet used traefik.containo.us).
+# external-dns target annotation makes blue's external-dns publish
+# <host> -> CNAME -> live.tmprl-demo.cloud (the swing record); without it the
+# traefik source emits no endpoint. TLS is served by the shared *.tmprl-demo.cloud
+# wildcard via Traefik's default TLSStore (tls: {}), so no per-host cert is minted.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: instruqt-litellm
+  namespace: tmprl-dem-cld-instruqt-litellm
+  annotations:
+    external-dns.alpha.kubernetes.io/target: live.tmprl-demo.cloud
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: ingress
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`litellm-instruqt.tmprl-demo.cloud`) && !PathPrefix(`/ui`) && !PathPrefix(`/fallback`)
+      services:
+        - name: instruqt-litellm
+          namespace: tmprl-dem-cld-instruqt-litellm
+          passHostHeader: true
+          port: 4000
+    - kind: Rule
+      match: Host(`litellm-broker-instruqt.tmprl-demo.cloud`)
+      services:
+        - name: instruqt-litellm-broker
+          namespace: tmprl-dem-cld-instruqt-litellm
+          passHostHeader: true
+          port: 80
+  tls: {}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: instruqt-litellm-http
+  namespace: tmprl-dem-cld-instruqt-litellm
+  annotations:
+    external-dns.alpha.kubernetes.io/target: live.tmprl-demo.cloud
+  labels:
+    app.kubernetes.io/name: instruqt-litellm
+    app.kubernetes.io/component: ingress
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: Host(`litellm-instruqt.tmprl-demo.cloud`) && !PathPrefix(`/ui`) && !PathPrefix(`/fallback`)
+      services:
+        - name: instruqt-litellm
+          namespace: tmprl-dem-cld-instruqt-litellm
+          passHostHeader: true
+          port: 4000
+    - kind: Rule
+      match: Host(`litellm-broker-instruqt.tmprl-demo.cloud`)
+      services:
+        - name: instruqt-litellm-broker
+          namespace: tmprl-dem-cld-instruqt-litellm
+          passHostHeader: true
+          port: 80

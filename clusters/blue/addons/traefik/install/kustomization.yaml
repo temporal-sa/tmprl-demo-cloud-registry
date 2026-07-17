@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - helmrepository.yaml
+  - helmrelease.yaml
+  # Chart 41's built-in PDB is disabled by default and still selects its
+  # apiVersion via a capability check (.Capabilities.APIVersions.Has
+  # policy/v1...), which Flux's helm-controller cannot satisfy at render time.
+  # Keep the PDB explicit and native (policy/v1).
+  - poddisruptionbudget.yaml

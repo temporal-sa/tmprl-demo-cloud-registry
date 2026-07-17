@@ -84,6 +84,43 @@ def create_or_verify_temporal_cloud_namespace(
 
 
 @activity.defn
+def ensure_temporal_cloud_namespace_tags(
+    request: models.EnsureTemporalCloudNamespaceTagsRequest,
+) -> models.TemporalCloudNamespaceTagsResult:
+    if not request.project.namespace_required:
+        return namespace_tags_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return namespace_tags_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return namespace_tags_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.ensure_temporal_cloud_namespace_tags(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            tags=request.tags,
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return namespace_tags_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Ensure Temporal Cloud namespace tags",
+        ) from error
+
+
+@activity.defn
 def create_or_verify_temporal_cloud_search_attribute(
     request: models.CreateOrVerifyTemporalCloudSearchAttributeRequest,
 ) -> models.TemporalCloudSearchAttributeResult:
@@ -842,6 +879,12 @@ def service_account_result(status: dict[str, Any]) -> models.TemporalCloudServic
         service_account_name=string_value(service_account.get("name")),
         created=service_account.get("action") == "created",
     )
+
+
+def namespace_tags_result(
+    status: dict[str, Any],
+) -> models.TemporalCloudNamespaceTagsResult:
+    return models.TemporalCloudNamespaceTagsResult(status=status)
 
 
 def search_attribute_result(

@@ -768,7 +768,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
     schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
     validator = Draft202012Validator(schema)
     demo_project = yaml.safe_load(
-        (ROOT / "projects/demo/registry.yaml").read_text()
+        (ROOT / "projects/operator/registry.yaml").read_text()
     )
 
     assert list(validator.iter_errors(demo_project)) == []

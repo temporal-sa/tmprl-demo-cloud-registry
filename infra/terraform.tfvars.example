@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars ONLY to override a default. Every variable already
+# defaults to the live tmprl-demo.cloud environment (see variables.tf), so the
+# normal case is no terraform.tfvars file at all. Real terraform.tfvars is
+# gitignored; this .example is committed.
+
+# region          = "us-west-1"
+# aws_account_id  = "429214323166"
+# name_prefix     = "tmprl-dem-cld"
+# domain          = "tmprl-demo.cloud"
+# route53_zone_id = "Z08792403SH7ADUAH7X5X"
+
+# Clusters to stand up on the shared VPC. Blue only until a green sibling is
+# added for a blue/green cutover.
+# colors = ["blue"]
+
+# EKS control-plane version. Defaults to the latest GA — a fresh stack is the
+# upgrade vehicle (stand up latest, validate, roll to it).
+# kubernetes_version = "1.36"
+
+# One shared NAT gateway instead of one-per-AZ (halves NAT baseline cost).
+# single_nat_gateway = false
+
+# Tighten the public API endpoint to an operator allowlist (auth is IAM-gated
+# regardless). Open by default for bring-up.
+# endpoint_public_access_cidrs = ["203.0.113.4/32"]
+
+# Durable cluster-admin principals (stable break-glass / CI role ARNs) so
+# kubectl admin survives SSO permission-set re-provisioning.
+# cluster_admin_principal_arns = ["arn:aws:iam::429214323166:role/break-glass-eks-admin"]
+
+# Envelope-encrypt Kubernetes Secrets with a per-cluster KMS CMK.
+# enable_secrets_encryption = true

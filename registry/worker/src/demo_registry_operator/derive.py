@@ -69,6 +69,33 @@ def host(subdomain: str | None, project_name: str) -> str:
     return f"{subdomain or project_name}.{BASE_DOMAIN}"
 
 
+# The Tofu-managed swing record (live.tmprl-demo.cloud A ALIAS -> active color's
+# Traefik ELB). Managed demos get an explicit <demo> CNAME -> live via external-dns
+# so they follow the active color atomically; the value is color-independent (the
+# same on blue and green) which is exactly what makes the swing multi-cluster-safe.
+LIVE_SWING_HOST = f"live.{BASE_DOMAIN}"
+
+
+def demo_project_workflow_id(project_name: str, cluster: str | None = None) -> str:
+    """Entity workflow id for a DemoProject, optionally scoped to a cluster/color.
+
+    Producers (watch signal-with-start) and consumers (canary signal/describe)
+    MUST derive the id here so every site computes it identically; a mismatch
+    silently misroutes signals to a different or nonexistent workflow. Unset
+    cluster yields the original single-cluster id verbatim.
+    """
+    if cluster:
+        return f"demo-project/{cluster}/{project_name}"
+    return f"demo-project/{project_name}"
+
+
+def instruqt_course_workflow_id(course_name: str, cluster: str | None = None) -> str:
+    """Entity workflow id for an InstruqtCourse; see demo_project_workflow_id."""
+    if cluster:
+        return f"instruqt-course/{cluster}/{course_name}"
+    return f"instruqt-course/{course_name}"
+
+
 def crashable_workspace_id(owner_email: str, project_name: str) -> str:
     """Short deterministic id for one user's crashable clone of one demo.
 

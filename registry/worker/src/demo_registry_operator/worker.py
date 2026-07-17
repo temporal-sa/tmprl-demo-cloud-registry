@@ -47,6 +47,7 @@ from demo_registry_operator.activities.external_resources import (
     create_or_verify_ecr_repository,
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_search_attribute,
+    ensure_temporal_cloud_namespace_tags,
     create_or_verify_temporal_cloud_service_account,
     create_temporal_api_key_candidate_secret,
     delete_ecr_repositories,
@@ -140,6 +141,10 @@ from demo_registry_operator.activities.revision import (
     wait_for_revision_cleanup,
 )
 from demo_registry_operator.config import WorkerConfig
+from demo_registry_operator.derive import (
+    demo_project_workflow_id,
+    instruqt_course_workflow_id,
+)
 from demo_registry_operator.resources import WORKER_LIVENESS_FILE
 from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.watch import run_demo_project_watch
@@ -319,6 +324,7 @@ async def main() -> None:
                     stage_temporal_mtls_ca,
                     create_or_verify_temporal_cloud_namespace,
                     create_or_verify_temporal_cloud_search_attribute,
+                    ensure_temporal_cloud_namespace_tags,
                     delete_temporal_cloud_search_attribute,
                     configure_temporal_cloud_namespace_mtls,
                     create_or_verify_temporal_cloud_service_account,
@@ -394,6 +400,7 @@ async def main() -> None:
                         signal_entity_workflows_for_worker_update_when_current(
                             client,
                             poll_interval_seconds=config.watch_interval_seconds,
+                            cluster=config.cluster,
                         )
                     )
                 )
@@ -440,6 +447,7 @@ async def signal_entity_workflows_for_worker_update_when_current(
     temporal_client: Client,
     *,
     poll_interval_seconds: int,
+    cluster: str | None = None,
     restart_process: Callable[[], None] | None = None,
 ) -> None:
     version = worker_deployment_version_from_env()
@@ -473,6 +481,7 @@ async def signal_entity_workflows_for_worker_update_when_current(
         result = await signal_running_entity_workflows_for_worker_update(
             temporal_client,
             signal_name=CHECK_WORKER_VERSION_SIGNAL,
+            cluster=cluster,
         )
         logger.info(
             "Signaled running entity workflows for worker version update: %s",
@@ -531,8 +540,9 @@ async def signal_running_entity_workflows_for_worker_update(
     temporal_client: Client,
     *,
     signal_name: str = CHECK_WORKER_VERSION_SIGNAL,
+    cluster: str | None = None,
 ) -> dict[str, Any]:
-    query = running_entity_workflows_query()
+    query = running_entity_workflows_query(cluster)
     try:
         job_id = worker_update_batch_job_id()
         signal_operation = batch_pb2.BatchOperationSignal(
@@ -613,11 +623,25 @@ async def signal_running_entity_workflows_individually(
     return signaled
 
 
-def running_entity_workflows_query() -> str:
+def running_entity_workflows_query(cluster: str | None = None) -> str:
     workflow_type_query = " OR ".join(
         f'WorkflowType = "{workflow_type}"' for workflow_type in ENTITY_WORKFLOW_TYPES
     )
-    return f'({workflow_type_query}) AND ExecutionStatus = "Running"'
+    query = f'({workflow_type_query}) AND ExecutionStatus = "Running"'
+    if cluster:
+        # This batch signal is namespace-wide, and blue/green (plus the uncolored
+        # pet) share one Temporal namespace. Without an id scope, a colored
+        # operator's worker-update handoff would signal the OTHER cluster's running
+        # entity workflows. Scope it to this color's ids. The prefixes come from the
+        # same derive helpers the producers use (empty name -> just the
+        # "<type>/<color>/" segment) so the scope can never drift from real ids.
+        demo_prefix = demo_project_workflow_id("", cluster)
+        course_prefix = instruqt_course_workflow_id("", cluster)
+        query += (
+            f' AND (WorkflowId STARTS_WITH "{demo_prefix}"'
+            f' OR WorkflowId STARTS_WITH "{course_prefix}")'
+        )
+    return query
 
 
 def worker_update_batch_job_id() -> str:

@@ -235,7 +235,9 @@ def test_worker_update_restarts_after_observed_promotion(monkeypatch):
         )
     )
 
-    assert signals == [(client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL})]
+    assert signals == [
+        (client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL, "cluster": None})
+    ]
     assert restarts == ["restart"]
 
 
@@ -273,7 +275,9 @@ def test_worker_update_does_not_restart_when_current_at_start(monkeypatch):
         )
     )
 
-    assert signals == [(client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL})]
+    assert signals == [
+        (client, {"signal_name": worker.CHECK_WORKER_VERSION_SIGNAL, "cluster": None})
+    ]
     assert restarts == []
 
 

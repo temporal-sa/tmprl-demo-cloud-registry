@@ -1,0 +1,169 @@
+# Catalog web UI + auth verifier (P7). The operator stamps a forward-auth
+# middleware on every auth-gated demo IngressRoute pointing at
+# http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify.
+# On the pet this Service is rendered by the registry.yaml self-demo's `web`
+# component; blue's operator is Flux-bootstrapped and the self-demo is excluded,
+# so blue must run `web` standalone or every auth-gated demo (canonical-ai-demo,
+# langgraph-temporal, no-roads-serverless, durable-banking-skills) 500s at the
+# forward-auth hop. shared-auth is the SAME shared-SM secret the pet uses, so a
+# Google session minted at catalog.tmprl-demo.cloud validates here too.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+  annotations:
+    platform.temporal.io/component: web
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: shared-auth
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: platform-secrets
+    kind: ClusterSecretStore
+  target:
+    name: shared-auth
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: tmprl-dem-cld/platform/shared-auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry-operator
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registry-operator
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: web
+      # The catalog web now opens a Temporal Cloud gRPC connection (to start
+      # CrashableWorkspaceWorkflow). The TC endpoint is a 4-dot FQDN; with the
+      # default ndots:5 glibc tries cluster search domains first and a dropped
+      # lookup wedges the gRPC DNS resolver in a retry loop. ndots:2 resolves it
+      # absolute-first (same dnsConfig the operator uses).
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+          - name: single-request-reopen
+      containers:
+        - name: web
+          image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/web:git-bb9b9839e384
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AUTH_MODE
+              value: google
+            # Colored queue to match blue's operator (registry-management-blue).
+            - name: DEMO_REGISTRY_TASK_QUEUE
+              value: registry-management-blue
+            - name: CATALOG_STATUS_DIR
+              value: /app/status
+          envFrom:
+            - secretRef:
+                name: shared-auth
+            # Platform Temporal connection (TEMPORAL_ADDRESS/NAMESPACE/API_KEY/TLS)
+            # so the catalog web can start CrashableWorkspaceWorkflow on blue's
+            # operator task queue. server.py gates the crashable feature on
+            # TEMPORAL_ADDRESS, so without this the web still serves login/auth but
+            # crashable is disabled. NOTE: blue's OPERATOR image must also include
+            # the crashable workflow code (a merged-branch build) for these
+            # workflows to actually execute — the current git-7fe0dc2a3047 predates it.
+            - secretRef:
+                name: registry-worker-temporal
+          volumeMounts:
+            - name: catalog-status
+              mountPath: /app/status
+            - name: catalog
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: catalog-status
+          configMap:
+            name: registry-catalog-status
+            optional: true
+        - name: catalog
+          configMap:
+            name: registry-catalog
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: tmprl-dem-cld-registry-operator
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+# catalog.tmprl-demo.cloud -> blue's web (P7). This is the login page + OAuth
+# flow (/auth/login, /auth/callback) AND the /_auth/verify forward-auth endpoint
+# the auth-gated demos redirect to. It MUST be public (no temporal-auth-required
+# middleware) or nobody could reach login. external-dns publishes
+# catalog -> CNAME -> live -> blue; blue's web uses the shared OAuth client
+# (shared-auth) whose redirect_uri (catalog.tmprl-demo.cloud/auth/callback) is
+# already registered, so the flow works once catalog resolves to blue. Wildcard
+# TLS via the default TLSStore (tls: {}).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: catalog
+  namespace: tmprl-dem-cld-registry-operator
+  annotations:
+    external-dns.alpha.kubernetes.io/target: live.tmprl-demo.cloud
+  labels:
+    app.kubernetes.io/name: registry-operator
+    app.kubernetes.io/component: web
+spec:
+  # websecure-only + tls: {} — matches the operator's working demo IngressRoutes so
+  # Traefik binds the *.tmprl-demo.cloud wildcard from the default TLSStore. A route
+  # that mixes the web (:80) and websecure entrypoints under one tls: {} makes
+  # Traefik serve its self-signed TRAEFIK DEFAULT CERT instead.
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`catalog.tmprl-demo.cloud`)
+      services:
+        - name: web
+          port: 80
+          passHostHeader: true
+  tls: {}

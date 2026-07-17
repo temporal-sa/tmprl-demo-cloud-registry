@@ -15,6 +15,7 @@ from demo_registry_operator.activities.external_resources.iam import (
 )
 from demo_registry_operator.activities.external_resources.models import (
     CreateOrVerifyTemporalCloudNamespaceRequest,
+    EnsureTemporalCloudNamespaceTagsRequest,
     CreateOrVerifyTemporalCloudServiceAccountRequest,
     CreateOrVerifyTemporalCloudSearchAttributeRequest,
     CheckTemporalRuntimeSecretRequest,
@@ -62,6 +63,7 @@ from demo_registry_operator.activities.external_resources.models import (
     TemporalCloudCredentialStageResult,
     TemporalCloudNamespaceRequest,
     TemporalCloudNamespaceResult,
+    TemporalCloudNamespaceTagsResult,
     TemporalCloudProject,
     TemporalCloudPromotionResult,
     TemporalCloudSearchAttribute,
@@ -93,6 +95,7 @@ from demo_registry_operator.activities.external_resources.temporal import (
     configure_temporal_cloud_namespace_mtls,
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_search_attribute,
+    ensure_temporal_cloud_namespace_tags,
     create_or_verify_temporal_cloud_service_account,
     check_temporal_runtime_secret,
     create_temporal_api_key_candidate_secret,
@@ -121,6 +124,7 @@ from demo_registry_operator.activities.external_resources.temporal import (
 
 __all__ = [
     "CreateOrVerifyTemporalCloudNamespaceRequest",
+    "EnsureTemporalCloudNamespaceTagsRequest",
     "CreateOrVerifyTemporalCloudServiceAccountRequest",
     "CreateOrVerifyTemporalCloudSearchAttributeRequest",
     "CheckTemporalRuntimeSecretRequest",
@@ -168,6 +172,7 @@ __all__ = [
     "TemporalCloudCredentialStageResult",
     "TemporalCloudNamespaceRequest",
     "TemporalCloudNamespaceResult",
+    "TemporalCloudNamespaceTagsResult",
     "TemporalCloudProject",
     "TemporalCloudPromotionResult",
     "TemporalCloudSearchAttribute",
@@ -181,6 +186,7 @@ __all__ = [
     "create_or_verify_ecr_repository",
     "create_or_verify_temporal_cloud_namespace",
     "create_or_verify_temporal_cloud_search_attribute",
+    "ensure_temporal_cloud_namespace_tags",
     "create_or_verify_temporal_cloud_service_account",
     "check_temporal_runtime_secret",
     "create_temporal_api_key_candidate_secret",

@@ -33,6 +33,7 @@ class WorkerConfig:
     temporal_address: str
     temporal_namespace: str
     task_queue: str
+    cluster: str | None
     temporal_api_key: str | None
     temporal_tls: bool
     activity_workers: int
@@ -73,13 +74,20 @@ class WorkerConfig:
         watch_mode = env_watch_mode("DEMO_REGISTRY_WATCH_MODE", default=None)
         if watch_mode is None:
             watch_mode = env_watch_mode("DEMO_REGISTRY_WATCH_ENABLED")
+        # Cluster/color dimension (blue/green). When set, it scopes the task
+        # queue, entity workflow ids, and the worker-update batch-signal query so
+        # two clusters can share one Temporal namespace without cross-routing.
+        # When unset (the hand-built sa-demo pet + all existing tests) every
+        # derived value is byte-identical to the single-cluster behavior.
+        cluster = env_optional("DEMO_REGISTRY_CLUSTER")
         return cls(
             temporal_address=os.getenv("TEMPORAL_ADDRESS", "localhost:7233"),
             temporal_namespace=os.getenv("TEMPORAL_NAMESPACE", "default"),
             task_queue=os.getenv(
                 "DEMO_REGISTRY_TASK_QUEUE",
-                "registry-management",
+                f"registry-management-{cluster}" if cluster else "registry-management",
             ),
+            cluster=cluster,
             temporal_api_key=os.getenv("TEMPORAL_API_KEY"),
             temporal_tls=env_bool("TEMPORAL_TLS", default=False),
             activity_workers=env_int("DEMO_REGISTRY_ACTIVITY_WORKERS", default=20),

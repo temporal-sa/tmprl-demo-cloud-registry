@@ -1,0 +1,28 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: external-secrets
+  namespace: external-secrets
+spec:
+  chart:
+    spec:
+      chart: external-secrets
+      sourceRef:
+        kind: HelmRepository
+        name: external-secrets
+        namespace: flux-system
+      version: 2.7.0
+  install:
+    crds: CreateReplace
+  interval: 30m
+  releaseName: external-secrets
+  targetNamespace: external-secrets
+  upgrade:
+    crds: CreateReplace
+  values:
+    installCRDs: true
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::429214323166:role/tmprl-dem-cld-external-secrets
+      create: true
+      name: external-secrets

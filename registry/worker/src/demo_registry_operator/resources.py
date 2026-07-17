@@ -75,7 +75,14 @@ INSTRUQT_TESTING_SOURCE_REPOSITORY_KEY = "testing-source"
 INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
-TRAEFIK_API_VERSION = "traefik.containo.us/v1alpha1"
+# Traefik's CRD group changed between major versions: v2 served
+# traefik.containo.us, v3 serves traefik.io. The hand-built pet (sa-demo) runs
+# Traefik v2; the Tofu-managed blue/green stack runs v3. The operator emits the
+# group matching the cluster it runs on, selected by the color env var so
+# uncolored (pet) output stays byte-identical to today.
+TRAEFIK_API_VERSION_V2 = "traefik.containo.us/v1alpha1"
+TRAEFIK_API_VERSION_V3 = "traefik.io/v1alpha1"
+EXTERNAL_DNS_TARGET_ANNOTATION = "external-dns.alpha.kubernetes.io/target"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
@@ -676,6 +683,62 @@ def source_repo(
         return None
     repo = source.get("repo")
     return repo.strip() if isinstance(repo, str) and repo.strip() else None
+
+
+def source_repo_slug(
+    demo_project: dict[str, Any],
+    source_key: str = "source",
+) -> str | None:
+    """The ``owner/repo`` slug from ``spec.<source>.repo``, or None.
+
+    Accepts the GitHub URL forms the catalog uses (https/ssh/scp-style) and a bare
+    ``owner/repo`` slug; e.g. ``https://github.com/temporal-sa/canonical-ai-demo``
+    -> ``temporal-sa/canonical-ai-demo``.
+    """
+    repo = source_repo(demo_project, source_key)
+    if not repo:
+        return None
+    value = repo.strip()
+    if value.endswith(".git"):
+        value = value[: -len(".git")]
+    if "://" not in value and "@" in value and ":" in value:
+        # scp-style: git@github.com:owner/repo
+        value = value.split(":", 1)[1]
+    else:
+        parsed = urlparse(value)
+        if parsed.scheme:  # https:// or ssh:// — drop scheme + host, keep the path
+            value = parsed.path
+    return value.strip("/") or None
+
+
+# Temporal Cloud namespace tag values are 1-63 chars from [a-z0-9._-@] only
+# (lowercase; no '/', which a GitHub owner/repo slug contains). Coerce disallowed
+# characters to '_' so e.g. temporal-sa/canonical-ai-demo -> temporal-sa_canonical-ai-demo.
+_TEMPORAL_CLOUD_TAG_VALUE_ALLOWED = set(
+    "abcdefghijklmnopqrstuvwxyz0123456789._-@"
+)
+
+
+def _temporal_cloud_tag_value(value: str) -> str:
+    lowered = value.strip().lower()
+    coerced = "".join(
+        char if char in _TEMPORAL_CLOUD_TAG_VALUE_ALLOWED else "_" for char in lowered
+    )
+    return coerced[:63]
+
+
+def namespace_tags(demo_project: dict[str, Any]) -> dict[str, str]:
+    """Owner/repo tags to stamp on the demo's Temporal Cloud namespace.
+
+    ``owner`` marks every managed namespace as ours; ``repo`` records the source
+    repo so a namespace is traceable back to the demo that created it. Values are
+    coerced to Temporal Cloud's tag charset (see _temporal_cloud_tag_value).
+    """
+    tags = {"owner": _temporal_cloud_tag_value(derive.BASE_DOMAIN)}
+    slug = source_repo_slug(demo_project)
+    if slug:
+        tags["repo"] = _temporal_cloud_tag_value(slug)
+    return tags
 
 
 def content_source_config(instruqt_course: dict[str, Any]) -> dict[str, Any]:
@@ -1310,9 +1373,14 @@ def promotion_resources(
             )
         )
     if ingress_routes(demo_project):
-        resources.append(
-            certificate_resource(demo_project, namespace=route_namespace)
-        )
+        # Per-host Let's Encrypt cert only on the uncolored pet. Colored clusters
+        # serve demos from a single wildcard cert via Traefik's default TLSStore
+        # (see ingress_route_tls), so no per-rollout-namespace cert is minted —
+        # avoiding LE duplicate-cert rate-limit burn on rapid deploys.
+        if not operator_cluster():
+            resources.append(
+                certificate_resource(demo_project, namespace=route_namespace)
+            )
         resources.append(
             https_redirect_middleware(demo_project, namespace=route_namespace)
         )
@@ -2190,6 +2258,38 @@ def temporal_proxy_image(
     )
 
 
+def operator_cluster() -> str | None:
+    """The cluster/color this operator process runs as, or None (uncolored pet).
+
+    Read from the same env var config.WorkerConfig reads; the resource-rendering
+    layer reads it directly (as it already does for image env vars) rather than
+    threading it through every builder signature. It is a process-lifetime
+    constant, so a single read is safe and keeps the render call graph flat.
+    """
+    value = os.getenv("DEMO_REGISTRY_CLUSTER")
+    return value.strip() or None if value else None
+
+
+def traefik_api_version() -> str:
+    """v3 CRD group when colored (blue/green run Traefik v3), else v2 (the pet)."""
+    return TRAEFIK_API_VERSION_V3 if operator_cluster() else TRAEFIK_API_VERSION_V2
+
+
+def ingress_route_tls(demo_project: dict[str, Any]) -> dict[str, Any]:
+    """TLS config for a demo's websecure IngressRoute.
+
+    Colored clusters (blue/green) serve every demo from ONE wildcard cert via
+    Traefik's default TLSStore, so this is an empty block (= "terminate TLS with
+    the default store's cert"). That means a new per-rollout namespace does NOT
+    mint a fresh Let's Encrypt cert — critical because rapid deploys would
+    otherwise burn LE's duplicate-certificate rate limit. The uncolored pet keeps
+    its per-host cert secret (its Traefik v2 has no wildcard default store).
+    """
+    if operator_cluster():
+        return {}
+    return {"secretName": f"{project_name(demo_project)}-tls"}
+
+
 def platform_env_vars(
     demo_project: dict[str, Any],
     component_name: str,
@@ -2202,6 +2302,13 @@ def platform_env_vars(
         proxy_image = image_overrides.get(TEMPORAL_PROXY_BUILD_NAME)
         if proxy_image:
             env.append({"name": TEMPORAL_PROXY_IMAGE_ENV, "value": proxy_image})
+        # Propagate our own color into the self-rendered operator WorkerDeployment
+        # so the reconciler (and its self-canary) polls this color's task queue.
+        # The per-cluster configMap only feeds the bootstrap/watch pod, not this
+        # rendered worker, whose env comes entirely from the shared catalog spec.
+        cluster = operator_cluster()
+        if cluster:
+            env.append({"name": "DEMO_REGISTRY_CLUSTER", "value": cluster})
     return env
 
 
@@ -2614,8 +2721,17 @@ def ingress_resources(
     }
     if version:
         annotations["platform.temporal.io/rollout-version"] = version
+    if operator_cluster():
+        # external-dns (per color cluster) turns this into <demo> CNAME -> live so
+        # the demo follows the active color's swing record. The traefik source emits
+        # NO endpoint without a per-IngressRoute target, so this annotation is the
+        # mechanism, not a hint. Gated on color: the pet has no external-dns and its
+        # generated IngressRoutes must stay byte-identical. Both the base (websecure)
+        # and the derived http variant share this dict, so one insertion covers both;
+        # external-dns dedups the identical endpoints to a single record.
+        annotations[EXTERNAL_DNS_TARGET_ANNOTATION] = derive.LIVE_SWING_HOST
     base = {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "IngressRoute",
         "metadata": {
             "name": project_name(demo_project),
@@ -2626,9 +2742,7 @@ def ingress_resources(
         "spec": {
             "entryPoints": ["websecure"],
             "routes": routes,
-            "tls": {
-                "secretName": f"{project_name(demo_project)}-tls",
-            },
+            "tls": ingress_route_tls(demo_project),
         },
     }
 
@@ -2807,7 +2921,7 @@ def auth_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_MIDDLEWARE_NAME,
@@ -2838,7 +2952,7 @@ def https_redirect_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": HTTPS_REDIRECT_MIDDLEWARE_NAME,
@@ -2863,7 +2977,7 @@ def auth_header_strip_middleware(
     namespace: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": TRAEFIK_API_VERSION,
+        "apiVersion": traefik_api_version(),
         "kind": "Middleware",
         "metadata": {
             "name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME,

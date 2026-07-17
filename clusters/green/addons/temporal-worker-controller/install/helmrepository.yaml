@@ -1,0 +1,9 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: temporal-worker-controller
+  namespace: flux-system
+spec:
+  interval: 1h
+  type: oci
+  url: oci://docker.io/temporalio

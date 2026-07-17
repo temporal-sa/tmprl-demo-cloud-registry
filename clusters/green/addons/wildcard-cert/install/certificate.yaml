@@ -1,0 +1,22 @@
+# One wildcard cert for every managed demo host, so demos never mint per-host
+# Let's Encrypt certs (which would burn LE's duplicate-cert rate limit on rapid
+# rollouts — each rollout lands in a fresh per-version namespace). cert-manager
+# renews this ~30 days before the 90-day expiry, so issuance is ~4x/year per
+# cluster. Per cluster (blue/green each mint their own) => cert independence too.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-tmprl-demo-cloud
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: wildcard-cert
+spec:
+  secretName: wildcard-tmprl-demo-cloud-tls
+  dnsNames:
+    - "*.tmprl-demo.cloud"
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: letsencrypt
+  privateKey:
+    rotationPolicy: Always
