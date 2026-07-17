@@ -295,11 +295,74 @@ Each phase has an explicit test gate before moving on.
 | P4 — Routing + DNS | ✅ Done (gate passed: managed-demo record resolves to blue + reachable via public DNS; pet wildcard undisturbed; external-dns writes CNAME→live + owner=blue TXT and retracts on delete; `tofu plan` idempotent) |
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
-| P7 — Migrate + retire the pet | 🔄 In progress — approach locked (big-bang standby; all demos incl Lambda in one cutover; instruqt-litellm ported; durable green deferred) |
+| P7 — Migrate + retire the pet | 🔄 In progress — standby handoff DONE; all 7 DemoProjects serving on blue (adopt proven); instruqt-litellm deferred (cross-VPC DB); pet retirement (P7.3) gated |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P7.1/P7.2 — standby handoff EXECUTED; all 7 DemoProjects serving on blue.**
+  Commits `c8e45a5`→`6dd8dcf` (pushed). The big-bang standby cutover is done and
+  the core migration is proven; instruqt-litellm is deferred and pet retirement
+  (P7.3) remains gated.
+  - **Handoff:** stood the pet operator down — scaled WorkerDeployment
+    `registry-operator` → 0 (it's controller-owned; a plain Deployment scale
+    reverts, so patch the WD) + `spec.suspend` on the pet's `registry-operator` /
+    `registry-projects` / `registry-instruqt-courses` Flux Kustomizations so nothing
+    heals it back. Confirmed the operator pod terminated and stays down; the pet's
+    demo *workloads* keep running (only the reconciler stopped). Blue is now the
+    **sole reconciler**. Then pushed the catalog wiring; blue's operator reconciled
+    all 7 DemoProjects + 2 InstruqtCourses on `registry-management-blue`.
+  - **Adopt-existing PROVEN.** Blue's operator adopted each demo's pre-existing
+    Temporal Cloud namespace with no code change (find-first path). No duplicate-SA
+    or secret-clobber symptoms observed — the pet's demos were long-provisioned, so
+    adopt hit the verified/existing branches. The pet was still up briefly as blue
+    started (origin received the commits before the intended manual gate — a sync
+    pushed them), but overlap was in steady-state-adopt territory, benign.
+  - **Serving state on blue (via public DNS, `<demo>→live→blue`, wildcard TLS):**
+    3 public demos **HTTP 200** (banking-app, dejavu-tacos, pizza); 4 auth-gated
+    **302→`catalog.tmprl-demo.cloud/auth/login`** exactly like the pet
+    (canonical-ai-demo, durable-banking-skills, no-roads-serverless [the Lambda one],
+    langgraph-temporal). Operator phases: 5 Promoted + canonical/durable-banking-skills
+    at Ready (durable-banking-skills is Ready on the pet too — its terminal state;
+    canonical was WorkerRolloutFailed on the pet, so blue is no worse). Course
+    `durable-ad-campaign` Ready; `patching-and-recovery` still pending (was TestFailed
+    on the pet — pre-existing).
+  - **Three P7.2 fixes (each a real gap the big-bang surfaced):**
+    1. **`DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE` missing** (`3` in `70be6fa`) — demos with
+       temporalProxy (durable-banking-skills, pizza) failed reconcile
+       ("... is required when temporalProxy is enabled"). Blue was only ever run with
+       proxy-less P5 smoke demos. Added to blue's operator config (latest proxy build
+       `git-bb9b9839e384`). **GOTCHA:** blue's configMaps use kustomize
+       `disableNameSuffixHash: true`, so a content change does NOT roll the operator
+       pod — must `kubectl rollout restart` (or the env never loads). Applies to any
+       future operator-config change on blue.
+    2. **Auth-gated demos 500** (`ebf9940`) — the operator stamps a forward-auth
+       middleware → `http://web.tmprl-dem-cld-registry-operator.svc/_auth/verify`, but
+       blue had **no `web` service**: it's rendered by the `registry.yaml` self-demo's
+       `web` component, which P7 split out of blue's catalog. **Deployed `web`
+       standalone on blue** (`clusters/blue/bootstrap/registry-operator/web.yaml`:
+       Deployment+Service `web` 80→8080, SA, `shared-auth` ExternalSecret from the
+       shared SM path `tmprl-dem-cld/platform/shared-auth` so Google sessions validate
+       cross-cluster; catalog configMaps already existed on blue). Fixed all 4 at once.
+    3. **litellm DEFERRED** (`6dd8dcf`) — the LiteLLM gateway's Postgres (RDS
+       `temporal-instruqt-litellm`) is **private in the pet's VPC with no peering to
+       blue's VPC** (and dies with the pet), so blue has no path. The 2 migrated
+       courses don't use litellm. Unwired blue's `instruqt-litellm` Kustomization
+       (tree kept for a follow-up); external-dns retracted blue's records and
+       `litellm-instruqt` fell back to the pet (200). Re-wire once litellm has a
+       blue-side DB.
+  - **STILL OPEN before P7.3 (pet retirement):**
+    - **`catalog.tmprl-demo.cloud` still resolves to the PET** (via wildcard) — that's
+      where auth-gated demos redirect to log in. Before retiring the pet, blue must own
+      `catalog.` (IngressRoute on blue's `web` + a `catalog→live` record) or logins break.
+    - **litellm follow-up:** needs a blue-reachable Postgres (own RDS in blue's VPC).
+    - **`patching-and-recovery-workshop`** course reconcile (pre-existing broken on pet).
+    - **Pet operator is DOWN + its registry Flux Kustomizations SUSPENDED** — it must
+      STAY down (resuming it re-introduces the dual-reconcile hazard). P7.3 either
+      resumes-then-decommissions deliberately or tears the pet down.
+    - **Branch flip:** blue + the litellm image-automation still track
+      `feat/full-e2e-iac`; flip to `main` at the P7.3 merge (with `var.flux_git_branch`).
 
 - **P7 STARTED — approach locked** after a live-AWS + repo discovery sweep (workflow
   `wf_f2ad0e0a-b1b`, 5 parallel readers: catalog / Flux wiring / operator concurrency
