@@ -332,35 +332,12 @@ spec:
   timeout: 5m
   wait: true
 ---
-# instruqt-litellm app layer (P7). LiteLLM gateway + broker for Instruqt tracks,
-# ported from the pet with Traefik v3 (traefik.io) + Flux image CRD v1 rewrites,
-# the tmprl-dem-cld-instruqt-litellm-broker IRSA role, the external-dns target
-# annotation, and the shared wildcard cert (no per-host Certificate).
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: instruqt-litellm
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: node-local-dns
-    - name: external-secrets-stores
-    - name: traefik
-    - name: wildcard-cert
-  interval: 5m
-  path: ./clusters/blue/addons/instruqt-litellm/install
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
-  healthChecks:
-    - apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      name: instruqt-litellm-runtime
-      namespace: tmprl-dem-cld-instruqt-litellm
-    - apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      name: instruqt-litellm-broker
-      namespace: tmprl-dem-cld-instruqt-litellm
+# instruqt-litellm app layer — DEFERRED (P7 follow-up), intentionally NOT wired.
+# The ported tree lives at clusters/blue/addons/instruqt-litellm/, but the LiteLLM
+# gateway needs its Postgres DB (RDS temporal-instruqt-litellm) which is PRIVATE in
+# the pet's VPC (vpc-00bb9a602ae4bad2c, 10.0.0.0/16) with no peering to blue's VPC
+# (10.20.0.0/16) — blue has no network path, and that DB dies with the pet anyway.
+# The 2 migrated Instruqt courses do NOT use litellm, so this does not block P7.
+# Re-wire once litellm has a blue-reachable database (its own RDS in blue's VPC).
+# Until then litellm-instruqt / litellm-broker-instruqt resolve to the pet via the
+# wildcard (external-dns retracts blue's records when this Kustomization is pruned).
