@@ -100,6 +100,40 @@ def test_self_rendered_web_uncolored_queue(monkeypatch):
     assert {"name": "DEMO_REGISTRY_TASK_QUEUE", "value": "registry-management"} in env
 
 
+_VERSIONED_WORKER = {"build": "worker", "worker": {"versioning": {"enabled": True}}}
+
+
+def test_operator_worker_deployment_name_is_color_suffixed(monkeypatch):
+    # GAP-2: the operator's own worker-versioned deployment name is color-suffixed so
+    # two colors sharing the one Temporal namespace don't collide on the
+    # (namespace, deployment-name) worker-versioning identity.
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    assert (
+        resources.worker_deployment_name(
+            _CATALOG_PROJECT, "registry-operator", _VERSIONED_WORKER
+        )
+        == "registry-operator-blue"
+    )
+    monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    assert (
+        resources.worker_deployment_name(
+            _CATALOG_PROJECT, "registry-operator", _VERSIONED_WORKER
+        )
+        == "registry-operator"
+    )
+
+
+def test_ordinary_demo_worker_deployment_name_not_colored(monkeypatch):
+    # Only the catalog self-demo's operator component is colored; ordinary demos are
+    # isolated per-cluster already, so their versioned worker names are untouched.
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    ordinary = {"metadata": {"name": "pizza"}, "spec": {"components": {"worker": {}}}}
+    assert (
+        resources.worker_deployment_name(ordinary, "worker", _VERSIONED_WORKER)
+        == "worker"
+    )
+
+
 # --- derive: entity workflow ids (single source of truth) -------------------
 
 def test_workflow_ids_uncolored_are_unchanged():
