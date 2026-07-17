@@ -18,6 +18,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+COPY registry/web/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 COPY registry/web/server.py /app/server.py
 COPY --from=web-build /work/static /app/static
 # The catalog is published at runtime by the registry operator into a ConfigMap

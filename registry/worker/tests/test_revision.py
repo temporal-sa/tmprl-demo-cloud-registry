@@ -952,7 +952,7 @@ def test_finalization_policy_couples_control_plane_and_runtime_namespace():
 
 # --- Task 6.2: canary shape preserved via external, self-contained templates ---
 
-REGISTRY_PROJECT = ROOT / "projects" / "demo" / "registry.yaml"
+REGISTRY_PROJECT = ROOT / "projects" / "operator" / "registry.yaml"
 
 
 def _operator_canary_gate() -> dict:

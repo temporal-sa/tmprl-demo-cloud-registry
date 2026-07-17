@@ -19,6 +19,14 @@ IMAGE_REPOSITORY_PREFIX = "tmprl-dem-cld"
 SECRET_PREFIX_ROOT = "tmprl-dem-cld"
 BASE_DOMAIN = "tmprl-demo.cloud"
 
+# Ephemeral "crashable" workspaces are per-(user, demo) clones of a demo's
+# Kubernetes namespace. They get their own namespace + subdomain so they never
+# collide with the always-on demo. The id is a short deterministic digest so the
+# same user clicking the same demo always maps to the same workspace.
+CRASHABLE_NAMESPACE_PREFIX = "tmprl-dem-cld-crash-"
+CRASHABLE_SUBDOMAIN_PREFIX = "crash-"
+CRASHABLE_WORKSPACE_ID_LENGTH = 10
+
 
 # Kubernetes namespaces cap at 63 chars; Temporal Cloud namespaces (excluding the
 # ``.<account>`` suffix) cap at 39. Longer names are hash-truncated deterministically.
@@ -86,3 +94,33 @@ def instruqt_course_workflow_id(course_name: str, cluster: str | None = None) ->
     if cluster:
         return f"instruqt-course/{cluster}/{course_name}"
     return f"instruqt-course/{course_name}"
+
+
+def crashable_workspace_id(owner_email: str, project_name: str) -> str:
+    """Short deterministic id for one user's crashable clone of one demo.
+
+    Same (user, demo) always yields the same id so the entity workflow, its
+    namespace, and its host are stable across repeated "Create" clicks.
+    """
+
+    seed = f"{owner_email.strip().lower()}\n{project_name}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return digest[:CRASHABLE_WORKSPACE_ID_LENGTH]
+
+
+def crashable_workspace_namespace(workspace_id: str) -> str:
+    return _prefixed_truncated(
+        CRASHABLE_NAMESPACE_PREFIX, workspace_id, KUBERNETES_NAMESPACE_MAX_LENGTH
+    )
+
+
+def crashable_workspace_subdomain(workspace_id: str) -> str:
+    return f"{CRASHABLE_SUBDOMAIN_PREFIX}{workspace_id}"
+
+
+def crashable_workspace_host(workspace_id: str) -> str:
+    return host(crashable_workspace_subdomain(workspace_id), workspace_id)
+
+
+def crashable_workspace_task_queue(base_task_queue: str, workspace_id: str) -> str:
+    return f"{base_task_queue}-{workspace_id}"

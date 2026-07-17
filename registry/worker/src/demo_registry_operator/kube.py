@@ -1024,6 +1024,78 @@ def delete_deployment(namespace: str, name: str, *, dry_run: bool = False) -> st
         raise
 
 
+def list_deployment_images(namespace: str) -> dict[str, str]:
+    """Map each Deployment's platform build to its primary container image.
+
+    One list call. Used to clone a demo's already-running images into a crashable
+    workspace without rebuilding. The primary (first) container carries the build
+    image; sidecars (e.g. the temporal proxy) are ignored.
+    """
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.AppsV1Api().list_namespaced_deployment(namespace)
+    images: dict[str, str] = {}
+    for item in getattr(response, "items", []):
+        metadata = getattr(item, "metadata", None)
+        annotations = getattr(metadata, "annotations", None)
+        build = (
+            annotations.get("platform.temporal.io/build")
+            if isinstance(annotations, dict)
+            else None
+        )
+        spec = getattr(item, "spec", None)
+        template = getattr(spec, "template", None)
+        pod_spec = getattr(template, "spec", None)
+        containers = getattr(pod_spec, "containers", None) or []
+        if not isinstance(build, str) or not build or not containers:
+            continue
+        image = getattr(containers[0], "image", None)
+        if isinstance(image, str) and image:
+            images[build] = image
+    return images
+
+
+def list_pods(
+    namespace: str,
+    *,
+    label_selector: str | None = None,
+) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CoreV1Api().list_namespaced_pod(
+        namespace,
+        label_selector=label_selector,
+    )
+    summaries = [
+        object_metadata_summary(item) for item in getattr(response, "items", [])
+    ]
+    return [item for item in summaries if item.get("name")]
+
+
+def delete_pod(
+    namespace: str,
+    name: str,
+    *,
+    grace_period_seconds: int = 0,
+    dry_run: bool = False,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CoreV1Api().delete_namespaced_pod(
+            name,
+            namespace,
+            grace_period_seconds=grace_period_seconds,
+        )
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
 def list_services(
     namespace: str,
     *,

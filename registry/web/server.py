@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -7,6 +8,7 @@ import json
 import mimetypes
 import os
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from html import escape
@@ -18,6 +20,22 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
 from urllib.request import Request, urlopen
+
+# Temporal is only needed for the crashable-workspace endpoints. Import it
+# defensively so the catalog server still boots in environments where the
+# temporalio wheel is absent (the endpoints then report temporal-unavailable).
+try:
+    from temporalio.client import (
+        Client,
+        WithStartWorkflowOperation,
+        WorkflowExecutionStatus,
+    )
+    from temporalio.common import WorkflowIDConflictPolicy
+    from temporalio.service import RPCError, RPCStatusCode
+
+    TEMPORALIO_AVAILABLE = True
+except Exception:  # noqa: BLE001 - optional dependency
+    TEMPORALIO_AVAILABLE = False
 
 
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +53,11 @@ DEFAULT_DOWNSTREAM_JWT_SECONDS = 5 * 60
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
+
+CRASHABLE_WORKFLOW_TYPE = "CrashableWorkspaceWorkflow"
+DEFAULT_CRASHABLE_TASK_QUEUE = "registry-management"
+# Bound how long a sync request thread will block on a Temporal RPC.
+CRASHABLE_RPC_TIMEOUT_SECONDS = 30
 
 
 class AuthError(Exception):
@@ -144,9 +167,193 @@ def catalog_payload(registry_path: Path, status_dir: Path) -> dict[str, Any]:
     }
 
 
+def crashable_workflow_id(owner_email: str, demo_name: str) -> str:
+    return f"crashable-workspace/{owner_email}/{demo_name}"
+
+
+class TemporalUnavailable(Exception):
+    """The Temporal client could not be reached for a crashable-workspace call."""
+
+
+class WorkspaceNotFound(Exception):
+    """No crashable-workspace workflow exists for this (user, demo)."""
+
+
+class TemporalGateway:
+    """Sync facade over the async Temporal client for the request handlers.
+
+    ``ThreadingHTTPServer`` gives every request its own thread and there is no
+    asyncio loop, so we run one background loop thread and marshal coroutines
+    onto it. The client is connected lazily on that loop the first time an
+    endpoint is used, so the catalog server still starts if Temporal is down.
+    """
+
+    def __init__(
+        self,
+        *,
+        address: str,
+        namespace: str,
+        api_key: str | None,
+        tls: bool,
+        task_queue: str,
+    ) -> None:
+        self._address = address
+        self._namespace = namespace
+        self._api_key = api_key
+        self._tls = tls
+        self.task_queue = task_queue
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._client: Any | None = None
+        self._connect_lock: asyncio.Lock | None = None
+        self._start_lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None:
+            with self._start_lock:
+                if self._loop is None:
+                    loop = asyncio.new_event_loop()
+                    thread = threading.Thread(
+                        target=loop.run_forever,
+                        name="temporal-gateway-loop",
+                        daemon=True,
+                    )
+                    thread.start()
+                    self._loop = loop
+        return self._loop
+
+    def _run(self, coro: Any) -> Any:
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout=CRASHABLE_RPC_TIMEOUT_SECONDS)
+        except WorkspaceNotFound:
+            # A clean "no workspace" signal, mapped to 404/None by the handlers.
+            raise
+        except Exception as error:  # noqa: BLE001 - surface as a clean 503
+            # Everything else (RPC failures, timeouts, connection issues) becomes
+            # a temporal-unavailable 503 rather than an unhandled 500.
+            raise TemporalUnavailable(str(error)) from error
+
+    async def _get_client(self) -> Any:
+        # Runs on the loop thread; the None-checks are safe because there is no
+        # await between check and assignment.
+        if self._connect_lock is None:
+            self._connect_lock = asyncio.Lock()
+        async with self._connect_lock:
+            if self._client is None:
+                rpc_metadata = (
+                    {"authorization": f"Bearer {self._api_key}"}
+                    if self._api_key
+                    else None
+                )
+                self._client = await Client.connect(
+                    self._address,
+                    namespace=self._namespace,
+                    tls=self._tls,
+                    rpc_metadata=rpc_metadata,
+                )
+        return self._client
+
+    def ensure_workspace(self, owner_email: str, demo_name: str) -> dict[str, Any]:
+        return self._run(self._ensure_workspace(owner_email, demo_name))
+
+    async def _ensure_workspace(
+        self, owner_email: str, demo_name: str
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        operation = WithStartWorkflowOperation(
+            CRASHABLE_WORKFLOW_TYPE,
+            {
+                "demo_name": demo_name,
+                "owner_email": owner_email,
+                "ttl_seconds": 3600,
+            },
+            id=crashable_workflow_id(owner_email, demo_name),
+            task_queue=self.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        return await client.execute_update_with_start_workflow(
+            "ensure",
+            start_workflow_operation=operation,
+        )
+
+    def update_workspace(
+        self, owner_email: str, demo_name: str, update: str
+    ) -> dict[str, Any]:
+        return self._run(self._update_workspace(owner_email, demo_name, update))
+
+    async def _update_workspace(
+        self, owner_email: str, demo_name: str, update: str
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            crashable_workflow_id(owner_email, demo_name)
+        )
+        try:
+            return await handle.execute_update(update)
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                raise WorkspaceNotFound(demo_name) from error
+            raise
+
+    def workspace_status(self, owner_email: str, demo_name: str) -> dict[str, Any]:
+        return self._run(self._workspace_status(owner_email, demo_name))
+
+    async def _workspace_status(
+        self, owner_email: str, demo_name: str
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            crashable_workflow_id(owner_email, demo_name)
+        )
+        try:
+            description = await handle.describe()
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                return {"phase": "None", "demo": demo_name}
+            raise
+        if description.status == WorkflowExecutionStatus.RUNNING:
+            return await handle.query("status")
+        if description.status == WorkflowExecutionStatus.FAILED:
+            return {
+                "phase": "Failed",
+                "demo": demo_name,
+                "step": "Provisioning failed",
+                "last_error": "Environment provisioning failed. Try again.",
+            }
+        # Completed (torn down), cancelled, terminated, or timed out -> gone.
+        return {"phase": "None", "demo": demo_name}
+
+
+def env_truthy(name: str, *, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def build_temporal_gateway() -> TemporalGateway | None:
+    if not TEMPORALIO_AVAILABLE:
+        return None
+    address = os.environ.get("TEMPORAL_ADDRESS", "").strip()
+    if not address:
+        return None
+    return TemporalGateway(
+        address=address,
+        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default").strip() or "default",
+        api_key=os.environ.get("TEMPORAL_API_KEY", "").strip() or None,
+        tls=env_truthy("TEMPORAL_TLS"),
+        task_queue=(
+            os.environ.get("DEMO_REGISTRY_TASK_QUEUE", "").strip()
+            or DEFAULT_CRASHABLE_TASK_QUEUE
+        ),
+    )
+
+
 class RegistryRequestHandler(BaseHTTPRequestHandler):
     registry_path: Path
     status_dir: Path
+    temporal_gateway: TemporalGateway | None = None
     server_version = "DemoRegistryWeb/0.1"
 
     def do_GET(self) -> None:
@@ -159,6 +366,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(load_registry(self.registry_path))
             elif path == "/api/catalog":
                 self.send_json(catalog_payload(self.registry_path, self.status_dir))
+            elif path == "/api/crashable-workspace":
+                self.crashable_status(parse_query(parsed.query))
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
             elif path == "/auth/login":
@@ -185,6 +394,183 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 {"error": "registry_unavailable", "message": str(error)},
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            if path == "/api/crashable-workspace":
+                self.crashable_create()
+            elif path == "/api/crashable-workspace/extend":
+                self.crashable_update("extend")
+            elif path == "/api/crashable-workspace/crash":
+                self.crashable_update("crash")
+            elif path == "/api/crashable-workspace/delete":
+                self.crashable_delete()
+            else:
+                self.send_json(
+                    {"error": "not_found", "path": path},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(
+                {"error": "bad_request", "message": str(error)},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+
+    def read_json_body(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        if not raw:
+            return {}
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+
+    def authenticated_email(self) -> str:
+        # Mirror send_auth_verification: bootstrap-allow short-circuits to a
+        # fixed identity; otherwise require a valid signed session cookie.
+        if os.environ.get("AUTH_MODE", "disabled") == "bootstrap-allow":
+            return "bootstrap@temporal.io"
+        claims = session_from_request(self)
+        email = claims.get("email")
+        if not isinstance(email, str) or not email:
+            raise AuthError("Session is missing an email claim.")
+        return email
+
+    def demo_is_crashable(self, demo: str) -> bool:
+        registry = load_registry(self.registry_path)
+        for project in registry.get("projects", []):
+            if isinstance(project, dict) and project.get("name") == demo:
+                crashable = project.get("crashable")
+                return bool(isinstance(crashable, dict) and crashable.get("enabled"))
+        return False
+
+    def crashable_request(self) -> tuple[str, str] | None:
+        # Shared preamble for the mutating endpoints: auth + gateway + demo name.
+        # Returns (email, demo) or None after having already sent an error.
+        try:
+            email = self.authenticated_email()
+        except AuthError as error:
+            self.send_json(
+                {"error": "unauthorized", "message": str(error)},
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return None
+        if self.temporal_gateway is None:
+            self.send_json(
+                {"error": "temporal-unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return None
+        demo = self.read_json_body().get("demo")
+        if not isinstance(demo, str) or not demo:
+            self.send_json(
+                {"error": "bad_request", "message": "demo is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return None
+        return email, demo
+
+    def crashable_create(self) -> None:
+        request = self.crashable_request()
+        if request is None:
+            return
+        email, demo = request
+        if not self.demo_is_crashable(demo):
+            self.send_json(
+                {
+                    "error": "not-crashable",
+                    "message": f"{demo} is not a crashable demo.",
+                },
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            status = self.temporal_gateway.ensure_workspace(email, demo)
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(status)
+
+    def crashable_update(self, update: str) -> None:
+        request = self.crashable_request()
+        if request is None:
+            return
+        email, demo = request
+        try:
+            status = self.temporal_gateway.update_workspace(email, demo, update)
+        except WorkspaceNotFound:
+            self.send_json(
+                {"error": "not-found", "message": "No active workspace."},
+                status=HTTPStatus.NOT_FOUND,
+            )
+            return
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(status)
+
+    def crashable_delete(self) -> None:
+        request = self.crashable_request()
+        if request is None:
+            return
+        email, demo = request
+        try:
+            status = self.temporal_gateway.update_workspace(email, demo, "delete")
+        except WorkspaceNotFound:
+            # Already gone is a successful delete.
+            self.send_json({"phase": "None", "demo": demo})
+            return
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(status)
+
+    def crashable_status(self, params: dict[str, str]) -> None:
+        try:
+            email = self.authenticated_email()
+        except AuthError as error:
+            self.send_json(
+                {"error": "unauthorized", "message": str(error)},
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        demo = params.get("demo", "")
+        if not demo:
+            self.send_json(
+                {"error": "bad_request", "message": "demo is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if self.temporal_gateway is None:
+            self.send_json(
+                {"error": "temporal-unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        try:
+            status = self.temporal_gateway.workspace_status(email, demo)
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(status)
 
     def send_json(
         self,
@@ -846,12 +1232,14 @@ def decode_id_token_claims(id_token: str) -> dict[str, Any]:
 def make_handler(
     registry_path: Path,
     status_dir: Path,
+    temporal_gateway: TemporalGateway | None = None,
 ) -> type[RegistryRequestHandler]:
     class ConfiguredRegistryRequestHandler(RegistryRequestHandler):
         pass
 
     ConfiguredRegistryRequestHandler.registry_path = registry_path
     ConfiguredRegistryRequestHandler.status_dir = status_dir
+    ConfiguredRegistryRequestHandler.temporal_gateway = temporal_gateway
     return ConfiguredRegistryRequestHandler
 
 
@@ -859,9 +1247,11 @@ def main() -> None:
     registry_path = configured_path("REGISTRY_DATA_PATH", DEFAULT_REGISTRY_PATH)
     status_dir = configured_path("CATALOG_STATUS_DIR", DEFAULT_STATUS_DIR)
     port = int(os.environ.get("PORT", "8080"))
-    handler = make_handler(registry_path, status_dir)
+    temporal_gateway = build_temporal_gateway()
+    handler = make_handler(registry_path, status_dir, temporal_gateway)
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
-    print(f"Serving registry catalog on :{port}")
+    crashable = "enabled" if temporal_gateway else "disabled (no TEMPORAL_ADDRESS)"
+    print(f"Serving registry catalog on :{port} (crashable workspaces: {crashable})")
     server.serve_forever()
 
 
