@@ -6,9 +6,7 @@ resources:
   - rbac.yaml
   - external-secrets.yaml
   - deployment.yaml
-  # web.yaml removed (P8 phase A): the catalog web is now rendered by the
-  # registry.yaml self-demo's web component (wired via the registry-operator-self
-  # Flux Kustomization), not hand-authored here.
+  - web.yaml
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
