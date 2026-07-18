@@ -335,6 +335,16 @@ Newest first. One entry per meaningful step so a fresh session can resume.
     namespace needs Worker Deployments enabled). This is why I stopped: activating self-management on a
     flappy, error-spewing, outage-on-every-rollout basis would be a fragile hand-off, and repeatedly
     churning the prod control plane unattended to bet on it is not safe.
+  - **LIKELY ROOT CAUSE — a floating SDK pin silently upgraded temporalio on rebuild.**
+    `registry/worker/requirements.txt` pins `temporalio>=1.29,<2` with **no lockfile**, and the
+    Dockerfile just `pip install -r requirements.txt` — so every rebuild floats to the latest. The
+    seed image `git-b29d1cbffeea` resolved to **temporalio 1.30.0** (verified in the live pod); the
+    pet's last-working self-managed image predates that and ran an older 1.29.x. 1.30.0's worker-
+    heartbeat / Worker-Deployment registration path is what hits `PermissionDenied` on this
+    namespace/API key. **Fastest fix to try first:** pin `temporalio==<pet's known-good version>` (+
+    add a lockfile so builds are reproducible), rebuild, and versioned registration should go
+    clean/fast again — no TC-side change needed. If that isn't it, it's a genuine TC permission gap
+    (grant the key worker-management perms / enable Worker Deployments on the namespace).
   - **Rollback was clean but required manual orphan purge** (the self-demo has `finalization-policy:
     retain`, so pruning the CR left resources behind, and the self-rendered `web` Service SSA-hijacked
     the static `web` selector → catalog 000/404 until fixed). Deleted: `registry-operator-blue` WD (+
