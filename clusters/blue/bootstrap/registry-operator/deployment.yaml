@@ -1,13 +1,10 @@
-# Blue's static full worker+watch operator (polls registry-management-blue + watches
-# DemoProject CRs). P8 phase A KEEPS this running as the RENDERER: with the
-# registry.yaml self-demo now wired (registry-operator-self Kustomization), THIS
-# worker reconciles it and self-renders the real, versioned, canary-gated operator
-# WorkerDeployment registry-operator-blue (GAP-2 color suffix) — a watch-only bootstrap
-# could not, since rendering runs inside DemoProjectWorkflow and needs a worker on the
-# queue. Phase B (separate follow-on, AFTER registry-operator-blue is promoted) replaces
-# this Deployment with the scaled-to-zero registry-operator-watch bootstrap and prunes
-# this full worker; the two only overlap as full workers briefly during the handoff
-# (same color, already-provisioned demos -> steady-state adopt, low risk).
+# Blue's operator runs as a single self-contained worker+watch process (P5 e2e /
+# cutover prep). Unlike the pet's split (a scaled-to-zero watch/bootstrap handing
+# off to a self-rendered versioned WorkerDeployment), blue runs one Deployment
+# that both polls its color task queue (registry-management-blue) AND watches
+# DemoProject CRs — enough to reconcile demos on blue without the self-management
+# dance. Worker versioning is intentionally off (no TEMPORAL_DEPLOYMENT_NAME), so
+# the namespace-wide worker-update batch signal never runs here.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

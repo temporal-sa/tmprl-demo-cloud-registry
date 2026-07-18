@@ -283,33 +283,6 @@ spec:
       name: registry-operator
       namespace: tmprl-dem-cld-registry-operator
 ---
-# Operator self-management (P8). The registry.yaml self-demo (kept at
-# ./projects/operator so sibling colors never co-manage it). The RUNNING operator
-# reconciles it into the self-rendered, versioned, canary-gated operator
-# WorkerDeployment registry-operator-blue — in phase A that renderer is blue's static
-# registry-operator worker; after phase B it is registry-operator-blue itself
-# (self-management). The spec is color-agnostic; the operator injects the color (task
-# queue + WorkerDeployment name). dependsOn the bootstrap (registry-operator) + CRDs +
-# worker-controller.
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: registry-operator-self
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: registry-operator
-    - name: registry-crds
-    - name: temporal-worker-controller
-  interval: 5m
-  path: ./projects/operator
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
----
 # Real demo catalog (P7). DemoProject CRs under ./projects/demo. The operator
 # self-demo (registry.yaml, name: registry-operator) was split out to
 # ./projects/operator and is intentionally NOT wired here — blue's operator is
