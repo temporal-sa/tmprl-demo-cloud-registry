@@ -280,15 +280,17 @@ spec:
   healthChecks:
     - apiVersion: apps/v1
       kind: Deployment
-      name: registry-operator-watch
+      name: registry-operator
       namespace: tmprl-dem-cld-registry-operator
 ---
 # Operator self-management (P8). The registry.yaml self-demo (kept at
-# ./projects/operator so sibling colors never co-manage it) — blue's bootstrap watch
+# ./projects/operator so sibling colors never co-manage it). The RUNNING operator
 # reconciles it into the self-rendered, versioned, canary-gated operator
-# WorkerDeployment registry-operator-blue. The spec is color-agnostic; the running
-# operator injects the color (task queue + WorkerDeployment name). dependsOn the
-# bootstrap (registry-operator) + CRDs + worker-controller.
+# WorkerDeployment registry-operator-blue — in phase A that renderer is blue's static
+# registry-operator worker; after phase B it is registry-operator-blue itself
+# (self-management). The spec is color-agnostic; the operator injects the color (task
+# queue + WorkerDeployment name). dependsOn the bootstrap (registry-operator) + CRDs +
+# worker-controller.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
