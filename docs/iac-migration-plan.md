@@ -296,11 +296,38 @@ Each phase has an explicit test gate before moving on.
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
 | P7 — Migrate + retire the pet | ✅ Done — everything managed on blue (tracking `main`); litellm on shared RDS; pet reduced to a base-platform manual cluster (managed namespaces pruned) + its orphaned uncolored control-plane workflows terminated (10, on the dead `registry-management` queue). Follow-ups moved to P8. |
-| P8 — Restore operator self-management on blue | 🔄 In progress — Option A. Staged on `feat/p8-operator-self-management` (4 commits, not merged): GAP-1 (color operator+web queues) + GAP-2 (color the operator WorkerDeployment name) + bootstrap split (watch→self-render, self-demo Kustomization, web.yaml removed). Adversarial review running (`wf_afecf490-e91`); then the ⛔ gated cutover (seed build + cold-start + prune). |
+| P8 — Restore operator self-management on blue | 🔄 In progress — Option A, on `feat/p8-operator-self-management` (not merged). GAP-1 + GAP-2 code done; bootstrap **restructured to two-phase** after the adversarial review caught a cold-start deadlock. Branch now carries **Phase A** (wire self-demo, keep the static operator as renderer, self-demo renders web). **Phase B** (switch to watch + prune static) deferred to a follow-on after `registry-operator-blue` renders. Re-review, then the ⛔ gated cutover. |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P8 ADVERSARIAL REVIEW (`wf_afecf490-e91`) → bootstrap RESTRUCTURED to two-phase.**
+  The review caught a **HIGH** flaw in the first bootstrap commit (`9b542bd`, now corrected by
+  `db188c3`): switching blue straight to the `WORKER_ENABLED=false` watch and pruning the static
+  operator **deadlocks a cold-start** — rendering `registry-operator-blue` runs inside
+  `DemoProjectWorkflow`, which needs a worker on `registry-management-blue`; the pruned static
+  operator was the only one, and the watch only *signals* (never renders, never self-scales;
+  verified in `worker.py`/`watch.py`). The pet dodged it (self-rendered worker seeded historically).
+  - **Fix — two-phase cutover.** Branch carries **Phase A**: keep blue's static full
+    `registry-operator` as the RENDERER, wire `registry-operator-self` (→ `./projects/operator`),
+    drop `web.yaml` (self-demo renders web). **Phase B** (separate follow-on, AFTER
+    `registry-operator-blue` is promoted): switch the Deployment to `registry-operator-watch`
+    (replicas:0), prune the static worker. Brief same-color double-worker overlap during the
+    handoff (provisioned demos → steady-state adopt, low risk).
+  - **Other review findings:** GAP-3 (uncolored canary `projectNamePrefix`) verified genuinely
+    safe (color-scoped entity ids + per-run digests + GAP-2 target name) — correctly deferred.
+    `instruqt-cli` ExternalSecret is **dual-owned** (bootstrap external-secrets.yaml for the
+    operator's envFrom + the self-render both emit it, byte-identical) — low/benign (ambiguous
+    ownership + a delete-won't-stick footgun); documented, not blocking.
+  - **⛔ CORRECTED CUTOVER RUNBOOK:** (1) seed-build the GAP-fixed operator worker/web/proxy images
+    from the P8 merge commit (out-of-band CodeBuild). (2) Merge Phase A → main → blue's static
+    operator renders `registry-operator-blue` (web re-renders — brief catalog gap, do at low
+    traffic) → canary gate → promote. (3) Verify `registry-operator-blue` healthy + serving +
+    canary green. (4) Merge Phase B → switch to the watch + prune the static worker (promptly, to
+    shorten the double-worker window). (5) Verify self-build works end-to-end (push a trivial
+    operator change → build + canary + rollout). Watch image auto-bump still deferred (git-<sha>
+    unorderable).
 
 - **P8 IN PROGRESS on `feat/p8-operator-self-management`.** Discovery (`wf_a13e08f7-b04`)
   mapped the pet's self-managing split (a `registry-operator-watch` bootstrap Deployment,
