@@ -64,8 +64,11 @@ spec:
       env:
         - name: AUTH_MODE
           value: google
-        - name: DEMO_REGISTRY_TASK_QUEUE
-          value: registry-management
+        # DEMO_REGISTRY_TASK_QUEUE intentionally NOT set: the operator injects the
+        # color-derived queue (registry-management-<color>) into the web via
+        # resources.platform_env_vars, so CrashableWorkspaceWorkflow starts land on
+        # the queue this color's operator polls. Setting it here would pin the pet's
+        # uncolored queue.
       # single unnamed port -> name "http"; servicePort 80 -> public catch-all
       ports:
         - containerPort: 8080
@@ -77,8 +80,12 @@ spec:
       secrets:
         - temporal-cloud-bootstrap
       env:
-        - name: DEMO_REGISTRY_TASK_QUEUE
-          value: registry-management
+        # DEMO_REGISTRY_TASK_QUEUE intentionally NOT set: the self-rendered operator
+        # derives it from the injected DEMO_REGISTRY_CLUSTER (registry-management-<color>
+        # via config.from_env). An explicit value wins over the color-derived default
+        # (config.py) and would put the self-rendered operator back on the uncolored
+        # registry-management queue — where its color-scoped entity workflows have no
+        # poller.
         - name: DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE
           value: aws
         - name: DEMO_REGISTRY_TEMPORAL_CLOUD_MODE

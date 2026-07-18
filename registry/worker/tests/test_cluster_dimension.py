@@ -52,6 +52,88 @@ def test_blank_cluster_is_treated_as_unset(monkeypatch):
     assert config.task_queue == "registry-management"
 
 
+def test_registry_task_queue_derive():
+    # Single source shared by config.from_env and resources.platform_env_vars.
+    assert derive.registry_task_queue(None) == "registry-management"
+    assert derive.registry_task_queue("blue") == "registry-management-blue"
+    assert derive.registry_task_queue("green") == "registry-management-green"
+
+
+# A minimal registry catalog self-demo (the annotation is what gates the
+# operator/web self-management env injection in platform_env_vars).
+_CATALOG_PROJECT = {
+    "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+    "kind": "DemoProject",
+    "metadata": {
+        "name": "registry-operator",
+        "annotations": {"registry.tmprl-demo.cloud/catalog": "true"},
+    },
+    "spec": {"components": {"registry-operator": {}, "web": {}}},
+}
+
+
+def test_self_rendered_operator_gets_color_not_explicit_queue(monkeypatch):
+    # GAP-1: the self-rendered operator worker gets DEMO_REGISTRY_CLUSTER (so its
+    # own config.from_env derives registry-management-<color>) and must NOT carry an
+    # explicit DEMO_REGISTRY_TASK_QUEUE (which would win over the color derivation).
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    env = resources.platform_env_vars(_CATALOG_PROJECT, "registry-operator", "img", {})
+    assert {"name": "DEMO_REGISTRY_CLUSTER", "value": "blue"} in env
+    assert not any(e["name"] == "DEMO_REGISTRY_TASK_QUEUE" for e in env)
+
+
+def test_self_rendered_web_gets_color_derived_queue(monkeypatch):
+    # GAP-1: the catalog web reads DEMO_REGISTRY_TASK_QUEUE directly (it does not run
+    # config.from_env), so the operator injects the color-derived queue so
+    # CrashableWorkspaceWorkflow starts land where this color's operator polls.
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    env = resources.platform_env_vars(_CATALOG_PROJECT, "web", "img", {})
+    assert {
+        "name": "DEMO_REGISTRY_TASK_QUEUE",
+        "value": "registry-management-blue",
+    } in env
+
+
+def test_self_rendered_web_uncolored_queue(monkeypatch):
+    monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    env = resources.platform_env_vars(_CATALOG_PROJECT, "web", "img", {})
+    assert {"name": "DEMO_REGISTRY_TASK_QUEUE", "value": "registry-management"} in env
+
+
+_VERSIONED_WORKER = {"build": "worker", "worker": {"versioning": {"enabled": True}}}
+
+
+def test_operator_worker_deployment_name_is_color_suffixed(monkeypatch):
+    # GAP-2: the operator's own worker-versioned deployment name is color-suffixed so
+    # two colors sharing the one Temporal namespace don't collide on the
+    # (namespace, deployment-name) worker-versioning identity.
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    assert (
+        resources.worker_deployment_name(
+            _CATALOG_PROJECT, "registry-operator", _VERSIONED_WORKER
+        )
+        == "registry-operator-blue"
+    )
+    monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    assert (
+        resources.worker_deployment_name(
+            _CATALOG_PROJECT, "registry-operator", _VERSIONED_WORKER
+        )
+        == "registry-operator"
+    )
+
+
+def test_ordinary_demo_worker_deployment_name_not_colored(monkeypatch):
+    # Only the catalog self-demo's operator component is colored; ordinary demos are
+    # isolated per-cluster already, so their versioned worker names are untouched.
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    ordinary = {"metadata": {"name": "pizza"}, "spec": {"components": {"worker": {}}}}
+    assert (
+        resources.worker_deployment_name(ordinary, "worker", _VERSIONED_WORKER)
+        == "worker"
+    )
+
+
 # --- derive: entity workflow ids (single source of truth) -------------------
 
 def test_workflow_ids_uncolored_are_unchanged():

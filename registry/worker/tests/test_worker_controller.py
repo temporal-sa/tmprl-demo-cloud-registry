@@ -914,9 +914,11 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         "name": "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE",
         "value": "example.com/registry/temporal-cloud-proxy:git-e12b0ed9d450",
     } in container["env"]
-    assert {"name": "DEMO_REGISTRY_TASK_QUEUE", "value": "registry-management"} in (
-        container["env"]
-    )
+    # The operator no longer bakes an explicit DEMO_REGISTRY_TASK_QUEUE: it derives
+    # registry-management-<color> from the injected DEMO_REGISTRY_CLUSTER (config.
+    # from_env) so a colored operator polls its own queue. An explicit value would
+    # win over that derivation and pin the uncolored queue.
+    assert not any(e["name"] == "DEMO_REGISTRY_TASK_QUEUE" for e in container["env"])
     assert {
         "name": "DEMO_REGISTRY_TEMPORAL_CLOUD_BOOTSTRAP_SECRET_PATH",
         "value": "tmprl-dem-cld/registry-operator/temporal-cloud-bootstrap",

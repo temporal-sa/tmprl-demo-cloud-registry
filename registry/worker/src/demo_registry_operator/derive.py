@@ -19,6 +19,11 @@ IMAGE_REPOSITORY_PREFIX = "tmprl-dem-cld"
 SECRET_PREFIX_ROOT = "tmprl-dem-cld"
 BASE_DOMAIN = "tmprl-demo.cloud"
 
+# The operator's Temporal task queue. Colored per cluster so two colors sharing
+# one Temporal namespace never cross-route (registry-management-<color>); unset
+# color = the original uncolored queue.
+REGISTRY_TASK_QUEUE_BASE = "registry-management"
+
 # Ephemeral "crashable" workspaces are per-(user, demo) clones of a demo's
 # Kubernetes namespace. They get their own namespace + subdomain so they never
 # collide with the always-on demo. The id is a short deterministic digest so the
@@ -94,6 +99,16 @@ def instruqt_course_workflow_id(course_name: str, cluster: str | None = None) ->
     if cluster:
         return f"instruqt-course/{cluster}/{course_name}"
     return f"instruqt-course/{course_name}"
+
+
+def registry_task_queue(cluster: str | None = None) -> str:
+    """The operator's task queue, colored per cluster. Single source shared by the
+    worker config (config.py) and the self-rendered operator/web env (resources.
+    platform_env_vars) so a colored operator and its self-managed catalog web always
+    poll the same registry-management-<color> queue; unset cluster = uncolored."""
+    if cluster:
+        return f"{REGISTRY_TASK_QUEUE_BASE}-{cluster}"
+    return REGISTRY_TASK_QUEUE_BASE
 
 
 def crashable_workspace_id(owner_email: str, project_name: str) -> str:
