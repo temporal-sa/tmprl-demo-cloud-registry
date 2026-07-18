@@ -296,11 +296,61 @@ Each phase has an explicit test gate before moving on.
 | P5 — Operator cluster dimension | ✅ Done (gate passed: blue operator on `registry-management-blue` + `demo-project/blue/*` coexists with the pet's uncolored ids in ONE Temporal namespace, no cross-routing; throwaway demo reconciled on blue end-to-end — v3 IngressRoute + external-dns CNAME→live + wildcard TLS, HTTP 200 via public DNS; pet wildcard undisturbed; clean teardown) |
 | P6 — Blue/green cutover | ✅ Done (gate passed: stood up an ephemeral green [latest-GA = k8s 1.36, byte-identical to blue], warmed it with a green-only `p6-smoke`, flipped `live` blue→green [in-place alias UPSERT, demo followed via public DNS → HTTP 200 on green wildcard cert], rolled back green→blue, then destroyed green clean [0 orphans]; pet wildcard undisturbed throughout; `tofu plan` idempotent before + after) |
 | P7 — Migrate + retire the pet | ✅ Done — everything managed on blue (tracking `main`); litellm on shared RDS; pet reduced to a base-platform manual cluster (managed namespaces pruned) + its orphaned uncolored control-plane workflows terminated (10, on the dead `registry-management` queue). Follow-ups moved to P8. |
-| P8 — Restore operator self-management on blue | 🔄 In progress — Option A, on `feat/p8-operator-self-management` (not merged). Branch **collapsed to GAP-1/GAP-2 operator code + inert color-agnostic `registry.yaml` + docs** (safe to merge; 472 tests pass) after two review rounds. The bootstrap re-arch is NOT in the branch — it is an inherently **sequenced 3-step cutover** (seed-image bump → self-demo wiring → watch switch), applied step-by-step at ⛔ gated cutover time. |
+| P8 — Restore operator self-management on blue | 🔄 In progress — **BLOCKED on a Temporal Cloud worker-versioning issue.** GAP-1/GAP-2 code merged (`#14`, `b29d1cb`). Cutover **step 2 DONE**: blue's static operator bumped to the GAP-fixed seed image `git-b29d1cbffeea` (`f00887a`, live + healthy). Cutover **Phase A (self-demo wiring) ATTEMPTED then ROLLED BACK** (`2a7f146`→`205caf1`→`64e6a64`): the wiring is correct (operator self-rendered `registry-operator-blue` + web, colored), but the versioned worker's Worker Deployment (v2) registration is slow/flappy — `PermissionDenied` on `describe_namespace`/worker-heartbeat/`shutdown_worker` RPCs — so the canary-gated rollout is too slow/uncertain and blocks web promotion → catalog outage. Rolled back to keep the catalog up. **Blue is now stable at step 2** (static operator on GAP image + static web; self-management deferred pending the TC fix). |
 
 ## Progress log
 
 Newest first. One entry per meaningful step so a fresh session can resume.
+
+- **P8 CUTOVER (2026-07-17 overnight): GAP merged + step 2 done; Phase A hit a TC
+  worker-versioning wall → rolled back. Blue stable at step 2.** Executed the sequenced
+  cutover autonomously. **Done + kept:**
+  - **Step 1 — GAP code on main** (`b29d1cb`, PR `#14`, merged earlier).
+  - **Step 2 — seed image + operator bump (`f00887a`).** Seed-built worker/web/temporal-cloud-proxy
+    from `main` via `tmprl-dem-cld-build`, driven build-only by the operator's OWN plan/arg builders
+    (`resolve_project_image_build_plan` + `codebuild_start_build_args` against `projects/operator/
+    registry.yaml`; script in scratchpad `seed_build.py`). All three pushed as `git-b29d1cbffeea`.
+    Bumped the static `registry-operator` worker to it. **Live + healthy** (1/1, 0 restarts, polls
+    `registry-management-blue`, reconciles all 7 demos, catalog 200). This is the RENDERER now
+    running GAP-fixed code — the step-2 prerequisite is satisfied.
+  - **Phase A — self-demo wiring (`2a7f146` + `205caf1`), then ROLLED BACK (`64e6a64`).** Added the
+    `registry-operator-self` Kustomization (→ `./projects/operator`) + dropped `web.yaml`. The wiring
+    worked exactly as designed: the GAP operator self-rendered the **colored** `registry-operator-blue`
+    WorkerDeployment (`git-205caf10effb-45d4`) + candidate web + spun the canary gate (api-key/mtls/
+    lambda). Also confirmed `registry-operator-source` GitRepository auto-created + Ready, and the
+    catalog auth-bypass/`tls: {}` render path is correct.
+  - **⛔ BLOCKER (the reason for rollback): Worker Deployment (v2 worker-versioning) registration is
+    slow/flappy on this Temporal Cloud namespace + API key.** The versioned `registry-operator-blue`
+    pod (1/1, correct `TEMPORAL_DEPLOYMENT_NAME`/`BUILD_ID` env) logs repeated `PermissionDenied
+    "Request unauthorized"` on `describe_namespace` (worker-heartbeat capabilities), `shutdown_worker`,
+    and worker-heartbeat send; `poll_nexus_task_queue` returns server `Internal` errors; and for ~10 min
+    `describe_worker_deployment` returned `NotFound` ("no Worker Deployment found … does your Worker
+    Deployment have pollers?") → the worker-controller sat at `WaitingForPollers`. Because the
+    DemoProject promotion is gated on that rollout, **web never promoted → catalog was down ~20 min.**
+    I rolled back to restore the catalog. **KEY NUANCE:** during teardown the worker-controller then
+    reported the version *"cannot be deleted since it has active pollers"* — so the version **did
+    eventually register** (~10+ min late). So versioning is **not fundamentally broken — it is slow/
+    flappy**, almost certainly because the operator's TC API key (`registry-worker-temporal`) lacks the
+    permission the newer temporalio SDK's worker-heartbeat / Worker-Deployment RPCs want (or that
+    namespace needs Worker Deployments enabled). This is why I stopped: activating self-management on a
+    flappy, error-spewing, outage-on-every-rollout basis would be a fragile hand-off, and repeatedly
+    churning the prod control plane unattended to bet on it is not safe.
+  - **Rollback was clean but required manual orphan purge** (the self-demo has `finalization-policy:
+    retain`, so pruning the CR left resources behind, and the self-rendered `web` Service SSA-hijacked
+    the static `web` selector → catalog 000/404 until fixed). Deleted: `registry-operator-blue` WD (+
+    its Deployment; cleared after pollers aged out ~2 min past the `temporal.io/delete-protection`
+    finalizer), the candidate `web-git-…` Deploy/Svc, the `temporal` Connection, `registry-operator-source`
+    GitRepository, and the hijacked `web` Service (Flux recreated it from `web.yaml`). Catalog back to
+    **200 with trusted TLS**; all 7 DemoProjects at baseline; no orphans.
+  - **TO COMPLETE P8 (when the versioning issue is fixed):** (a) fix the TC side — grant
+    `registry-worker-temporal` the worker-management permission (describe-namespace / worker-deployment
+    RPCs) **or** enable Worker Deployments on `tmprl-dem-cld-registry-operator.a2dd6`, **or** pin/adjust
+    the temporalio SDK so worker-heartbeat doesn't hard-require it, then rebuild; (b) re-apply Phase A
+    (re-add the `registry-operator-self` Kustomization + drop `web.yaml` — see `2a7f146`/`205caf1` or
+    the `db188c3` reference) and **wait ~30 min**, watching `registry-operator-blue` reach `Ready` +
+    `current`; (c) then Phase B (`9b542bd`): swap `deployment.yaml`→`registry-operator-watch`
+    (replicas:0, `WATCH_HANDOFF_DEPLOYMENT=…/registry-operator-blue`) + prune the static worker. The
+    seed image `git-b29d1cbffeea` is already built + live, so step 2 need not be repeated.
 
 - **P8 RE-REVIEW #2 (`wf_f7aaa1dc-bbb`) → branch COLLAPSED to GAP code; cutover is a
   sequenced 3-step (image-first).** The re-review confirmed the deadlock fix but caught a
