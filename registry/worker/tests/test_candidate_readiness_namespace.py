@@ -101,6 +101,47 @@ def test_worker_rollout_falls_back_to_base_namespace(monkeypatch):
     )
 
 
+def test_worker_rollout_waits_for_temporal_state_fetch_failure(monkeypatch):
+    attempts = 0
+    monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
+    monkeypatch.setattr(reconcile.time, "sleep", lambda _: None)
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda *args: None)
+
+    def fake_read(namespace, deployments):
+        nonlocal attempts
+        attempts += 1
+        condition = (
+            {
+                "type": "Ready",
+                "status": "False",
+                "reason": "TemporalStateFetchFailed",
+                "message": 'Secret "temporal-worker-runtime" not found',
+            }
+            if attempts == 1
+            else {"type": "Ready", "status": "True"}
+        )
+        return {
+            "worker": {
+                "name": "retrieval-v2",
+                "namespace": namespace,
+                "conditions": [condition],
+            }
+        }
+
+    monkeypatch.setattr(reconcile, "read_worker_deployments", fake_read)
+    result = reconcile.wait_for_worker_deployment_rollouts(
+        reconcile.WorkerDeploymentRolloutRequest(
+            demo_project={"metadata": {"name": "golden-retriever"}},
+            worker_deployments={"worker": "retrieval-v2"},
+            runtime_namespace="tmprl-dem-cld-golden-retriever-53d78",
+            timeout_seconds=1,
+        )
+    )
+
+    assert attempts == 2
+    assert result.status["phase"] == "Ready", result.status
+
+
 def test_worker_rollout_workflow_passes_candidate_runtime_namespace(monkeypatch):
     seen = {}
 
