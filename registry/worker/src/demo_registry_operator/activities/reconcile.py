@@ -133,6 +133,7 @@ class WorkerDeploymentRolloutRequest:
     demo_project: dict[str, Any]
     worker_deployments: dict[str, Any]
     timeout_seconds: int | None = None
+    runtime_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1192,7 +1193,9 @@ def wait_for_worker_deployment_rollouts(
     )
     deadline = time.monotonic() + wait_seconds
     last_status: dict[str, Any] = {}
-    namespace = resources.project_namespace(demo_project)
+    namespace = request.runtime_namespace
+    if not isinstance(namespace, str) or not namespace.strip():
+        namespace = resources.project_namespace(demo_project)
     while True:
         last_status = read_worker_deployments(namespace, worker_deployments)
         aggregate = aggregate_worker_deployment_status(last_status)
