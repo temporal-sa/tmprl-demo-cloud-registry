@@ -1,0 +1,149 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: golden-retriever
+spec:
+  registry:
+    title: Golden Retriever — Durable Retrieval
+    summary: >-
+      Generation-fenced retrieval with Temporal orchestration, durable provider
+      quota handling, cited Lakebase search, and safe late-writer rejection.
+    tags:
+      - AI
+      - Retrieval
+      - Data Pipelines
+      - Entity Lifecycle
+    temporalSdks:
+      - Python
+    readiness:
+      score: 4
+      maxScore: 5
+      note: Lakebase and dedicated OAuth identities are provisioned; migrations and grants remain a rollout gate.
+    links:
+      runbook:
+        label: tmprl-demo.cloud deployment runbook
+        url: https://github.com/temporal-sa/golden-retriever/blob/lakebase-variant/docs/runbooks/deploy-tmprl-demo-cloud.md
+      additional:
+        - label: Architecture and presenter reference
+          url: https://github.com/temporal-sa/golden-retriever/blob/lakebase-variant/docs/lakebase-temporal-demo-spec.md
+          audience: technical
+
+  source:
+    repo: https://github.com/temporal-sa/golden-retriever
+    branch: lakebase-variant
+
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile.app
+    worker:
+      context: .
+      dockerfile: Dockerfile.worker
+
+  temporal:
+    auth:
+      mode: apiKey
+
+  secrets:
+    lakebase-app:
+      requiredProperties:
+        - DATABRICKS_HOST
+        - DATABRICKS_CLIENT_ID
+        - DATABRICKS_CLIENT_SECRET
+        - PGHOST
+        - PGPORT
+        - PGDATABASE
+        - PGUSER
+        - PGSSLMODE
+        - LAKEBASE_ENDPOINT
+    lakebase-worker:
+      requiredProperties:
+        - DATABRICKS_HOST
+        - DATABRICKS_CLIENT_ID
+        - DATABRICKS_CLIENT_SECRET
+        - PGHOST
+        - PGPORT
+        - PGDATABASE
+        - PGUSER
+        - PGSSLMODE
+        - LAKEBASE_ENDPOINT
+
+  components:
+    app:
+      build: app
+      temporalAccess: true
+      secrets:
+        - lakebase-app
+      env:
+        - name: DATABRICKS_AUTH_TYPE
+          value: oauth-m2m
+        - name: RETRIEVAL_ENV_FILE
+          value: ""
+        - name: RETRIEVAL_DEMO_MODE
+          value: "true"
+        - name: RETRIEVAL_SEARCH_BACKEND
+          value: postgres_text
+        - name: TEMPORAL_RETRIEVAL_TASK_QUEUE
+          value: retrieval-v2
+        - name: TEMPORAL_PROVIDER_TASK_QUEUE
+          value: retrieval-provider-v2
+        - name: LAKEBASE_POOL_MIN_SIZE
+          value: "1"
+        - name: LAKEBASE_POOL_MAX_SIZE
+          value: "10"
+        - name: LAKEBASE_APPLICATION_NAME
+          value: golden-retriever-app
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 80
+
+    worker:
+      build: worker
+      secrets:
+        - lakebase-worker
+      env:
+        - name: DATABRICKS_AUTH_TYPE
+          value: oauth-m2m
+        - name: RETRIEVAL_ENV_FILE
+          value: ""
+        - name: RETRIEVAL_DEMO_MODE
+          value: "true"
+        - name: RETRIEVAL_ADAPTER_BUNDLE_FACTORY
+          value: retrieval.demo.scripted_provider:create_adapter_bundle
+        - name: TEMPORAL_RETRIEVAL_TASK_QUEUE
+          value: retrieval-v2
+        - name: TEMPORAL_PROVIDER_TASK_QUEUE
+          value: retrieval-provider-v2
+        - name: TEMPORAL_USE_WORKER_VERSIONING
+          value: "true"
+        - name: TEMPORAL_ENABLE_SEARCH_ATTRIBUTES
+          value: "false"
+        - name: TEMPORAL_SERVER_PRIORITY_FAIRNESS_SUPPORTED
+          value: "false"
+        - name: LAKEBASE_POOL_MIN_SIZE
+          value: "1"
+        - name: LAKEBASE_POOL_MAX_SIZE
+          value: "20"
+        - name: LAKEBASE_APPLICATION_NAME
+          value: golden-retriever-worker
+        - name: OBJECT_CLEANUP_BATCH_SIZE
+          value: "250"
+      worker:
+        versioning:
+          enabled: true
+          deploymentName: retrieval-v2
+          rollout:
+            strategy: AllAtOnce
+          sunset:
+            scaledownDelay: 5m
+            deleteDelay: 24h
+
+  ingress:
+    subdomain: golden-retriever
+    temporalAuthRequired: true
+
+  smokeCheck:
+    path: /readyz
+    expectedStatus: 200
+    timeoutSeconds: 10
