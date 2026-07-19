@@ -236,6 +236,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 demo_project=demo_project,
                 worker_deployments=smoke_plan.get("workerDeployments", {}),
                 timeout_seconds=timeout_seconds,
+                runtime_namespace=smoke_plan.get("runtimeNamespace"),
             ),
             start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
             heartbeat_timeout=timedelta(minutes=2),
