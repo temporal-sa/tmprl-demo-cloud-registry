@@ -74,7 +74,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 revision_ref=revision_summary,
                 revision_owner_reference=revision_owner_reference,
             ),
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=timedelta(minutes=7),
+            heartbeat_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
         reconcile_status = reconcile_result.status
