@@ -1,0 +1,175 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: flourish-and-blotts
+spec:
+  registry:
+    title: Flourish & Blotts — Agentic OMS Repair
+    summary: >-
+      A wizarding-bookshop order-management saga where an LLM repair agent
+      diagnoses and fixes failed orders as durable Temporal activities, with
+      customer and ops human-in-the-loop approvals. Saga compensation, agentic
+      repair, and an in-dashboard ops-agent chat in one demo.
+    tags: [AI, Agents, Human-in-the-Loop, Saga, Order Management]
+    temporalSdks: [Python]
+    readiness:
+      score: 4
+      maxScore: 5
+      note: Full demo runs on Cloud with no Slack. Ops-escalation forced failures need optional Slack.
+    links:
+      runbook:
+        label: Quick start
+        url: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts#readme
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts
+    # branch defaults to main
+
+  temporal:
+    auth:
+      mode: apiKey
+    # The worker upserts these on every order/repair; the operator creates them
+    # on the Cloud namespace (the app's own operator_service registration is a
+    # no-op on Cloud and is swallowed).
+    searchAttributes:
+      OrderId:
+        type: keyword
+      CustomerName:
+        type: keyword
+      BookTitle:
+        type: keyword
+      OrderStatus:
+        type: keyword
+      FailureType:
+        type: keyword
+      RepairOutcome:
+        type: keyword
+      RequiresHITL:
+        type: bool
+      RepairAttempts:
+        type: int
+
+  secrets:
+    anthropic-credentials:
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+    # HMAC secret for signing customer-HITL approve/deny email links. Shared by
+    # the worker (mints links) and api (verifies them); /hitl is public, so this
+    # must be a real random value, not the repo default.
+    hitl-token:
+      requiredProperties:
+        - HITL_TOKEN_SECRET
+
+  builds:
+    worker:
+      context: .
+      dockerfile: worker/Dockerfile
+    api:
+      context: .
+      dockerfile: api/Dockerfile
+    ui:
+      context: .
+      dockerfile: ui/Dockerfile
+    # Thin FROM-wrapper around mailhog/mailhog so the fake SMTP inbox can be a
+    # platform-built component.
+    mailhog:
+      context: .
+      dockerfile: mailhog/Dockerfile
+
+  components:
+    # Temporal worker: hosts every workflow + activity, calls Anthropic, and
+    # posts SMTP to mailhog. Code only knows plaintext localhost:7233, so it uses
+    # the platform Temporal Cloud proxy sidecar (no code change).
+    worker:
+      build: worker
+      worker: true
+      temporalProxy:
+        enabled: true
+      secrets:
+        - anthropic-credentials
+        - hitl-token
+      env:
+        - name: API_BASE_URL
+          value: http://api:8000
+        - name: API_PUBLIC_URL
+          value: https://flourish-and-blotts.tmprl-demo.cloud
+        - name: SMTP_HOST
+          value: mailhog
+        - name: SMTP_PORT
+          value: "1025"
+
+    # FastAPI: REST + SSE for the UI, the /hitl email landing pages, and the
+    # ops-agent chat endpoints. Starts/queries/signals workflows via the proxy.
+    api:
+      build: api
+      # Owns the canonical in-memory inventory store (reservations + stock) — a
+      # second replica would split-brain the counts. Keep it single.
+      replicas: 1
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      secrets:
+        - anthropic-credentials
+        - hitl-token
+      env:
+        # Namespace-base URL — the app appends /workflows/<id> for deep links.
+        # Replace the account suffix (.a2dd6) if your Temporal Cloud account differs.
+        - name: TEMPORAL_UI_URL
+          value: https://cloud.temporal.io/namespaces/tmprl-dem-cld-flourish-and-blotts.a2dd6
+        - name: MAILHOG_UI_URL
+          value: https://flourish-and-blotts.tmprl-demo.cloud/mailhog
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 8000
+
+    # Vite/React storefront + ops dashboard, served by nginx. Static only; it
+    # reads runtime URLs from GET /api/config, so no build args are needed.
+    ui:
+      build: ui
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+
+    # Fake SMTP + web inbox for customer-HITL emails. SMTP on 1025 (internal),
+    # web UI on 8025 exposed at /mailhog via MH_UI_WEB_PATH.
+    mailhog:
+      build: mailhog
+      replicas: 1 # in-memory inbox; a second replica would scatter captured mail
+      env:
+        - name: MH_UI_WEB_PATH
+          value: mailhog
+      ports:
+        - name: smtp
+          containerPort: 1025
+          servicePort: 1025
+        - name: http
+          containerPort: 8025
+          servicePort: 8025
+
+  # Public storefront (fake, resettable data). /api + /hitl go to the API, the
+  # MailHog inbox is exposed under /mailhog, everything else serves the SPA.
+  ingress:
+    subdomain: flourish-and-blotts
+    temporalAuthRequired: false
+    routes:
+      - pathPrefix: /api
+        component: api
+        port: http
+      - pathPrefix: /hitl
+        component: api
+        port: http
+      - pathPrefix: /mailhog
+        component: mailhog
+        port: http
+      - pathPrefix: /
+        component: ui
+        port: http
+
+  # Static catalog endpoint — 200 only once the API is up and connected to
+  # Temporal through the proxy, so it doubles as a readiness gate.
+  smokeCheck:
+    path: /api/catalog
+    expectedStatus: 200
+    timeoutSeconds: 10
