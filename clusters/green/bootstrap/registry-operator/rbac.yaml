@@ -112,8 +112,10 @@ rules:
       - workerdeployments
     verbs:
       - get
+      - list
       - create
       - patch
+      - delete
   - apiGroups:
       - source.toolkit.fluxcd.io
     resources:

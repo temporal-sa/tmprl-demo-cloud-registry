@@ -113,10 +113,14 @@ def test_demoprojectrevision_crd_registered_in_kustomization():
 # --- Task 1.3: RBAC (cluster-scoped + finalizers subresource) ---
 
 RBAC = ROOT / "clusters" / "sa-demo" / "bootstrap" / "registry-operator" / "rbac.yaml"
+REGISTRY_OPERATOR_RBACS = tuple(
+    ROOT / "clusters" / cluster / "bootstrap" / "registry-operator" / "rbac.yaml"
+    for cluster in ("blue", "green", "sa-demo")
+)
 
 
-def _cluster_role_rules() -> list[dict]:
-    docs = [d for d in yaml.safe_load_all(RBAC.read_text()) if d]
+def _cluster_role_rules(path: Path = RBAC) -> list[dict]:
+    docs = [d for d in yaml.safe_load_all(path.read_text()) if d]
     cluster_role = next(d for d in docs if d.get("kind") == "ClusterRole")
     return cluster_role["rules"]
 
@@ -156,9 +160,14 @@ def test_rbac_covers_ownerreference_patch_targets():
     assert {"get", "patch", "delete"} <= _verbs_for(rules, "", "namespaces")
     assert {"get", "patch", "delete"} <= _verbs_for(rules, "apps", "deployments")
     assert {"get", "patch", "delete"} <= _verbs_for(rules, "", "services")
-    assert {"get", "create", "patch"} <= _verbs_for(
-        rules, "temporal.io", "workerdeployments"
-    )
+
+
+def test_all_registry_operator_rbac_covers_temporal_teardown():
+    required = {"get", "list", "create", "patch", "delete"}
+    for rbac in REGISTRY_OPERATOR_RBACS:
+        rules = _cluster_role_rules(rbac)
+        assert required <= _verbs_for(rules, "temporal.io", "workerdeployments")
+        assert required <= _verbs_for(rules, "temporal.io", "connections")
 
 
 # --- Task 1.4: kube helpers + merge-patch content-type guard ---

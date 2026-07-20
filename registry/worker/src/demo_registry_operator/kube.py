@@ -993,6 +993,128 @@ def delete_external_secret(namespace: str, name: str, *, dry_run: bool = False) 
         raise
 
 
+def list_worker_deployments(
+    namespace: str,
+    *,
+    label_selector: str | None = None,
+) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CustomObjectsApi().list_namespaced_custom_object(
+        TEMPORAL_WORKER_CONTROLLER_GROUP,
+        TEMPORAL_WORKER_CONTROLLER_VERSION,
+        namespace,
+        TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+        label_selector=label_selector,
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def read_worker_deployment(namespace: str, name: str) -> dict[str, Any] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        resource = client.CustomObjectsApi().get_namespaced_custom_object(
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            namespace,
+            TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+            name,
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return resource if isinstance(resource, dict) else None
+
+
+def delete_worker_deployment(
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CustomObjectsApi().delete_namespaced_custom_object(
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            namespace,
+            TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+            name,
+        )
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
+def list_connections(
+    namespace: str,
+    *,
+    label_selector: str | None = None,
+) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CustomObjectsApi().list_namespaced_custom_object(
+        TEMPORAL_WORKER_CONTROLLER_GROUP,
+        TEMPORAL_WORKER_CONTROLLER_VERSION,
+        namespace,
+        TEMPORAL_CONNECTION_PLURAL,
+        label_selector=label_selector,
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def read_connection(namespace: str, name: str) -> dict[str, Any] | None:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        resource = client.CustomObjectsApi().get_namespaced_custom_object(
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            namespace,
+            TEMPORAL_CONNECTION_PLURAL,
+            name,
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return resource if isinstance(resource, dict) else None
+
+
+def delete_connection(
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> str:
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CustomObjectsApi().delete_namespaced_custom_object(
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            namespace,
+            TEMPORAL_CONNECTION_PLURAL,
+            name,
+        )
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
 def list_deployments(
     namespace: str,
     *,
