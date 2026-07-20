@@ -142,6 +142,80 @@ def test_worker_rollout_waits_for_temporal_state_fetch_failure(monkeypatch):
     assert result.status["phase"] == "Ready", result.status
 
 
+def test_worker_resources_wait_for_external_secrets_before_apply(monkeypatch):
+    apply_calls: list[list[str]] = []
+    secret_reads = 0
+    monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
+    monkeypatch.setattr(reconcile.time, "sleep", lambda _: None)
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda *args: None)
+
+    rendered = [
+        {
+            "apiVersion": "external-secrets.io/v1",
+            "kind": "ExternalSecret",
+            "metadata": {
+                "name": "temporal-worker-runtime",
+                "namespace": "candidate",
+            },
+        },
+        {
+            "apiVersion": "temporal.io/v1alpha1",
+            "kind": "Connection",
+            "metadata": {"name": "temporal", "namespace": "candidate"},
+        },
+        {
+            "apiVersion": "temporal.io/v1alpha1",
+            "kind": "WorkerDeployment",
+            "metadata": {"name": "retrieval-v2", "namespace": "candidate"},
+        },
+    ]
+
+    def fake_apply(resources, *, dry_run):
+        assert dry_run is False
+        apply_calls.append([resource["kind"] for resource in resources])
+        return [
+            {
+                "apiVersion": resource["apiVersion"],
+                "kind": resource["kind"],
+                "name": resource["metadata"]["name"],
+                "namespace": resource["metadata"]["namespace"],
+                "action": "applied",
+            }
+            for resource in resources
+        ]
+
+    def fake_read_external_secret(namespace, name):
+        nonlocal secret_reads
+        secret_reads += 1
+        ready = secret_reads > 1
+        return {
+            "name": name,
+            "namespace": namespace,
+            "phase": "Ready" if ready else "Waiting",
+            "ready": ready,
+        }
+
+    monkeypatch.setattr(reconcile.kube, "apply_resources", fake_apply)
+    monkeypatch.setattr(
+        reconcile.kube,
+        "read_external_secret_status",
+        fake_read_external_secret,
+    )
+
+    applied = reconcile.apply_resources_with_worker_secret_barrier(rendered)
+
+    assert apply_calls == [
+        ["ExternalSecret"],
+        ["Connection", "WorkerDeployment"],
+    ]
+    assert secret_reads == 2
+    assert [resource["kind"] for resource in applied] == [
+        "ExternalSecret",
+        "Connection",
+        "WorkerDeployment",
+    ]
+
+
 def test_worker_rollout_workflow_passes_candidate_runtime_namespace(monkeypatch):
     seen = {}
 

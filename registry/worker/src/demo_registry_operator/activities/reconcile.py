@@ -219,7 +219,7 @@ def apply_demo_project_resources(
     )
 
     try:
-        applied = kube.apply_resources(rendered_resources, dry_run=False)
+        applied = apply_resources_with_worker_secret_barrier(rendered_resources)
         external_secret_status = external_secret_sync_status(applied)
         worker_deployments_status = worker_deployment_sync_status(applied)
     except ValueError as error:
@@ -270,6 +270,69 @@ def apply_demo_project_resources(
         external_resource_block=external_resource_block,
     )
     return DemoProjectStatusResult(status)
+
+
+WORKER_SECRET_DEPENDENT_KINDS = {"Connection", "WorkerDeployment"}
+
+
+def apply_resources_with_worker_secret_barrier(
+    rendered_resources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create WorkerDeployments only after their ExternalSecrets are ready."""
+    has_worker_deployment = any(
+        resource.get("kind") == "WorkerDeployment"
+        for resource in rendered_resources
+    )
+    if not has_worker_deployment:
+        return kube.apply_resources(rendered_resources, dry_run=False)
+
+    prerequisites = [
+        resource
+        for resource in rendered_resources
+        if resource.get("kind") not in WORKER_SECRET_DEPENDENT_KINDS
+    ]
+    worker_resources = [
+        resource
+        for resource in rendered_resources
+        if resource.get("kind") in WORKER_SECRET_DEPENDENT_KINDS
+    ]
+
+    applied = kube.apply_resources(prerequisites, dry_run=False)
+    wait_for_external_secret_sync_barrier(applied)
+    applied.extend(kube.apply_resources(worker_resources, dry_run=False))
+    return applied
+
+
+def wait_for_external_secret_sync_barrier(
+    applied_resources: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Wait for External Secrets before exposing their refs to the worker controller.
+
+    The worker controller does not enqueue WorkerDeployments when a referenced
+    Secret is created. Creating the Connection or WorkerDeployment too early can
+    therefore leave the rollout permanently blocked on the initial NotFound.
+    """
+    status = external_secret_sync_status(applied_resources)
+    if status is None:
+        return None
+
+    config = WorkerConfig.from_env()
+    timeout_seconds = max(1, config.readiness_timeout_seconds)
+    deadline = time.monotonic() + timeout_seconds
+    while status.get("phase") != "Ready":
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for ExternalSecrets to become ready before "
+                f"applying WorkerDeployment resources after {timeout_seconds} seconds."
+            )
+        activity.heartbeat({
+            "phase": status.get("phase"),
+            "externalSecrets": status.get("resources", []),
+        })
+        time.sleep(config.readiness_poll_seconds)
+        status = external_secret_sync_status(applied_resources)
+
+    return status
 
 
 @activity.defn
