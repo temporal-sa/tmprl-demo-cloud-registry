@@ -1,51 +1,54 @@
-# Blue's operator runs as a single self-contained worker+watch process (P5 e2e /
-# cutover prep). Unlike the pet's split (a scaled-to-zero watch/bootstrap handing
-# off to a self-rendered versioned WorkerDeployment), blue runs one Deployment
-# that both polls its color task queue (registry-management-blue) AND watches
-# DemoProject CRs — enough to reconcile demos on blue without the self-management
-# dance. Worker versioning is intentionally off (no TEMPORAL_DEPLOYMENT_NAME), so
-# the namespace-wide worker-update batch signal never runs here.
+# Blue's operator uses the pet's SELF-MANAGING split (P8 phase B), color-aware:
+#   - THIS is the bootstrap "watch" Deployment: watch-only (WORKER_ENABLED=false),
+#     replicas:0 in steady state (the self-rendered operator is live and self-manages).
+#     On a cold start it is scaled to 1; in WATCH_MODE=bootstrap it reconciles the
+#     registry.yaml self-demo, which self-renders the REAL operator as the versioned
+#     WorkerDeployment registry-operator-blue (GAP-2 color suffix), then scales itself
+#     back to 0 once WATCH_HANDOFF_DEPLOYMENT has a current, ready build.
+#   - The self-rendered registry-operator-blue worker is what polls
+#     registry-management-blue and reconciles the catalog; its image comes from the
+#     canary-gated self-build, NOT this manifest. The image here is only the bootstrap
+#     renderer, pinned to the GAP-fixed seed (bumped on cold-start cutover, not by Flux
+#     image-automation: the self-build tags git-<sha>, which is unorderable for an
+#     ImagePolicy — a P8 open item).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: registry-operator
+  name: registry-operator-watch
   namespace: tmprl-dem-cld-registry-operator
   labels:
     app.kubernetes.io/name: registry-operator
-    app.kubernetes.io/component: operator
+    app.kubernetes.io/component: watch
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: registry-operator
-      app.kubernetes.io/component: operator
+      app.kubernetes.io/component: watch
   template:
     metadata:
       labels:
         app.kubernetes.io/name: registry-operator
-        app.kubernetes.io/component: operator
+        app.kubernetes.io/component: watch
     spec:
       serviceAccountName: registry-operator
-      # Same dnsConfig the operator stamps on every workload it renders
-      # (resources.workload_dns_config). The Temporal Cloud endpoint is a 4-dot
-      # FQDN; with the default ndots:5 glibc tries cluster search domains first,
-      # and a dropped lookup wedges the worker's gRPC DNS resolver in a permanent
-      # "dns error" poll-retry loop. ndots:2 resolves the FQDN absolute-first;
-      # single-request-reopen serializes A/AAAA to dodge the conntrack race.
+      # Same ndots dnsConfig as the self-rendered worker: the watch opens a Temporal
+      # Cloud gRPC connection (signal-with-start of entity workflows), and the 4-dot
+      # TC FQDN wedges the gRPC resolver under the default ndots:5 (P5 gotcha).
       dnsConfig:
         options:
           - name: ndots
             value: "2"
           - name: single-request-reopen
       containers:
-        - name: operator
+        - name: watch
           image: 429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/worker:git-b29d1cbffeea
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
                 name: registry-operator-common-config
             - configMapRef:
-                name: registry-operator-config
+                name: registry-operator-watch-config
             - secretRef:
                 name: registry-worker-temporal
             - secretRef:
@@ -54,8 +57,8 @@ spec:
                 name: instruqt-cli
           resources:
             requests:
-              cpu: 250m
-              memory: 512Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: 500m
+              memory: 512Mi

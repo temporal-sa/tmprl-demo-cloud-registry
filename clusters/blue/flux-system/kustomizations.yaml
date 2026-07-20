@@ -280,7 +280,7 @@ spec:
   healthChecks:
     - apiVersion: apps/v1
       kind: Deployment
-      name: registry-operator
+      name: registry-operator-watch
       namespace: tmprl-dem-cld-registry-operator
 ---
 # Operator self-management (P8 phase A). The registry.yaml self-demo (kept at
