@@ -1049,12 +1049,67 @@ def prune_stale_runtime_candidates_impl(
     previous_runtime_namespace: str | None = None,
 ) -> dict[str, Any]:
     namespace = resources.project_namespace(demo_project)
+    if (
+        isinstance(active_runtime_namespace, str)
+        and active_runtime_namespace
+        and active_runtime_namespace != namespace
+    ):
+        stale_runtime_namespaces: list[str] = []
+        if (
+            isinstance(previous_runtime_namespace, str)
+            and previous_runtime_namespace
+        ):
+            stale_runtime_namespaces.append(previous_runtime_namespace)
+        stale_runtime_namespaces.extend(runtime_namespaces_for_project(demo_project))
+
+        namespace_prunes: list[dict[str, Any]] = []
+        for stale_namespace in dict.fromkeys(stale_runtime_namespaces):
+            if stale_namespace in {namespace, active_runtime_namespace}:
+                continue
+            action = delete_runtime_namespace_in_dependency_order(stale_namespace)
+            namespace_prunes.append({
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "name": stale_namespace,
+                "rolloutVersion": active_version,
+                "action": action,
+                "role": (
+                    "previous-runtime"
+                    if stale_namespace == previous_runtime_namespace
+                    else "stale-runtime"
+                ),
+            })
+
+        action = delete_runtime_namespace_in_dependency_order(namespace)
+        namespace_prunes.append({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "name": namespace,
+            "rolloutVersion": active_version,
+            "action": action,
+            "role": "legacy-base",
+        })
+
+        deleted = [
+            item for item in namespace_prunes if item.get("action") != "not-found"
+        ]
+        return {
+            "phase": "Pruned" if deleted else "Skipped",
+            "message": (
+                f"Deleted {len(deleted)} stale namespace(s)."
+                if deleted
+                else "No stale runtime namespaces found."
+            ),
+            "activeVersion": active_version,
+            "activeRuntimeNamespace": active_runtime_namespace,
+            "resources": namespace_prunes,
+        }
+
     namespace_prunes: list[dict[str, Any]] = []
     if (
         isinstance(previous_runtime_namespace, str)
         and previous_runtime_namespace
         and previous_runtime_namespace != namespace
-        and previous_runtime_namespace != active_runtime_namespace
     ):
         action = delete_runtime_namespace_in_dependency_order(
             previous_runtime_namespace
@@ -1066,21 +1121,6 @@ def prune_stale_runtime_candidates_impl(
             "rolloutVersion": active_version,
             "action": action,
             "role": "previous-runtime",
-        })
-
-    if (
-        isinstance(active_runtime_namespace, str)
-        and active_runtime_namespace
-        and active_runtime_namespace != namespace
-    ):
-        action = delete_runtime_namespace_in_dependency_order(namespace)
-        namespace_prunes.append({
-            "apiVersion": "v1",
-            "kind": "Namespace",
-            "name": namespace,
-            "rolloutVersion": active_version,
-            "action": action,
-            "role": "legacy-base",
         })
 
     if namespace_prunes:

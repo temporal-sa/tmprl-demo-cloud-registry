@@ -195,6 +195,30 @@ def status_with_serverless_lambda(
     return merged
 
 
+def status_with_temporal_runtime_secret_path(
+    status: dict[str, Any],
+    demo_project: dict[str, Any],
+) -> dict[str, Any]:
+    if not resources.temporal_components(demo_project):
+        return status
+    return {
+        **status,
+        "temporalRuntimeSecretPath": resources.temporal_secret_remote_path(
+            demo_project
+        ),
+    }
+
+
+def previous_reconcile_status(
+    workflow_status: dict[str, Any],
+    demo_project: dict[str, Any],
+) -> dict[str, Any]:
+    persisted_status = demo_project.get("status")
+    if not isinstance(persisted_status, dict):
+        persisted_status = {}
+    return {**persisted_status, **workflow_status}
+
+
 def status_reconcile_identity(status: dict[str, Any]) -> dict[str, str] | None:
     reconcile_key = status.get("reconcileKey")
     if not isinstance(reconcile_key, str) or not reconcile_key:
@@ -719,7 +743,8 @@ class DemoProjectWorkflow:
             return False
 
         self._reconcile_sequence += 1
-        previous_status = self._status
+        self._recover_temporal_runtime_secret_suffix(demo_project)
+        previous_status = previous_reconcile_status(self._status, demo_project)
         self._status = {
             "project": project_name,
             "phase": (
@@ -764,9 +789,12 @@ class DemoProjectWorkflow:
             return await self._handle_reconcile_failure(
                 project_name, demo_project, error
             )
-        self._status = status_with_serverless_lambda(
-            runtime_status,
-            serverless_status,
+        self._status = status_with_temporal_runtime_secret_path(
+            status_with_serverless_lambda(
+                runtime_status,
+                serverless_status,
+            ),
+            external.demo_project,
         )
         await self._record_status(external.demo_project, self._status)
         return True
@@ -828,6 +856,23 @@ class DemoProjectWorkflow:
             self._temporal_runtime_secret_suffix,
         )
         return demo_project_with_temporal_runtime_secret_path(demo_project, path)
+
+    def _recover_temporal_runtime_secret_suffix(
+        self,
+        demo_project: dict[str, Any],
+    ) -> None:
+        if self._temporal_runtime_secret_suffix is not None:
+            return
+        status = demo_project.get("status")
+        runtime_secret_path = resources.temporal_runtime_secret_path_from_status(
+            status
+        )
+        suffix = resources.temporal_secret_suffix_from_remote_path(
+            demo_project,
+            runtime_secret_path,
+        )
+        if suffix is not None:
+            self._temporal_runtime_secret_suffix = suffix
 
     def _external_plan_with_new_runtime_secret_path(
         self,

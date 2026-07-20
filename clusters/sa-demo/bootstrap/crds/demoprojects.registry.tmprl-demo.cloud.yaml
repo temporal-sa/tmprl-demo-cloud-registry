@@ -242,6 +242,8 @@ spec:
                   type: string
                 activeRuntimeNamespace:
                   type: string
+                temporalRuntimeSecretPath:
+                  type: string
                 activeImages:
                   type: object
                   additionalProperties:

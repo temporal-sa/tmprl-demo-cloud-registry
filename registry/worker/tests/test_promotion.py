@@ -77,6 +77,11 @@ def stub_empty_worker_controller_resources(monkeypatch):
         "list_connections",
         lambda namespace, *, label_selector=None: [],
     )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_namespaces",
+        lambda *, label_selector: [],
+    )
 
 
 def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
@@ -689,6 +694,49 @@ def test_promote_candidate_prunes_legacy_base_namespace(monkeypatch):
     assert deleted == [("tmprl-dem-cld-banking-money-transfer", False)]
     assert result["phase"] == "Pruned"
     assert result["resources"][0]["role"] == "legacy-base"
+
+
+def test_promote_candidate_discovers_and_prunes_all_stale_runtime_namespaces(
+    monkeypatch,
+):
+    deleted = []
+    stub_empty_worker_controller_resources(monkeypatch)
+    project_namespace = "tmprl-dem-cld-banking-money-transfer"
+    active_namespace = f"{project_namespace}-new12"
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_namespaces",
+        lambda *, label_selector: [
+            {"name": active_namespace},
+            {"name": f"{project_namespace}-old12"},
+            {"name": f"{project_namespace}-orphan12"},
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_namespace",
+        lambda name, *, dry_run: deleted.append(name) or "deleting",
+    )
+
+    result = reconcile.prune_stale_runtime_candidates(
+        reconcile.PruneStaleRuntimeCandidatesRequest(
+            demo_project=banking_project(),
+            active_version="git-new",
+            active_runtime_namespace=active_namespace,
+            previous_runtime_namespace=f"{project_namespace}-old12",
+        )
+    ).status
+
+    assert deleted == [
+        f"{project_namespace}-old12",
+        f"{project_namespace}-orphan12",
+        project_namespace,
+    ]
+    assert [item["role"] for item in result["resources"]] == [
+        "previous-runtime",
+        "stale-runtime",
+        "legacy-base",
+    ]
 
 
 def test_restore_active_runtime_routes_uses_explicit_active_version(monkeypatch):

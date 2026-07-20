@@ -50,6 +50,7 @@ def test_demoproject_status_keeps_existing_enumerated_keys():
         "candidateRolloutStatus",
         "workerDeploymentStatus",
         "reconcileKey",
+        "temporalRuntimeSecretPath",
     ):
         assert key in status_props
 

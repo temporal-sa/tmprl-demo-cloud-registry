@@ -48,6 +48,7 @@ from demo_registry_operator.resources import (
     source_watch_required,
     source_watch_resources,
     spec_of,
+    temporal_runtime_secret_path_from_status,
 )
 
 
@@ -607,11 +608,15 @@ def active_version_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     status = demo_project.get("status") if isinstance(demo_project, dict) else None
     if not isinstance(status, dict):
         return {}
-    return {
+    active_status = {
         key: copy.deepcopy(status[key])
         for key in ACTIVE_VERSION_STATUS_KEYS
         if status.get(key) is not None
     }
+    runtime_secret_path = temporal_runtime_secret_path_from_status(status)
+    if runtime_secret_path is not None:
+        active_status["temporalRuntimeSecretPath"] = runtime_secret_path
+    return active_status
 
 
 def workflow_signal_payload(

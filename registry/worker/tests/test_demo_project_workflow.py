@@ -20,9 +20,11 @@ from demo_registry_operator.workflows.demo_project import (
     demo_project_with_temporal_runtime_secret_path,
     project_has_active_version,
     remember_completed_reconcile_identity,
+    previous_reconcile_status,
     previous_temporal_search_attributes,
     reconcile_identity,
     status_reconcile_identity,
+    status_with_temporal_runtime_secret_path,
     temporal_api_key_rotation_state,
     temporal_candidate_secret_token,
     temporal_search_attributes_reconcile_status,
@@ -592,6 +594,74 @@ def test_runtime_secret_suffix_is_carried_from_run_request():
     )
 
     assert workflow._temporal_runtime_secret_suffix == "stable123"
+
+
+def test_runtime_secret_suffix_recovers_from_persisted_status():
+    workflow = workflow_instance()
+    demo_project = project()
+    demo_project["status"] = {
+        "temporalRuntimeSecretPath": "tmprl-dem-cld/demo/temporal-stable123",
+    }
+
+    workflow._recover_temporal_runtime_secret_suffix(demo_project)
+
+    assert workflow._temporal_runtime_secret_suffix == "stable123"
+    rendered = workflow._demo_project_with_known_runtime_secret_path(demo_project)
+    assert rendered["spec"]["temporal"]["runtimeSecretPath"] == (
+        "tmprl-dem-cld/demo/temporal-stable123"
+    )
+
+
+def test_runtime_secret_suffix_recovers_from_legacy_nested_status():
+    workflow = workflow_instance()
+    demo_project = project()
+    demo_project["status"] = {
+        "externalResources": {
+            "secretsManager": {
+                "temporalCredentials": {
+                    "path": "tmprl-dem-cld/demo/temporal-legacy123",
+                }
+            }
+        }
+    }
+
+    workflow._recover_temporal_runtime_secret_suffix(demo_project)
+
+    assert workflow._temporal_runtime_secret_suffix == "legacy123"
+
+
+def test_previous_reconcile_status_recovers_persisted_active_runtime():
+    demo_project = project()
+    demo_project["status"] = {
+        "phase": "Promoted",
+        "activeRuntimeNamespace": "tmprl-dem-cld-demo-old12",
+        "activeRevision": {"name": "demo-old12"},
+    }
+
+    previous = previous_reconcile_status(
+        {"phase": "Starting", "message": "new workflow"},
+        demo_project,
+    )
+
+    assert previous["phase"] == "Starting"
+    assert previous["activeRuntimeNamespace"] == "tmprl-dem-cld-demo-old12"
+    assert previous["activeRevision"] == {"name": "demo-old12"}
+
+
+def test_status_persists_temporal_runtime_secret_path():
+    demo_project = demo_project_with_temporal_runtime_secret_path(
+        project(),
+        "tmprl-dem-cld/demo/temporal-stable123",
+    )
+
+    status = status_with_temporal_runtime_secret_path(
+        {"phase": "Ready"},
+        demo_project,
+    )
+
+    assert status["temporalRuntimeSecretPath"] == (
+        "tmprl-dem-cld/demo/temporal-stable123"
+    )
 
 
 def test_runtime_secret_path_moves_from_missing_legacy_to_workflow_suffix(

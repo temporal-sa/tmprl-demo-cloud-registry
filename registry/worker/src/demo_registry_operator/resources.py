@@ -4855,6 +4855,51 @@ def temporal_secret_remote_path_with_suffix(
     return f"{project_secret_prefix(demo_project)}/temporal-{token}"
 
 
+def temporal_secret_suffix_from_remote_path(
+    demo_project: dict[str, Any],
+    remote_path: Any,
+) -> str | None:
+    if not isinstance(remote_path, str):
+        return None
+    prefix = f"{project_secret_prefix(demo_project)}/temporal-"
+    path = remote_path.strip()
+    if not path.startswith(prefix):
+        return None
+    suffix = path[len(prefix) :]
+    if not suffix or "/" in suffix:
+        return None
+    return suffix
+
+
+def temporal_runtime_secret_path_from_status(status: Any) -> str | None:
+    if not isinstance(status, dict):
+        return None
+
+    persisted_path = status.get("temporalRuntimeSecretPath")
+    if isinstance(persisted_path, str) and persisted_path.strip():
+        return persisted_path.strip()
+
+    external_resources = status.get("externalResources")
+    if not isinstance(external_resources, dict):
+        return None
+    secrets_manager = external_resources.get("secretsManager")
+    if isinstance(secrets_manager, dict):
+        temporal_credentials = secrets_manager.get("temporalCredentials")
+        if isinstance(temporal_credentials, dict):
+            path = temporal_credentials.get("path")
+            if isinstance(path, str) and path.strip():
+                return path.strip()
+
+    temporal_cloud = external_resources.get("temporalCloud")
+    if isinstance(temporal_cloud, dict):
+        api_key = temporal_cloud.get("apiKey")
+        if isinstance(api_key, dict):
+            path = api_key.get("secretRemotePath")
+            if isinstance(path, str) and path.strip():
+                return path.strip()
+    return None
+
+
 def temporal_mtls_ca_secret_remote_path(demo_project: dict[str, Any]) -> str:
     return f"{temporal_secret_remote_path(demo_project)}/ca"
 

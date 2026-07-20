@@ -245,3 +245,33 @@ def test_worker_rollout_workflow_passes_candidate_runtime_namespace(monkeypatch)
         seen["request"].runtime_namespace
         == "tmprl-dem-cld-operator-canary-mtls-abc-8dc6d"
     )
+
+
+def test_revision_runtime_namespace_teardown_uses_dependency_ordered_activity(
+    monkeypatch,
+):
+    seen = {}
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        seen["activity"] = activity
+        seen["request"] = request
+        return SimpleNamespace(action="deleted")
+
+    monkeypatch.setattr(
+        kubernetes_runtime_workflow.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    runtime = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
+
+    asyncio.run(
+        runtime._teardown_revision_runtime_namespace(
+            {
+                "runtimeNamespaceEnabled": True,
+                "runtimeNamespace": "tmprl-dem-cld-demo-old12",
+            }
+        )
+    )
+
+    assert seen["activity"] is reconcile.delete_project_namespace_resource
+    assert seen["request"].namespace == "tmprl-dem-cld-demo-old12"

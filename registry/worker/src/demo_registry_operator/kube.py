@@ -671,7 +671,9 @@ def _content_type_api_client(content_type: str) -> Any:
     per-method default.
     """
     api_client = _client_module().ApiClient()
-    api_client.select_header_content_type = lambda _content_types: content_type
+    api_client.select_header_content_type = (
+        lambda _content_types, *_request_args: content_type
+    )
     return api_client
 
 

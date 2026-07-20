@@ -327,6 +327,13 @@ def test_workflow_signal_payload_carries_active_version_status():
         "activeImageVersion": "git-abc123-key-1",
         "activeImages": {"worker": "repo/worker:git-abc123"},
         "activeRuntimeNamespace": "tmprl-dem-cld-banking-money-transfer-7aa3",
+        "externalResources": {
+            "secretsManager": {
+                "temporalCredentials": {
+                    "path": "tmprl-dem-cld/banking-money-transfer/temporal-stable123",
+                }
+            }
+        },
         "activeRevision": {"name": "banking-money-transfer-deadbeef"},
         "activeRouteServices": {"web": "web-git-abc123-key-1"},
         "conditions": [{"type": "Ready", "status": "True"}],
@@ -340,6 +347,9 @@ def test_workflow_signal_payload_carries_active_version_status():
         "activeImageVersion": "git-abc123-key-1",
         "activeImages": {"worker": "repo/worker:git-abc123"},
         "activeRuntimeNamespace": "tmprl-dem-cld-banking-money-transfer-7aa3",
+        "temporalRuntimeSecretPath": (
+            "tmprl-dem-cld/banking-money-transfer/temporal-stable123"
+        ),
         "activeRevision": {"name": "banking-money-transfer-deadbeef"},
         "activeRouteServices": {"web": "web-git-abc123-key-1"},
     }

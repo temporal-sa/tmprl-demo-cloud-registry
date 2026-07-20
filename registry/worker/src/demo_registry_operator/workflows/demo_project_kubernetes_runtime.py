@@ -170,6 +170,9 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 "pruneStatus": prune_status,
                 "prunedResources": prune_status.get("resources", []),
             }
+            reconcile_status = await self._finalize_promoted_revision(
+                reconcile_status
+            )
 
         if reconcile_status.get("phase") != "SmokeCheckPending":
             return messages.DemoProjectKubernetesRuntimeResult(
@@ -684,6 +687,22 @@ class DemoProjectKubernetesRuntimeWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
 
+    async def _teardown_revision_runtime_namespace(
+        self,
+        ref_summary: dict[str, Any] | None,
+    ) -> None:
+        if not ref_summary or not ref_summary.get("runtimeNamespaceEnabled"):
+            return
+        namespace = ref_summary.get("runtimeNamespace")
+        if not isinstance(namespace, str) or not namespace:
+            return
+        await workflow.execute_activity(
+            reconcile_activities.delete_project_namespace_resource,
+            reconcile_activities.ProjectNamespaceDeleteRequest(namespace=namespace),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
     async def _plan_revision_deletes(
         self,
         project: str,
@@ -791,11 +810,12 @@ class DemoProjectKubernetesRuntimeWorkflow:
         cleanup: dict[str, Any] = {"phase": "Skipped", "decision": decision}
         for target in decision.get("delete") or []:
             allowed = require_allowed_revision_delete(target, decision)
+            target_summary = revision_summary_from_delete_decision(decision, allowed)
             await self._set_revision_phase(
                 allowed, "Superseded", "Superseded by a newer revision."
             )
+            await self._teardown_revision_runtime_namespace(target_summary)
             await self._delete_revision(allowed)
-            target_summary = revision_summary_from_delete_decision(decision, allowed)
             cleanup = await self._wait_revision_cleanup(target_summary or revision)
         await self._patch_revision_refs(
             self._project, {"revisionCleanupStatus": cleanup}
