@@ -414,6 +414,7 @@ def delete_runtime_namespace_in_dependency_order(namespace: str) -> str:
         resources_to_delete=worker_deployments,
         delete_resource=kube.delete_worker_deployment,
         read_resource=kube.read_worker_deployment,
+        force_remove_finalizers=kube.force_remove_worker_deployment_finalizers,
         deadline=deadline,
         timeout_seconds=timeout_seconds,
         poll_seconds=max(1, config.readiness_poll_seconds),
@@ -429,6 +430,7 @@ def delete_runtime_namespace_in_dependency_order(namespace: str) -> str:
         resources_to_delete=connections,
         delete_resource=kube.delete_connection,
         read_resource=kube.read_connection,
+        force_remove_finalizers=kube.force_remove_connection_finalizers,
         deadline=deadline,
         timeout_seconds=timeout_seconds,
         poll_seconds=max(1, config.readiness_poll_seconds),
@@ -457,6 +459,7 @@ def delete_namespaced_resources_sequentially(
     resources_to_delete: list[dict[str, Any]],
     delete_resource: Callable[..., str],
     read_resource: Callable[[str, str], dict[str, Any] | None],
+    force_remove_finalizers: Callable[..., str],
     deadline: float,
     timeout_seconds: int,
     poll_seconds: int,
@@ -474,6 +477,7 @@ def delete_namespaced_resources_sequentially(
             kind=kind,
             name=name,
             read_resource=read_resource,
+            force_remove_finalizers=force_remove_finalizers,
             deadline=deadline,
             timeout_seconds=timeout_seconds,
             poll_seconds=poll_seconds,
@@ -498,16 +502,41 @@ def wait_for_namespaced_resource_deletion(
     kind: str,
     name: str,
     read_resource: Callable[[str, str], dict[str, Any] | None],
+    force_remove_finalizers: Callable[..., str],
     deadline: float,
     timeout_seconds: int,
     poll_seconds: int,
 ) -> None:
+    forced = False
     while read_resource(namespace, name) is not None:
         now = time.monotonic()
         if now >= deadline:
+            if not forced:
+                # The worker controller's `temporal.io/delete-protection` finalizer
+                # has not cleared within the graceful window — its Temporal Cloud
+                # cleanup is wedged (typically the namespace or its credential is
+                # already unreachable). Without this, the teardown activity would
+                # retry forever and the Kubernetes namespace would be stuck
+                # Terminating indefinitely. Force-remove the finalizer so teardown
+                # proceeds; server-side worker-deployment cleanup is skipped, which
+                # is acceptable because the namespace and credentials are going away.
+                activity.logger.warning(
+                    "Forcing finalizer removal on %s %s/%s after %ss; the worker "
+                    "controller did not complete Temporal-side cleanup in time.",
+                    kind,
+                    namespace,
+                    name,
+                    timeout_seconds,
+                )
+                force_remove_finalizers(namespace, name, dry_run=False)
+                forced = True
+                # Brief grace to observe Kubernetes garbage-collect the object now
+                # that the finalizer is gone, independent of the elapsed deadline.
+                deadline = now + max(1, poll_seconds) * 3
+                continue
             raise TimeoutError(
-                f"Timed out waiting for {kind} {namespace}/{name} deletion "
-                f"after {timeout_seconds} seconds; namespace was not deleted."
+                f"{kind} {namespace}/{name} still present after removing "
+                f"finalizers; namespace was not deleted."
             )
         activity.heartbeat(
             {

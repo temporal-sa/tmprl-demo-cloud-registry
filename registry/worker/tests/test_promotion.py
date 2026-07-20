@@ -1030,63 +1030,118 @@ def test_runtime_namespace_teardown_orders_worker_connection_then_namespace(
     ]
 
 
-def test_runtime_namespace_teardown_timeout_preserves_namespace(monkeypatch):
+def test_runtime_namespace_teardown_forces_wedged_finalizer(monkeypatch):
+    # When the worker controller's delete-protection finalizer never clears (its
+    # Temporal Cloud cleanup is wedged), teardown must force-remove the finalizer
+    # and still delete the namespace — otherwise the namespace is stuck
+    # Terminating forever. This automates the manual unstick.
     events = []
-    monotonic_values = iter([0.0, 0.0, 2.0])
+    state = {"forced": False}
+    monotonic_values = iter([0.0, 0.5, 2.0, 5.0, 5.1, 5.2])
     monkeypatch.setenv("DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS", "1")
     monkeypatch.setenv("DEMO_REGISTRY_READINESS_POLL_SECONDS", "1")
     monkeypatch.setattr(
         reconcile.kube,
         "list_worker_deployments",
-        lambda namespace, *, label_selector=None: [
-            {"metadata": {"name": "worker"}}
-        ],
+        lambda namespace, *, label_selector=None: [{"metadata": {"name": "worker"}}],
     )
     monkeypatch.setattr(
         reconcile.kube,
         "delete_worker_deployment",
-        lambda namespace, name, *, dry_run: events.append(
-            ("delete", "WorkerDeployment", name)
-        )
+        lambda namespace, name, *, dry_run: events.append(("delete-wd", name))
         or "deleting",
     )
     monkeypatch.setattr(
         reconcile.kube,
         "read_worker_deployment",
-        lambda namespace, name: {"metadata": {"name": name}},
+        # Stays present until the finalizer is force-removed, then gone.
+        lambda namespace, name: None if state["forced"] else {"metadata": {"name": name}},
+    )
+
+    def force_wd(namespace, name, *, dry_run):
+        state["forced"] = True
+        events.append(("force-wd", name))
+        return "finalizers-removed"
+
+    monkeypatch.setattr(
+        reconcile.kube, "force_remove_worker_deployment_finalizers", force_wd
     )
     monkeypatch.setattr(
         reconcile.kube,
         "list_connections",
-        lambda namespace, *, label_selector=None: events.append(
-            ("list", "Connection")
-        )
-        or [],
+        lambda namespace, *, label_selector=None: [],
     )
     monkeypatch.setattr(
         reconcile.kube,
         "delete_namespace",
-        lambda name, *, dry_run: events.append(("delete", "Namespace", name)),
+        lambda name, *, dry_run: events.append(("delete-ns", name)) or "deleting",
     )
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda details: None)
     monkeypatch.setattr(
-        reconcile.activity,
-        "heartbeat",
-        lambda details: events.append(("heartbeat", details["name"])),
+        reconcile.activity, "logger", type("L", (), {"warning": staticmethod(lambda *a, **k: None)})
     )
     monkeypatch.setattr(reconcile.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(reconcile.time, "monotonic", lambda: next(monotonic_values))
 
-    with pytest.raises(TimeoutError, match="namespace was not deleted"):
-        reconcile.delete_project_namespace_resource(
-            reconcile.ProjectNamespaceDeleteRequest(
-                "tmprl-dem-cld-banking-money-transfer"
-            )
-        )
+    result = reconcile.delete_project_namespace_resource(
+        reconcile.ProjectNamespaceDeleteRequest("tmprl-dem-cld-banking-money-transfer")
+    ).action
 
-    assert events == [
-        ("delete", "WorkerDeployment", "worker"),
-        ("heartbeat", "worker"),
-    ]
+    assert result == "deleting"
+    # Finalizer force-removed, and the namespace was still deleted (after the force).
+    assert ("force-wd", "worker") in events
+    assert ("delete-ns", "tmprl-dem-cld-banking-money-transfer") in events
+    assert events.index(("force-wd", "worker")) < events.index(
+        ("delete-ns", "tmprl-dem-cld-banking-money-transfer")
+    )
+
+
+def test_runtime_namespace_teardown_raises_if_still_present_after_force(monkeypatch):
+    # If the object is still present even after finalizers are force-removed
+    # (e.g. another finalizer, or an API problem), fail with a retryable timeout
+    # rather than silently deleting the namespace out from under it.
+    monotonic_values = iter([0.0, 2.0, 6.0, 6.1])
+    monkeypatch.setenv("DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("DEMO_REGISTRY_READINESS_POLL_SECONDS", "1")
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_worker_deployments",
+        lambda namespace, *, label_selector=None: [{"metadata": {"name": "worker"}}],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_worker_deployment",
+        lambda namespace, name, *, dry_run: "deleting",
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "read_worker_deployment",
+        lambda namespace, name: {"metadata": {"name": name}},  # never disappears
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "force_remove_worker_deployment_finalizers",
+        lambda namespace, name, *, dry_run: "finalizers-removed",
+    )
+    deleted_namespace = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_namespace",
+        lambda name, *, dry_run: deleted_namespace.append(name) or "deleting",
+    )
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda details: None)
+    monkeypatch.setattr(
+        reconcile.activity, "logger", type("L", (), {"warning": staticmethod(lambda *a, **k: None)})
+    )
+    monkeypatch.setattr(reconcile.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(reconcile.time, "monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(TimeoutError, match="after removing finalizers"):
+        reconcile.delete_project_namespace_resource(
+            reconcile.ProjectNamespaceDeleteRequest("tmprl-dem-cld-banking-money-transfer")
+        )
+    # Namespace must NOT be deleted while a CR is still present.
+    assert deleted_namespace == []
 
 
 def test_runtime_namespace_teardown_waits_for_each_worker_sequentially(

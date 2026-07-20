@@ -1115,6 +1115,62 @@ def delete_connection(
         raise
 
 
+def force_remove_worker_deployment_finalizers(
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> str:
+    return _force_remove_custom_object_finalizers(
+        TEMPORAL_WORKER_DEPLOYMENT_PLURAL, namespace, name, dry_run=dry_run
+    )
+
+
+def force_remove_connection_finalizers(
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> str:
+    return _force_remove_custom_object_finalizers(
+        TEMPORAL_CONNECTION_PLURAL, namespace, name, dry_run=dry_run
+    )
+
+
+def _force_remove_custom_object_finalizers(
+    plural: str,
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> str:
+    """Clear finalizers on a wedged worker-controller CR so teardown can proceed.
+
+    Used only as a last resort when the controller's `temporal.io/delete-protection`
+    finalizer cannot clear (its Temporal Cloud cleanup is unreachable). Removing the
+    finalizer lets Kubernetes garbage-collect the object; server-side cleanup is
+    skipped, which is acceptable because the namespace/credentials are being deleted.
+    """
+    if dry_run:
+        return "planned"
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CustomObjectsApi().patch_namespaced_custom_object(
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            namespace,
+            plural,
+            name,
+            {"metadata": {"finalizers": []}},
+        )
+        return "finalizers-removed"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
 def list_deployments(
     namespace: str,
     *,
