@@ -92,6 +92,34 @@ def test_temporal_cloud_runtime_canary_timeout_is_retryable_provider_error():
     assert error.non_retryable is False
 
 
+def test_temporal_cloud_resource_version_mismatch_is_retryable():
+    # A failed async operation reports "resource version mismatch" — an
+    # optimistic-concurrency conflict on the namespace spec. It must retry, not
+    # fail the workflow as a terminal ProviderConfigurationError.
+    error = external_resources.temporal_cloud_application_error(
+        RuntimeError(
+            "Temporal Cloud operation create-search-attribute:ns:RepairAttempts "
+            "did not succeed: resource version mismatch"
+        ),
+        operation="Reconcile Temporal Cloud search attributes",
+    )
+
+    assert error.type == PROVIDER_TRANSIENT_ERROR
+    assert error.non_retryable is False
+
+
+def test_temporal_cloud_namespace_not_active_is_retryable():
+    # A freshly-created namespace is briefly not ACTIVE; spec updates against it
+    # fail until it finishes provisioning. Retry until it converges.
+    error = external_resources.temporal_cloud_application_error(
+        RuntimeError("namespace tmprl-dem-cld-x.acct1 is not active"),
+        operation="Reconcile Temporal Cloud search attributes",
+    )
+
+    assert error.type == PROVIDER_TRANSIENT_ERROR
+    assert error.non_retryable is False
+
+
 def test_temporal_cloud_cleanup_validation_error_is_terminal():
     error = external_resources.temporal_cloud_application_error(
         RuntimeError("invalid namespace retention policy"),

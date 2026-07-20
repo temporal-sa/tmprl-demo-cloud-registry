@@ -398,7 +398,7 @@ def temporal_search_attributes_reconcile_status(
     namespace: str | None,
     desired: dict[str, external_resources.TemporalCloudSearchAttribute],
     previous_managed: dict[str, str],
-    results: list[external_resources.TemporalCloudSearchAttributeResult],
+    statuses: list[dict[str, Any]],
 ) -> dict[str, Any]:
     attributes: list[dict[str, Any]] = []
     managed_names: set[str] = set()
@@ -407,8 +407,7 @@ def temporal_search_attributes_reconcile_status(
     reason: str | None = None
     message: str | None = None
 
-    for result in results:
-        status = result.status
+    for status in statuses:
         phase = status.get("phase")
         if isinstance(phase, str):
             phases.add(phase)
@@ -442,7 +441,7 @@ def temporal_search_attributes_reconcile_status(
         phase = "Error"
     elif "ManualSetupRequired" in phases:
         phase = "ManualSetupRequired"
-    elif results:
+    elif statuses:
         phase = "Ready"
     else:
         phase = "NotRequired"
@@ -1272,47 +1271,33 @@ class DemoProjectWorkflow:
         previous_managed = previous_temporal_search_attributes(previous_status)
         delete_names = sorted(set(previous_managed) - set(desired))
 
-        activity_handles = [
-            workflow.execute_activity(
-                external_resources.create_or_verify_temporal_cloud_search_attribute,
-                external_resources.CreateOrVerifyTemporalCloudSearchAttributeRequest(
+        # Every search attribute mutates the same namespace spec under
+        # resource_version optimistic concurrency. Fanning out one activity per
+        # attribute (asyncio.gather) makes them race and conflict ("resource
+        # version mismatch"). Reconcile the whole set in one batched activity.
+        statuses: list[dict[str, Any]] = []
+        if desired or delete_names:
+            result = await workflow.execute_activity(
+                external_resources.reconcile_temporal_cloud_search_attributes,
+                external_resources.ReconcileTemporalCloudSearchAttributesRequest(
                     checked_at=external_plan.checked_at,
                     project=project,
                     namespace=state.namespace,
-                    search_attribute=attribute,
+                    desired=tuple(desired.values()),
+                    delete_names=tuple(delete_names),
                 ),
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
             )
-            for attribute in desired.values()
-        ]
-        activity_handles.extend(
-            workflow.execute_activity(
-                external_resources.delete_temporal_cloud_search_attribute,
-                external_resources.DeleteTemporalCloudSearchAttributeRequest(
-                    checked_at=external_plan.checked_at,
-                    project=project,
-                    namespace=state.namespace,
-                    search_attribute=external_resources.TemporalCloudSearchAttribute(
-                        name=name,
-                        type=previous_managed[name],
-                    ),
-                ),
-                start_to_close_timeout=timedelta(minutes=5),
-                heartbeat_timeout=timedelta(minutes=1),
-                retry_policy=COMMON_RETRY_POLICY,
-            )
-            for name in delete_names
-        )
+            statuses = result.statuses
 
-        results = list(await asyncio.gather(*activity_handles)) if activity_handles else []
         state.search_attributes = temporal_search_attributes_reconcile_status(
             external_plan.checked_at,
             namespace=state.namespace.namespace,
             desired=desired,
             previous_managed=previous_managed,
-            results=results,
+            statuses=statuses,
         )
 
     async def _stage_temporal_runtime_credential(

@@ -14,6 +14,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     delete_temporal_cloud_api_key,
     delete_temporal_cloud_runtime_secret,
     ensure_temporal_cloud_search_attribute,
+    ensure_temporal_cloud_search_attributes,
     delete_temporal_runtime_candidate_secret,
     delete_temporal_cloud_search_attribute_value,
     ensure_temporal_cloud_namespace,
@@ -159,6 +160,28 @@ class FakeReconciler:
         if current_type is None:
             return {"action": "not-found", "currentType": None}
         return {"action": "deleted", "currentType": current_type}
+
+    async def reconcile_search_attributes(self, qualified_name, *, desired, delete_names):
+        self.calls.append(
+            ("reconcile_search_attributes", qualified_name, tuple(desired), tuple(delete_names))
+        )
+        results = {}
+        for name, attribute_type in desired:
+            current_type = self.search_attributes.get(name)
+            if current_type == attribute_type:
+                results[name] = {"action": "verified", "currentType": current_type}
+            elif current_type is not None:
+                results[name] = {"action": "drifted", "currentType": current_type}
+            else:
+                self.search_attributes[name] = attribute_type
+                results[name] = {"action": "created", "currentType": attribute_type}
+        for name in delete_names:
+            current_type = self.search_attributes.pop(name, None)
+            if current_type is None:
+                results[name] = {"action": "not-found", "currentType": None}
+            else:
+                results[name] = {"action": "deleted", "currentType": current_type}
+        return results
 
     async def delete_namespace(self, qualified_name):
         self.calls.append(("delete_namespace", qualified_name))
@@ -387,6 +410,89 @@ def test_delete_search_attribute_deletes_requested_managed_name_only():
     assert status["phase"] == "Deleted"
     assert status["searchAttribute"]["action"] == "deleted"
     assert reconciler.search_attributes == {"ExternalAttribute": "keyword"}
+
+
+def test_reconcile_search_attributes_applies_all_in_one_operation():
+    reconciler = FakeReconciler(
+        search_attributes={"Existing": "keyword", "Stale": "bool"}
+    )
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+
+    statuses = asyncio.run(
+        ensure_temporal_cloud_search_attributes(
+            {
+                **PROJECT,
+                "spec": {
+                    **PROJECT["spec"],
+                    "temporal": {
+                        "searchAttributes": {
+                            "NewOne": {"type": "int"},
+                            "Existing": {"type": "keyword"},
+                        }
+                    },
+                },
+            },
+            namespace_status_value=namespace_status,
+            desired=[
+                {"name": "NewOne", "type": "int"},
+                {"name": "Existing", "type": "keyword"},
+            ],
+            delete_names=["Stale"],
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    # Exactly one batched namespace operation, not one per attribute.
+    assert len(reconciler.called("reconcile_search_attributes")) == 1
+    assert reconciler.called("create_or_verify_search_attribute") == []
+    assert reconciler.called("delete_search_attribute") == []
+
+    by_name = {s["searchAttribute"]["name"]: s for s in statuses}
+    assert by_name["NewOne"]["searchAttribute"]["action"] == "created"
+    assert by_name["Existing"]["searchAttribute"]["action"] == "verified"
+    assert by_name["Stale"]["searchAttribute"]["action"] == "deleted"
+    assert reconciler.search_attributes == {"Existing": "keyword", "NewOne": "int"}
+
+
+def test_reconcile_search_attributes_reports_type_drift():
+    reconciler = FakeReconciler(search_attributes={"CustomerId": "keyword"})
+    namespace_status = {
+        "namespace": {
+            "name": "tmprl-dem-cld-banking-money-transfer.acct1",
+            "grpcAddress": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+            "action": "verified",
+        }
+    }
+
+    statuses = asyncio.run(
+        ensure_temporal_cloud_search_attributes(
+            {
+                **PROJECT,
+                "spec": {
+                    **PROJECT["spec"],
+                    "temporal": {
+                        "searchAttributes": {"CustomerId": {"type": "double"}}
+                    },
+                },
+            },
+            namespace_status_value=namespace_status,
+            desired=[{"name": "CustomerId", "type": "double"}],
+            delete_names=[],
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    assert statuses[0]["phase"] == "Error"
+    assert statuses[0]["reason"] == "SearchAttributeTypeDrift"
+    assert statuses[0]["searchAttribute"]["currentType"] == "keyword"
 
 
 def test_reconcile_search_attribute_only_project_does_not_create_runtime_credentials():
@@ -1191,6 +1297,70 @@ def test_cloud_api_create_search_attribute_preserves_existing_and_retries_stale_
     ]
     assert service.updates[-1][1] == {
         "ExistingAttribute": values.SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+        "CustomerId": values.SEARCH_ATTRIBUTE_TYPE_KEYWORD,
+    }
+
+
+def test_cloud_api_reconcile_search_attributes_retries_async_resource_version_mismatch():
+    # The conflict surfaces as a FAILED async operation ("resource version
+    # mismatch"), not a synchronous update_namespace error. _update_namespace_spec
+    # must still retry against a freshly-read resource_version.
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+    from temporalio.api.cloud.operation.v1 import AsyncOperation
+
+    values = NamespaceSpec.SearchAttributeType
+
+    class FakeCloudService:
+        def __init__(self):
+            self.resource_versions = ["v1", "v2"]
+            self.updates = []
+            # First operation fails with a version conflict; the retry succeeds.
+            self.op_states = {
+                "op-1": AsyncOperation.STATE_FAILED,
+                "op-2": AsyncOperation.STATE_FULFILLED,
+            }
+
+        async def get_namespace(self, request):
+            return SimpleNamespace(
+                namespace=SimpleNamespace(
+                    spec=NamespaceSpec(),
+                    resource_version=self.resource_versions.pop(0),
+                )
+            )
+
+        async def update_namespace(self, request):
+            op_id = f"op-{len(self.updates) + 1}"
+            self.updates.append(
+                (request.resource_version, dict(request.spec.search_attributes))
+            )
+            return SimpleNamespace(
+                async_operation=SimpleNamespace(
+                    id=op_id, state=AsyncOperation.STATE_PENDING
+                )
+            )
+
+        async def get_async_operation(self, request):
+            return SimpleNamespace(
+                async_operation=SimpleNamespace(
+                    state=self.op_states[request.async_operation_id],
+                    failure_reason="resource version mismatch",
+                )
+            )
+
+    service = FakeCloudService()
+    reconciler = CloudApiReconciler(service, account_id="acct1", poll_seconds=0)
+
+    results = asyncio.run(
+        reconciler.reconcile_search_attributes(
+            "tmprl-dem-cld-banking-money-transfer.acct1",
+            desired=[("CustomerId", "keyword")],
+            delete_names=[],
+        )
+    )
+
+    assert results == {"CustomerId": {"action": "created", "currentType": "keyword"}}
+    assert [update[0] for update in service.updates] == ["v1", "v2"]
+    assert service.updates[-1][1] == {
         "CustomerId": values.SEARCH_ATTRIBUTE_TYPE_KEYWORD,
     }
 

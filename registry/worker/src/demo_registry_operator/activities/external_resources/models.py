@@ -476,6 +476,27 @@ class DeleteTemporalCloudSearchAttributeRequest:
 
 
 @dataclass(frozen=True)
+class ReconcileTemporalCloudSearchAttributesRequest:
+    # Every search attribute mutates the *same* namespace spec, so the whole set
+    # (creates/verifies + deletions) is reconciled by one activity in a single
+    # namespace update. Fanning these out per-attribute causes optimistic
+    # concurrency (resource_version) conflicts on the shared spec.
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+    desired: tuple[TemporalCloudSearchAttribute, ...] = ()
+    delete_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TemporalCloudSearchAttributesResult:
+    # One status dict per attribute (same shape as the singular
+    # TemporalCloudSearchAttributeResult.status), so the workflow can report
+    # every attribute even though a single Cloud operation applied them all.
+    statuses: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class StageTemporalApiKeyCandidateRequest:
     checked_at: str
     project: TemporalCloudProject

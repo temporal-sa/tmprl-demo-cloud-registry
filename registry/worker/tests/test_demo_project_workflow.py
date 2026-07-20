@@ -414,46 +414,31 @@ def test_previous_temporal_search_attributes_reads_managed_names_from_status():
 
 
 def test_temporal_search_attribute_status_tracks_owned_creates_and_deletes():
-    results = [
-        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
-            status={
-                "phase": "Ready",
-                "searchAttribute": {
-                    "name": "NewAttribute",
-                    "type": "keyword",
-                    "action": "created",
-                },
+    statuses = [
+        {
+            "phase": "Ready",
+            "searchAttribute": {
+                "name": "NewAttribute",
+                "type": "keyword",
+                "action": "created",
             },
-            name="NewAttribute",
-            type="keyword",
-            action="created",
-        ),
-        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
-            status={
-                "phase": "Ready",
-                "searchAttribute": {
-                    "name": "ExistingExternal",
-                    "type": "double",
-                    "action": "verified",
-                },
+        },
+        {
+            "phase": "Ready",
+            "searchAttribute": {
+                "name": "ExistingExternal",
+                "type": "double",
+                "action": "verified",
             },
-            name="ExistingExternal",
-            type="double",
-            action="verified",
-        ),
-        demo_project_workflow.external_resources.TemporalCloudSearchAttributeResult(
-            status={
-                "phase": "Deleted",
-                "searchAttribute": {
-                    "name": "RemovedManaged",
-                    "type": "bool",
-                    "action": "deleted",
-                },
+        },
+        {
+            "phase": "Deleted",
+            "searchAttribute": {
+                "name": "RemovedManaged",
+                "type": "bool",
+                "action": "deleted",
             },
-            name="RemovedManaged",
-            type="bool",
-            action="deleted",
-        ),
+        },
     ]
 
     status = temporal_search_attributes_reconcile_status(
@@ -470,7 +455,7 @@ def test_temporal_search_attribute_status_tracks_owned_creates_and_deletes():
             ),
         },
         previous_managed={"RemovedManaged": "bool"},
-        results=results,
+        statuses=statuses,
     )
 
     assert status["phase"] == "Ready"

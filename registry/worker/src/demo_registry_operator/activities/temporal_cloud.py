@@ -923,6 +923,84 @@ async def ensure_temporal_cloud_search_attribute(
     return status
 
 
+async def ensure_temporal_cloud_search_attributes(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    desired: list[dict[str, str]],
+    delete_names: list[str],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+) -> list[dict[str, Any]]:
+    if not resources.temporal_namespace_required(demo_project):
+        return [temporal_cloud_not_required_status(checked_at)]
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    desired_types = {
+        entry["name"]: resources.temporal_search_attribute_type(entry.get("type"))
+        for entry in desired
+    }
+
+    results = await reconciler.reconcile_search_attributes(
+        namespace.qualified_name,
+        desired=list(desired_types.items()),
+        delete_names=list(delete_names),
+    )
+
+    statuses: list[dict[str, Any]] = []
+    for name, attribute_type in desired_types.items():
+        outcome = results.get(name, {})
+        action = outcome.get("action")
+        current_type = outcome.get("currentType")
+        phase = "Error" if action == "drifted" else "Ready"
+        status = {
+            "phase": phase,
+            "provider": "temporal-cloud",
+            "mode": "cloud-api",
+            "checkedAt": checked_at,
+            "namespace": {"name": namespace.qualified_name},
+            "searchAttribute": {
+                "name": name,
+                "type": attribute_type,
+                "action": action,
+            },
+        }
+        if current_type:
+            status["searchAttribute"]["currentType"] = current_type
+        if action == "drifted":
+            status.update(
+                {
+                    "reason": "SearchAttributeTypeDrift",
+                    "message": (
+                        f"Temporal Cloud search attribute {name!r} exists with "
+                        f"type {current_type!r}, but project config requires "
+                        f"{attribute_type!r}."
+                    ),
+                }
+            )
+        statuses.append(status)
+
+    for name in delete_names:
+        outcome = results.get(name, {})
+        current_type = outcome.get("currentType")
+        statuses.append(
+            {
+                "phase": "Deleted",
+                "provider": "temporal-cloud",
+                "mode": "cloud-api",
+                "checkedAt": checked_at,
+                "namespace": {"name": namespace.qualified_name},
+                "searchAttribute": {
+                    "name": name,
+                    "type": current_type,
+                    "action": outcome.get("action"),
+                },
+            }
+        )
+
+    return statuses
+
+
 async def delete_temporal_cloud_search_attribute_value(
     demo_project: dict[str, Any],
     *,
@@ -2292,6 +2370,50 @@ class CloudApiReconciler:
             mutate=mutate,
         )
 
+    async def reconcile_search_attributes(
+        self,
+        qualified_name: str,
+        *,
+        desired: list[tuple[str, str]],
+        delete_names: list[str],
+    ) -> dict[str, dict[str, str | None]]:
+        # Apply every create/verify/delete in a SINGLE namespace-spec update.
+        # Search attributes all live on one namespace spec guarded by
+        # resource_version optimistic concurrency, so per-attribute updates run
+        # concurrently would conflict ("resource version mismatch"). Batching
+        # makes the reconcile one atomic, conflict-free operation.
+        def mutate(spec: Any) -> tuple[bool, dict[str, dict[str, str | None]]]:
+            results: dict[str, dict[str, str | None]] = {}
+            changed = False
+            for name, attribute_type in desired:
+                desired_type = resources.temporal_search_attribute_type(attribute_type)
+                current_type = cloud_search_attribute_status_type(spec, name)
+                if current_type == desired_type:
+                    results[name] = {"action": "verified", "currentType": current_type}
+                elif current_type is not None:
+                    results[name] = {"action": "drifted", "currentType": current_type}
+                else:
+                    spec.search_attributes[name] = cloud_search_attribute_type_value(
+                        desired_type
+                    )
+                    results[name] = {"action": "created", "currentType": desired_type}
+                    changed = True
+            for name in delete_names:
+                current_type = cloud_search_attribute_status_type(spec, name)
+                if current_type is None:
+                    results[name] = {"action": "not-found", "currentType": None}
+                else:
+                    del spec.search_attributes[name]
+                    results[name] = {"action": "deleted", "currentType": current_type}
+                    changed = True
+            return changed, results
+
+        return await self._update_namespace_spec(
+            qualified_name,
+            label=f"reconcile-search-attributes:{qualified_name}",
+            mutate=mutate,
+        )
+
     async def update_namespace_tags(
         self,
         qualified_name: str,
@@ -2352,12 +2474,15 @@ class CloudApiReconciler:
                         resource_version=namespace.resource_version,
                     )
                 )
+                # Kept inside the try: the resource_version conflict can surface
+                # here (async operation FAILED with "resource version mismatch")
+                # rather than at update_namespace, so both paths must retry.
+                await self._await_operation(response.async_operation, label=label)
             except Exception as error:  # noqa: BLE001 - retry stale versions
                 if not _is_stale_resource_version(error) or attempt == max_attempts - 1:
                     raise
                 await asyncio.sleep(0)
                 continue
-            await self._await_operation(response.async_operation, label=label)
             return result
 
         raise RuntimeError(
@@ -2910,7 +3035,15 @@ def _is_not_found(error: Exception) -> bool:
 
 
 def _is_invalid_resource_version(error: Exception) -> bool:
-    return "invalid resource version" in str(error).lower()
+    lowered = str(error).lower()
+    # "invalid resource version" surfaces synchronously from UpdateNamespace;
+    # "resource version mismatch" surfaces asynchronously as a failed async
+    # operation. Both mean an optimistic-concurrency conflict on the namespace
+    # spec and must be retried against a freshly-read resource_version.
+    return (
+        "invalid resource version" in lowered
+        or "resource version mismatch" in lowered
+    )
 
 
 def _is_stale_resource_version(error: Exception) -> bool:

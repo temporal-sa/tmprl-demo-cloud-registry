@@ -161,6 +161,47 @@ def create_or_verify_temporal_cloud_search_attribute(
 
 
 @activity.defn
+def reconcile_temporal_cloud_search_attributes(
+    request: models.ReconcileTemporalCloudSearchAttributesRequest,
+) -> models.TemporalCloudSearchAttributesResult:
+    if not request.project.namespace_required:
+        return search_attributes_result(
+            [temporal_cloud.temporal_cloud_not_required_status(request.checked_at)]
+        )
+    if platform_manual_setup_required(request.project):
+        return search_attributes_result(
+            [manual_setup_required_status(request.project, request.checked_at)]
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return search_attributes_result([bootstrap])
+
+    async def run() -> list[dict[str, Any]]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.ensure_temporal_cloud_search_attributes(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            desired=[
+                {"name": attribute.name, "type": attribute.type}
+                for attribute in request.desired
+            ],
+            delete_names=list(request.delete_names),
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return search_attributes_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Reconcile Temporal Cloud search attributes",
+        ) from error
+
+
+@activity.defn
 def delete_temporal_cloud_search_attribute(
     request: models.DeleteTemporalCloudSearchAttributeRequest,
 ) -> models.TemporalCloudSearchAttributeResult:
@@ -901,6 +942,12 @@ def search_attribute_result(
     )
 
 
+def search_attributes_result(
+    statuses: list[dict[str, Any]],
+) -> models.TemporalCloudSearchAttributesResult:
+    return models.TemporalCloudSearchAttributesResult(statuses=list(statuses))
+
+
 def stage_result(status: dict[str, Any]) -> models.TemporalCloudCredentialStageResult:
     return models.TemporalCloudCredentialStageResult(
         status=status,
@@ -983,6 +1030,13 @@ def temporal_cloud_transient_error_message(message: str) -> bool:
             "connection reset",
             "deadline exceeded",
             "invalid resource version",
+            # Optimistic-concurrency conflict on the namespace spec, surfaced by
+            # a failed async operation. Transient: retry against a fresh version.
+            "resource version mismatch",
+            # A freshly-created namespace is briefly not ACTIVE; spec updates
+            # against it fail until it finishes provisioning. Retry until active.
+            "not active",
+            "namespace is not ready",
             "rate limit",
             "resource exhausted",
             "temporarily unavailable",
