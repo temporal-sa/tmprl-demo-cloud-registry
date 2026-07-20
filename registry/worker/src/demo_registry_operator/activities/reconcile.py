@@ -112,6 +112,7 @@ class WorkerDeploymentRollbackRequest:
     active_images: dict[str, str]
     active_version: str
     worker_deployments: dict[str, Any]
+    active_runtime_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -964,6 +965,7 @@ def rollback_worker_deployments(
             version=active_version,
             external_resources=request.external_resources,
             image_overrides=active_images,
+            namespace=request.active_runtime_namespace,
         )
         action = kube.apply_resource(rendered)
         rolled_back.append(component_name)

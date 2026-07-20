@@ -5,6 +5,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError
 
 from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import reconcile as reconcile_activities
@@ -443,18 +444,32 @@ class DemoProjectKubernetesRuntimeWorkflow:
         *,
         worker_rollout_failed: bool = False,
     ) -> dict[str, Any]:
-        rollback_status = await self._restore_previous_active_runtime_routes(
-            project,
-            demo_project,
-            previous_status,
-        )
+        try:
+            rollback_status = await self._restore_previous_active_runtime_routes(
+                project,
+                demo_project,
+                previous_status,
+            )
+        except ActivityError as error:
+            rollback_status = cleanup_recovery_failure_status(
+                "Previous active routes could not be restored",
+                error,
+            )
         result: dict[str, Any] = {"rollbackStatus": rollback_status}
         # 4.2: on a worker rollout failure, render+apply the previous active
         # WorkerDeployment (Worker Versioning rollback) before tearing the candidate down.
         if worker_rollout_failed:
-            result["workerDeploymentRollbackStatus"] = (
-                await self._rollback_worker_deployments(demo_project, previous_status)
-            )
+            try:
+                worker_rollback_status = await self._rollback_worker_deployments(
+                    demo_project,
+                    previous_status,
+                )
+            except ActivityError as error:
+                worker_rollback_status = cleanup_recovery_failure_status(
+                    "Previous active WorkerDeployment could not be restored",
+                    error,
+                )
+            result["workerDeploymentRollbackStatus"] = worker_rollback_status
         prune_status = await self._delete_failed_candidate_resources(
             demo_project,
             reconcile_status,
@@ -760,6 +775,9 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 worker_deployments=(
                     previous_status.get("workerDeploymentStatus", {}) or {}
                 ),
+                active_runtime_namespace=previous_status.get(
+                    "activeRuntimeNamespace"
+                ),
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
@@ -822,6 +840,19 @@ class DemoProjectKubernetesRuntimeWorkflow:
         )
         promoted_status["revisionCleanupStatus"] = cleanup
         return promoted_status
+
+
+def cleanup_recovery_failure_status(
+    message: str,
+    error: ActivityError,
+) -> dict[str, Any]:
+    return {
+        "phase": "Error",
+        "reason": "ActivityFailed",
+        "message": f"{message}; failed candidate cleanup continued.",
+        "error": str(error),
+    }
+
 
 def _revision_name_of(ref: Any) -> str | None:
     if isinstance(ref, dict):

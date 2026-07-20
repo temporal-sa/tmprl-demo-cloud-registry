@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import demo_registry_operator.workflows.demo_project_kubernetes_runtime as kubernetes_runtime_workflow
 from demo_registry_operator.activities import reconcile
+from temporalio.exceptions import ActivityError
 
 
 class _Cfg:
@@ -275,3 +276,94 @@ def test_revision_runtime_namespace_teardown_uses_dependency_ordered_activity(
 
     assert seen["activity"] is reconcile.delete_project_namespace_resource
     assert seen["request"].namespace == "tmprl-dem-cld-demo-old12"
+
+
+def activity_error(message: str) -> ActivityError:
+    return ActivityError(
+        message,
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="test-worker",
+        activity_type="test_activity",
+        activity_id="test-activity",
+        retry_state=None,
+    )
+
+
+def test_worker_rollback_passes_previous_active_runtime_namespace(monkeypatch):
+    seen = {}
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        seen["request"] = request
+        return SimpleNamespace(status={"phase": "RolledBack"})
+
+    monkeypatch.setattr(
+        kubernetes_runtime_workflow.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    runtime = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
+    runtime._external_resources = None
+
+    result = asyncio.run(
+        runtime._rollback_worker_deployments(
+            {"metadata": {"name": "demo"}},
+            {
+                "activeImages": {"worker": "example/worker:git-old"},
+                "activeImageVersion": "git-old",
+                "activeRuntimeNamespace": "tmprl-dem-cld-demo-old12",
+            },
+        )
+    )
+
+    assert result == {"phase": "RolledBack"}
+    assert seen["request"].active_runtime_namespace == (
+        "tmprl-dem-cld-demo-old12"
+    )
+
+
+def test_failed_candidate_cleanup_continues_after_recovery_failures():
+    events = []
+    runtime = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
+
+    async def fail_routes(*args, **kwargs):
+        events.append("routes")
+        raise activity_error("route rollback failed")
+
+    async def fail_worker(*args, **kwargs):
+        events.append("worker")
+        raise activity_error("worker rollback failed")
+
+    async def delete_candidate(*args, **kwargs):
+        events.append("delete-candidate")
+        return {"phase": "Deleted", "resources": [{"kind": "Namespace"}]}
+
+    async def finalize_revision():
+        events.append("finalize-revision")
+        return {"phase": "Cleaned"}
+
+    runtime._restore_previous_active_runtime_routes = fail_routes
+    runtime._rollback_worker_deployments = fail_worker
+    runtime._delete_failed_candidate_resources = delete_candidate
+    runtime._finalize_failed_revision = finalize_revision
+
+    result = asyncio.run(
+        runtime._cleanup_failed_candidate(
+            "demo",
+            {"metadata": {"name": "demo"}},
+            {"candidateRolloutStatus": {"imageVersion": "git-failed"}},
+            {"activeImageVersion": "git-old"},
+            worker_rollout_failed=True,
+        )
+    )
+
+    assert events == [
+        "routes",
+        "worker",
+        "delete-candidate",
+        "finalize-revision",
+    ]
+    assert result["rollbackStatus"]["phase"] == "Error"
+    assert result["workerDeploymentRollbackStatus"]["phase"] == "Error"
+    assert result["pruneStatus"]["phase"] == "Deleted"
+    assert result["revisionCleanupStatus"]["phase"] == "Cleaned"

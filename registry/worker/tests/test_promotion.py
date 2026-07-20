@@ -816,6 +816,9 @@ def test_rollback_worker_deployments_restores_previous_active_workerdeployment(
             active_images=banking_images("git-0d"),
             active_version="git-0d",
             worker_deployments={},
+            active_runtime_namespace=(
+                "tmprl-dem-cld-banking-money-transfer-old12"
+            ),
         )
     ).status
 
@@ -834,6 +837,9 @@ def test_rollback_worker_deployments_restores_previous_active_workerdeployment(
             "platform.temporal.io/rollout-version"
         ]
         == "git-0d"
+    )
+    assert worker_deployment["metadata"]["namespace"] == (
+        "tmprl-dem-cld-banking-money-transfer-old12"
     )
 
 
