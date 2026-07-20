@@ -1288,6 +1288,18 @@ def runtime_secret_resources(
         resources.append(external_secret(demo_project, namespace=namespace))
     if temporal_worker_runtime_secret_needed(demo_project):
         resources.append(worker_runtime_external_secret(demo_project, namespace=namespace))
+        controller_secret_name = worker_controller_auth_secret_name(
+            demo_project,
+            namespace=namespace,
+        )
+        if controller_secret_name != TEMPORAL_WORKER_RUNTIME_SECRET_NAME:
+            resources.append(
+                worker_runtime_external_secret(
+                    demo_project,
+                    namespace=namespace,
+                    name=controller_secret_name,
+                )
+            )
     if is_registry_catalog_project(demo_project):
         resources.append(registry_shared_auth_external_secret(demo_project, namespace=namespace))
     if registry_operator_component_enabled(demo_project):
@@ -1827,6 +1839,10 @@ def worker_connection_resource(
             "Worker Controller versioning cannot be used with Temporal mTLS auth "
             "until Connection supports client certificate refs."
         )
+    auth_secret_name = worker_controller_auth_secret_name(
+        demo_project,
+        namespace=namespace,
+    )
     return {
         "apiVersion": TEMPORAL_WORKER_CONTROLLER_API_VERSION,
         "kind": "Connection",
@@ -1835,7 +1851,7 @@ def worker_connection_resource(
             "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
-                "platform.temporal.io/secret": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+                "platform.temporal.io/secret": auth_secret_name,
                 "platform.temporal.io/secret-prefix": project_secret_prefix(demo_project),
             },
         },
@@ -1845,7 +1861,7 @@ def worker_connection_resource(
                 external_resources,
             ),
             "apiKeySecretRef": {
-                "name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+                "name": auth_secret_name,
                 "key": STANDARD_TEMPORAL_ENV["api_key"],
             },
         },
@@ -3081,12 +3097,13 @@ def worker_runtime_external_secret(
     demo_project: dict[str, Any],
     *,
     namespace: str | None = None,
+    name: str = TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
 ) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
-            "name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+            "name": name,
             "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
@@ -3101,7 +3118,7 @@ def worker_runtime_external_secret(
                 "kind": "ClusterSecretStore",
             },
             "target": {
-                "name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+                "name": name,
                 "creationPolicy": "Owner",
             },
             "data": [
@@ -3122,6 +3139,25 @@ def worker_runtime_external_secret(
             ],
         },
     }
+
+
+def worker_controller_auth_secret_name(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> str:
+    """Isolate Worker Controller clients across candidate runtime namespaces.
+
+    Worker Controller v1.8.0 does not include the Kubernetes namespace in its
+    Temporal client-pool key. Reusing the stable runtime Secret name can
+    therefore reuse a client whose dynamic credential reader still points at a
+    deleted candidate namespace. A namespace-derived Secret name forces a fresh
+    client while the worker pod keeps using the stable runtime Secret.
+    """
+    if not namespace or not runtime_namespace_rollout_enabled(demo_project):
+        return TEMPORAL_WORKER_RUNTIME_SECRET_NAME
+    namespace_digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:8]
+    return dns_label(f"{TEMPORAL_WORKER_RUNTIME_SECRET_NAME}-{namespace_digest}")
 
 
 def temporal_api_key_external_secret_annotations(
