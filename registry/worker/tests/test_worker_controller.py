@@ -29,6 +29,7 @@ from demo_registry_operator.resources import (
     runtime_namespace,
     runtime_workload_resources,
     source_git_repository,
+    worker_controller_auth_secret_name,
     worker_deployment_status,
     worker_deployment_rollout_wait_seconds,
 )
@@ -401,6 +402,10 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
     demo_project = project(worker=versioned_worker())
     version = candidate_version(demo_project, images())
     namespace = runtime_namespace(demo_project, version)
+    controller_secret_name = worker_controller_auth_secret_name(
+        demo_project,
+        namespace=namespace,
+    )
 
     deployments = deployment_resources(demo_project, images())
     resources = runtime_workload_resources(
@@ -420,7 +425,7 @@ def test_versioned_worker_renders_connection_and_workerdeployment_not_deployment
     assert connection["spec"] == {
         "hostPort": "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
         "apiKeySecretRef": {
-            "name": "temporal-worker-runtime",
+            "name": controller_secret_name,
             "key": "TEMPORAL_API_KEY",
         },
     }
@@ -601,6 +606,52 @@ def test_versioned_worker_runtime_secret_contains_only_auth_env():
         "TEMPORAL_API_KEY",
         "TEMPORAL_TLS",
     ]
+
+
+def test_candidate_runtime_isolates_worker_controller_credential_secret():
+    demo_project = project(worker=versioned_worker())
+    version = candidate_version(demo_project, images())
+    namespace = runtime_namespace(demo_project, version)
+    controller_secret_name = worker_controller_auth_secret_name(
+        demo_project,
+        namespace=namespace,
+    )
+
+    secrets = runtime_secret_resources(demo_project, namespace=namespace)
+    secret_names = {
+        item["metadata"]["name"]
+        for item in secrets
+        if item["kind"] == "ExternalSecret"
+    }
+    assert controller_secret_name != "temporal-worker-runtime"
+    assert secret_names == {
+        "temporal-credentials",
+        "temporal-worker-runtime",
+        controller_secret_name,
+    }
+
+    controller_secret = next(
+        item
+        for item in secrets
+        if item["metadata"]["name"] == controller_secret_name
+    )
+    assert controller_secret["spec"]["target"]["name"] == controller_secret_name
+
+    workloads = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+    connection = next(item for item in workloads if item["kind"] == "Connection")
+    assert connection["spec"]["apiKeySecretRef"]["name"] == controller_secret_name
+
+    worker_deployment = next(
+        item for item in workloads if item["kind"] == "WorkerDeployment"
+    )
+    assert worker_deployment["spec"]["template"]["spec"]["containers"][0][
+        "envFrom"
+    ] == [{"secretRef": {"name": "temporal-worker-runtime"}}]
 
 
 def test_versioned_worker_with_ports_uses_stable_service_name_and_rollout_selector():
