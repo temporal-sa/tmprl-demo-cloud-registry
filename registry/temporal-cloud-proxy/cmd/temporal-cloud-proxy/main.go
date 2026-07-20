@@ -168,23 +168,74 @@ func cloudAuthInterceptor(namespace string, apiKey string, aliases map[string]st
 }
 
 func rewriteNamespace(msg proto.Message, target string, aliases map[string]struct{}) error {
-	reflected := msg.ProtoReflect()
-	field := reflected.Descriptor().Fields().ByName("namespace")
-	if field == nil || field.Kind() != protoreflect.StringKind {
-		return nil
+	return rewriteNamespaceMessage(msg.ProtoReflect(), target, aliases, true)
+}
+
+// rewriteNamespaceMessage rewrites the `namespace` field on this message and any
+// nested messages. Temporal requests carry a namespace not only at the top level
+// but embedded in workflow command attributes — StartChildWorkflowExecution,
+// SignalExternalWorkflowExecution, and RequestCancelExternalWorkflowExecution all
+// have their own `namespace` field inside RespondWorkflowTaskCompletedRequest.
+// The proxy aliases (e.g. "default") to the real Cloud namespace, so EVERY
+// occurrence must be rewritten; otherwise Temporal Cloud rejects the whole
+// RespondWorkflowTaskCompleted with "Namespace <alias> is not found" and the
+// workflow task times out forever (e.g. a child-workflow-based agentic repair
+// never starts).
+//
+// topLevel preserves the original behavior of defaulting an empty request
+// namespace to the target. Nested empty namespaces are left untouched — an empty
+// embedded namespace already means "the enclosing workflow's namespace".
+func rewriteNamespaceMessage(
+	m protoreflect.Message,
+	target string,
+	aliases map[string]struct{},
+	topLevel bool,
+) error {
+	if field := m.Descriptor().Fields().ByName("namespace"); field != nil &&
+		field.Kind() == protoreflect.StringKind && !field.IsList() && !field.IsMap() {
+		current := m.Get(field).String()
+		switch {
+		case current == target:
+			// Already the real namespace; nothing to do.
+		case current == "":
+			if topLevel {
+				m.Set(field, protoreflect.ValueOfString(target))
+			}
+		default:
+			if _, ok := aliases[current]; !ok {
+				return fmt.Errorf("request namespace %q is not allowed by this proxy", current)
+			}
+			m.Set(field, protoreflect.ValueOfString(target))
+		}
 	}
 
-	current := reflected.Get(field).String()
-	if current == target {
-		return nil
-	}
-	if current == "" {
-		reflected.Set(field, protoreflect.ValueOfString(target))
-		return nil
-	}
-	if _, ok := aliases[current]; ok {
-		reflected.Set(field, protoreflect.ValueOfString(target))
-		return nil
-	}
-	return fmt.Errorf("request namespace %q is not allowed by this proxy", current)
+	var walkErr error
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if fd.Name() == "namespace" || fd.Kind() != protoreflect.MessageKind {
+			return true
+		}
+		switch {
+		case fd.IsList():
+			list := v.List()
+			for i := 0; i < list.Len(); i++ {
+				if walkErr = rewriteNamespaceMessage(list.Get(i).Message(), target, aliases, false); walkErr != nil {
+					return false
+				}
+			}
+		case fd.IsMap():
+			if fd.MapValue().Kind() != protoreflect.MessageKind {
+				return true
+			}
+			v.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
+				if walkErr = rewriteNamespaceMessage(mv.Message(), target, aliases, false); walkErr != nil {
+					return false
+				}
+				return true
+			})
+		default:
+			walkErr = rewriteNamespaceMessage(v.Message(), target, aliases, false)
+		}
+		return walkErr == nil
+	})
+	return walkErr
 }
