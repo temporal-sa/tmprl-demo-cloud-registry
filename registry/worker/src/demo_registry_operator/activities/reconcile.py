@@ -1,6 +1,7 @@
-from dataclasses import dataclass
 import ssl
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -376,12 +377,147 @@ def delete_project_namespace_resource(
     request: ProjectNamespaceDeleteRequest,
 ) -> ActivityActionResult:
     try:
-        return ActivityActionResult(kube.delete_namespace(
-            required_string(request.namespace, "namespace"),
-            dry_run=False,
-        ))
+        return ActivityActionResult(
+            delete_runtime_namespace_in_dependency_order(
+                required_string(request.namespace, "namespace")
+            )
+        )
     except RuntimeError as error:
         raise errors.non_retryable_error(str(error), error_type=errors.CONFIGURATION_ERROR) from error
+
+
+def delete_runtime_namespace_in_dependency_order(namespace: str) -> str:
+    """Delete worker CRs before their credentials disappear with the namespace.
+
+    WorkerDeployment and Connection finalizers can need the referenced Temporal
+    credential while they clean up remote state. Kubernetes namespace deletion
+    does not provide a dependency order, so explicitly finish each finalizer
+    before removing the next dependency. A single deadline bounds the complete
+    namespace teardown; activity retries make partially completed cleanup
+    idempotent.
+    """
+    config = WorkerConfig.from_env()
+    # These activities have a five-minute start-to-close timeout. Leave enough
+    # margin to return a retryable TimeoutError instead of being killed at the
+    # activity boundary; a retry resumes the idempotent, partially completed
+    # teardown without deleting the namespace or its credentials.
+    timeout_seconds = max(1, min(config.readiness_timeout_seconds, 240))
+    deadline = time.monotonic() + timeout_seconds
+
+    worker_deployments = list_namespaced_resources_for_teardown(
+        namespace,
+        kube.list_worker_deployments,
+    )
+    delete_namespaced_resources_sequentially(
+        namespace,
+        kind="WorkerDeployment",
+        resources_to_delete=worker_deployments,
+        delete_resource=kube.delete_worker_deployment,
+        read_resource=kube.read_worker_deployment,
+        deadline=deadline,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=max(1, config.readiness_poll_seconds),
+    )
+
+    connections = list_namespaced_resources_for_teardown(
+        namespace,
+        kube.list_connections,
+    )
+    delete_namespaced_resources_sequentially(
+        namespace,
+        kind="Connection",
+        resources_to_delete=connections,
+        delete_resource=kube.delete_connection,
+        read_resource=kube.read_connection,
+        deadline=deadline,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=max(1, config.readiness_poll_seconds),
+    )
+
+    return kube.delete_namespace(namespace, dry_run=False)
+
+
+def list_namespaced_resources_for_teardown(
+    namespace: str,
+    list_resources: Callable[..., list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    try:
+        return list_resources(namespace, label_selector=None)
+    except Exception as error:
+        # A concurrent or retried namespace deletion is already complete.
+        if getattr(error, "status", None) == 404:
+            return []
+        raise
+
+
+def delete_namespaced_resources_sequentially(
+    namespace: str,
+    *,
+    kind: str,
+    resources_to_delete: list[dict[str, Any]],
+    delete_resource: Callable[..., str],
+    read_resource: Callable[[str, str], dict[str, Any] | None],
+    deadline: float,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> None:
+    names = sorted(
+        {
+            namespaced_resource_name(resource, kind=kind)
+            for resource in resources_to_delete
+        }
+    )
+    for name in names:
+        delete_resource(namespace, name, dry_run=False)
+        wait_for_namespaced_resource_deletion(
+            namespace,
+            kind=kind,
+            name=name,
+            read_resource=read_resource,
+            deadline=deadline,
+            timeout_seconds=timeout_seconds,
+            poll_seconds=poll_seconds,
+        )
+
+
+def namespaced_resource_name(resource: dict[str, Any], *, kind: str) -> str:
+    metadata = resource.get("metadata")
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str) or not name:
+        # Summary-shaped values are useful in tests and are also returned by
+        # several existing kube list helpers.
+        name = resource.get("name")
+    if isinstance(name, str) and name:
+        return name
+    raise RuntimeError(f"Listed {kind} is missing metadata.name")
+
+
+def wait_for_namespaced_resource_deletion(
+    namespace: str,
+    *,
+    kind: str,
+    name: str,
+    read_resource: Callable[[str, str], dict[str, Any] | None],
+    deadline: float,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> None:
+    while read_resource(namespace, name) is not None:
+        now = time.monotonic()
+        if now >= deadline:
+            raise TimeoutError(
+                f"Timed out waiting for {kind} {namespace}/{name} deletion "
+                f"after {timeout_seconds} seconds; namespace was not deleted."
+            )
+        activity.heartbeat(
+            {
+                "phase": "RuntimeNamespaceTeardown",
+                "namespace": namespace,
+                "kind": kind,
+                "name": name,
+            }
+        )
+        time.sleep(min(poll_seconds, max(0.0, deadline - now)))
 
 
 @activity.defn
@@ -891,7 +1027,9 @@ def prune_stale_runtime_candidates_impl(
         and previous_runtime_namespace != namespace
         and previous_runtime_namespace != active_runtime_namespace
     ):
-        action = kube.delete_namespace(previous_runtime_namespace, dry_run=False)
+        action = delete_runtime_namespace_in_dependency_order(
+            previous_runtime_namespace
+        )
         namespace_prunes.append({
             "apiVersion": "v1",
             "kind": "Namespace",
@@ -906,7 +1044,7 @@ def prune_stale_runtime_candidates_impl(
         and active_runtime_namespace
         and active_runtime_namespace != namespace
     ):
-        action = kube.delete_namespace(namespace, dry_run=False)
+        action = delete_runtime_namespace_in_dependency_order(namespace)
         namespace_prunes.append({
             "apiVersion": "v1",
             "kind": "Namespace",
@@ -992,7 +1130,9 @@ def delete_runtime_candidate_resources_impl(
         and candidate_runtime_namespace
         and candidate_runtime_namespace != namespace
     ):
-        action = kube.delete_namespace(candidate_runtime_namespace, dry_run=False)
+        action = delete_runtime_namespace_in_dependency_order(
+            candidate_runtime_namespace
+        )
         return {
             "phase": "Deleted",
             "message": "Deleted failed runtime candidate namespace.",

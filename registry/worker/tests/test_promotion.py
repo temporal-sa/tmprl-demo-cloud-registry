@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from demo_registry_operator import resources
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.resources import HTTPS_REDIRECT_MIDDLEWARE_NAME
@@ -62,6 +64,19 @@ def applied_summary(rendered):
             }
         )
     return summaries
+
+
+def stub_empty_worker_controller_resources(monkeypatch):
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_worker_deployments",
+        lambda namespace, *, label_selector=None: [],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_connections",
+        lambda namespace, *, label_selector=None: [],
+    )
 
 
 def test_plan_project_finalization_uses_source_watch_namespace(monkeypatch):
@@ -611,6 +626,7 @@ def test_promote_candidate_prunes_stale_plain_runtime_candidates(monkeypatch):
 
 def test_promote_candidate_prunes_previous_runtime_namespace(monkeypatch):
     deleted = []
+    stub_empty_worker_controller_resources(monkeypatch)
 
     def delete_namespace(name, *, dry_run):
         deleted.append((name, dry_run))
@@ -654,6 +670,7 @@ def test_promote_candidate_prunes_previous_runtime_namespace(monkeypatch):
 
 def test_promote_candidate_prunes_legacy_base_namespace(monkeypatch):
     deleted = []
+    stub_empty_worker_controller_resources(monkeypatch)
 
     def delete_namespace(name, *, dry_run):
         deleted.append((name, dry_run))
@@ -885,6 +902,7 @@ def test_delete_runtime_candidate_resources_deletes_only_failed_candidate(
 
 def test_delete_runtime_candidate_resources_deletes_runtime_namespace(monkeypatch):
     deleted = []
+    stub_empty_worker_controller_resources(monkeypatch)
 
     def delete_namespace(name, *, dry_run):
         deleted.append((name, dry_run))
@@ -910,6 +928,220 @@ def test_delete_runtime_candidate_resources_deletes_runtime_namespace(monkeypatc
             "rolloutVersion": "git-failed",
             "action": "deleting",
         }
+    ]
+
+
+def test_runtime_namespace_teardown_orders_worker_connection_then_namespace(
+    monkeypatch,
+):
+    events = []
+    worker_reads = iter([{"metadata": {"name": "worker"}}, None])
+    connection_reads = iter([{"metadata": {"name": "temporal"}}, None])
+
+    def list_worker_deployments(namespace, *, label_selector=None):
+        events.append(("list", "WorkerDeployment", namespace))
+        return [{"metadata": {"name": "worker"}}]
+
+    def delete_worker_deployment(namespace, name, *, dry_run):
+        events.append(("delete", "WorkerDeployment", namespace, name))
+        return "deleting"
+
+    def read_worker_deployment(namespace, name):
+        result = next(worker_reads)
+        events.append(("read", "WorkerDeployment", name, result is None))
+        return result
+
+    def list_connections(namespace, *, label_selector=None):
+        events.append(("list", "Connection", namespace))
+        return [{"metadata": {"name": "temporal"}}]
+
+    def delete_connection(namespace, name, *, dry_run):
+        events.append(("delete", "Connection", namespace, name))
+        return "deleting"
+
+    def read_connection(namespace, name):
+        result = next(connection_reads)
+        events.append(("read", "Connection", name, result is None))
+        return result
+
+    def delete_namespace(name, *, dry_run):
+        events.append(("delete", "Namespace", name))
+        return "deleting"
+
+    monkeypatch.setattr(
+        reconcile.kube, "list_worker_deployments", list_worker_deployments
+    )
+    monkeypatch.setattr(
+        reconcile.kube, "delete_worker_deployment", delete_worker_deployment
+    )
+    monkeypatch.setattr(
+        reconcile.kube, "read_worker_deployment", read_worker_deployment
+    )
+    monkeypatch.setattr(reconcile.kube, "list_connections", list_connections)
+    monkeypatch.setattr(reconcile.kube, "delete_connection", delete_connection)
+    monkeypatch.setattr(reconcile.kube, "read_connection", read_connection)
+    monkeypatch.setattr(reconcile.kube, "delete_namespace", delete_namespace)
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda details: None)
+    monkeypatch.setattr(reconcile.time, "sleep", lambda seconds: None)
+
+    result = reconcile.delete_runtime_candidate_resources(
+        reconcile.DeleteRuntimeCandidateResourcesRequest(
+            demo_project=banking_project(),
+            candidate_version="git-failed",
+            candidate_runtime_namespace=(
+                "tmprl-dem-cld-banking-money-transfer-bad12"
+            ),
+        )
+    ).status
+
+    assert result["phase"] == "Deleted"
+    assert events == [
+        (
+            "list",
+            "WorkerDeployment",
+            "tmprl-dem-cld-banking-money-transfer-bad12",
+        ),
+        (
+            "delete",
+            "WorkerDeployment",
+            "tmprl-dem-cld-banking-money-transfer-bad12",
+            "worker",
+        ),
+        ("read", "WorkerDeployment", "worker", False),
+        ("read", "WorkerDeployment", "worker", True),
+        (
+            "list",
+            "Connection",
+            "tmprl-dem-cld-banking-money-transfer-bad12",
+        ),
+        (
+            "delete",
+            "Connection",
+            "tmprl-dem-cld-banking-money-transfer-bad12",
+            "temporal",
+        ),
+        ("read", "Connection", "temporal", False),
+        ("read", "Connection", "temporal", True),
+        (
+            "delete",
+            "Namespace",
+            "tmprl-dem-cld-banking-money-transfer-bad12",
+        ),
+    ]
+
+
+def test_runtime_namespace_teardown_timeout_preserves_namespace(monkeypatch):
+    events = []
+    monotonic_values = iter([0.0, 0.0, 2.0])
+    monkeypatch.setenv("DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("DEMO_REGISTRY_READINESS_POLL_SECONDS", "1")
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_worker_deployments",
+        lambda namespace, *, label_selector=None: [
+            {"metadata": {"name": "worker"}}
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_worker_deployment",
+        lambda namespace, name, *, dry_run: events.append(
+            ("delete", "WorkerDeployment", name)
+        )
+        or "deleting",
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "read_worker_deployment",
+        lambda namespace, name: {"metadata": {"name": name}},
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_connections",
+        lambda namespace, *, label_selector=None: events.append(
+            ("list", "Connection")
+        )
+        or [],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_namespace",
+        lambda name, *, dry_run: events.append(("delete", "Namespace", name)),
+    )
+    monkeypatch.setattr(
+        reconcile.activity,
+        "heartbeat",
+        lambda details: events.append(("heartbeat", details["name"])),
+    )
+    monkeypatch.setattr(reconcile.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(reconcile.time, "monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(TimeoutError, match="namespace was not deleted"):
+        reconcile.delete_project_namespace_resource(
+            reconcile.ProjectNamespaceDeleteRequest(
+                "tmprl-dem-cld-banking-money-transfer"
+            )
+        )
+
+    assert events == [
+        ("delete", "WorkerDeployment", "worker"),
+        ("heartbeat", "worker"),
+    ]
+
+
+def test_runtime_namespace_teardown_waits_for_each_worker_sequentially(
+    monkeypatch,
+):
+    events = []
+    previous_namespace = "tmprl-dem-cld-banking-money-transfer-old12"
+    project_namespace = "tmprl-dem-cld-banking-money-transfer"
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_worker_deployments",
+        lambda namespace, *, label_selector=None: [
+            {"metadata": {"name": "worker-b"}},
+            {"metadata": {"name": "worker-a"}},
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_worker_deployment",
+        lambda namespace, name, *, dry_run: events.append(("delete", name))
+        or "deleting",
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "read_worker_deployment",
+        lambda namespace, name: events.append(("read", name)) or None,
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_connections",
+        lambda namespace, *, label_selector=None: [],
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_namespace",
+        lambda name, *, dry_run: events.append(("delete-namespace", name))
+        or "deleting",
+    )
+
+    result = reconcile.prune_stale_runtime_candidates(
+        reconcile.PruneStaleRuntimeCandidatesRequest(
+            demo_project=banking_project(),
+            active_version="git-new",
+            active_runtime_namespace=project_namespace,
+            previous_runtime_namespace=previous_namespace,
+        )
+    ).status
+
+    assert result["phase"] == "Pruned"
+    assert events == [
+        ("delete", "worker-a"),
+        ("read", "worker-a"),
+        ("delete", "worker-b"),
+        ("read", "worker-b"),
+        ("delete-namespace", previous_namespace),
     ]
 
 
