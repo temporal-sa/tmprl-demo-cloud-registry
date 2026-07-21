@@ -6,13 +6,16 @@ import asyncio
 import math
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from temporalio import activity, workflow
 from temporalio.client import Client, TLSConfig
 from temporalio.worker import Worker
 
 from demo_registry_operator.workflows import messages
+
+if TYPE_CHECKING:
+    from temporalio.runtime import Runtime
 
 
 DEFAULT_RUNTIME_CANARY_TIMEOUT_SECONDS = 180.0
@@ -22,6 +25,10 @@ DEFAULT_RUNTIME_CANARY_WORKFLOW_RPC_TIMEOUT_SECONDS = 10.0
 DEFAULT_RUNTIME_CANARY_WORKFLOW_TASK_TIMEOUT_SECONDS = 10.0
 DEFAULT_RUNTIME_CANARY_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 MIN_RUNTIME_CANARY_TIMEOUT_SECONDS = 0.1
+
+
+class TemporalRuntimeCanaryShutdownError(RuntimeError):
+    """Raised when a disposable canary worker cannot prove it shut down."""
 
 
 @workflow.defn(name="TemporalRuntimeCredentialCanary")
@@ -156,6 +163,7 @@ async def run_temporal_runtime_canary_attempt(
             address,
             namespace=namespace,
             identity=f"tmprl-demo-cloud-auth-canary-{nonce[:12]}",
+            runtime=runtime_canary_runtime(),
             **client_auth_kwargs(credential, auth_mode),
         ),
         timeout=connect_timeout,
@@ -235,23 +243,40 @@ async def drain_canary_worker(
     *,
     timeout_seconds: float = DEFAULT_RUNTIME_CANARY_SHUTDOWN_TIMEOUT_SECONDS,
 ) -> None:
-    """Best-effort, bounded re-drive of the worker shutdown.
+    """Require a bounded re-drive of the worker shutdown to complete.
 
     ``Worker.shutdown()`` is idempotent and only *waits* for the drain performed
     by the worker's background run task, so it is safe to call again after the
     context manager's own shutdown await was interrupted by a cancellation.
 
-    Do NOT wrap this in ``asyncio.shield``: ``wait_for`` cancels and reaps the
-    coroutine it wraps on timeout/cancel, but a shield would protect that inner
-    task from cancellation, orphaning it and producing "Task was destroyed but
-    it is pending" once the loop tears down. Cancelling our *wait* here is
-    harmless — the shutdown event is already set, so the background run task
-    keeps draining the pollers to completion regardless.
+    An incomplete shutdown must fail the canary. Returning success would allow
+    the workflow to revoke the credential or delete the namespace while SDK
+    Core still owns pollers for it.
     """
     try:
         await asyncio.wait_for(worker.shutdown(), timeout=timeout_seconds)
-    except (TimeoutError, asyncio.CancelledError):
-        pass
+    except TimeoutError as error:
+        raise TemporalRuntimeCanaryShutdownError(
+            "Temporal runtime credential canary worker did not shut down within "
+            f"{timeout_seconds:g} seconds."
+        ) from error
+
+
+def runtime_canary_runtime() -> Runtime:
+    """Return the shared Runtime used only by disposable credential canaries.
+
+    Worker Heartbeating creates a hidden Nexus-only worker per Client/namespace.
+    Candidate credentials and namespaces are intentionally short-lived, so that
+    background poller can outlive its authorization during cleanup. The main
+    registry worker keeps the default heartbeat-enabled Runtime; only these
+    one-off validation workers use this heartbeat-disabled Runtime.
+    """
+
+    # Import lazily so sandboxing TemporalRuntimeCredentialCanary does not
+    # construct a Runtime or thread lock while importing this Workflow module.
+    from demo_registry_operator.activities import runtime_canary
+
+    return runtime_canary.get_runtime()
 
 
 def runtime_canary_passed_status(

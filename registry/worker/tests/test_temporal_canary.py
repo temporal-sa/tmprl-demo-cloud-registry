@@ -6,6 +6,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from temporalio import workflow
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from demo_registry_operator.activities import temporal_canary
 from demo_registry_operator.workflows.messages import (
@@ -95,6 +97,7 @@ def test_runtime_canary_passes_when_worker_shutdown_cancelled_after_completion(m
         SimpleNamespace(connect=fake_connect),
     )
     monkeypatch.setattr(temporal_canary, "Worker", FakeWorker)
+    monkeypatch.setattr(temporal_canary, "runtime_canary_runtime", object)
 
     status = asyncio.run(
         temporal_canary.run_temporal_runtime_canary(
@@ -144,6 +147,7 @@ def test_runtime_canary_reraises_real_activity_cancellation(monkeypatch):
 
 def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
     calls = {}
+    canary_runtime = object()
 
     class FakeClient:
         async def execute_workflow(self, workflow, request, **kwargs):
@@ -184,6 +188,11 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
         SimpleNamespace(connect=fake_connect),
     )
     monkeypatch.setattr(temporal_canary, "Worker", FakeWorker)
+    monkeypatch.setattr(
+        temporal_canary,
+        "runtime_canary_runtime",
+        lambda: canary_runtime,
+    )
 
     status = asyncio.run(
         temporal_canary.run_temporal_runtime_canary_attempt(
@@ -202,6 +211,7 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
     assert calls["connect"]["namespace"] == "example.a2dd6"
     assert calls["connect"]["api_key"] == "candidate-key"
     assert calls["connect"]["tls"] is True
+    assert calls["connect"]["runtime"] is canary_runtime
     assert calls["workflow"]["execution_timeout"] == timedelta(seconds=5)
     request = calls["workflow"]["request"]
     assert isinstance(request, TemporalRuntimeCredentialCanaryRequest)
@@ -211,6 +221,54 @@ def test_runtime_canary_attempt_sets_client_and_workflow_timeouts(monkeypatch):
     assert calls["workflow"]["rpc_timeout"] == timedelta(seconds=3)
     assert status["connectTimeoutSeconds"] == 2
     assert status["workflowRpcTimeoutSeconds"] == 3
+
+
+def test_runtime_canary_runtime_disables_worker_heartbeating(monkeypatch):
+    from demo_registry_operator.activities import runtime_canary
+
+    created = []
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(runtime_canary, "Runtime", FakeRuntime)
+    monkeypatch.setattr(runtime_canary, "_runtime", None)
+
+    first = runtime_canary.get_runtime()
+    second = runtime_canary.get_runtime()
+
+    assert first is second
+    assert len(created) == 1
+    assert created[0]["worker_heartbeat_interval"] is None
+
+
+def test_runtime_canary_workflow_prepares_in_sandbox():
+    async def prepare_workflow():
+        SandboxedWorkflowRunner().prepare_workflow(
+            workflow._Definition.must_from_class(
+                temporal_canary.TemporalRuntimeCredentialCanary
+            )
+        )
+
+    asyncio.run(prepare_workflow())
+
+
+def test_runtime_canary_shutdown_timeout_fails_canary():
+    class StuckWorker:
+        async def shutdown(self):
+            await asyncio.Event().wait()
+
+    with pytest.raises(
+        temporal_canary.TemporalRuntimeCanaryShutdownError,
+        match="did not shut down",
+    ):
+        asyncio.run(
+            temporal_canary.drain_canary_worker(
+                StuckWorker(),
+                timeout_seconds=0.001,
+            )
+        )
 
 
 # --- External canary templates + mTLS env-var mapping (operator-canary gate) ---
