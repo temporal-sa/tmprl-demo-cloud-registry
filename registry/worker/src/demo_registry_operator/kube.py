@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from typing import Any
 
 DEMO_PROJECT_GROUP = "registry.tmprl-demo.cloud"
@@ -1250,6 +1251,348 @@ def list_pods(
         object_metadata_summary(item) for item in getattr(response, "items", [])
     ]
     return [item for item in summaries if item.get("name")]
+
+
+def collect_namespace_diagnostics(
+    namespace: str,
+    *,
+    label_selector: str | None = None,
+    max_pods: int = 20,
+    max_events: int = 200,
+    log_tail_lines: int = 500,
+    max_log_bytes: int = 64 * 1024,
+    max_total_log_bytes: int = 4 * 1024 * 1024,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Collect a bounded, secret-value-free Kubernetes failure snapshot.
+
+    Pod specs are deliberately summarized rather than serialized wholesale so
+    environment values and mounted Secret data never enter the artifact. Logs
+    can themselves contain sensitive application output, so callers must store
+    the returned snapshot in a private destination.
+    """
+    client = _client_module()
+    load_kubernetes_config()
+    core = client.CoreV1Api()
+    pod_response = core.list_namespaced_pod(
+        namespace,
+        label_selector=label_selector,
+        limit=max_pods,
+        _request_timeout=(5, 30),
+    )
+    pods = sorted(
+        list(getattr(pod_response, "items", []) or []),
+        key=lambda item: str(getattr(getattr(item, "metadata", None), "name", "")),
+    )
+    remaining_log_bytes = max_total_log_bytes
+    pod_diagnostics: list[dict[str, Any]] = []
+    collection_errors: list[dict[str, Any]] = []
+    log_entry_count = 0
+    log_error_count = 0
+    logs_truncated = False
+
+    for index, pod in enumerate(pods):
+        pod_summary = pod_diagnostic_summary(pod)
+        pod_name = pod_summary.get("name")
+        container_statuses = pod_container_statuses_by_name(pod)
+        container_logs: list[dict[str, Any]] = []
+        for container_name in pod_container_names(pod):
+            status = container_statuses.get(container_name, {})
+            attempts = [False]
+            if int(status.get("restartCount") or 0) > 0:
+                attempts.append(True)
+            for previous in attempts:
+                if remaining_log_bytes <= 0:
+                    logs_truncated = True
+                    break
+                read_limit = min(max_log_bytes, remaining_log_bytes)
+                try:
+                    raw_log = core.read_namespaced_pod_log(
+                        pod_name,
+                        namespace,
+                        container=container_name,
+                        previous=previous,
+                        timestamps=True,
+                        tail_lines=log_tail_lines,
+                        limit_bytes=read_limit,
+                        _request_timeout=(5, 30),
+                    )
+                except Exception as error:
+                    log_error_count += 1
+                    container_logs.append(
+                        {
+                            "container": container_name,
+                            "stream": "previous" if previous else "current",
+                            "error": bounded_text(str(error), 2 * 1024),
+                        }
+                    )
+                    continue
+
+                log_text = raw_log if isinstance(raw_log, str) else str(raw_log or "")
+                encoded = log_text.encode("utf-8", errors="replace")
+                truncated = len(encoded) > read_limit
+                if truncated:
+                    encoded = encoded[-read_limit:]
+                    log_text = encoded.decode("utf-8", errors="replace")
+                remaining_log_bytes -= len(encoded)
+                log_entry_count += 1
+                container_logs.append(
+                    {
+                        "container": container_name,
+                        "stream": "previous" if previous else "current",
+                        "tailLines": log_tail_lines,
+                        "truncated": truncated,
+                        "bytes": len(encoded),
+                        "log": log_text,
+                    }
+                )
+                logs_truncated = logs_truncated or truncated
+            if remaining_log_bytes <= 0:
+                break
+        pod_summary["logs"] = container_logs
+        pod_diagnostics.append(pod_summary)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "namespace": namespace,
+                    "phase": "CollectingPodLogs",
+                    "pod": pod_name,
+                    "completedPods": index + 1,
+                    "totalPods": len(pods),
+                }
+            )
+
+    events: list[dict[str, Any]] = []
+    events_truncated = False
+    try:
+        event_response = core.list_namespaced_event(
+            namespace,
+            limit=max_events,
+            _request_timeout=(5, 30),
+        )
+        event_items = list(getattr(event_response, "items", []) or [])
+        events = [event_diagnostic_summary(item) for item in event_items]
+        events.sort(key=lambda item: str(item.get("lastObservedAt") or ""))
+        events_truncated = bool(
+            getattr(getattr(event_response, "metadata", None), "_continue", None)
+        )
+    except Exception as error:
+        collection_errors.append(
+            {
+                "resource": "events",
+                "error": bounded_text(str(error), 2 * 1024),
+            }
+        )
+
+    pods_truncated = bool(
+        getattr(getattr(pod_response, "metadata", None), "_continue", None)
+    )
+    return {
+        "namespace": namespace,
+        "labelSelector": label_selector,
+        "pods": pod_diagnostics,
+        "events": events,
+        "limits": {
+            "maxPods": max_pods,
+            "maxEvents": max_events,
+            "logTailLines": log_tail_lines,
+            "maxLogBytesPerStream": max_log_bytes,
+            "maxTotalLogBytes": max_total_log_bytes,
+        },
+        "summary": {
+            "podCount": len(pod_diagnostics),
+            "eventCount": len(events),
+            "logEntryCount": log_entry_count,
+            "logErrorCount": log_error_count,
+            "podsTruncated": pods_truncated,
+            "eventsTruncated": events_truncated,
+            "logsTruncated": logs_truncated,
+            "partial": bool(
+                collection_errors
+                or log_error_count
+                or pods_truncated
+                or events_truncated
+                or logs_truncated
+            ),
+        },
+        "collectionErrors": collection_errors,
+    }
+
+
+def pod_diagnostic_summary(pod: Any) -> dict[str, Any]:
+    metadata = getattr(pod, "metadata", None)
+    spec = getattr(pod, "spec", None)
+    status = getattr(pod, "status", None)
+    return {
+        "name": getattr(metadata, "name", None),
+        "uid": getattr(metadata, "uid", None),
+        "namespace": getattr(metadata, "namespace", None),
+        "createdAt": kubernetes_time(getattr(metadata, "creation_timestamp", None)),
+        "labels": getattr(metadata, "labels", None) or {},
+        "nodeName": getattr(spec, "node_name", None),
+        "serviceAccountName": getattr(spec, "service_account_name", None),
+        "containers": pod_container_specs(pod),
+        "phase": getattr(status, "phase", None),
+        "reason": getattr(status, "reason", None),
+        "message": bounded_text(getattr(status, "message", None), 4 * 1024),
+        "hostIP": getattr(status, "host_ip", None),
+        "podIP": getattr(status, "pod_ip", None),
+        "startedAt": kubernetes_time(getattr(status, "start_time", None)),
+        "conditions": [
+            {
+                "type": getattr(condition, "type", None),
+                "status": getattr(condition, "status", None),
+                "reason": getattr(condition, "reason", None),
+                "message": bounded_text(
+                    getattr(condition, "message", None), 4 * 1024
+                ),
+                "lastTransitionTime": kubernetes_time(
+                    getattr(condition, "last_transition_time", None)
+                ),
+            }
+            for condition in (getattr(status, "conditions", None) or [])
+        ],
+        "containerStatuses": list(pod_container_statuses_by_name(pod).values()),
+    }
+
+
+def pod_container_specs(pod: Any) -> list[dict[str, Any]]:
+    spec = getattr(pod, "spec", None)
+    rendered: list[dict[str, Any]] = []
+    for kind, attribute in (
+        ("init", "init_containers"),
+        ("app", "containers"),
+        ("ephemeral", "ephemeral_containers"),
+    ):
+        for container in (getattr(spec, attribute, None) or []):
+            rendered.append(
+                {
+                    "name": getattr(container, "name", None),
+                    "image": getattr(container, "image", None),
+                    "kind": kind,
+                }
+            )
+    return rendered
+
+
+def pod_container_names(pod: Any) -> list[str]:
+    names: list[str] = []
+    for container in pod_container_specs(pod):
+        name = container.get("name")
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return names
+
+
+def pod_container_statuses_by_name(pod: Any) -> dict[str, dict[str, Any]]:
+    status = getattr(pod, "status", None)
+    rendered: dict[str, dict[str, Any]] = {}
+    for kind, attribute in (
+        ("init", "init_container_statuses"),
+        ("app", "container_statuses"),
+        ("ephemeral", "ephemeral_container_statuses"),
+    ):
+        for container in (getattr(status, attribute, None) or []):
+            name = getattr(container, "name", None)
+            if not isinstance(name, str) or not name:
+                continue
+            rendered[name] = {
+                "name": name,
+                "kind": kind,
+                "ready": getattr(container, "ready", None),
+                "restartCount": getattr(container, "restart_count", None),
+                "image": getattr(container, "image", None),
+                "imageID": getattr(container, "image_id", None),
+                "containerID": getattr(container, "container_id", None),
+                "state": container_state_summary(getattr(container, "state", None)),
+                "lastState": container_state_summary(
+                    getattr(container, "last_state", None)
+                ),
+            }
+    return rendered
+
+
+def container_state_summary(state: Any) -> dict[str, Any]:
+    if state is None:
+        return {}
+    waiting = getattr(state, "waiting", None)
+    running = getattr(state, "running", None)
+    terminated = getattr(state, "terminated", None)
+    if waiting is not None:
+        return {
+            "phase": "waiting",
+            "reason": getattr(waiting, "reason", None),
+            "message": bounded_text(getattr(waiting, "message", None), 4 * 1024),
+        }
+    if running is not None:
+        return {
+            "phase": "running",
+            "startedAt": kubernetes_time(getattr(running, "started_at", None)),
+        }
+    if terminated is not None:
+        return {
+            "phase": "terminated",
+            "exitCode": getattr(terminated, "exit_code", None),
+            "signal": getattr(terminated, "signal", None),
+            "reason": getattr(terminated, "reason", None),
+            "message": bounded_text(
+                getattr(terminated, "message", None), 4 * 1024
+            ),
+            "startedAt": kubernetes_time(getattr(terminated, "started_at", None)),
+            "finishedAt": kubernetes_time(
+                getattr(terminated, "finished_at", None)
+            ),
+            "containerID": getattr(terminated, "container_id", None),
+        }
+    return {}
+
+
+def event_diagnostic_summary(event: Any) -> dict[str, Any]:
+    metadata = getattr(event, "metadata", None)
+    involved = getattr(event, "involved_object", None)
+    source = getattr(event, "source", None)
+    observed_at = (
+        getattr(event, "event_time", None)
+        or getattr(event, "last_timestamp", None)
+        or getattr(metadata, "creation_timestamp", None)
+    )
+    return {
+        "type": getattr(event, "type", None),
+        "reason": getattr(event, "reason", None),
+        "message": bounded_text(getattr(event, "message", None), 8 * 1024),
+        "count": getattr(event, "count", None),
+        "firstObservedAt": kubernetes_time(
+            getattr(event, "first_timestamp", None)
+        ),
+        "lastObservedAt": kubernetes_time(observed_at),
+        "action": getattr(event, "action", None),
+        "reportingController": getattr(event, "reporting_controller", None),
+        "source": {
+            "component": getattr(source, "component", None),
+            "host": getattr(source, "host", None),
+        },
+        "involvedObject": {
+            "apiVersion": getattr(involved, "api_version", None),
+            "kind": getattr(involved, "kind", None),
+            "namespace": getattr(involved, "namespace", None),
+            "name": getattr(involved, "name", None),
+            "uid": getattr(involved, "uid", None),
+        },
+    }
+
+
+def kubernetes_time(value: Any) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
+
+def bounded_text(value: Any, limit: int) -> str | None:
+    if value is None:
+        return None
+    rendered = str(value)
+    return rendered if len(rendered) <= limit else rendered[:limit] + "…"
 
 
 def delete_pod(

@@ -185,6 +185,12 @@ spec:
                 lastFailedRevision:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                diagnosticsStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                lastFailedDiagnostics:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 workerDeploymentRollbackStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

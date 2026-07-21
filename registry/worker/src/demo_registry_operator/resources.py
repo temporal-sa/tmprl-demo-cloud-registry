@@ -2321,6 +2321,16 @@ def platform_env_vars(
         proxy_image = image_overrides.get(TEMPORAL_PROXY_BUILD_NAME)
         if proxy_image:
             env.append({"name": TEMPORAL_PROXY_IMAGE_ENV, "value": proxy_image})
+        diagnostics_bucket = os.getenv(
+            "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET", ""
+        ).strip()
+        if diagnostics_bucket:
+            env.append(
+                {
+                    "name": "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET",
+                    "value": diagnostics_bucket,
+                }
+            )
         # Propagate our own color into the self-rendered operator worker. Its own
         # config.from_env derives the task queue from DEMO_REGISTRY_CLUSTER, so this
         # is what makes the self-rendered operator poll registry-management-<color>.
@@ -3880,6 +3890,10 @@ def catalog_status_entry(
             status.get("serverlessWorkerStatus")
         ),
         "smokeCheck": status.get("smokeCheckStatus"),
+        "diagnostics": (
+            status.get("diagnosticsStatus")
+            or status.get("lastFailedDiagnostics")
+        ),
         "prune": status.get("pruneStatus"),
         "prunedResources": status.get("prunedResources", []),
         "finalizeStatus": status.get("finalizeStatus"),

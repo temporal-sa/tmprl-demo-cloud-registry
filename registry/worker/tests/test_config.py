@@ -25,6 +25,19 @@ def test_public_ecr_region_defaults_to_global_region(monkeypatch):
     assert config.public_ecr_region == "us-east-1"
 
 
+def test_rollout_diagnostics_bucket_is_optional_and_configurable(monkeypatch):
+    monkeypatch.delenv("DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET", raising=False)
+    assert WorkerConfig.from_env().rollout_diagnostics_bucket is None
+
+    monkeypatch.setenv(
+        "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET",
+        "tmprl-dem-cld-rollout-diagnostics",
+    )
+    assert WorkerConfig.from_env().rollout_diagnostics_bucket == (
+        "tmprl-dem-cld-rollout-diagnostics"
+    )
+
+
 def test_local_docker_build_mode_is_no_longer_accepted(monkeypatch):
     monkeypatch.setenv("DEMO_REGISTRY_BUILD_MODE", "local-docker")
 

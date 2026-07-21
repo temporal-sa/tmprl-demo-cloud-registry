@@ -51,6 +51,11 @@ output "ci_tofu_role_arn" {
   value       = aws_iam_role.ci_tofu.arn
 }
 
+output "rollout_diagnostics_bucket" {
+  description = "Private S3 bucket containing short-lived failed-rollout diagnostics."
+  value       = aws_s3_bucket.rollout_diagnostics.id
+}
+
 output "acm_wildcard_certificate_arn" {
   description = "ARN of the reused *.<domain> ACM wildcard cert (P4 attaches it to the load balancer)."
   value       = data.aws_acm_certificate.wildcard.arn

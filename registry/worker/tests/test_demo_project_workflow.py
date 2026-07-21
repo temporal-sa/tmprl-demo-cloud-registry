@@ -1043,6 +1043,74 @@ def test_smoke_check_failed_settles_then_force_reconcile_retries():
     assert wf._pending_force_reconcile == {"token": "retry-1", "reason": "manual"}
 
 
+# --- External-resource re-check: converge once a missing secret appears ---
+
+
+def test_external_resources_pending_only_when_waiting_with_known_spec():
+    wf = workflow_instance()
+    # Needs both a last-known spec to re-reconcile and the waiting phase.
+    wf._status = {"phase": "WaitingForExternalResources"}
+    wf._last_demo_project = None
+    assert wf._external_resources_pending() is False
+
+    wf._last_demo_project = project()
+    assert wf._external_resources_pending() is True
+
+    wf._status = {"phase": "Ready"}
+    assert wf._external_resources_pending() is False
+
+
+def test_external_resource_recheck_drives_wait_timeout():
+    wf = workflow_instance()
+    wf._last_demo_project = project()
+    wf._status = {"phase": "WaitingForExternalResources"}
+
+    assert (
+        wf._external_resource_recheck_timeout()
+        == demo_project_workflow.EXTERNAL_RESOURCE_RECHECK_INTERVAL
+    )
+    # With no rotation scheduled, the re-check timer is what wakes the workflow.
+    timeout, summary = wf._next_wait_timeout()
+    assert timeout == demo_project_workflow.EXTERNAL_RESOURCE_RECHECK_INTERVAL
+    assert summary == "external-resource-recheck"
+
+
+def test_no_wait_timeout_when_not_waiting_for_external_resources():
+    wf = workflow_instance()
+    wf._status = {"phase": "Ready"}
+    assert wf._external_resource_recheck_timeout() is None
+    assert wf._next_wait_timeout() == (None, None)
+
+
+def test_recheck_wakeup_reconciles_last_spec_without_a_signal():
+    wf = workflow_instance()
+    demo_project = project()
+    wf._last_demo_project = demo_project
+    wf._status = {"phase": "WaitingForExternalResources"}
+    # No pending spec, no force, no rotation.
+    assert wf._pending_spec is None
+
+    reconcile_input = asyncio.run(wf._select_demo_project_for_reconcile("demo"))
+
+    assert reconcile_input.demo_project is demo_project
+    assert reconcile_input.force_reconcile_requested is False
+    assert reconcile_input.rotation_due is False
+    assert wf._current_reconcile_identity == reconcile_identity(demo_project)
+
+
+def test_recheck_yields_to_a_pending_spec_signal():
+    wf = workflow_instance()
+    wf._last_demo_project = project(generation=1)
+    wf._status = {"phase": "WaitingForExternalResources"}
+    newer = project(generation=2)
+    wf.reconcile(reconcile_signal(newer))
+
+    reconcile_input = asyncio.run(wf._select_demo_project_for_reconcile("demo"))
+
+    # A real pending spec takes precedence over the bare re-check wake-up.
+    assert reconcile_input.demo_project is newer
+
+
 # --- Saga: first-time-failure compensation vs established-project settle ---
 
 

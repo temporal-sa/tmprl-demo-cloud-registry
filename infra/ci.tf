@@ -272,6 +272,18 @@ resource "aws_iam_role_policy" "ci_tofu" {
         ]
         Resource = "arn:${local.partition}:s3:::${local.tofu_state_bucket}/*"
       },
+      {
+        # Bucket-scoped because the CI role must create and manage the rollout
+        # diagnostics bucket declared by this root stack. It has no access to
+        # unrelated account buckets.
+        Sid    = "ManageRolloutDiagnosticsBucket"
+        Effect = "Allow"
+        Action = "s3:*"
+        Resource = [
+          "arn:${local.partition}:s3:::${local.rollout_diagnostics_bucket}",
+          "arn:${local.partition}:s3:::${local.rollout_diagnostics_bucket}/*",
+        ]
+      },
     ]
   })
 }

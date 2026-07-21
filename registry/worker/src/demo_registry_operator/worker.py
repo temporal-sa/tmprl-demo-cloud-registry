@@ -141,6 +141,9 @@ from demo_registry_operator.activities.revision import (
     set_revision_phase,
     wait_for_revision_cleanup,
 )
+from demo_registry_operator.activities.rollout_diagnostics import (
+    capture_rollout_diagnostics,
+)
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.derive import (
     demo_project_workflow_id,
@@ -188,6 +191,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.force_reconcile",
     "demo_registry_operator.activities.instruqt",
     "demo_registry_operator.activities.reconcile",
+    "demo_registry_operator.activities.rollout_diagnostics",
     "demo_registry_operator.derive",
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
@@ -384,6 +388,7 @@ async def main() -> None:
                     record_catalog_project_status,
                     wait_for_candidate_readiness,
                     wait_for_worker_deployment_rollouts,
+                    capture_rollout_diagnostics,
                     resolve_source_images,
                     build_workspace_plan,
                     apply_workspace_resource,

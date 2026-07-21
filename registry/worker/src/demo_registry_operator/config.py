@@ -66,6 +66,7 @@ class WorkerConfig:
     catalog_status_mirror_namespace: str
     source_watch_namespace: str
     source_watch_interval: str
+    rollout_diagnostics_bucket: str | None = None
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -190,6 +191,9 @@ class WorkerConfig:
             source_watch_interval=env_first(
                 "DEMO_REGISTRY_SOURCE_WATCH_INTERVAL",
                 default=DEFAULT_SOURCE_WATCH_INTERVAL,
+            ),
+            rollout_diagnostics_bucket=env_optional(
+                "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET"
             ),
         )
 

@@ -65,6 +65,13 @@ When a worker component opts into Worker Controller versioning, reconcile
 renders a project-local `Connection` and `WorkerDeployment`, mirrors
 `WorkerDeployment.status` into `DemoProject.status.workerDeploymentStatus`, and
 waits for the controller rollout to become ready before public route promotion.
+Before a failed candidate is deleted, the Kubernetes runtime workflow captures
+bounded pod status, namespace Events, and current/previous container logs as a
+gzip-compressed JSON object in the configured S3 diagnostics bucket. The durable
+object reference is recorded under `DemoProject.status.diagnosticsStatus.s3Uri`
+and retained across later successful reconciles as `lastFailedDiagnostics`.
+If the S3 upload fails, route rollback still runs but candidate deletion is
+blocked so the Kubernetes evidence is not silently lost.
 Runtime ExternalSecret sync is also recorded under
 `DemoProject.status.externalSecretStatus`, including each ExternalSecret's
 Ready condition and controller message.
@@ -93,6 +100,9 @@ Environment variables:
 - `TEMPORAL_TLS`, default `false`
 - `DEMO_REGISTRY_TASK_QUEUE`, default `registry-management`
 - `DEMO_REGISTRY_ACTIVITY_WORKERS`, default `20`
+- `DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET`, optional; private S3 bucket for
+  failed Kubernetes rollout evidence. Blue/green configure the Tofu-managed
+  platform diagnostics bucket, whose objects expire after 30 days.
 - `DEMO_REGISTRY_WORKER_ENABLED`, default `true`
 - `DEMO_REGISTRY_WATCH_ENABLED`, default `false`; accepts `true` for the legacy
   always-on watcher, `auto` to run only from the current ready WorkerDeployment

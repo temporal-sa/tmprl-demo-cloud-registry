@@ -10,6 +10,7 @@ from temporalio.exceptions import ActivityError
 from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import reconcile as reconcile_activities
 from demo_registry_operator.activities import revision as revision_activities
+from demo_registry_operator.activities import rollout_diagnostics as diagnostics_activities
 from demo_registry_operator.workflows import messages
 
 
@@ -25,6 +26,13 @@ CHECK_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
+)
+DIAGNOSTICS_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    maximum_attempts=5,
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 
@@ -79,7 +87,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        reconcile_status = reconcile_result.status
+        reconcile_status = carry_forward_last_failed_diagnostics(
+            reconcile_result.status,
+            previous_status,
+        )
         if revision_summary is not None:
             await self._set_revision_phase(
                 revision_summary["name"],
@@ -119,6 +130,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     demo_project,
                     reconcile_status,
                     previous_status,
+                    failure_phase="WorkerRolloutFailed",
+                    failure_status={
+                        "workerDeploymentStatus": worker_rollout_result,
+                    },
                     worker_rollout_failed=True,
                 )
                 status = self._worker_rollout_failed_status(
@@ -190,6 +205,8 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 demo_project,
                 reconcile_status,
                 previous_status,
+                failure_phase="CandidateNotReady",
+                failure_status={"readinessStatus": readiness_result},
             )
             status = self._candidate_not_ready_status(
                 reconcile_status,
@@ -209,6 +226,11 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 demo_project,
                 reconcile_status,
                 previous_status,
+                failure_phase="SmokeCheckFailed",
+                failure_status={
+                    "readinessStatus": readiness_result,
+                    "smokeCheckStatus": smoke_result,
+                },
             )
             status = self._smoke_check_failed_status(
                 reconcile_status,
@@ -442,8 +464,20 @@ class DemoProjectKubernetesRuntimeWorkflow:
         reconcile_status: dict[str, Any],
         previous_status: dict[str, Any],
         *,
+        failure_phase: str,
+        failure_status: dict[str, Any],
         worker_rollout_failed: bool = False,
     ) -> dict[str, Any]:
+        try:
+            diagnostics_status = await self._capture_failed_candidate_diagnostics(
+                project,
+                demo_project,
+                reconcile_status,
+                failure_phase=failure_phase,
+                failure_status=failure_status,
+            )
+        except ActivityError as error:
+            diagnostics_status = diagnostics_capture_failure_status(error)
         try:
             rollback_status = await self._restore_previous_active_runtime_routes(
                 project,
@@ -455,7 +489,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 "Previous active routes could not be restored",
                 error,
             )
-        result: dict[str, Any] = {"rollbackStatus": rollback_status}
+        result: dict[str, Any] = {
+            "diagnosticsStatus": diagnostics_status,
+            "rollbackStatus": rollback_status,
+        }
         # 4.2: on a worker rollout failure, render+apply the previous active
         # WorkerDeployment (Worker Versioning rollback) before tearing the candidate down.
         if worker_rollout_failed:
@@ -470,6 +507,21 @@ class DemoProjectKubernetesRuntimeWorkflow:
                     error,
                 )
             result["workerDeploymentRollbackStatus"] = worker_rollback_status
+        if diagnostics_status.get("phase") == "Error":
+            prune_status = {
+                "phase": "Retained",
+                "reason": "DiagnosticsCaptureFailed",
+                "message": (
+                    "Failed candidate resources were retained because durable "
+                    "diagnostic capture failed."
+                ),
+                "resources": [],
+            }
+            result["pruneStatus"] = prune_status
+            revision_cleanup = await self._retain_failed_revision_for_diagnostics()
+            if revision_cleanup is not None:
+                result["revisionCleanupStatus"] = revision_cleanup
+            return result
         prune_status = await self._delete_failed_candidate_resources(
             demo_project,
             reconcile_status,
@@ -481,6 +533,58 @@ class DemoProjectKubernetesRuntimeWorkflow:
         if revision_cleanup is not None:
             result["revisionCleanupStatus"] = revision_cleanup
         return result
+
+    async def _capture_failed_candidate_diagnostics(
+        self,
+        project: str,
+        demo_project: dict[str, Any],
+        reconcile_status: dict[str, Any],
+        *,
+        failure_phase: str,
+        failure_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        candidate_status = reconcile_status.get("candidateRolloutStatus", {})
+        candidate_status = (
+            candidate_status if isinstance(candidate_status, dict) else {}
+        )
+        candidate_version = candidate_status.get("imageVersion")
+        if not isinstance(candidate_version, str) or not candidate_version:
+            return {
+                "phase": "Skipped",
+                "ok": True,
+                "reason": "CandidateVersionUnavailable",
+                "message": "Failed candidate did not report an image version.",
+            }
+        runtime_namespace = candidate_status.get("runtimeNamespace")
+        base_namespace = resources.project_namespace(demo_project)
+        namespace = (
+            runtime_namespace
+            if isinstance(runtime_namespace, str) and runtime_namespace
+            else base_namespace
+        )
+        label_selector = (
+            None
+            if namespace != base_namespace
+            else (
+                "platform.temporal.io/rollout-version="
+                f"{candidate_version}"
+            )
+        )
+        capture_result = await workflow.execute_activity(
+            diagnostics_activities.capture_rollout_diagnostics,
+            diagnostics_activities.CaptureRolloutDiagnosticsRequest(
+                project=project,
+                candidate_version=candidate_version,
+                namespace=namespace,
+                failure_phase=failure_phase,
+                failure_status=failure_status,
+                label_selector=label_selector,
+            ),
+            start_to_close_timeout=timedelta(minutes=3),
+            heartbeat_timeout=timedelta(seconds=30),
+            retry_policy=DIAGNOSTICS_RETRY_POLICY,
+        )
+        return capture_result.status
 
     async def _restore_previous_active_runtime_routes(
         self,
@@ -636,6 +740,10 @@ class DemoProjectKubernetesRuntimeWorkflow:
         revision_cleanup = cleanup_status.get("revisionCleanupStatus")
         if isinstance(revision_cleanup, dict):
             rendered["revisionCleanupStatus"] = revision_cleanup
+        diagnostics_status = cleanup_status.get("diagnosticsStatus")
+        if isinstance(diagnostics_status, dict):
+            rendered["diagnosticsStatus"] = diagnostics_status
+            rendered["lastFailedDiagnostics"] = diagnostics_status
         return rendered
 
     # --- Phase 4.1-4.3: revision lifecycle (activity-calling) ---
@@ -809,6 +917,31 @@ class DemoProjectKubernetesRuntimeWorkflow:
         )
         return cleanup
 
+    async def _retain_failed_revision_for_diagnostics(self) -> dict[str, Any] | None:
+        revision = self._revision_summary
+        if not revision:
+            return None
+        await self._set_revision_phase(
+            revision["name"],
+            "Failed",
+            "Candidate retained because durable diagnostic capture failed.",
+        )
+        cleanup = {
+            "phase": "Retained",
+            "reason": "DiagnosticsCaptureFailed",
+            "message": (
+                "Revision and runtime resources were retained for manual diagnostics."
+            ),
+        }
+        await self._patch_revision_refs(
+            self._project,
+            {
+                "lastFailedRevision": revision,
+                "revisionCleanupStatus": cleanup,
+            },
+        )
+        return cleanup
+
     async def _finalize_promoted_revision(
         self, promoted_status: dict[str, Any]
     ) -> dict[str, Any]:
@@ -852,6 +985,29 @@ def cleanup_recovery_failure_status(
         "message": f"{message}; failed candidate cleanup continued.",
         "error": str(error),
     }
+
+
+def diagnostics_capture_failure_status(error: ActivityError) -> dict[str, Any]:
+    return {
+        "phase": "Error",
+        "ok": False,
+        "reason": "ActivityFailed",
+        "message": (
+            "Durable rollout diagnostic capture failed; failed candidate deletion "
+            "was blocked to preserve Kubernetes logs and Events."
+        ),
+        "error": str(error),
+    }
+
+
+def carry_forward_last_failed_diagnostics(
+    status: dict[str, Any],
+    previous_status: dict[str, Any],
+) -> dict[str, Any]:
+    last_failed = previous_status.get("lastFailedDiagnostics")
+    if not isinstance(last_failed, dict):
+        return status
+    return {**status, "lastFailedDiagnostics": last_failed}
 
 
 def _revision_name_of(ref: Any) -> str | None:

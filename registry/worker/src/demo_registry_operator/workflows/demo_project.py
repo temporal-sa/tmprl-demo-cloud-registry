@@ -59,6 +59,14 @@ TERMINAL_ROLLOUT_FAILURE_PHASES = {
     "SmokeCheckFailed",
     "WorkerRolloutFailed",
 }
+# Phases where the reconcile settled while blocked on an external resource the
+# operator does not own (e.g. a project-owner AWS Secrets Manager value that must
+# be created out-of-band). Nothing changes the reconcile key when that value later
+# appears, so the entity workflow re-verifies on a durable timer until it clears.
+EXTERNAL_RESOURCE_WAIT_PHASES = {
+    "WaitingForExternalResources",
+}
+EXTERNAL_RESOURCE_RECHECK_INTERVAL = timedelta(minutes=2)
 FORCE_TEMPORAL_AUTH_ROTATION_REASON = "rotate-temporal-auth"
 
 
@@ -679,6 +687,15 @@ class DemoProjectWorkflow:
             and self._temporal_api_key_rotation_due()
             and self._last_demo_project is not None
         )
+        # A bare re-check wake-up (no signal, no rotation) while blocked on an
+        # external resource: re-reconcile the last-known spec so the newly-present
+        # resource is picked up. Yields to any real pending spec/force signal.
+        recheck_due = (
+            not force_reconcile_requested
+            and self._pending_spec is None
+            and not rotation_due
+            and self._external_resources_pending()
+        )
 
         if force_reconcile_requested:
             assert force_reconcile is not None
@@ -692,6 +709,9 @@ class DemoProjectWorkflow:
                 demo_project,
                 self._temporal_api_key_rotation,
             )
+        elif recheck_due:
+            demo_project = self._last_demo_project
+            self._current_reconcile_identity = reconcile_identity(demo_project)
         else:
             demo_project = self._pending_spec
             self._pending_spec = None
@@ -2102,7 +2122,7 @@ class DemoProjectWorkflow:
             if self._has_pending_action() or self._temporal_api_key_rotation_due():
                 return
 
-            timeout = self._temporal_api_key_rotation_timeout()
+            timeout, timeout_summary = self._next_wait_timeout()
             if timeout is None:
                 await workflow.wait_condition(self._has_pending_action)
                 return
@@ -2110,7 +2130,7 @@ class DemoProjectWorkflow:
                 await workflow.wait_condition(
                     self._has_pending_action,
                     timeout=timeout,
-                    timeout_summary="temporal-auth-rotation",
+                    timeout_summary=timeout_summary,
                 )
                 return
             except asyncio.TimeoutError:
@@ -2137,6 +2157,32 @@ class DemoProjectWorkflow:
         if delay.total_seconds() <= 0:
             return timedelta(seconds=0)
         return delay
+
+    def _external_resources_pending(self) -> bool:
+        # A reconcile that settled in WaitingForExternalResources is blocked on a
+        # resource we don't control (a missing Secrets Manager value). Re-verify
+        # the last-known spec on a timer so the project converges once it appears.
+        return (
+            self._last_demo_project is not None
+            and isinstance(self._status, dict)
+            and self._status.get("phase") in EXTERNAL_RESOURCE_WAIT_PHASES
+        )
+
+    def _external_resource_recheck_timeout(self) -> timedelta | None:
+        if not self._external_resources_pending():
+            return None
+        return EXTERNAL_RESOURCE_RECHECK_INTERVAL
+
+    def _next_wait_timeout(self) -> tuple[timedelta | None, str | None]:
+        # Wake on whichever durable timer fires first: a due Temporal auth
+        # rotation or the next external-resource re-check.
+        rotation = self._temporal_api_key_rotation_timeout()
+        recheck = self._external_resource_recheck_timeout()
+        if rotation is not None and (recheck is None or rotation <= recheck):
+            return rotation, "temporal-auth-rotation"
+        if recheck is not None:
+            return recheck, "external-resource-recheck"
+        return None, None
 
     def _is_duplicate_reconcile_signal(self, identity: dict[str, str]) -> bool:
         return any(

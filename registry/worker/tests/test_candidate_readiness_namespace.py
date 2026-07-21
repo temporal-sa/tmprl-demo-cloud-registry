@@ -326,6 +326,10 @@ def test_failed_candidate_cleanup_continues_after_recovery_failures():
     events = []
     runtime = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
 
+    async def capture_diagnostics(*args, **kwargs):
+        events.append("capture-diagnostics")
+        return {"phase": "Captured", "s3Uri": "s3://diagnostics/failure.json.gz"}
+
     async def fail_routes(*args, **kwargs):
         events.append("routes")
         raise activity_error("route rollback failed")
@@ -342,6 +346,7 @@ def test_failed_candidate_cleanup_continues_after_recovery_failures():
         events.append("finalize-revision")
         return {"phase": "Cleaned"}
 
+    runtime._capture_failed_candidate_diagnostics = capture_diagnostics
     runtime._restore_previous_active_runtime_routes = fail_routes
     runtime._rollback_worker_deployments = fail_worker
     runtime._delete_failed_candidate_resources = delete_candidate
@@ -353,17 +358,67 @@ def test_failed_candidate_cleanup_continues_after_recovery_failures():
             {"metadata": {"name": "demo"}},
             {"candidateRolloutStatus": {"imageVersion": "git-failed"}},
             {"activeImageVersion": "git-old"},
+            failure_phase="WorkerRolloutFailed",
+            failure_status={"workerDeploymentStatus": {"phase": "TimedOut"}},
             worker_rollout_failed=True,
         )
     )
 
     assert events == [
+        "capture-diagnostics",
         "routes",
         "worker",
         "delete-candidate",
         "finalize-revision",
     ]
     assert result["rollbackStatus"]["phase"] == "Error"
+    assert result["diagnosticsStatus"]["phase"] == "Captured"
     assert result["workerDeploymentRollbackStatus"]["phase"] == "Error"
     assert result["pruneStatus"]["phase"] == "Deleted"
     assert result["revisionCleanupStatus"]["phase"] == "Cleaned"
+
+
+def test_failed_candidate_cleanup_retains_resources_when_diagnostics_fail():
+    events = []
+    runtime = kubernetes_runtime_workflow.DemoProjectKubernetesRuntimeWorkflow()
+
+    async def fail_diagnostics(*args, **kwargs):
+        events.append("capture-diagnostics")
+        raise activity_error("s3 upload failed")
+
+    async def restore_routes(*args, **kwargs):
+        events.append("routes")
+        return {"phase": "Restored"}
+
+    async def forbidden_delete(*args, **kwargs):
+        raise AssertionError("candidate must be retained")
+
+    async def forbidden_finalize():
+        raise AssertionError("revision delete must be retained")
+
+    async def retain_revision():
+        events.append("retain-revision")
+        return {"phase": "Retained", "reason": "DiagnosticsCaptureFailed"}
+
+    runtime._capture_failed_candidate_diagnostics = fail_diagnostics
+    runtime._restore_previous_active_runtime_routes = restore_routes
+    runtime._delete_failed_candidate_resources = forbidden_delete
+    runtime._finalize_failed_revision = forbidden_finalize
+    runtime._retain_failed_revision_for_diagnostics = retain_revision
+
+    result = asyncio.run(
+        runtime._cleanup_failed_candidate(
+            "demo",
+            {"metadata": {"name": "demo"}},
+            {"candidateRolloutStatus": {"imageVersion": "git-failed"}},
+            {"activeImageVersion": "git-old"},
+            failure_phase="CandidateNotReady",
+            failure_status={"readinessStatus": {"phase": "TimedOut"}},
+        )
+    )
+
+    assert events == ["capture-diagnostics", "routes", "retain-revision"]
+    assert result["diagnosticsStatus"]["phase"] == "Error"
+    assert result["rollbackStatus"]["phase"] == "Restored"
+    assert result["pruneStatus"]["phase"] == "Retained"
+    assert result["revisionCleanupStatus"]["phase"] == "Retained"

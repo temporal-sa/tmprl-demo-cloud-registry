@@ -79,6 +79,20 @@ rules:
       - create
       - patch
   - apiGroups:
+      - ""
+    resources:
+      - pods
+      - events
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - pods/log
+    verbs:
+      - get
+  - apiGroups:
       - apps
     resources:
       - deployments
