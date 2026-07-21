@@ -67,6 +67,7 @@ spec:
         - PGUSER
         - PGSSLMODE
         - LAKEBASE_ENDPOINT
+        - GOOGLE_DRIVE_CREDENTIALS_JSON
 
   components:
     app:
@@ -102,6 +103,15 @@ spec:
       build: worker
       secrets:
         - lakebase-worker
+      command:
+        - /bin/sh
+        - -c
+      args:
+        - |
+          set -eu
+          umask 077
+          printf '%s' "$GOOGLE_DRIVE_CREDENTIALS_JSON" > "$GOOGLE_DRIVE_CREDENTIALS_FILE"
+          exec retrieval-worker
       env:
         - name: DATABRICKS_AUTH_TYPE
           value: oauth-m2m
@@ -110,7 +120,27 @@ spec:
         - name: RETRIEVAL_DEMO_MODE
           value: "true"
         - name: RETRIEVAL_ADAPTER_BUNDLE_FACTORY
-          value: retrieval.demo.scripted_provider:create_adapter_bundle
+          value: retrieval.google_drive.bundle:create_adapter_bundle
+        - name: RETRIEVAL_STAGING_BACKEND
+          value: lakebase
+        - name: DATABRICKS_EMBEDDING_ENDPOINT
+          value: retrieval-demo-gte-large-en
+        - name: RETRIEVAL_EMBEDDING_DIMENSION
+          value: "1024"
+        - name: GOOGLE_DRIVE_CREDENTIALS_FILE
+          value: /tmp/google-drive-service-account.json
+        - name: GOOGLE_DRIVE_CREDENTIAL_KEY
+          value: drive-demo
+        - name: GOOGLE_DRIVE_USER_KEY
+          value: drive-user
+        - name: GOOGLE_DRIVE_ROOT_FOLDER_ID
+          value: 1qKWnoELmCbatHv3MKT4TwKiPdgYeC-vi
+        - name: GOOGLE_DRIVE_HELD_FILE_ID
+          value: 1srG1JJr2XXMq9yudkvgYQaTfuj6evjhK
+        - name: GOOGLE_DRIVE_MAX_FILE_BYTES
+          value: "52428800"
+        - name: GOOGLE_DRIVE_REQUEST_TIMEOUT
+          value: "60"
         - name: TEMPORAL_RETRIEVAL_TASK_QUEUE
           value: retrieval-v2
         - name: TEMPORAL_PROVIDER_TASK_QUEUE
