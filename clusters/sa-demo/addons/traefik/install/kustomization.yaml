@@ -1,9 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - namespace.yaml
-  - helmrepository.yaml
-  - helmrelease.yaml
-  # Chart 23.0.1 renders its built-in PDB as policy/v1beta1 unless Helm is
-  # connected to the cluster during rendering. Keep the PDB explicit and native.
-  - poddisruptionbudget.yaml

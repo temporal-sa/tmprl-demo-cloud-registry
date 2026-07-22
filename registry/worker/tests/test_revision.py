@@ -7,7 +7,7 @@ import yaml
 from demo_registry_operator import kube
 
 ROOT = Path(__file__).resolve().parents[3]
-CRD_DIR = ROOT / "clusters" / "sa-demo" / "bootstrap" / "crds"
+CRD_DIR = ROOT / "clusters" / "blue" / "bootstrap" / "crds"
 DEMOPROJECTS_CRD = CRD_DIR / "demoprojects.registry.tmprl-demo.cloud.yaml"
 REVISIONS_CRD = CRD_DIR / "demoprojectrevisions.registry.tmprl-demo.cloud.yaml"
 KUSTOMIZATION = CRD_DIR / "kustomization.yaml"
@@ -113,10 +113,10 @@ def test_demoprojectrevision_crd_registered_in_kustomization():
 
 # --- Task 1.3: RBAC (cluster-scoped + finalizers subresource) ---
 
-RBAC = ROOT / "clusters" / "sa-demo" / "bootstrap" / "registry-operator" / "rbac.yaml"
+RBAC = ROOT / "clusters" / "blue" / "bootstrap" / "registry-operator" / "rbac.yaml"
 REGISTRY_OPERATOR_RBACS = tuple(
     ROOT / "clusters" / cluster / "bootstrap" / "registry-operator" / "rbac.yaml"
-    for cluster in ("blue", "green", "sa-demo")
+    for cluster in ("blue", "green")
 )
 
 

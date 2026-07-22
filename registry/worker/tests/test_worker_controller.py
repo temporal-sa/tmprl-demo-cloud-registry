@@ -1351,7 +1351,7 @@ def test_registry_operator_rbac_can_manage_canary_and_prune_resources():
     manifests = list(
         yaml.safe_load_all(
             (
-                ROOT / "clusters/sa-demo/bootstrap/registry-operator/rbac.yaml"
+                ROOT / "clusters/blue/bootstrap/registry-operator/rbac.yaml"
             ).read_text()
         )
     )

@@ -1,20 +1,10 @@
 # LiteLLM shared Postgres (P7). One RDS instance in the Tofu-managed VPC, shared by
-# every color's litellm gateway (blue + green). It is restored ONCE from a snapshot
-# of the legacy hand-built RDS (temporal-instruqt-litellm, which lives in the pet's
-# VPC with no path from here) so the LiteLLM master key + virtual API keys + config
-# migrate intact. The LITELLM_MASTER_KEY / LITELLM_SALT_KEY stay in the shared
+# every color's litellm gateway (blue + green). It was restored once from a
+# snapshot of the legacy temporal-instruqt-litellm RDS so the LiteLLM master key,
+# virtual API keys, and config migrated intact. The LITELLM_MASTER_KEY and
+# LITELLM_SALT_KEY stay in the shared
 # Secrets Manager secret (tmprl-dem-cld/platform/instruqt-litellm/runtime) unchanged,
 # so the restored rows remain decryptable; only DATABASE_URL's host is repointed.
-#
-# Migration runbook (live steps, run at go-time):
-#   1. Snapshot the legacy DB:
-#      aws rds create-db-snapshot --region us-west-1 \
-#        --db-instance-identifier temporal-instruqt-litellm \
-#        --db-snapshot-identifier <snap>            # wait until "available"
-#   2. tofu apply -var litellm_db_snapshot_identifier=<snap>  (creates this instance)
-#   3. Update the SM secret's DATABASE_URL host -> aws_db_instance.litellm endpoint
-#      (user/password/dbname unchanged — preserved by the snapshot).
-#   4. Re-wire clusters/blue/addons/instruqt-litellm and reconcile.
 # Engine/version/username/password/db_name are inherited from the snapshot.
 
 resource "aws_db_subnet_group" "litellm" {

@@ -1,11 +1,6 @@
-# Blue cluster (tmprl-dem-cld-blue) root sync — P3 platform layer.
-#
-# Duplicated from clusters/sa-demo/ with paths repointed to ./clusters/blue/ and
-# IRSA annotations moved to the tmprl-dem-cld-* roles (P2). cert-manager +
-# ClusterIssuers are new here (installed out-of-band on the pet). The app layer
-# (instruqt-litellm) and the registry layer (CRDs, operator, projects, courses)
-# are intentionally NOT wired yet — they land in later phases (operator runs
-# scaled-to-zero until the P6 cutover).
+# Active blue cluster (tmprl-dem-cld-blue) root sync. OpenTofu installs Flux and
+# this root object; the Kustomizations below reconcile the platform, registry,
+# project catalog, Instruqt courses, and LiteLLM app layer from this repository.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -320,7 +315,7 @@ spec:
 # runtime service account / runtime secret. Concurrent reconcile is NOT safe
 # (audit: TC service-account dup + runtime-secret last-writer-wins). The pet
 # operator MUST be scaled to 0 before this is pushed, so blue is the sole
-# reconciler. See docs/iac-migration-plan.md (P7 big-bang standby).
+# reconciler.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -358,8 +353,8 @@ spec:
   timeout: 5m
   wait: true
 ---
-# instruqt-litellm app layer (P7). LiteLLM gateway + broker for Instruqt tracks,
-# ported from the pet with Traefik v3 + Flux image CRD v1 rewrites, the
+# instruqt-litellm app layer (P7). LiteLLM gateway + credential-authenticated
+# token broker, with Traefik v3, Flux image CRD v1,
 # tmprl-dem-cld-instruqt-litellm-broker IRSA role, external-dns target annotation,
 # and the shared wildcard cert. Backed by the shared LiteLLM RDS in the Tofu VPC
 # (infra/litellm_rds.tf), reached via DATABASE_URL in the shared SM secret

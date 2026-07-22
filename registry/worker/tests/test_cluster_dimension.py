@@ -4,8 +4,8 @@ DEMO_REGISTRY_CLUSTER scopes the task queue, entity workflow ids, the
 worker-update batch-signal query, the generated Traefik CRD group, and the
 external-dns target annotation so blue/green can share one Temporal namespace and
 one Route53 zone without cross-routing. The load-bearing invariant is that every
-one of those is a BYTE-IDENTICAL no-op when the var is unset — that is what keeps
-the hand-built sa-demo pet (which sets no color) working unchanged.
+one of those is a BYTE-IDENTICAL no-op when the var is unset, preserving the
+legacy single-cluster behavior.
 """
 
 from types import SimpleNamespace

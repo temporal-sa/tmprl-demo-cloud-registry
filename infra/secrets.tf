@@ -39,23 +39,23 @@ locals {
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/temporal-cloud-mtls-ca-fYhw3c"
     }
     "instruqt-litellm/runtime" = {
-      description = "Runtime secrets for sa-demo Instruqt LiteLLM"
-      tags        = { app = "instruqt-litellm", managed-by = "codex", cluster = "sa-demo" }
+      description = "Shared runtime secrets for Instruqt LiteLLM"
+      tags        = { app = "instruqt-litellm", managed-by = "codex", cluster = "shared" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/instruqt-litellm/runtime-DorO0z"
     }
     "instruqt-litellm/broker" = {
-      description = "Runtime secrets for sa-demo Instruqt LiteLLM"
-      tags        = { app = "instruqt-litellm", managed-by = "codex", cluster = "sa-demo" }
+      description = "Shared broker secrets for Instruqt LiteLLM"
+      tags        = { app = "instruqt-litellm", managed-by = "codex", cluster = "shared" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/instruqt-litellm/broker-fvSKOg"
     }
     "instruqt-litellm/provider/anthropic" = {
-      description = "Anthropic provider API key for sa-demo Instruqt LiteLLM"
-      tags        = { app = "instruqt-litellm", cluster = "sa-demo", secret-scope = "provider", managed-by = "codex" }
+      description = "Anthropic provider API key for shared Instruqt LiteLLM"
+      tags        = { app = "instruqt-litellm", cluster = "shared", secret-scope = "provider", managed-by = "codex" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/instruqt-litellm/provider/anthropic-Jupm53"
     }
     "instruqt-litellm/provider/openai" = {
-      description = "OpenAI provider API key for sa-demo Instruqt LiteLLM"
-      tags        = { app = "instruqt-litellm", cluster = "sa-demo", secret-scope = "provider", managed-by = "codex" }
+      description = "OpenAI provider API key for shared Instruqt LiteLLM"
+      tags        = { app = "instruqt-litellm", cluster = "shared", secret-scope = "provider", managed-by = "codex" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/instruqt-litellm/provider/openai-Ya8q1P"
     }
   }

@@ -80,8 +80,8 @@ class WorkerConfig:
         # Cluster/color dimension (blue/green). When set, it scopes the task
         # queue, entity workflow ids, and the worker-update batch-signal query so
         # two clusters can share one Temporal namespace without cross-routing.
-        # When unset (the hand-built sa-demo pet + all existing tests) every
-        # derived value is byte-identical to the single-cluster behavior.
+        # When unset, every derived value remains byte-identical to the legacy
+        # single-cluster behavior.
         cluster = env_optional("DEMO_REGISTRY_CLUSTER")
         return cls(
             temporal_address=os.getenv("TEMPORAL_ADDRESS", "localhost:7233"),

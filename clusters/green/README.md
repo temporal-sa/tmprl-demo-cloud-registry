@@ -1,8 +1,7 @@
 # green (tmprl-dem-cld-green)
 
 Flux bootstrap configuration for the Tofu-managed `tmprl-dem-cld-green` EKS
-cluster — the green side of the blue/green pair. Added in P6 of the IaC
-migration (see `docs/iac-migration-plan.md`) as the cutover target.
+cluster — the green side of the blue/green pair and the standby cutover target.
 
 This tree is a **self-contained duplication** of `clusters/blue/`, not an
 overlay: every manifest reads exactly as deployed, with no base to peel back.
@@ -41,13 +40,13 @@ cluster-autoscaler chart 9.58.0 / image v1.36.0, temporal-worker-controller
 
 - **instruqt-litellm** (app layer) — not needed for the cutover gate.
 - **The real `projects/` catalog** — green is warmed with a throwaway `p6-smoke`
-  DemoProject applied directly, so green never co-manages the pet's shared demos.
+  DemoProject applied directly, so green never co-manages blue's active demos.
   Real-demo migration is P7.
 
 ## Cross-phase gotchas (carried from the blue tree)
 
-- **Traefik v3 CRD apiGroup** is `traefik.io` (not the pet's `traefik.containo.us`).
-  The operator emits `traefik.io/v1alpha1` IngressRoute/Middleware when colored, and
+- **Traefik v3 CRD apiGroup** is `traefik.io`. The operator emits
+  `traefik.io/v1alpha1` IngressRoute/Middleware when colored, and
   the RBAC grant matches; v3 silently ignores v2-group objects.
 - **worker-controller `certmanager.install=false`** — `install: true` deploys a
   whole second cert-manager subchart. Green relies on its own cert-manager addon,

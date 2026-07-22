@@ -24,14 +24,15 @@ derives and provisions for real at reconcile time.
 
 | Layer | Path | Managed by | Changes |
 | --- | --- | --- | --- |
-| Platform / infra | `clusters/sa-demo/` | **Flux** (GitOps) | rare |
+| Platform / infra | `clusters/blue/` and `infra/` | **Flux** (GitOps) + **OpenTofu** | rare |
 | Demos | `projects/demo/` | the **operator** (reconciles the CRs Flux delivers) | every demo |
 | Instruqt courses | `projects/instruqt/` | the **operator** (reconciles the CRs Flux delivers) | every course |
 
-`clusters/sa-demo/` holds: Flux config (`flux-system/`), the `DemoProject` CRD
-(`bootstrap/crds/`), External Secrets (`addons/external-secrets/`), and the
-operator Deployment itself (`bootstrap/registry-operator/`). The operator is
-**bootstrapped** here because it can't reconcile itself into existence.
+`clusters/blue/` is the active cluster's desired state. It holds the Flux config
+(`flux-system/`), registry CRDs (`bootstrap/crds/`), cluster add-ons, and the
+bootstrap operator handoff (`bootstrap/registry-operator/`). `infra/` provisions
+the blue/green AWS foundation and installs the initial Flux root sync; Flux then
+reconciles the cluster-local desired state from `clusters/blue/`.
 
 `projects/demo/` holds thin `DemoProject` CRs. `projects/instruqt/` holds
 `InstruqtCourse` CRs. Flux points separate Kustomizations at each directory and
@@ -169,7 +170,7 @@ Note: percentage *ramping* fits poorly here (few long-lived entity workflows, no
 high-volume executions); think blue/green + canary, not statistical ramp.
 
 ### 4. Flux Kustomizations are self-managed
-The Flux `Kustomization` CRs in `clusters/sa-demo/flux-system/kustomizations.yaml`
+The Flux `Kustomization` CRs in `clusters/blue/flux-system/kustomizations.yaml`
 are reconciled by the root `flux-system` Kustomization. Terraform/OpenTofu or a
 human bootstrap still has to install Flux and apply the first root sync object on
 a fresh cluster, but subsequent platform wiring changes are GitOps-managed like
@@ -185,9 +186,8 @@ that need an inspectable UI without Temporal Cloud creds; TTL cleanup workflow.
 
 ## Key decisions & lessons (carry forward)
 
-- **Operator derives; no generator.** `spec.derived`,
-  `scripts/generate_projects.py`, `clusters/sa-demo/generated/`, and the
-  `--check` CI gate were removed.
+- **Operator derives; no generator.** `spec.derived`, the generated cluster
+  manifests, and the `--check` CI gate were removed.
 - **Authoring stays thin.** `worker: true` marks a Temporal worker; versioning is
   the object form `worker.versioning` with optional `deploymentName` for the
   Worker Deployment identity. Task queues remain app-owned routing names.

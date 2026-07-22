@@ -168,10 +168,11 @@ role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds` for that
 project plus read/create/verify permissions for the ECR repositories it passes
 to the build.
 
-On `sa-demo`, non-secret runtime settings for the bootstrapped operator live in
-`clusters/sa-demo/bootstrap/registry-operator/kustomization.yaml` as a
-Kustomize `configMapGenerator`. Changing that generator rolls the operator
-through Flux because the generated ConfigMap name changes.
+On the active blue cluster, non-secret runtime settings for the bootstrap
+handoff live in
+`clusters/blue/bootstrap/registry-operator/kustomization.yaml` as a Kustomize
+`configMapGenerator`. Changing that generator rolls the operator through Flux
+because the generated ConfigMap name changes.
 
 `cloud-api` mode uses the Temporal Cloud Operations API through the bundled
 `temporalio` SDK. It runs with `DEMO_REGISTRY_EXTERNAL_RESOURCE_MODE=aws`

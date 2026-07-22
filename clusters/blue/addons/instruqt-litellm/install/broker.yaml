@@ -50,8 +50,6 @@ spec:
               value: us-west-1
             - name: BROKER_DYNAMODB_TABLE
               value: temporal-instruqt-litellm-broker
-            - name: BROKER_TRACK_CONFIG
-              value: /etc/instruqt-litellm/tracks.yaml
             - name: LITELLM_BASE_URL
               value: http://instruqt-litellm.tmprl-dem-cld-instruqt-litellm.svc.cluster.local:4000
             - name: LITELLM_PUBLIC_BASE_URL
@@ -59,10 +57,6 @@ spec:
           envFrom:
             - secretRef:
                 name: instruqt-litellm-broker-secrets
-          volumeMounts:
-            - name: tracks
-              mountPath: /etc/instruqt-litellm
-              readOnly: true
           readinessProbe:
             httpGet:
               path: /healthz
@@ -87,7 +81,3 @@ spec:
             capabilities:
               drop:
                 - ALL
-      volumes:
-        - name: tracks
-          configMap:
-            name: instruqt-litellm-tracks

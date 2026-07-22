@@ -76,10 +76,9 @@ INSTRUQT_TESTING_CONTENT_REPOSITORY_KEY = "testing-content"
 FLUX_GIT_REPOSITORY_API_VERSION = "source.toolkit.fluxcd.io/v1"
 TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
 # Traefik's CRD group changed between major versions: v2 served
-# traefik.containo.us, v3 serves traefik.io. The hand-built pet (sa-demo) runs
-# Traefik v2; the Tofu-managed blue/green stack runs v3. The operator emits the
-# group matching the cluster it runs on, selected by the color env var so
-# uncolored (pet) output stays byte-identical to today.
+# traefik.containo.us, while the Tofu-managed blue/green stack's v3 serves
+# traefik.io. The operator emits the group selected by the cluster/color env var;
+# uncolored output retains the legacy v2 behavior for compatibility.
 TRAEFIK_API_VERSION_V2 = "traefik.containo.us/v1alpha1"
 TRAEFIK_API_VERSION_V3 = "traefik.io/v1alpha1"
 EXTERNAL_DNS_TARGET_ANNOTATION = "external-dns.alpha.kubernetes.io/target"

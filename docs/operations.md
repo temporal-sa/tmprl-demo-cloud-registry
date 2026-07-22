@@ -1,8 +1,8 @@
 # Operations Runbook
 
-How to operate the `sa-demo` registry platform. Pairs with
-[architecture.md](architecture.md). Assumes `kubectl` is pointed at the
-`sa-demo` EKS cluster and the AWS profile is set:
+How to operate the registry platform on the active `tmprl-dem-cld-blue` EKS
+cluster. Pairs with [architecture.md](architecture.md). Assumes `kubectl` is
+pointed at that cluster and the AWS profile is set:
 
 ```sh
 export AWS_PROFILE="SolutionsArchitecture/AWSAdministratorAccess"   # account 429214323166, region us-west-1
@@ -11,7 +11,8 @@ export AWS_PROFILE="SolutionsArchitecture/AWSAdministratorAccess"   # account 42
 Key namespaces: operator and registry app run in
 `tmprl-dem-cld-registry-operator`; each demo gets `tmprl-dem-cld-<name>`.
 Temporal Cloud namespace for the operator:
-`tmprl-dem-cld-registry-operator.a2dd6`, task queue `registry-management`.
+`tmprl-dem-cld-registry-operator.a2dd6`, task queue
+`registry-management-blue`.
 
 ## Deploying / upgrading the operator image
 
@@ -80,9 +81,9 @@ kubectl -n flux-system get gitrepository cluster-gitops-config \
 
 ## Flux wiring
 
-The Flux `Kustomization` CRs in `clusters/sa-demo/flux-system/kustomizations.yaml`
+The Flux `Kustomization` CRs in `clusters/blue/flux-system/kustomizations.yaml`
 are self-managed by the root `flux-system` Kustomization. After the initial
-bootstrap apply, edits to `clusters/sa-demo/flux-system/` reconcile from git like
+bootstrap apply, edits to `clusters/blue/flux-system/` reconcile from git like
 the rest of the platform wiring.
 
 To force Flux to fetch and reconcile the current branch:

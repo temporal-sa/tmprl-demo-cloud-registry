@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tmprl-dem-cld-worker-controller
-  labels:
-    app.kubernetes.io/name: temporal-worker-controller
-    app.kubernetes.io/managed-by: flux
