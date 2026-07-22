@@ -39,10 +39,9 @@ COPY --from=secret-broker /secret-broker /usr/local/bin/secret-broker
 ```
 
 Docker automatically selects the `amd64` or `arm64` image from the manifest
-list for the target platform. The artifact image does not compile the CLI from
-source. Its build downloads the already-compiled versioned binary, signature,
-and public key, checks the pinned key fingerprint, verifies the binary
-signature, and copies only the verified binary into the final scratch layer.
+list for the target platform. The workflow builds each target binary once,
+signs it, verifies it, and passes that same file into the artifact-image build.
+The image does not compile the CLI again or download it back through S3.
 
 ## Option 2: Install from a Setup Script
 
@@ -125,10 +124,11 @@ request from the supplied credential.
 
 The KMS signing key protects consumers from a binary or public-key substitution
 in the artifact bucket: the private key never leaves KMS, and the fingerprint
-trusted by the artifact Dockerfile is stored in source control rather than
-accepted from S3. A signature proves that the artifact passed through the
-authorized signing identity; it does not prevent rollback to an older signed
-release or a malicious source change that the authorized workflow signs.
+trusted by the publishing workflow and installer is stored in source control
+rather than accepted from S3. A signature proves that the artifact passed
+through the authorized signing identity; it does not prevent rollback to an
+older signed release or a malicious source change that the authorized workflow
+signs.
 
 After a successful mint, the CLI intentionally handles and persists the
 short-lived LiteLLM key in the sandbox environment files documented in

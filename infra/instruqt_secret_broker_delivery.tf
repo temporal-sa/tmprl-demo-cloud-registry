@@ -1,8 +1,8 @@
 # Public delivery resources for the Instruqt secret-broker CLI. The binary and
 # artifact image contain no credentials; callers provide the HMAC credential at
 # runtime through Instruqt. ECR Public serves the multi-platform artifact image,
-# while S3 provides KMS-signed binaries suitable for setup scripts and verified
-# artifact-image builds.
+# while S3 provides KMS-signed binaries suitable for setup scripts. The same
+# workflow-built binaries are packaged directly into the artifact image.
 
 locals {
   instruqt_secret_broker_ecr_name  = "${var.name_prefix}/instruqt-secret-broker"

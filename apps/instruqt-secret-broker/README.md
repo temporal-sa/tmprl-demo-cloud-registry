@@ -37,8 +37,8 @@ public multi-platform container image, checksum-verified Linux CLI downloads,
 direct source-build option, and Instruqt sandbox preset tradeoffs.
 
 The published artifacts contain no credential material. Linux binaries are
-signed by a Tofu-managed asymmetric AWS KMS key, and the artifact-image build
-pins the public key fingerprint and verifies the target-platform signature
-before copying the binary into its final scratch layer. The HMAC credential is
-read only at runtime from `TEMPORAL_LITELLM_BROKER_SECRET`; the binary cannot
-mint a token without a valid credential.
+signed by a Tofu-managed asymmetric AWS KMS key and immediately verified by the
+publishing workflow. The artifact image packages that same target-platform
+binary without recompiling or downloading it. The HMAC credential is read only
+at runtime from `TEMPORAL_LITELLM_BROKER_SECRET`; the binary cannot mint a token
+without a valid credential.
