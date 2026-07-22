@@ -36,6 +36,9 @@ See [instruqt-distribution.md](./docs/instruqt-distribution.md) for the
 public multi-platform container image, checksum-verified Linux CLI downloads,
 direct source-build option, and Instruqt sandbox preset tradeoffs.
 
-The published artifacts contain no credential material. The HMAC credential is
+The published artifacts contain no credential material. Linux binaries are
+signed by a Tofu-managed asymmetric AWS KMS key, and the artifact-image build
+pins the public key fingerprint and verifies the target-platform signature
+before copying the binary into its final scratch layer. The HMAC credential is
 read only at runtime from `TEMPORAL_LITELLM_BROKER_SECRET`; the binary cannot
 mint a token without a valid credential.

@@ -20,8 +20,9 @@ broker and commits the resulting ECR digest; Flux keeps read-only Git access.
 
 The companion Instruqt secret-broker CLI lives under
 `apps/instruqt-secret-broker/`. Its workflow publishes a Linux `amd64`/`arm64`
-artifact image to public ECR and checksum-verified native binaries for setup
-scripts.
+artifact image to public ECR and KMS-signed native binaries for setup scripts.
+The artifact-image build downloads the already-compiled target binary and
+verifies its signature before creating the final scratch layer.
 
 ## Goals
 

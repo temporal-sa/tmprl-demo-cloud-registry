@@ -1,13 +1,31 @@
 # Public delivery resources for the Instruqt secret-broker CLI. The binary and
 # artifact image contain no credentials; callers provide the HMAC credential at
 # runtime through Instruqt. ECR Public serves the multi-platform artifact image,
-# while S3 provides checksum-verified binaries suitable for setup scripts.
+# while S3 provides KMS-signed binaries suitable for setup scripts and verified
+# artifact-image builds.
 
 locals {
-  instruqt_secret_broker_ecr_name = "${var.name_prefix}/instruqt-secret-broker"
-  instruqt_secret_broker_role     = "${var.name_prefix}-instruqt-secret-broker-github-actions"
-  instruqt_secret_broker_bucket   = "${var.name_prefix}-secret-broker-${local.account_id}-${var.region}"
-  instruqt_secret_broker_prefix   = "secret-broker"
+  instruqt_secret_broker_ecr_name  = "${var.name_prefix}/instruqt-secret-broker"
+  instruqt_secret_broker_role      = "${var.name_prefix}-instruqt-secret-broker-github-actions"
+  instruqt_secret_broker_bucket    = "${var.name_prefix}-secret-broker-${local.account_id}-${var.region}"
+  instruqt_secret_broker_prefix    = "secret-broker"
+  instruqt_secret_broker_key_alias = "alias/${var.name_prefix}-instruqt-secret-broker-signing"
+}
+
+resource "aws_kms_key" "instruqt_secret_broker_signing" {
+  description              = "Signs public Instruqt secret-broker CLI artifacts"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "RSA_3072"
+  deletion_window_in_days  = 30
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "instruqt_secret_broker_signing" {
+  name          = local.instruqt_secret_broker_key_alias
+  target_key_id = aws_kms_key.instruqt_secret_broker_signing.key_id
 }
 
 resource "aws_ecrpublic_repository" "instruqt_secret_broker" {
@@ -160,6 +178,23 @@ resource "aws_iam_role_policy" "instruqt_secret_broker_github_actions" {
           "ecr-public:UploadLayerPart",
         ]
         Resource = aws_ecrpublic_repository.instruqt_secret_broker.arn
+      },
+      {
+        Sid      = "SignCliArtifacts"
+        Effect   = "Allow"
+        Action   = "kms:Sign"
+        Resource = aws_kms_key.instruqt_secret_broker_signing.arn
+        Condition = {
+          StringEquals = {
+            "kms:SigningAlgorithm" = "RSASSA_PSS_SHA_256"
+          }
+        }
+      },
+      {
+        Sid      = "ExportCliSigningPublicKey"
+        Effect   = "Allow"
+        Action   = "kms:GetPublicKey"
+        Resource = aws_kms_key.instruqt_secret_broker_signing.arn
       },
       {
         Sid      = "ListCliArtifacts"

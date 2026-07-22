@@ -59,8 +59,10 @@ output "rollout_diagnostics_bucket" {
 output "instruqt_secret_broker_delivery" {
   description = "Public image and direct-download locations for the Instruqt secret-broker CLI."
   value = {
-    public_ecr_uri = aws_ecrpublic_repository.instruqt_secret_broker.repository_uri
-    cli_base_url   = "https://${aws_s3_bucket.instruqt_secret_broker.bucket_regional_domain_name}/${local.instruqt_secret_broker_prefix}"
+    public_ecr_uri     = aws_ecrpublic_repository.instruqt_secret_broker.repository_uri
+    cli_base_url       = "https://${aws_s3_bucket.instruqt_secret_broker.bucket_regional_domain_name}/${local.instruqt_secret_broker_prefix}"
+    signing_key_arn    = aws_kms_key.instruqt_secret_broker_signing.arn
+    signing_public_key = "https://${aws_s3_bucket.instruqt_secret_broker.bucket_regional_domain_name}/${local.instruqt_secret_broker_prefix}/trust/v1/signing-key.pem"
   }
 }
 

@@ -14,6 +14,12 @@ Every `main` build publishes a moving `main` reference and an immutable
 digest in durable workshop configuration. The moving reference is useful for
 testing and deliberate rolling upgrades.
 
+Each Linux binary has an adjacent `.sig` file produced by an asymmetric AWS KMS
+key using RSA-PSS with SHA-256. The stable public key is published at
+`trust/v1/signing-key.pem`; consumers must pin its SPKI SHA-256 fingerprint,
+`cf0310e7827f2b444a876b06768e8e11bef5b2ad9d5f58f93e45c27674b2b594`,
+rather than trusting an arbitrary key downloaded from the artifact bucket.
+
 Instruqt injects `INSTRUQT_TRACK_ID`, `INSTRUQT_TRACK_SLUG`, and
 `INSTRUQT_PARTICIPANT_ID` into lifecycle scripts. Calling `secret-broker` from
 the track setup script therefore supplies the required track and participant
@@ -33,13 +39,17 @@ COPY --from=secret-broker /secret-broker /usr/local/bin/secret-broker
 ```
 
 Docker automatically selects the `amd64` or `arm64` image from the manifest
-list for the target platform.
+list for the target platform. The artifact image does not compile the CLI from
+source. Its build downloads the already-compiled versioned binary, signature,
+and public key, checks the pinned key fingerprint, verifies the binary
+signature, and copies only the verified binary into the final scratch layer.
 
 ## Option 2: Install from a Setup Script
 
 This path adds the CLI to an existing sandbox without changing its container
 image. The installer detects `amd64` or `arm64`, downloads the matching binary,
-verifies its SHA-256 checksum, and installs it at
+verifies its SHA-256 checksum and KMS signature against the pinned public key,
+and installs it at
 `/usr/local/bin/secret-broker` by default.
 
 For a convenient moving install:
@@ -63,8 +73,8 @@ curl --fail --silent --show-error --location \
 SECRET_BROKER_VERSION="${version}" sh /tmp/install-secret-broker.sh
 ```
 
-The host needs `curl`, `sha256sum`, and `install`, which are present in the
-standard Ubuntu-based Instruqt images.
+The host needs `curl`, `openssl`, `sha256sum`, `awk`, and `install`, which are
+present in the standard Ubuntu-based Instruqt images.
 
 ## Option 3: Build Directly from the Monorepo
 
@@ -112,6 +122,13 @@ broker URL and a credential key identifier, but reads the HMAC secret only from
 `TEMPORAL_LITELLM_BROKER_SECRET` at runtime. The broker must continue to treat
 the client and signing protocol as public information and authorize every mint
 request from the supplied credential.
+
+The KMS signing key protects consumers from a binary or public-key substitution
+in the artifact bucket: the private key never leaves KMS, and the fingerprint
+trusted by the artifact Dockerfile is stored in source control rather than
+accepted from S3. A signature proves that the artifact passed through the
+authorized signing identity; it does not prevent rollback to an older signed
+release or a malicious source change that the authorized workflow signs.
 
 After a successful mint, the CLI intentionally handles and persists the
 short-lived LiteLLM key in the sandbox environment files documented in
