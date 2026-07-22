@@ -36,6 +36,10 @@ See [instruqt-distribution.md](./docs/instruqt-distribution.md) for the
 public multi-platform container image, checksum-verified Linux CLI downloads,
 direct source-build option, and Instruqt sandbox preset tradeoffs.
 
+A complete course-image example is available in
+[example/](./example/). It copies the CLI from the public artifact image and
+invokes it from an Instruqt setup lifecycle script.
+
 The published artifacts contain no credential material. Linux binaries are
 signed by a Tofu-managed asymmetric AWS KMS key and immediately verified by the
 publishing workflow. The artifact image packages that same target-platform
