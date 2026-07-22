@@ -12,7 +12,7 @@
 # Doctrine: fresh stack is the upgrade vehicle — latest-GA, not pet-parity.
 #
 # --------------------------------------------------------------------------
-# Controller topology (must match the pet's 6 controllers)
+# Controller topology
 # --------------------------------------------------------------------------
 # In chart 2.19.0 the following are ON by default and are intentionally left
 # at their defaults (create: true):
@@ -21,13 +21,9 @@
 #   - helmController           (helm.toolkit.fluxcd.io/v2)
 #   - notificationController
 #
-# The two image-automation controllers are enabled EXPLICITLY below. They back
-# the repo's image-automation addon, which authors ImageRepository / ImagePolicy
-# / ImageUpdateAutomation (image.toolkit.fluxcd.io). Setting them explicitly
-# keeps intent obvious and stays correct even if a future chart flips the
-# default. NOTE the chart key is `imageReflectionController` (reflectION), not
-# `imageReflectorController`; this chart has no values.schema.json, so a
-# misspelled key would silently no-op instead of erroring.
+# Broker image promotion is performed by GitHub Actions, which commits an image
+# digest to the deployment manifest. No resources use Flux image automation, so
+# leave both optional controllers disabled.
 #
 # Everything else (watchAllNamespaces: true, installCRDs: true, RBAC + view/
 # edit/admin aggregation, cluster-admin roleRef, per-controller resource
@@ -36,8 +32,8 @@
 
 # image-reflector-controller
 imageReflectionController:
-  create: true
+  create: false
 
 # image-automation-controller
 imageAutomationController:
-  create: true
+  create: false

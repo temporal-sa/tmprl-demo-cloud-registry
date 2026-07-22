@@ -17,9 +17,9 @@ resource "kubernetes_namespace" "flux_system" {
   }
 }
 
-# Flux controllers (source, kustomize, helm, notification, image-reflector,
-# image-automation). installCRDs defaults true, so this release OWNS the Flux
-# CRDs. Values enable the two image controllers explicitly — see flux2-values.yaml.
+# Flux controllers (source, kustomize, helm, notification). installCRDs defaults
+# true, so this release owns the installed Flux CRDs. The unused image reflector
+# and automation controllers are disabled in flux2-values.yaml.
 resource "helm_release" "flux" {
   name       = "flux2"
   namespace  = kubernetes_namespace.flux_system.metadata[0].name

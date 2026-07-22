@@ -1,0 +1,90 @@
+name: Build and promote Instruqt LiteLLM broker
+
+"on":
+  push:
+    branches:
+      - main
+    paths:
+      - apps/instruqt-litellm/broker/**
+      - .github/workflows/build-instruqt-litellm-broker.yaml
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: instruqt-litellm-broker-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-1
+  AWS_ACCOUNT_ID: "429214323166"
+  ECR_REPOSITORY: temporal-instruqt-litellm-broker
+  AWS_ROLE_ARN: arn:aws:iam::429214323166:role/tmprl-dem-cld-instruqt-broker-github-actions
+  BROKER_DIR: apps/instruqt-litellm/broker
+  BROKER_MANIFEST: apps/instruqt-litellm/deploy/broker.yaml
+
+jobs:
+  build-and-promote:
+    name: Build, push, and promote image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image names
+        id: image
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA:0:12}"
+          timestamp="$(date -u +'%Y%m%d%H%M%S')"
+          repository="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "immutable_tag=main-${timestamp}-${short_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.BROKER_DIR }}
+          file: ${{ env.BROKER_DIR }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.repository }}:main
+            ${{ steps.image.outputs.repository }}:${{ steps.image.outputs.immutable_tag }}
+
+      - name: Commit the deployed digest
+        env:
+          IMAGE: ${{ steps.image.outputs.repository }}:main@${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          python3 "${BROKER_DIR}/scripts/promote_image.py" \
+            --manifest "${BROKER_MANIFEST}" \
+            --image "${IMAGE}"
+
+          if git diff --quiet -- "${BROKER_MANIFEST}"; then
+            echo "Broker manifest already pins ${IMAGE}"
+            exit 0
+          fi
+
+          git add "${BROKER_MANIFEST}"
+          git commit -m "Deploy Instruqt LiteLLM broker ${GITHUB_SHA:0:12}"
+          git push origin HEAD:main

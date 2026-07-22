@@ -13,6 +13,11 @@ they commit. The platform owns the registry operator, Flux installation,
 cluster add-ons, and external resource provisioning needed to turn that CR into
 managed infrastructure.
 
+The shared Instruqt LiteLLM service is maintained as a first-class application
+under `apps/instruqt-litellm/`: broker source, tests, container build, and
+Flux-reconciled manifests live together. Its GitHub Actions workflow builds the
+broker and commits the resulting ECR digest; Flux keeps read-only Git access.
+
 ## Goals
 
 - Project owners do not need direct Kubernetes API access for routine deploys.

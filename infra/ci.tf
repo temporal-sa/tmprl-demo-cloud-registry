@@ -184,7 +184,28 @@ resource "aws_iam_role_policy" "ci_tofu" {
           "ecr:SetRepositoryPolicy",
           "ecr:PutImageScanningConfiguration",
         ]
-        Resource = local.ecr_prefix_arn
+        Resource = [
+          local.ecr_prefix_arn,
+          aws_ecr_repository.instruqt_litellm_broker.arn,
+        ]
+      },
+      {
+        Sid    = "ManageInstruqtLiteLLMBrokerTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:CreateTable",
+          "dynamodb:DeleteTable",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTable",
+          "dynamodb:DescribeTimeToLive",
+          "dynamodb:ListTagsOfResource",
+          "dynamodb:TagResource",
+          "dynamodb:UntagResource",
+          "dynamodb:UpdateContinuousBackups",
+          "dynamodb:UpdateTable",
+          "dynamodb:UpdateTimeToLive",
+        ]
+        Resource = aws_dynamodb_table.instruqt_litellm_broker.arn
       },
       {
         Sid    = "ManageBuildProject"

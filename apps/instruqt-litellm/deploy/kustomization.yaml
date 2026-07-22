@@ -10,4 +10,3 @@ resources:
   - broker.yaml
   - hpa.yaml
   - ingressroute.yaml
-  - image-automation.yaml

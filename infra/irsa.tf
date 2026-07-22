@@ -250,7 +250,7 @@ resource "aws_iam_role_policy" "instruqt_litellm_broker" {
         "dynamodb:PutItem",
         "dynamodb:UpdateItem",
       ]
-      Resource = "arn:${local.partition}:dynamodb:${var.region}:${local.account_id}:table/temporal-instruqt-litellm-broker"
+      Resource = aws_dynamodb_table.instruqt_litellm_broker.arn
     }]
   })
 }

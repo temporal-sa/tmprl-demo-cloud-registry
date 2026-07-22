@@ -354,7 +354,7 @@ spec:
   wait: true
 ---
 # instruqt-litellm app layer (P7). LiteLLM gateway + credential-authenticated
-# token broker, with Traefik v3, Flux image CRD v1,
+# token broker, with Traefik v3,
 # tmprl-dem-cld-instruqt-litellm-broker IRSA role, external-dns target annotation,
 # and the shared wildcard cert. Backed by the shared LiteLLM RDS in the Tofu VPC
 # (infra/litellm_rds.tf), reached via DATABASE_URL in the shared SM secret
@@ -372,7 +372,7 @@ spec:
     - name: traefik
     - name: wildcard-cert
   interval: 5m
-  path: ./clusters/blue/addons/instruqt-litellm/install
+  path: ./apps/instruqt-litellm/deploy
   prune: true
   sourceRef:
     kind: GitRepository

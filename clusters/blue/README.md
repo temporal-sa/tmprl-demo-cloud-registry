@@ -23,10 +23,11 @@ Cluster-specific values include:
   read-only PAT; branch `main`) and the self-managed `Kustomization`s. Tofu
   installs Flux and applies the initial `GitRepository` + root `Kustomization`;
   everything below self-manages.
-- `addons/` — platform layer: node-local-dns, metrics-server,
+- `addons/` — cluster-local platform layer: node-local-dns, metrics-server,
   cluster-autoscaler, external-secrets (+ ClusterSecretStore), cert-manager
-  (+ ClusterIssuers), temporal-worker-controller, traefik, external-dns,
-  wildcard TLS, and the Instruqt LiteLLM gateway/broker.
+  (+ ClusterIssuers), temporal-worker-controller, traefik, external-dns, and
+  wildcard TLS. The Instruqt LiteLLM app lives at the repo-level
+  `apps/instruqt-litellm/deploy` path and is referenced by the root sync.
 - `bootstrap/` — registry CRDs and the scaled-to-zero bootstrap watch handoff.
   The active operator worker is self-rendered through the registry project.
 
@@ -35,7 +36,6 @@ Cluster-specific values include:
 - **Traefik v3 CRD apiGroup** is `traefik.io`. LiteLLM and operator-generated
   `IngressRoute`/`Middleware` objects MUST use `traefik.io/v1alpha1` and v3
   matcher syntax, or Traefik v3 silently ignores them.
-- **Flux image-automation** CRDs use `image.toolkit.fluxcd.io/v1` in Flux 2.9.
 - **node-local-dns** takes effect only if the kubelet `--cluster-dns` points at
   the link-local `169.254.20.10`; the DaemonSet also binds `172.20.0.10` and
   installs intercept rules. Verify the cache is actually in-path on blue.
