@@ -18,6 +18,11 @@ under `apps/instruqt-litellm/`: broker source, tests, container build, and
 Flux-reconciled manifests live together. Its GitHub Actions workflow builds the
 broker and commits the resulting ECR digest; Flux keeps read-only Git access.
 
+The companion Instruqt secret-broker CLI lives under
+`apps/instruqt-secret-broker/`. Its workflow publishes a Linux `amd64`/`arm64`
+artifact image to public ECR and checksum-verified native binaries for setup
+scripts.
+
 ## Goals
 
 - Project owners do not need direct Kubernetes API access for routine deploys.

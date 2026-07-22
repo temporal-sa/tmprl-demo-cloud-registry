@@ -208,6 +208,23 @@ resource "aws_iam_role_policy" "ci_tofu" {
         Resource = aws_dynamodb_table.instruqt_litellm_broker.arn
       },
       {
+        Sid    = "ManageInstruqtSecretBrokerPublicEcr"
+        Effect = "Allow"
+        Action = [
+          "ecr-public:CreateRepository",
+          "ecr-public:DeleteRepository",
+          "ecr-public:DeleteRepositoryPolicy",
+          "ecr-public:DescribeRepositories",
+          "ecr-public:GetRepositoryCatalogData",
+          "ecr-public:GetRepositoryPolicy",
+          "ecr-public:PutRepositoryCatalogData",
+          "ecr-public:SetRepositoryPolicy",
+          "ecr-public:TagResource",
+          "ecr-public:UntagResource",
+        ]
+        Resource = aws_ecrpublic_repository.instruqt_secret_broker.arn
+      },
+      {
         Sid    = "ManageBuildProject"
         Effect = "Allow"
         Action = [
@@ -303,6 +320,15 @@ resource "aws_iam_role_policy" "ci_tofu" {
         Resource = [
           "arn:${local.partition}:s3:::${local.rollout_diagnostics_bucket}",
           "arn:${local.partition}:s3:::${local.rollout_diagnostics_bucket}/*",
+        ]
+      },
+      {
+        Sid    = "ManageInstruqtSecretBrokerArtifacts"
+        Effect = "Allow"
+        Action = "s3:*"
+        Resource = [
+          aws_s3_bucket.instruqt_secret_broker.arn,
+          "${aws_s3_bucket.instruqt_secret_broker.arn}/*",
         ]
       },
     ]

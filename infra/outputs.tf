@@ -56,6 +56,14 @@ output "rollout_diagnostics_bucket" {
   value       = aws_s3_bucket.rollout_diagnostics.id
 }
 
+output "instruqt_secret_broker_delivery" {
+  description = "Public image and direct-download locations for the Instruqt secret-broker CLI."
+  value = {
+    public_ecr_uri = aws_ecrpublic_repository.instruqt_secret_broker.repository_uri
+    cli_base_url   = "https://${aws_s3_bucket.instruqt_secret_broker.bucket_regional_domain_name}/${local.instruqt_secret_broker_prefix}"
+  }
+}
+
 output "acm_wildcard_certificate_arn" {
   description = "ARN of the reused *.<domain> ACM wildcard cert (P4 attaches it to the load balancer)."
   value       = data.aws_acm_certificate.wildcard.arn
