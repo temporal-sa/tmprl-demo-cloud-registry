@@ -7,12 +7,7 @@ locals {
   instruqt_litellm_broker_iam_name = "${var.name_prefix}-instruqt-broker-github-actions"
   instruqt_litellm_broker_table    = "temporal-instruqt-litellm-broker"
 
-  # Keep the standalone repository trusted during the migration. Remove its
-  # subject after temporal-sa/tmprl-demo-cloud-instruqt-broker is archived.
-  instruqt_litellm_broker_github_subjects = [
-    "repo:${var.github_repo}:ref:refs/heads/main",
-    "repo:temporal-sa/tmprl-demo-cloud-instruqt-broker:ref:refs/heads/main",
-  ]
+  instruqt_litellm_broker_github_subject = "repo:${var.github_repo}:ref:refs/heads/main"
 }
 
 resource "aws_ecr_repository" "instruqt_litellm_broker" {
@@ -73,7 +68,7 @@ resource "aws_iam_role" "instruqt_litellm_broker_github_actions" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = local.instruqt_litellm_broker_github_subjects
+          "token.actions.githubusercontent.com:sub" = local.instruqt_litellm_broker_github_subject
         }
       }
     }]
