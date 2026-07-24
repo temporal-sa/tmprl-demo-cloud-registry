@@ -202,7 +202,6 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_registry(document))
 
     for document in instruqt_courses:
-        errors.extend(validate_source_repo(document))
         errors.extend(validate_instruqt_course_source_path(document, "source"))
         errors.extend(validate_instruqt_course_source_path(document, "content"))
         errors.extend(validate_instruqt_course_testing(document))

@@ -149,8 +149,9 @@ contains the Instruqt CLI and records CLI/token readiness under
 
 Rules:
 
-- `source.repo` must be in the `temporal-sa` GitHub organization. `source.branch`
-  defaults to `main`.
+- `source.repo` and, when configured, `content.repo` must be in the
+  `temporal-sa`, `temporal-community`, or `temporalio` GitHub organization.
+  `source.branch` defaults to `main`.
 - `track.organization` and `track.slug` define the production Instruqt target.
   The operator rewrites rendered `track.yml` to that owner/slug before pushing.
 - `source.testingBranch` is the testing-track lifecycle switch. The operator
@@ -189,7 +190,8 @@ Rules:
   the Flux-compatible JSON keys `identity` and `known_hosts`. Use
   `source.gitRepository.url` for the SSH clone URL, such as
   `ssh://git@github.com/temporal-sa/private-demo.git`, while `source.repo`
-  remains the canonical project source URL.
+  remains the canonical project source URL. An override URL must also target
+  `temporal-sa`, `temporal-community`, or `temporalio`.
 - `source.gitRepository.sparseCheckout` is an authoring shortcut for path
   whitelists; the operator renders it as Flux `GitRepository.spec.ignore`
   patterns because the installed source-controller CRD does not support a

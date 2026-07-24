@@ -53,6 +53,70 @@ def base_spec() -> dict:
     }
 
 
+def instruqt_course_document(
+    repo: str,
+    *,
+    git_repository_url: str | None = None,
+):
+    source = {"repo": repo, "path": "instruqt"}
+    if git_repository_url is not None:
+        source["gitRepository"] = {"url": git_repository_url}
+    return validate_projects.ProjectDocument(
+        path=ROOT / "projects/instruqt/test.yaml",
+        data={
+            "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+            "kind": "InstruqtCourse",
+            "metadata": {"name": "test-course"},
+            "spec": {
+                "source": source,
+                "track": {
+                    "organization": "temporal",
+                    "slug": "test-course",
+                },
+            },
+        },
+    )
+
+
+def test_instruqt_schema_accepts_allowed_github_organizations():
+    validators = validate_projects.load_default_validators()
+
+    for organization in ("temporal-sa", "temporal-community", "temporalio"):
+        document = instruqt_course_document(
+            f"https://github.com/{organization}/workshop",
+            git_repository_url=f"ssh://git@github.com/{organization}/workshop.git",
+        )
+
+        assert validate_projects.validate_document_schema(validators, document) == []
+
+
+def test_instruqt_schema_rejects_unapproved_canonical_repository():
+    document = instruqt_course_document("https://github.com/example/workshop")
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert len(errors) == 1
+    assert "schema error at spec.source.repo" in errors[0].message
+
+
+def test_instruqt_schema_rejects_unapproved_git_repository_override():
+    document = instruqt_course_document(
+        "https://github.com/temporal-community/workshop",
+        git_repository_url="ssh://git@github.com/example/workshop.git",
+    )
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert len(errors) == 1
+    assert "schema error at spec.source.gitRepository.url" in errors[0].message
+
+
 def test_env_input_ref_user_secret_counts_as_secret_usage():
     spec = base_spec()
     spec["secrets"] = {
