@@ -702,6 +702,49 @@ def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatc
     )
 
 
+def test_instruqt_track_deploy_skips_track_test(monkeypatch):
+    calls = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        calls.append((activity, request, kwargs))
+        if activity is instruqt_activities.push_instruqt_course_track:
+            return SimpleNamespace(
+                status={
+                    "phase": "Pushed",
+                    "push": {"phase": "Succeeded"},
+                }
+            )
+        if activity is instruqt_activities.deploy_instruqt_course_track:
+            return SimpleNamespace(status={"phase": "Deployed"})
+        raise AssertionError(f"Unexpected activity: {activity}")
+
+    monkeypatch.setattr(
+        workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    result = asyncio.run(
+        workflow_instance()._deploy_track_channel(
+            course(),
+            images={},
+            channel="production",
+        )
+    )
+
+    assert result == {"phase": "Deployed"}
+    assert [activity for activity, _, _ in calls] == [
+        instruqt_activities.push_instruqt_course_track,
+        instruqt_activities.deploy_instruqt_course_track,
+    ]
+    deploy_request = calls[1][1]
+    assert deploy_request.push_status == {
+        "phase": "Pushed",
+        "push": {"phase": "Succeeded"},
+    }
+    assert deploy_request.test_status is None
+
+
 def test_instruqt_reconcile_key_changes_with_force_reconcile_token():
     base = course()
     forced = course(

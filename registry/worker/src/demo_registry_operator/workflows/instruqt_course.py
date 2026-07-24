@@ -581,20 +581,6 @@ class InstruqtCourseWorkflow:
         if push_status.get("phase") != "Pushed":
             return push_status
 
-        test_activity = await workflow.execute_activity(
-            instruqt_activities.test_instruqt_course_track,
-            request,
-            start_to_close_timeout=timedelta(hours=3),
-            heartbeat_timeout=timedelta(minutes=5),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
-        test_status = test_activity.status
-        if test_status.get("phase") != "Tested":
-            return {
-                **test_status,
-                "push": push_status.get("push"),
-            }
-
         deploy_activity = await workflow.execute_activity(
             instruqt_activities.deploy_instruqt_course_track,
             instruqt_activities.InstruqtTrackDeployRequest(
@@ -602,7 +588,6 @@ class InstruqtCourseWorkflow:
                 images=images,
                 channel=channel,
                 push_status=push_status,
-                test_status=test_status,
             ),
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(minutes=2),

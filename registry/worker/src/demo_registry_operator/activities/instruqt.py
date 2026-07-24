@@ -903,18 +903,18 @@ def deploy_instruqt_course_track(
                 test_status=test_status.get("test"),
             )
         )
-    return InstruqtActivityResult(
-        {
-            "phase": "Deployed",
-            "channel": operation["channel"],
-            "target": operation["target"],
-            "message": "Instruqt track was pushed, tested, and deployed.",
-            "artifact": operation["artifact"],
-            "push": push_status.get("push", push_status),
-            "test": test_status.get("test", test_status),
-            "deploy": command,
-        }
-    )
+    status = {
+        "phase": "Deployed",
+        "channel": operation["channel"],
+        "target": operation["target"],
+        "message": "Instruqt track was pushed and deployed.",
+        "artifact": operation["artifact"],
+        "push": push_status.get("push", push_status),
+        "deploy": command,
+    }
+    if test_status:
+        status["test"] = test_status.get("test", test_status)
+    return InstruqtActivityResult(status)
 
 
 def run_instruqt_track_operation(
