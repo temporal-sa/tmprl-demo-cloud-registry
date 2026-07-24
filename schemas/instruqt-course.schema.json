@@ -92,7 +92,7 @@
       "properties": {
         "repo": {
           "type": "string",
-          "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+          "pattern": "^https://github\\.com/(temporal-sa|temporal-community|temporalio)/[A-Za-z0-9_.-]+/?$"
         },
         "branch": {
           "type": "string",
@@ -170,7 +170,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^(https://github\\.com/|ssh://git@github\\.com/)(temporal-sa|temporal-community|temporalio)/[A-Za-z0-9_.-]+/?$"
         },
         "authSecret": {
           "$ref": "#/$defs/dnsLabel"

@@ -1,0 +1,24 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: ai-agents-workshop-v4
+spec:
+  source:
+    repo: https://github.com/temporal-community/ai-agents-workshop-v4
+    branch: main
+    path: instruqt
+
+  images:
+    workshop:
+      container: workshop
+      context:
+        source: source
+        path: .
+      dockerfile:
+        source: source
+        path: instruqt/docker/Dockerfile
+      platform: linux/amd64
+
+  track:
+    organization: temporal
+    slug: temporal-ai-agents-python-v4
