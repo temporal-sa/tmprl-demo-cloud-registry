@@ -2180,9 +2180,9 @@ def container(
     if env_from:
         rendered["envFrom"] = env_from
 
-    env = env_vars(component_name, component)
-    env.extend(
-        platform_env_vars(demo_project, component_name, image, image_overrides or {})
+    env = env_with_overrides(
+        env_vars(component_name, component),
+        platform_env_vars(demo_project, component_name, image, image_overrides or {}),
     )
     if mounts_temporal_mtls_cert_files(demo_project, component):
         env = env_with_overrides(env, temporal_mtls_cert_file_path_env(component))

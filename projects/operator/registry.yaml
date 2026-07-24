@@ -102,8 +102,6 @@ spec:
           value: "30"
         - name: DEMO_REGISTRY_AWS_REGION
           value: us-west-1
-        - name: DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET
-          value: tmprl-dem-cld-rollout-diagnostics-429214323166-us-west-1
         - name: DEMO_REGISTRY_AWS_ACCOUNT_ID
           value: "429214323166"
         - name: DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID

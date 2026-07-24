@@ -815,12 +815,15 @@ def test_schema_rejects_env_value_and_value_from_conflict():
     assert errors
 
 
-def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate():
+def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
+    monkeypatch,
+):
     schema = json.loads((ROOT / "schemas/project.schema.json").read_text())
     validator = Draft202012Validator(schema)
     demo_project = yaml.safe_load(
         (ROOT / "projects/operator/registry.yaml").read_text()
     )
+    diagnostics_bucket = "tmprl-dem-cld-rollout-diagnostics-429214323166-us-west-1"
 
     assert list(validator.iter_errors(demo_project)) == []
     assert demo_project["metadata"]["name"] == "registry-operator"
@@ -887,6 +890,25 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         "annotations"
     ]
     assert SOURCE_COMMIT_ANNOTATION not in demo_project["metadata"]["annotations"]
+
+    operator_component = demo_project["spec"]["components"]["registry-operator"]
+    assert not any(
+        item["name"] == "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET"
+        for item in operator_component["env"]
+    )
+    # The running operator supplies this platform-owned value. Simulate a stale
+    # declaration too so a future collision cannot produce an invalid
+    # WorkerDeployment with duplicate env names.
+    operator_component["env"].append(
+        {
+            "name": "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET",
+            "value": "stale-bucket",
+        }
+    )
+    monkeypatch.setenv(
+        "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET",
+        diagnostics_bucket,
+    )
 
     image_overrides = {
         "temporal-cloud-proxy": (
@@ -978,6 +1000,18 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         "name": "DEMO_REGISTRY_WATCH_ENABLED",
         "value": "auto",
     } in container["env"]
+    assert [
+        item
+        for item in container["env"]
+        if item["name"] == "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET"
+    ] == [
+        {
+            "name": "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET",
+            "value": diagnostics_bucket,
+        }
+    ]
+    env_names = [item["name"] for item in container["env"]]
+    assert len(env_names) == len(set(env_names))
     assert worker_deployment["spec"]["sunset"] == {
         "scaledownDelay": "1m",
         "deleteDelay": "5m",
