@@ -4,10 +4,9 @@ metadata:
   name: durable-ad-campaign-python-workshop
 spec:
   source:
-    repo: https://github.com/temporal-sa/instruqt-example-track
+    repo: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101
     branch: main
-    testingBranch: live-test
-    path: instruqt
+    path: tracks/python/instruqt
 
   images:
     workstation:
@@ -17,7 +16,8 @@ spec:
         path: .
       dockerfile:
         source: source
-        path: instruqt/Dockerfile
+        path: tracks/python/instruqt/Dockerfile
+      platform: linux/amd64
 
   track:
     organization: temporal

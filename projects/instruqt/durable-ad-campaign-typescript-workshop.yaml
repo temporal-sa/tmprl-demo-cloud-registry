@@ -1,0 +1,24 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: durable-ad-campaign-typescript-workshop
+spec:
+  source:
+    repo: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101
+    branch: main
+    path: tracks/typescript/instruqt
+
+  images:
+    workstation:
+      container: workstation
+      context:
+        source: source
+        path: .
+      dockerfile:
+        source: source
+        path: tracks/typescript/instruqt/Dockerfile
+      platform: linux/amd64
+
+  track:
+    organization: temporal
+    slug: durable-ad-campaign-typescript-workshop
