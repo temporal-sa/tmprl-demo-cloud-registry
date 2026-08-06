@@ -1,0 +1,129 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: lakebase-agent
+spec:
+  registry:
+    title: Temporal + Lakebase Underwriting Agent
+    summary: >-
+      A durable personal-loan underwriting agent with retry-safe tools,
+      human approval through Temporal signals, and governed operational state
+      in Databricks Lakebase.
+    tags:
+      - AI
+      - Agents
+      - Human in the Loop
+      - Databases
+    temporalSdks:
+      - Python
+    readiness:
+      score: 4
+      maxScore: 5
+      note: Application-ready; Lakebase schema, policy sync, and OAuth secret are operator prerequisites.
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: lakebase-agent-task-queue
+    links:
+      runbook:
+        label: Deployment and demo guide
+        url: https://github.com/temporal-sa/temporal-lakebase-agent#readme
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-lakebase-agent
+    branch: deploy/tmprl-demo-cloud-registry
+
+  builds:
+    web:
+      context: .
+      dockerfile: Dockerfile.web
+    worker:
+      context: .
+      dockerfile: Dockerfile.worker
+
+  temporal:
+    auth:
+      mode: apiKey
+
+  secrets:
+    lakebase:
+      requiredProperties:
+        - DATABRICKS_HOST
+        - DATABRICKS_CLIENT_ID
+        - DATABRICKS_CLIENT_SECRET
+        - LAKEBASE_ENDPOINT
+
+  components:
+    web:
+      build: web
+      temporalAccess: true
+      secrets:
+        - lakebase
+      env:
+        - name: DATABRICKS_AUTH_TYPE
+          value: oauth-m2m
+        - name: LAKEBASE_CONNECTION_MODE
+          value: endpoint
+        - name: LAKEBASE_DATABASE
+          value: databricks_postgres
+        - name: LAKEBASE_SCHEMA
+          value: agent_ops
+        - name: LAKEBASE_POLICY_SCHEMA
+          value: agent_policy
+        - name: LAKEBASE_POOL_SIZE
+          value: "5"
+        - name: LAKEBASE_MAX_OVERFLOW
+          value: "10"
+        - name: LAKEBASE_TOKEN_REFRESH_SECONDS
+          value: "2400"
+        - name: TEMPORAL_TASK_QUEUE
+          value: lakebase-agent-task-queue
+        - name: TEMPORAL_UI_URL
+          value: https://cloud.temporal.io
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 80
+
+    worker:
+      build: worker
+      secrets:
+        - lakebase
+      env:
+        - name: DATABRICKS_AUTH_TYPE
+          value: oauth-m2m
+        - name: LAKEBASE_CONNECTION_MODE
+          value: endpoint
+        - name: LAKEBASE_DATABASE
+          value: databricks_postgres
+        - name: LAKEBASE_SCHEMA
+          value: agent_ops
+        - name: LAKEBASE_POLICY_SCHEMA
+          value: agent_policy
+        - name: LAKEBASE_POOL_SIZE
+          value: "5"
+        - name: LAKEBASE_MAX_OVERFLOW
+          value: "10"
+        - name: LAKEBASE_TOKEN_REFRESH_SECONDS
+          value: "2400"
+        - name: TEMPORAL_TASK_QUEUE
+          value: lakebase-agent-task-queue
+        - name: AGENT_MODEL_PROVIDER
+          value: scripted
+        - name: DEMO_TOOL_DELAY_SECONDS
+          value: "3"
+      worker:
+        versioning:
+          enabled: true
+          deploymentName: lakebase-agent
+          rollout:
+            strategy: AllAtOnce
+
+  ingress:
+    subdomain: lakebase-agent
+    temporalAuthRequired: true
+
+  smokeCheck:
+    path: /ready
+    expectedStatus: 200
+    timeoutSeconds: 10
