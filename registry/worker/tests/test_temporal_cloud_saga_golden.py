@@ -1,0 +1,373 @@
+"""Characterization of the Temporal Cloud reconcile saga.
+
+This pins the exact activity call sequence, the exact request payloads, and the
+exact merged status for a project with no additional namespaces -- the shape
+every shipped project has. It exists so the multi-namespace refactor can be
+shown to preserve behavior rather than asserted to. If a change here is needed
+to make this pass, the refactor is wrong, not the test.
+
+Three scenarios, because each takes a different path through the saga:
+
+  steady state       the runtime-secret suffix is already owned, so the path
+                     cannot move and the secret is checked once
+  first provision    no suffix yet, so the saga mints one, rebuilds the plan,
+                     and re-checks the secret at the new path
+  search attributes  adds the one batched activity, and pins the delete delta,
+                     which is computed against a single flat status blob
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+
+import demo_registry_operator.workflows.demo_project as demo_project_workflow
+from demo_registry_operator.activities.external_resources import models
+from demo_registry_operator.workflows.demo_project import (
+    DemoProjectWorkflow,
+    demo_project_with_temporal_runtime_secret_path,
+)
+from demo_registry_operator.workflows.messages import DemoProjectRunRequest
+
+
+CHECKED_AT = "2026-06-20T00:00:00+00:00"
+NAMESPACE = "tmprl-dem-cld-demo"
+LEGACY_PATH = "tmprl-dem-cld/demo/temporal"
+STABLE_SUFFIX = "stable123"
+STABLE_PATH = f"tmprl-dem-cld/demo/temporal-{STABLE_SUFFIX}"
+MINTED_SUFFIX = "deadbeefcafe"
+MINTED_PATH = f"tmprl-dem-cld/demo/temporal-{MINTED_SUFFIX}"
+
+
+def project() -> dict[str, Any]:
+    return {
+        "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+        "kind": "DemoProject",
+        "metadata": {"name": "demo", "generation": 1},
+        "spec": {
+            "components": {
+                "worker": {"image": "example.com/demo/worker:latest", "worker": True},
+            },
+        },
+    }
+
+
+def activity_results(runtime_secret_path: str) -> dict[str, Any]:
+    """One canned result per activity on the apiKey happy path."""
+    return {
+        "create_or_verify_temporal_cloud_namespace": models.TemporalCloudNamespaceResult(
+            status={"phase": "Ready", "namespace": NAMESPACE},
+            namespace=NAMESPACE,
+            grpc_address=f"{NAMESPACE}.acct1.tmprl.cloud:7233",
+            auth_mode="apiKey",
+            created=True,
+            region="aws-us-west-2",
+        ),
+        "ensure_temporal_cloud_namespace_tags": models.TemporalCloudStatusResult(
+            status={"phase": "Ready", "action": "updated"},
+        ),
+        "reconcile_temporal_cloud_search_attributes": models.TemporalCloudSearchAttributesResult(
+            statuses=[
+                {
+                    "phase": "Ready",
+                    "searchAttribute": {
+                        "name": "OrderId",
+                        "type": "keyword",
+                        "action": "created",
+                    },
+                },
+                {
+                    "phase": "Ready",
+                    "searchAttribute": {
+                        "name": "Retired",
+                        "type": "keyword",
+                        "action": "deleted",
+                    },
+                },
+            ],
+        ),
+        "create_or_verify_temporal_cloud_service_account": models.TemporalCloudServiceAccountResult(
+            status={"phase": "Ready"},
+            service_account_id="sa-123",
+            service_account_name="demo-runtime",
+            created=True,
+        ),
+        "check_temporal_runtime_secret": models.TemporalRuntimeSecretCheckResult(
+            status={"phase": "Ready"},
+            runtime_secret_path=runtime_secret_path,
+            state="Missing",
+            exists=False,
+            rotate=True,
+        ),
+        "create_temporal_api_key_candidate_secret": models.TemporalCloudCredentialStageResult(
+            status={"phase": "Ready"},
+            promote_required=True,
+            candidate_api_key_id="key-abc",
+            candidate_secret_path=f"{runtime_secret_path}/candidate-abc",
+        ),
+        "run_temporal_runtime_candidate_canary": models.TemporalCloudStatusResult(
+            status={"phase": "Ready"},
+        ),
+        "promote_temporal_runtime_credential": models.TemporalCloudPromotionResult(
+            status={"phase": "Ready", "apiKey": {"keyId": "key-abc"}},
+            promoted=True,
+        ),
+        "delete_temporal_runtime_candidate_secret": models.TemporalCloudStatusResult(
+            status={"phase": "Ready", "action": "deleted"},
+        ),
+        "mirror_temporal_runtime_secret": models.TemporalCloudStatusResult(
+            status={"phase": "Ready", "action": "mirrored"},
+        ),
+    }
+
+
+def run_saga(
+    monkeypatch,
+    *,
+    owned_suffix: str | None,
+    search_attributes: dict[str, Any] | None = None,
+    previous_status: dict[str, Any] | None = None,
+):
+    """Drive the real saga with a recording stub, returning (calls, status, workflow)."""
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    demo_project = project()
+    if search_attributes:
+        demo_project["spec"]["temporal"] = {"searchAttributes": search_attributes}
+    if owned_suffix:
+        workflow._temporal_runtime_secret_suffix = owned_suffix
+        demo_project = demo_project_with_temporal_runtime_secret_path(
+            demo_project, f"tmprl-dem-cld/demo/temporal-{owned_suffix}"
+        )
+        expected_path = f"tmprl-dem-cld/demo/temporal-{owned_suffix}"
+    else:
+        expected_path = MINTED_PATH
+
+    results = activity_results(expected_path)
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        name = getattr(activity, "__name__", str(activity))
+        calls.append((name, request))
+        if name not in results:
+            raise AssertionError(f"unexpected activity in the saga: {name}")
+        return results[name]
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo", run_id="run-1"),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "uuid4",
+        lambda: SimpleNamespace(hex=MINTED_SUFFIX + "0000000000000000000"),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        demo_project,
+        checked_at=CHECKED_AT,
+    )
+    status = asyncio.run(
+        workflow._reconcile_temporal_cloud(
+            external_plan, previous_status=previous_status or {}
+        )
+    )
+    return calls, status, workflow
+
+
+# A project with no spec.temporal.searchAttributes never reaches the
+# search-attribute activity; the step still emits a NotRequired status block.
+STEADY_STATE_SEQUENCE = [
+    "create_or_verify_temporal_cloud_namespace",
+    "ensure_temporal_cloud_namespace_tags",
+    "create_or_verify_temporal_cloud_service_account",
+    "check_temporal_runtime_secret",
+    "create_temporal_api_key_candidate_secret",
+    "run_temporal_runtime_candidate_canary",
+    "promote_temporal_runtime_credential",
+    "delete_temporal_runtime_candidate_secret",
+    "mirror_temporal_runtime_secret",
+]
+
+# First provision re-checks the runtime secret once the path has moved.
+FIRST_PROVISION_SEQUENCE = [
+    "create_or_verify_temporal_cloud_namespace",
+    "ensure_temporal_cloud_namespace_tags",
+    "create_or_verify_temporal_cloud_service_account",
+    "check_temporal_runtime_secret",
+    "check_temporal_runtime_secret",
+    "create_temporal_api_key_candidate_secret",
+    "run_temporal_runtime_candidate_canary",
+    "promote_temporal_runtime_credential",
+    "delete_temporal_runtime_candidate_secret",
+    "mirror_temporal_runtime_secret",
+]
+
+# Declaring search attributes inserts exactly one activity, after tags.
+SEARCH_ATTRIBUTE_SEQUENCE = [
+    "create_or_verify_temporal_cloud_namespace",
+    "ensure_temporal_cloud_namespace_tags",
+    "reconcile_temporal_cloud_search_attributes",
+    "create_or_verify_temporal_cloud_service_account",
+    "check_temporal_runtime_secret",
+    "create_temporal_api_key_candidate_secret",
+    "run_temporal_runtime_candidate_canary",
+    "promote_temporal_runtime_credential",
+    "delete_temporal_runtime_candidate_secret",
+    "mirror_temporal_runtime_secret",
+]
+
+PINNED_STATUS_KEYS = {
+    "phase",
+    "namespace",
+    "apiKey",
+    "searchAttributes",
+    "runtimeSecretMirror",
+}
+
+
+# --- steady state ------------------------------------------------------------
+
+
+def test_steady_state_calls_exactly_this_activity_sequence(monkeypatch):
+    calls, _status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert [name for name, _request in calls] == STEADY_STATE_SEQUENCE
+
+
+def test_steady_state_targets_the_derived_namespace_on_every_request(monkeypatch):
+    calls, _status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    seen = 0
+    for name, request in calls:
+        temporal_project = getattr(request, "project", None)
+        if temporal_project is None:
+            continue
+        seen += 1
+        # No target override anywhere: every activity resolves the namespace from
+        # metadata.name, exactly as it did before the refactor.
+        assert temporal_project.target_namespace is None, name
+        assert temporal_project.namespace == NAMESPACE, name
+        assert temporal_project.runtime_secret_path == STABLE_PATH, name
+        assert temporal_project.as_demo_project()["spec"]["temporal"] == {
+            "auth": {"mode": "apiKey"},
+            "runtimeSecretPath": STABLE_PATH,
+        }, name
+    assert seen == len(STEADY_STATE_SEQUENCE)
+
+
+def test_steady_state_uses_one_candidate_token_for_the_whole_pass(monkeypatch):
+    calls, _status, workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    tokens = {
+        request.candidate_secret_token
+        for _name, request in calls
+        if getattr(request, "candidate_secret_token", None) is not None
+    }
+    assert tokens == {workflow._tc_token}
+
+
+def test_steady_state_returns_this_merged_status(monkeypatch):
+    _calls, status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert status == {
+        "phase": "Ready",
+        "namespace": NAMESPACE,
+        "apiKey": {"keyId": "key-abc"},
+        "searchAttributes": {
+            "phase": "NotRequired",
+            "checkedAt": CHECKED_AT,
+            "namespace": NAMESPACE,
+            "ownershipPolicy": "delete-only-previously-managed",
+            "attributes": [],
+            "managedNames": [],
+        },
+        "runtimeSecretMirror": {"phase": "Ready", "action": "mirrored"},
+    }
+
+
+def test_steady_state_status_keys_are_pinned(monkeypatch):
+    # The status shape is a contract: the catalog ConfigMap, printer columns, and
+    # temporal_auth_rotation_state all read it. Adding namespaces must not move it.
+    _calls, status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert set(status) == PINNED_STATUS_KEYS
+
+
+def test_steady_state_records_state_for_compensation(monkeypatch):
+    _calls, _status, workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert workflow._tc_state is not None
+    assert workflow._tc_state.promoted is True
+    assert workflow._tc_plan is not None
+
+
+# --- first provision ---------------------------------------------------------
+
+
+def test_first_provision_calls_exactly_this_activity_sequence(monkeypatch):
+    calls, _status, _workflow = run_saga(monkeypatch, owned_suffix=None)
+    assert [name for name, _request in calls] == FIRST_PROVISION_SEQUENCE
+
+
+def test_first_provision_moves_the_runtime_secret_path_once(monkeypatch):
+    calls, _status, workflow = run_saga(monkeypatch, owned_suffix=None)
+    checks = [
+        request for name, request in calls if name == "check_temporal_runtime_secret"
+    ]
+    assert checks[0].project.runtime_secret_path == LEGACY_PATH
+    assert checks[1].project.runtime_secret_path == MINTED_PATH
+    assert workflow._temporal_runtime_secret_suffix == MINTED_SUFFIX
+    assert workflow._tc_plan.temporal_project.runtime_secret_path == MINTED_PATH
+
+
+def test_first_provision_status_keys_are_pinned(monkeypatch):
+    _calls, status, _workflow = run_saga(monkeypatch, owned_suffix=None)
+    assert set(status) == PINNED_STATUS_KEYS
+
+
+# --- search attributes -------------------------------------------------------
+
+
+def test_search_attributes_add_exactly_one_activity(monkeypatch):
+    calls, _status, _workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        search_attributes={"OrderId": {"type": "keyword"}},
+    )
+    assert [name for name, _request in calls] == SEARCH_ATTRIBUTE_SEQUENCE
+
+
+def test_search_attribute_delta_deletes_only_previously_managed_names(monkeypatch):
+    # The delete set is computed against one flat status blob. Pinned here because
+    # sharing that blob across namespaces is what would make a loop destructive.
+    calls, _status, _workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        search_attributes={"OrderId": {"type": "keyword"}},
+        previous_status={
+            "externalResources": {
+                "temporalCloud": {
+                    "searchAttributes": {
+                        "managedNames": ["OrderId", "Retired"],
+                        "attributes": [
+                            {"name": "OrderId", "type": "keyword"},
+                            {"name": "Retired", "type": "keyword"},
+                        ],
+                    }
+                }
+            }
+        },
+    )
+    request = next(
+        request
+        for name, request in calls
+        if name == "reconcile_temporal_cloud_search_attributes"
+    )
+    assert [attribute.name for attribute in request.desired] == ["OrderId"]
+    assert list(request.delete_names) == ["Retired"]
+    assert request.namespace.namespace == NAMESPACE
