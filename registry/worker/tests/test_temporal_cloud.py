@@ -1825,3 +1825,54 @@ def test_deletes_nexus_endpoints_and_tolerates_missing_ones():
     assert reconciler.called("delete_nexus_endpoint") == [
         ("delete_nexus_endpoint", "endpoint-orders")
     ]
+
+
+def test_nexus_endpoint_spec_matches_the_real_protobuf_shape():
+    # FakeReconciler above is hand-written, so nothing else here would notice a
+    # wrong protobuf field name. This builds the real messages and reads one back.
+    from temporalio.api.cloud.cloudservice.v1 import (
+        CreateNexusEndpointRequest,
+        DeleteNexusEndpointRequest,
+        GetNexusEndpointsRequest,
+        UpdateNexusEndpointRequest,
+    )
+    from temporalio.api.cloud.nexus.v1 import Endpoint
+
+    spec = CloudApiReconciler._nexus_endpoint_spec(
+        "scenario-orders",
+        "tmprl-dem-cld-scenario-beta.acct1",
+        "orders-tq",
+        ("tmprl-dem-cld-scenario.acct1", "tmprl-dem-cld-scenario-alpha.acct1"),
+    )
+    assert spec.target_spec.worker_target_spec.namespace_id == (
+        "tmprl-dem-cld-scenario-beta.acct1"
+    )
+    assert spec.target_spec.worker_target_spec.task_queue == "orders-tq"
+    assert len(spec.policy_specs) == 2
+
+    for request in (
+        CreateNexusEndpointRequest(spec=spec),
+        UpdateNexusEndpointRequest(endpoint_id="e1", spec=spec, resource_version="v1"),
+        DeleteNexusEndpointRequest(endpoint_id="e1", resource_version="v1"),
+        GetNexusEndpointsRequest(page_size=100, name="scenario-orders"),
+    ):
+        assert request.SerializeToString() is not None
+
+    info = CloudApiReconciler._nexus_endpoint_info(
+        Endpoint(id="endpoint-1", resource_version="v1", spec=spec)
+    )
+    assert info.endpoint_id == "endpoint-1"
+    assert info.target_namespace_id == "tmprl-dem-cld-scenario-beta.acct1"
+    assert set(info.allowed_caller_namespace_ids) == {
+        "tmprl-dem-cld-scenario.acct1",
+        "tmprl-dem-cld-scenario-alpha.acct1",
+    }
+    # Allowlist comparison is order-insensitive, so a reordered spec is not drift.
+    assert info.matches(
+        target_namespace_id="tmprl-dem-cld-scenario-beta.acct1",
+        target_task_queue="orders-tq",
+        allowed_caller_namespace_ids=(
+            "tmprl-dem-cld-scenario-alpha.acct1",
+            "tmprl-dem-cld-scenario.acct1",
+        ),
+    )
