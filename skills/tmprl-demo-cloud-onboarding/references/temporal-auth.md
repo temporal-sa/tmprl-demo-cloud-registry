@@ -308,6 +308,32 @@ var names.
 
 Lambda workers can use either API-key or mTLS project auth.
 
+## Credentials For Additional Namespaces
+
+A component bound with `temporalNamespace` gets the same env vars, sourced from
+that namespace's own credentials instead of the project's. Nothing in the app
+changes: it still reads `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and the rest.
+
+What differs is where they come from. The bound namespace gets its own
+credential in Secrets Manager at `tmprl-dem-cld/<project>/temporal-<label>`, and
+its own Kubernetes Secret, named by appending a short digest of the label to the
+usual name (`temporal-credentials-<digest>`, or
+`temporal-worker-runtime-<digest>` for a versioned worker). The digest keeps the
+name within the 63-character limit whatever the label is.
+
+Components with no `temporalNamespace` are untouched: they keep reading
+`temporal-credentials` and `temporal-worker-runtime` exactly as before.
+
+Two carve-outs, both rejected by validation rather than silently ignored:
+`temporalNamespace` does not work on `serverless.provider: aws-lambda`
+components, whose Temporal wiring is a separate path, or alongside
+`temporalProxy`, which already rewrites namespaces its own way.
+
+Credential rotation runs per namespace, so an mTLS project pays the CA staging
+and weekly client-cert rotation cost once per declared namespace.
+
+See `demo-project-contract.md` for the schema.
+
 ## Temporal Search Attributes
 
 Declare namespace search attributes when the demo requires them:
