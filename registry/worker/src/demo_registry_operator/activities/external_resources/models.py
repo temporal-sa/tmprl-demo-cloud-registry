@@ -36,12 +36,13 @@ class TemporalNamespaceSpec:
 
 @dataclass(frozen=True)
 class NexusEndpointSpec:
-    """One entry from spec.temporal.nexusEndpoints, with labels already resolved.
+    """One entry from spec.temporal.nexusEndpoints.
 
-    ``target_namespace`` and ``allowed_caller_namespaces`` hold derived Temporal
-    Cloud namespace names, not the labels the project author wrote. The Cloud API
-    keys off the qualified ``<name>.<account-id>`` form, which the reconciler
-    builds from these plus the account id it already holds.
+    Namespaces are held as the labels the project author wrote, with "primary"
+    meaning the project's original namespace. Resolving a label to a derived
+    namespace name -- and then to the qualified ``<name>.<account-id>`` id the
+    Cloud API keys off -- happens in the activity, which is where every other
+    namespace name is resolved too.
     """
 
     name: str
@@ -109,6 +110,10 @@ class TemporalCloudProject:
         # namespaces stays byte-identical to what activities have always received.
         if self.target_namespace:
             temporal["namespaceOverride"] = self.target_namespace
+        # additional_namespaces and nexus_endpoints are deliberately not emitted:
+        # they are planning inputs the workflow and the Nexus activity read off
+        # this model directly, and emitting them would change the dict every
+        # existing activity receives.
         return {
             "metadata": {"name": self.name},
             "spec": {

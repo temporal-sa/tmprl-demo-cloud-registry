@@ -75,6 +75,33 @@ class NamespaceInfo:
     created: bool = False
 
 
+@dataclass
+class NexusEndpointInfo:
+    endpoint_id: str
+    name: str
+    # Qualified "<namespace>.<account-id>" ids, which is what the Cloud API stores
+    # and compares against -- not the short namespace names a project declares.
+    target_namespace_id: str
+    target_task_queue: str
+    allowed_caller_namespace_ids: tuple[str, ...] = ()
+    resource_version: str | None = None
+    state: str | None = None
+    created: bool = False
+
+    def matches(
+        self,
+        *,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> bool:
+        return (
+            self.target_namespace_id == target_namespace_id
+            and self.target_task_queue == target_task_queue
+            and set(self.allowed_caller_namespace_ids) == set(allowed_caller_namespace_ids)
+        )
+
+
 class TemporalCloudReconciler(Protocol):
     async def list_regions(self) -> list[str]: ...
 
@@ -134,6 +161,27 @@ class TemporalCloudReconciler(Protocol):
     async def create_api_key(
         self, service_account_id: str, display_name: str, description: str, ttl_days: int
     ) -> temporal_auth.ApiKeyResult: ...
+
+    async def find_nexus_endpoint(self, name: str) -> NexusEndpointInfo | None: ...
+
+    async def create_nexus_endpoint(
+        self,
+        name: str,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> NexusEndpointInfo: ...
+
+    async def update_nexus_endpoint(
+        self,
+        endpoint_id: str,
+        name: str,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> NexusEndpointInfo: ...
+
+    async def delete_nexus_endpoint(self, endpoint_id: str) -> str: ...
 
 
 class SecretStore(Protocol):
@@ -352,6 +400,137 @@ async def reconcile_temporal_cloud(
     }
     status.update(auth_status)
     return status
+
+
+NEXUS_PRIMARY_NAMESPACE_REF = "primary"
+
+
+def nexus_namespace_id(
+    demo_project: dict[str, Any],
+    reference: str,
+    account_id: str | None,
+) -> str:
+    """Resolve a declared namespace reference to the Cloud API's namespace_id.
+
+    ``reference`` is a label from spec.temporal.namespaces, or "primary" for the
+    project's original namespace. The Cloud API keys off the qualified
+    ``<namespace>.<account-id>`` form, which is the same value NamespaceInfo
+    carries as ``qualified_name``.
+    """
+    label = None if reference == NEXUS_PRIMARY_NAMESPACE_REF else reference
+    namespace = resources.project_temporal_namespace_for_label(demo_project, label)
+    return f"{namespace}.{account_id}" if account_id else namespace
+
+
+async def reconcile_nexus_endpoints(
+    demo_project: dict[str, Any],
+    *,
+    endpoints: tuple[Any, ...],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+    account_id: str | None,
+) -> dict[str, Any]:
+    """Create-or-verify every declared endpoint, correcting drift in place.
+
+    Endpoints are looked up by name first and only created when absent. An
+    existing endpoint whose target or caller allowlist has drifted is updated
+    rather than recreated, because the endpoint id is what callers resolve.
+    """
+    statuses: list[dict[str, Any]] = []
+    endpoint_ids: dict[str, str] = {}
+
+    for endpoint in endpoints:
+        target_namespace_id = nexus_namespace_id(
+            demo_project, endpoint.target_namespace, account_id
+        )
+        target_task_queue = endpoint.target_task_queue
+        allowed_ids = tuple(
+            nexus_namespace_id(demo_project, reference, account_id)
+            for reference in endpoint.allowed_caller_namespaces
+        )
+
+        existing = await reconciler.find_nexus_endpoint(endpoint.name)
+        if existing is None:
+            info = await reconciler.create_nexus_endpoint(
+                endpoint.name,
+                target_namespace_id,
+                target_task_queue,
+                allowed_ids,
+            )
+            action = "created"
+        elif existing.matches(
+            target_namespace_id=target_namespace_id,
+            target_task_queue=target_task_queue,
+            allowed_caller_namespace_ids=allowed_ids,
+        ):
+            info = existing
+            action = "verified"
+        else:
+            info = await reconciler.update_nexus_endpoint(
+                existing.endpoint_id,
+                endpoint.name,
+                target_namespace_id,
+                target_task_queue,
+                allowed_ids,
+            )
+            action = "updated"
+
+        endpoint_ids[endpoint.name] = info.endpoint_id
+        statuses.append(
+            {
+                "name": endpoint.name,
+                "action": action,
+                "endpointId": info.endpoint_id,
+                "targetNamespace": target_namespace_id,
+                "targetTaskQueue": target_task_queue,
+                "allowedCallerNamespaces": list(allowed_ids),
+            }
+        )
+
+    return {
+        "phase": "Ready",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "endpoints": statuses,
+        "endpointIds": endpoint_ids,
+    }
+
+
+async def delete_nexus_endpoints(
+    demo_project: dict[str, Any],
+    *,
+    endpoints: tuple[Any, ...],
+    reconciler: TemporalCloudReconciler,
+    checked_at: str,
+) -> dict[str, Any]:
+    """Delete this project's endpoints, tolerating ones already gone.
+
+    Runs before any namespace teardown: an endpoint outlives the namespace it
+    targets, and endpoint names are account-wide, so a leaked one blocks the name
+    for every other project.
+    """
+    statuses: list[dict[str, Any]] = []
+    for endpoint in endpoints:
+        existing = await reconciler.find_nexus_endpoint(endpoint.name)
+        if existing is None:
+            statuses.append({"name": endpoint.name, "action": "not-found"})
+            continue
+        action = await reconciler.delete_nexus_endpoint(existing.endpoint_id)
+        statuses.append(
+            {
+                "name": endpoint.name,
+                "action": action,
+                "endpointId": existing.endpoint_id,
+            }
+        )
+    return {
+        "phase": "Deleted",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "endpoints": statuses,
+    }
 
 
 async def reconcile_temporal_cloud_search_attributes(
@@ -2692,6 +2871,174 @@ class CloudApiReconciler:
             raise
         await self._await_operation(
             response.async_operation, label=f"delete-service-account:{service_account_id}"
+        )
+        return "deleted"
+
+    # --- Nexus Endpoints ---
+    #
+    # Endpoint names are unique account-wide, not per namespace, so find-by-name is
+    # a server-side filter rather than a scan. The spec carries the target and the
+    # caller allowlist together, so an update rewrites both -- a changed
+    # targetTaskQueue drifts back just like a changed allowlist does.
+
+    @staticmethod
+    def _nexus_endpoint_info(endpoint: Any, *, created: bool = False) -> NexusEndpointInfo:
+        target = endpoint.spec.target_spec.worker_target_spec
+        return NexusEndpointInfo(
+            endpoint_id=endpoint.id,
+            name=endpoint.spec.name,
+            target_namespace_id=target.namespace_id,
+            target_task_queue=target.task_queue,
+            allowed_caller_namespace_ids=tuple(
+                policy.allowed_cloud_namespace_policy_spec.namespace_id
+                for policy in endpoint.spec.policy_specs
+                if policy.HasField("allowed_cloud_namespace_policy_spec")
+            ),
+            resource_version=endpoint.resource_version,
+            state=str(endpoint.state),
+            created=created,
+        )
+
+    @staticmethod
+    def _nexus_endpoint_spec(
+        name: str,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> Any:
+        from temporalio.api.cloud.nexus.v1 import (
+            AllowedCloudNamespacePolicySpec,
+            EndpointPolicySpec,
+            EndpointSpec,
+            EndpointTargetSpec,
+            WorkerTargetSpec,
+        )
+
+        return EndpointSpec(
+            name=name,
+            target_spec=EndpointTargetSpec(
+                worker_target_spec=WorkerTargetSpec(
+                    namespace_id=target_namespace_id,
+                    task_queue=target_task_queue,
+                )
+            ),
+            # Temporal permits no callers by default, even from the target's own
+            # namespace, so every allowed caller needs its own policy spec.
+            policy_specs=[
+                EndpointPolicySpec(
+                    allowed_cloud_namespace_policy_spec=AllowedCloudNamespacePolicySpec(
+                        namespace_id=namespace_id,
+                    )
+                )
+                for namespace_id in allowed_caller_namespace_ids
+            ],
+        )
+
+    async def find_nexus_endpoint(self, name: str) -> NexusEndpointInfo | None:
+        from temporalio.api.cloud.cloudservice.v1 import GetNexusEndpointsRequest
+
+        response = await self._cs.get_nexus_endpoints(
+            GetNexusEndpointsRequest(page_size=100, name=name)
+        )
+        for endpoint in response.endpoints:
+            if endpoint.spec.name == name:
+                return self._nexus_endpoint_info(endpoint)
+        return None
+
+    async def create_nexus_endpoint(
+        self,
+        name: str,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> NexusEndpointInfo:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            CreateNexusEndpointRequest,
+            GetNexusEndpointRequest,
+        )
+
+        response = await self._cs.create_nexus_endpoint(
+            CreateNexusEndpointRequest(
+                spec=self._nexus_endpoint_spec(
+                    name,
+                    target_namespace_id,
+                    target_task_queue,
+                    allowed_caller_namespace_ids,
+                )
+            )
+        )
+        await self._await_operation(
+            response.async_operation, label=f"create-nexus-endpoint:{name}"
+        )
+        got = await self._cs.get_nexus_endpoint(
+            GetNexusEndpointRequest(endpoint_id=response.endpoint_id)
+        )
+        return self._nexus_endpoint_info(got.endpoint, created=True)
+
+    async def update_nexus_endpoint(
+        self,
+        endpoint_id: str,
+        name: str,
+        target_namespace_id: str,
+        target_task_queue: str,
+        allowed_caller_namespace_ids: tuple[str, ...],
+    ) -> NexusEndpointInfo:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            GetNexusEndpointRequest,
+            UpdateNexusEndpointRequest,
+        )
+
+        got = await self._cs.get_nexus_endpoint(
+            GetNexusEndpointRequest(endpoint_id=endpoint_id)
+        )
+        response = await self._cs.update_nexus_endpoint(
+            UpdateNexusEndpointRequest(
+                endpoint_id=endpoint_id,
+                spec=self._nexus_endpoint_spec(
+                    name,
+                    target_namespace_id,
+                    target_task_queue,
+                    allowed_caller_namespace_ids,
+                ),
+                resource_version=got.endpoint.resource_version,
+            )
+        )
+        await self._await_operation(
+            response.async_operation, label=f"update-nexus-endpoint:{name}"
+        )
+        got = await self._cs.get_nexus_endpoint(
+            GetNexusEndpointRequest(endpoint_id=endpoint_id)
+        )
+        return self._nexus_endpoint_info(got.endpoint)
+
+    async def delete_nexus_endpoint(self, endpoint_id: str) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            DeleteNexusEndpointRequest,
+            GetNexusEndpointRequest,
+        )
+
+        try:
+            got = await self._cs.get_nexus_endpoint(
+                GetNexusEndpointRequest(endpoint_id=endpoint_id)
+            )
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _is_not_found(error):
+                return "not-found"
+            raise
+
+        try:
+            response = await self._cs.delete_nexus_endpoint(
+                DeleteNexusEndpointRequest(
+                    endpoint_id=endpoint_id,
+                    resource_version=got.endpoint.resource_version,
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - tolerate already-deleted
+            if _is_not_found(error):
+                return "not-found"
+            raise
+        await self._await_operation(
+            response.async_operation, label=f"delete-nexus-endpoint:{endpoint_id}"
         )
         return "deleted"
 
