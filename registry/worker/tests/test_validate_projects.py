@@ -753,3 +753,219 @@ def test_schema_rejects_invalid_additional_link_audience():
         "audience" in error.message or "internal" in error.message
         for error in errors
     ), [error.message for error in errors]
+
+
+# --- multi-namespace and Nexus endpoints ------------------------------------
+
+
+def namespace_spec(**overrides) -> dict:
+    spec = base_spec()
+    spec["temporal"] = {"namespaces": {"alpha": {}}}
+    spec["components"] = {
+        "app": {"build": "app", "worker": True, "temporalNamespace": "alpha"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def messages(errors) -> list[str]:
+    return [error.message for error in errors]
+
+
+def test_declared_namespace_and_binding_validate():
+    document = project_document(namespace_spec())
+    assert validate_projects.validate_temporal_namespace_labels(document) == []
+    assert validate_projects.validate_component_temporal_namespace_refs(document) == []
+
+
+def test_reserved_namespace_labels_are_rejected():
+    for label in ("candidate", "ca-candidate"):
+        spec = base_spec()
+        spec["temporal"] = {"namespaces": {label: {}}}
+        errors = validate_projects.validate_temporal_namespace_labels(
+            project_document(spec)
+        )
+        assert any("reserved name" in message for message in messages(errors)), label
+
+
+def test_component_must_reference_a_declared_namespace():
+    spec = namespace_spec()
+    spec["components"]["app"]["temporalNamespace"] = "beta"
+    errors = validate_projects.validate_component_temporal_namespace_refs(
+        project_document(spec)
+    )
+    assert (
+        "components.app.temporalNamespace 'beta' must match a declared "
+        "temporal.namespaces entry"
+    ) in messages(errors)
+
+
+def test_declared_namespace_must_be_referenced():
+    spec = base_spec()
+    spec["temporal"] = {"namespaces": {"alpha": {}}}
+    errors = validate_projects.validate_component_temporal_namespace_refs(
+        project_document(spec)
+    )
+    assert (
+        "temporal.namespaces.alpha must be referenced by at least one component "
+        "or Nexus endpoint"
+    ) in messages(errors)
+
+
+def test_namespace_referenced_only_by_an_endpoint_is_not_orphaned():
+    spec = base_spec()
+    spec["temporal"] = {
+        "namespaces": {"alpha": {}},
+        "nexusEndpoints": {
+            "orders": {
+                "targetNamespace": "alpha",
+                "targetTaskQueue": "orders-tq",
+                "allowedCallerNamespaces": ["primary"],
+            }
+        },
+    }
+    assert (
+        validate_projects.validate_component_temporal_namespace_refs(
+            project_document(spec)
+        )
+        == []
+    )
+
+
+def test_binding_is_rejected_on_lambda_and_proxy_components():
+    spec = namespace_spec()
+    spec["components"]["lambda"] = {
+        "build": "app",
+        "temporalNamespace": "alpha",
+        "serverless": {"provider": "aws-lambda"},
+    }
+    spec["components"]["proxied"] = {
+        "build": "app",
+        "temporalNamespace": "alpha",
+        "temporalProxy": {"enabled": True},
+    }
+    rendered = messages(
+        validate_projects.validate_component_temporal_namespace_refs(
+            project_document(spec)
+        )
+    )
+    assert (
+        "components.lambda.temporalNamespace is not supported for serverless "
+        "aws-lambda components"
+    ) in rendered
+    assert (
+        "components.proxied.temporalNamespace cannot be used with temporalProxy"
+    ) in rendered
+
+
+def endpoint_spec(**endpoint) -> dict:
+    spec = namespace_spec()
+    base = {
+        "targetNamespace": "alpha",
+        "targetTaskQueue": "orders-tq",
+        "allowedCallerNamespaces": ["primary"],
+    }
+    base.update(endpoint)
+    spec["temporal"]["nexusEndpoints"] = {"orders": base}
+    return spec
+
+
+def test_valid_nexus_endpoint_passes():
+    assert validate_projects.validate_nexus_endpoints(
+        project_document(endpoint_spec())
+    ) == []
+
+
+def test_nexus_endpoint_target_must_be_primary_or_declared():
+    errors = validate_projects.validate_nexus_endpoints(
+        project_document(endpoint_spec(targetNamespace="beta"))
+    )
+    assert any("targetNamespace 'beta'" in message for message in messages(errors))
+
+
+def test_nexus_endpoint_target_may_be_primary():
+    assert validate_projects.validate_nexus_endpoints(
+        project_document(endpoint_spec(targetNamespace="primary"))
+    ) == []
+
+
+def test_nexus_endpoint_requires_a_task_queue():
+    errors = validate_projects.validate_nexus_endpoints(
+        project_document(endpoint_spec(targetTaskQueue="  "))
+    )
+    assert any("targetTaskQueue must be" in message for message in messages(errors))
+
+
+def test_nexus_endpoint_requires_a_non_empty_caller_allowlist():
+    # Temporal admits no callers by default, so an empty list is unreachable.
+    errors = validate_projects.validate_nexus_endpoints(
+        project_document(endpoint_spec(allowedCallerNamespaces=[]))
+    )
+    assert any(
+        "allowedCallerNamespaces must list at least one namespace" in message
+        for message in messages(errors)
+    )
+
+
+def test_nexus_endpoint_rejects_unknown_and_duplicate_callers():
+    errors = messages(
+        validate_projects.validate_nexus_endpoints(
+            project_document(
+                endpoint_spec(allowedCallerNamespaces=["primary", "primary", "beta"])
+            )
+        )
+    )
+    assert any("duplicates allowedCallerNamespaces[0]" in message for message in errors)
+    assert any("[2] 'beta' must be" in message for message in errors)
+
+
+def test_nexus_endpoint_name_must_start_with_a_letter():
+    spec = namespace_spec()
+    spec["temporal"]["nexusEndpoints"] = {
+        "9orders": {
+            "targetNamespace": "alpha",
+            "targetTaskQueue": "orders-tq",
+            "allowedCallerNamespaces": ["primary"],
+        }
+    }
+    errors = validate_projects.validate_nexus_endpoints(project_document(spec))
+    assert any("must start with a letter" in message for message in messages(errors))
+
+
+def test_nexus_endpoint_names_are_unique_across_the_registry():
+    first = project_document(endpoint_spec())
+    second = validate_projects.ProjectDocument(
+        path=ROOT / "projects/other.yaml", data=first.data
+    )
+    errors = validate_projects.validate_unique_nexus_endpoint_names([first, second])
+    assert any(
+        "duplicate Nexus endpoint name 'orders'" in message
+        for message in messages(errors)
+    )
+    assert any("unique account-wide" in message for message in messages(errors))
+
+
+def test_declared_namespaces_join_the_temporal_uniqueness_map():
+    # The label-derived name is checked too, not just the project's own -- the
+    # Temporal name truncates at 39 chars where the Kubernetes one truncates at 63.
+    spec = base_spec()
+    spec["temporal"] = {"namespaces": {"alpha": {}}}
+    first = validate_projects.ProjectDocument(
+        path=ROOT / "projects/first.yaml",
+        data={"kind": "DemoProject", "metadata": {"name": "demo"}, "spec": spec},
+    )
+    second = validate_projects.ProjectDocument(
+        path=ROOT / "projects/second.yaml", data=first.data
+    )
+    errors = messages(
+        validate_projects.validate_unique_derived_namespaces([first, second])
+    )
+    assert any(
+        "duplicate derived Temporal namespace 'tmprl-dem-cld-demo-alpha'" in message
+        and "temporal.namespaces.alpha" in message
+        for message in errors
+    )
+    assert any(
+        "duplicate derived Temporal namespace 'tmprl-dem-cld-demo'" in message
+        for message in errors
+    )
