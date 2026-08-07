@@ -212,6 +212,10 @@
           "type": "boolean",
           "default": false
         },
+        "temporalNamespace": {
+          "$ref": "#/$defs/temporalNamespaceLabel",
+          "$comment": "Binds this component to a namespace declared in spec.temporal.namespaces. Absent means the project's original namespace, which is what every component gets today."
+        },
         "temporalProxy": {
           "$ref": "#/$defs/temporalProxy"
         },
@@ -705,6 +709,24 @@
           "additionalProperties": {
             "$ref": "#/$defs/temporalSearchAttribute"
           }
+        },
+        "namespaces": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/temporalNamespaceLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/temporalNamespaceSpec"
+          }
+        },
+        "nexusEndpoints": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/nexusEndpointName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/nexusEndpoint"
+          }
         }
       }
     },
@@ -741,6 +763,73 @@
       "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
       "minLength": 1,
       "maxLength": 64
+    },
+    "temporalNamespaceLabel": {
+      "$ref": "#/$defs/dnsLabel",
+      "$comment": "candidate and ca-candidate collide with the credential-rotation staging paths tmprl-dem-cld/<project>/temporal-<suffix>, so they are reserved.",
+      "not": {
+        "enum": ["candidate", "ca-candidate"]
+      }
+    },
+    "temporalNamespaceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Additional namespaces inherit the project's spec.temporal.auth.mode; auth is not per-namespace.",
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/temporalRegion"
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        },
+        "searchAttributes": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/temporalSearchAttributeName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/temporalSearchAttribute"
+          }
+        }
+      }
+    },
+    "nexusEndpointName": {
+      "type": "string",
+      "$comment": "Temporal Cloud requires ^[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]$ and names are unique account-wide, so this is deliberately not dnsLabel (which permits a leading digit).",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9]$",
+      "minLength": 2,
+      "maxLength": 63
+    },
+    "nexusEndpointNamespaceRef": {
+      "$ref": "#/$defs/dnsLabel",
+      "$comment": "Either the literal \"primary\" (the project's original namespace) or a key declared in spec.temporal.namespaces. Which one it is gets checked semantically, not here."
+    },
+    "nexusEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetTaskQueue", "allowedCallerNamespaces"],
+      "properties": {
+        "targetNamespace": {
+          "$ref": "#/$defs/nexusEndpointNamespaceRef",
+          "default": "primary"
+        },
+        "targetTaskQueue": {
+          "type": "string",
+          "$comment": "Deliberately not cross-validated: the platform has never tracked a component's task queue and this feature does not introduce that tracking.",
+          "minLength": 1
+        },
+        "allowedCallerNamespaces": {
+          "type": "array",
+          "$comment": "Temporal allows no callers by default, even in the target's own namespace, so this must be explicit and non-empty.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nexusEndpointNamespaceRef"
+          }
+        }
+      }
     },
     "temporalProxy": {
       "type": "object",

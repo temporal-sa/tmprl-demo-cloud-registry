@@ -1186,3 +1186,72 @@ def test_container_renders_liveness_probe_only_when_opted_in():
     assert "livenessProbe" in opted
     plain = resources.container(dp, "worker", {"build": "worker", "worker": True}, "img:git-x")
     assert "livenessProbe" not in plain
+
+
+# --- Blue/green CRD parity: enforce Decision #7 instead of trusting habit ---
+
+BOOTSTRAP_CRD_DIRS = tuple(
+    ROOT / "clusters" / cluster / "bootstrap" / "crds" for cluster in ("blue", "green")
+)
+
+
+def _bootstrap_crd_filenames() -> list[str]:
+    blue, _green = BOOTSTRAP_CRD_DIRS
+    return sorted(path.name for path in blue.glob("*.yaml"))
+
+
+def test_blue_and_green_bootstrap_crd_dirs_hold_the_same_files():
+    blue, green = BOOTSTRAP_CRD_DIRS
+    assert sorted(path.name for path in blue.glob("*.yaml")) == sorted(
+        path.name for path in green.glob("*.yaml")
+    )
+
+
+def test_blue_and_green_crd_schemas_are_identical():
+    blue, green = BOOTSTRAP_CRD_DIRS
+    for name in _bootstrap_crd_filenames():
+        if name == "kustomization.yaml":
+            continue
+        assert _load(blue / name)["spec"]["versions"] == _load(green / name)["spec"][
+            "versions"
+        ], f"{name} schema drifted between blue and green"
+
+
+def test_blue_and_green_crd_files_are_byte_identical():
+    blue, green = BOOTSTRAP_CRD_DIRS
+    for name in _bootstrap_crd_filenames():
+        assert (blue / name).read_bytes() == (green / name).read_bytes(), (
+            f"{name} differs between blue and green"
+        )
+
+
+# --- Multi-namespace / Nexus schema surface ---
+
+
+def _temporal_schema() -> dict:
+    return _v1_schema(_load(DEMOPROJECTS_CRD))["spec"]["properties"]["temporal"][
+        "properties"
+    ]
+
+
+def test_demoproject_temporal_keeps_existing_keys():
+    # spec.temporal is a closed schema, so an unlisted key gets pruned by the
+    # apiserver. Adding namespaces/nexusEndpoints must not displace these.
+    temporal = _temporal_schema()
+    for key in ("region", "auth", "searchAttributes"):
+        assert key in temporal
+
+
+def test_demoproject_temporal_declares_additional_namespaces():
+    entry = _temporal_schema()["namespaces"]["additionalProperties"]
+    assert sorted(entry["properties"]) == ["region", "retentionDays", "searchAttributes"]
+    # Auth mode is inherited from the project, never declared per namespace.
+    assert "auth" not in entry["properties"]
+
+
+def test_demoproject_temporal_declares_nexus_endpoints():
+    entry = _temporal_schema()["nexusEndpoints"]["additionalProperties"]
+    assert set(entry["required"]) == {"targetTaskQueue", "allowedCallerNamespaces"}
+    assert entry["properties"]["targetNamespace"]["default"] == "primary"
+    # Temporal allows no callers by default, so the allowlist must be explicit.
+    assert entry["properties"]["allowedCallerNamespaces"]["minItems"] == 1
