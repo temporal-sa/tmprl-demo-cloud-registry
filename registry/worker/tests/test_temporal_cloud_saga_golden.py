@@ -371,3 +371,223 @@ def test_search_attribute_delta_deletes_only_previously_managed_names(monkeypatc
     assert [attribute.name for attribute in request.desired] == ["OrderId"]
     assert list(request.delete_names) == ["Retired"]
     assert request.namespace.namespace == NAMESPACE
+
+
+# --- the loop over namespace targets -----------------------------------------
+
+
+def with_additional_namespace(external_plan, label="alpha"):
+    """Attach one declared namespace, the way the planner will once wired."""
+    from dataclasses import replace
+
+    project = external_plan.temporal_project
+    spec = models.TemporalNamespaceSpec(
+        label=label,
+        namespace=f"tmprl-dem-cld-demo-{label}",
+        auth_mode=project.auth_mode,
+        runtime_secret_path=f"tmprl-dem-cld/demo/temporal-{label}",
+        mtls_ca_secret_path=f"tmprl-dem-cld/demo/temporal-{label}/ca",
+        components={"sidecar": {"build": "app", "worker": True}},
+    )
+    return replace(
+        external_plan,
+        temporal_project=replace(project, additional_namespaces=(spec,)),
+    )
+
+
+def test_a_project_without_declared_namespaces_yields_one_target():
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        project(), checked_at=CHECKED_AT
+    )
+    targets = demo_project_workflow.temporal_namespace_targets(external_plan)
+    assert [target.label for target in targets] == [None]
+    # The primary target's plan is the plan itself, not a rebuild of it.
+    assert targets[0].external_plan(external_plan) is external_plan
+
+
+def test_declared_namespaces_become_additional_targets():
+    external_plan = with_additional_namespace(
+        demo_project_workflow.external_resources.plan_external_resources(
+            project(), checked_at=CHECKED_AT
+        )
+    )
+    targets = demo_project_workflow.temporal_namespace_targets(external_plan)
+    assert [target.label for target in targets] == [None, "alpha"]
+
+    sibling = targets[1].external_plan(external_plan).temporal_project
+    assert sibling.target_namespace == "tmprl-dem-cld-demo-alpha"
+    assert sibling.runtime_secret_path == "tmprl-dem-cld/demo/temporal-alpha"
+    assert sibling.components == {"sidecar": {"build": "app", "worker": True}}
+    # The projection must not recurse: a sibling declares no siblings of its own.
+    assert sibling.additional_namespaces == ()
+    # And every activity resolves it to the sibling namespace, not the primary.
+    assert (
+        demo_project_workflow.resources.project_temporal_namespace(
+            sibling.as_demo_project()
+        )
+        == "tmprl-dem-cld-demo-alpha"
+    )
+
+
+def test_candidate_token_is_unchanged_for_the_primary_target():
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        project(), checked_at=CHECKED_AT
+    )
+    common = dict(workflow_id="DemoProject/demo", run_id="run-1", reconcile_sequence=3)
+    assert demo_project_workflow.temporal_candidate_secret_token(
+        external_plan, **common
+    ) == demo_project_workflow.temporal_candidate_secret_token(
+        external_plan, **common, target_namespace=None
+    )
+
+
+def test_candidate_token_differs_per_target():
+    external_plan = demo_project_workflow.external_resources.plan_external_resources(
+        project(), checked_at=CHECKED_AT
+    )
+    common = dict(workflow_id="DemoProject/demo", run_id="run-1", reconcile_sequence=3)
+    primary = demo_project_workflow.temporal_candidate_secret_token(
+        external_plan, **common
+    )
+    alpha = demo_project_workflow.temporal_candidate_secret_token(
+        external_plan, **common, target_namespace="alpha"
+    )
+    beta = demo_project_workflow.temporal_candidate_secret_token(
+        external_plan, **common, target_namespace="beta"
+    )
+    assert len({primary, alpha, beta}) == 3
+
+
+def test_status_is_unchanged_when_no_namespace_is_declared():
+    merged = demo_project_workflow.merge_temporal_cloud_namespace_status(
+        {None: {"phase": "Ready", "namespace": NAMESPACE}}
+    )
+    assert merged == {"phase": "Ready", "namespace": NAMESPACE}
+    assert "additionalNamespaces" not in merged
+
+
+def test_additional_namespace_status_hangs_off_a_sibling_key():
+    merged = demo_project_workflow.merge_temporal_cloud_namespace_status(
+        {
+            None: {"phase": "Ready", "namespace": NAMESPACE},
+            "alpha": {"phase": "Ready", "namespace": "tmprl-dem-cld-demo-alpha"},
+        }
+    )
+    # The primary blob stays exactly where every existing reader looks for it.
+    assert merged["phase"] == "Ready"
+    assert merged["namespace"] == NAMESPACE
+    assert merged["additionalNamespaces"] == {
+        "alpha": {"phase": "Ready", "namespace": "tmprl-dem-cld-demo-alpha"}
+    }
+
+
+def run_two_namespace_saga(monkeypatch):
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    workflow._temporal_runtime_secret_suffix = STABLE_SUFFIX
+    demo_project = demo_project_with_temporal_runtime_secret_path(
+        project(), STABLE_PATH
+    )
+    demo_project["spec"]["temporal"]["searchAttributes"] = {"OrderId": {"type": "keyword"}}
+
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        name = getattr(activity, "__name__", str(activity))
+        calls.append((name, request))
+        target = getattr(request, "project", None)
+        path = getattr(target, "runtime_secret_path", STABLE_PATH)
+        results = activity_results(path)
+        if name not in results:
+            raise AssertionError(f"unexpected activity in the saga: {name}")
+        if name == "create_or_verify_temporal_cloud_namespace":
+            namespace = target.target_namespace or NAMESPACE
+            return models.TemporalCloudNamespaceResult(
+                status={"phase": "Ready", "namespace": namespace},
+                namespace=namespace,
+                grpc_address=f"{namespace}.acct1.tmprl.cloud:7233",
+                auth_mode="apiKey",
+                created=True,
+                region="aws-us-west-2",
+            )
+        return results[name]
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo", run_id="run-1"),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+
+    external_plan = with_additional_namespace(
+        demo_project_workflow.external_resources.plan_external_resources(
+            demo_project, checked_at=CHECKED_AT
+        )
+    )
+    status = asyncio.run(
+        workflow._reconcile_temporal_cloud(external_plan, previous_status={})
+    )
+    return calls, status, workflow
+
+
+def test_both_namespaces_are_created(monkeypatch):
+    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    created = [
+        request.project.target_namespace or NAMESPACE
+        for name, request in calls
+        if name == "create_or_verify_temporal_cloud_namespace"
+    ]
+    assert created == [NAMESPACE, "tmprl-dem-cld-demo-alpha"]
+
+
+def test_each_namespace_stages_against_its_own_secret_path(monkeypatch):
+    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    paths = [
+        request.project.runtime_secret_path
+        for name, request in calls
+        if name == "create_temporal_api_key_candidate_secret"
+    ]
+    assert paths == [STABLE_PATH, "tmprl-dem-cld/demo/temporal-alpha"]
+
+
+def test_each_namespace_uses_a_distinct_candidate_token(monkeypatch):
+    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    tokens = [
+        request.candidate_secret_token
+        for _name, request in calls
+        if getattr(request, "candidate_secret_token", None) is not None
+    ]
+    # Distinct per target, so the two never overwrite each other's staged secret.
+    assert len(set(tokens)) == 2
+
+
+def test_project_scoped_steps_run_only_for_the_primary_namespace(monkeypatch):
+    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    names = [name for name, _request in calls]
+    # Search attributes would delete the other namespace's attributes; the mirror
+    # would overwrite the workers' live credentials.
+    assert names.count("reconcile_temporal_cloud_search_attributes") == 1
+    assert names.count("mirror_temporal_runtime_secret") == 1
+
+
+def test_two_namespace_status_keeps_the_primary_blob_in_place(monkeypatch):
+    _calls, status, _workflow = run_two_namespace_saga(monkeypatch)
+    assert status["namespace"] == NAMESPACE
+    assert status["apiKey"] == {"keyId": "key-abc"}
+    assert set(status["additionalNamespaces"]) == {"alpha"}
+    assert status["additionalNamespaces"]["alpha"]["namespace"] == (
+        "tmprl-dem-cld-demo-alpha"
+    )
+
+
+def test_both_targets_are_recorded_for_compensation(monkeypatch):
+    _calls, _status, workflow = run_two_namespace_saga(monkeypatch)
+    assert [context.target.label for context in workflow._tc_targets] == [None, "alpha"]
+    # The project-level plan slot still tracks the primary target only.
+    assert workflow._tc_plan.temporal_project.target_namespace is None

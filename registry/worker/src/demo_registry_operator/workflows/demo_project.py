@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -117,6 +117,87 @@ class TemporalCloudReconcileState:
                 "toRegion": self.desired_region,
             }
         return merged
+
+
+@dataclass(frozen=True)
+class TemporalCloudNamespaceTarget:
+    """One namespace this project needs reconciled.
+
+    ``label`` is None for the project's original namespace, which is the only
+    target that exists until a project declares spec.temporal.namespaces.
+    """
+
+    label: str | None = None
+    spec: external_resources.TemporalNamespaceSpec | None = None
+
+    @property
+    def is_primary(self) -> bool:
+        return self.label is None
+
+    def external_plan(self, external_plan: Any) -> Any:
+        """Project the plan onto this target.
+
+        The primary target returns the plan untouched -- identity, not a rebuild,
+        so a project with no additional namespaces cannot drift from the plan the
+        saga has always received.
+        """
+        if self.is_primary or self.spec is None:
+            return external_plan
+        project = external_plan.temporal_project
+        return replace(
+            external_plan,
+            temporal_project=replace(
+                project,
+                target_namespace=self.spec.namespace,
+                runtime_secret_path=self.spec.runtime_secret_path,
+                mtls_ca_secret_path=self.spec.mtls_ca_secret_path,
+                components=self.spec.components,
+                search_attributes=self.spec.search_attributes,
+                region=self.spec.region,
+                additional_namespaces=(),
+                nexus_endpoints=(),
+            ),
+        )
+
+
+@dataclass
+class TemporalCloudTargetContext:
+    """Per-target saga bookkeeping, so a later failure can unwind earlier targets."""
+
+    target: TemporalCloudNamespaceTarget
+    plan: Any
+    state: TemporalCloudReconcileState
+    token: str
+
+
+def temporal_namespace_targets(external_plan: Any) -> list[TemporalCloudNamespaceTarget]:
+    project = external_plan.temporal_project
+    return [
+        TemporalCloudNamespaceTarget(),
+        *(
+            TemporalCloudNamespaceTarget(label=spec.label, spec=spec)
+            for spec in getattr(project, "additional_namespaces", ())
+        ),
+    ]
+
+
+def merge_temporal_cloud_namespace_status(
+    results: dict[str | None, dict[str, Any]],
+) -> dict[str, Any]:
+    """Keep the primary namespace's status exactly where it has always been.
+
+    Additional namespaces hang off a sibling key that is omitted when empty, so
+    every existing reader -- the catalog status ConfigMap, printer columns,
+    previous_temporal_search_attributes, temporal_auth_rotation_state -- keeps
+    seeing the same blob it sees today.
+    """
+    primary = results.get(None, {})
+    additional = {
+        label: status for label, status in results.items() if label is not None
+    }
+    if not additional:
+        return primary
+    return {**primary, "additionalNamespaces": additional}
 
 
 @dataclass
@@ -510,6 +591,7 @@ def temporal_candidate_secret_token(
     workflow_id: str,
     run_id: str,
     reconcile_sequence: int,
+    target_namespace: str | None = None,
 ) -> str:
     project = external_plan.temporal_project
     parts = [
@@ -523,6 +605,11 @@ def temporal_candidate_secret_token(
         str(project.runtime_secret_path),
         str(project.mtls_ca_secret_path),
     ]
+    # Appended only for an additional namespace, so the primary token is byte-for-byte
+    # what it has always been. The framing below is length-prefixed and therefore
+    # prefix-free, so an extra part can never collide with a shorter payload.
+    if target_namespace is not None:
+        parts.append(str(target_namespace))
     payload = "".join(f"{len(part)}:{part}" for part in parts)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return digest[:20]
@@ -571,6 +658,9 @@ class DemoProjectWorkflow:
         self._tc_state: TemporalCloudReconcileState | None = None
         self._tc_plan: Any = None
         self._tc_token: str | None = None
+        # One context per namespace target reconciled this pass, in order, so a
+        # failure part-way through can unwind the targets that already completed.
+        self._tc_targets: list[TemporalCloudTargetContext] = []
         self._status: dict[str, Any] = {
             "phase": "Starting",
             "message": "Workflow has not received project state.",
@@ -776,6 +866,7 @@ class DemoProjectWorkflow:
         self._tc_state = None
         self._tc_plan = None
         self._tc_token = None
+        self._tc_targets = []
         try:
             external = await self._reconcile_external_resources(
                 demo_project,
@@ -1065,38 +1156,53 @@ class DemoProjectWorkflow:
         *,
         previous_status: dict[str, Any],
     ) -> dict[str, Any]:
-        candidate_secret_token = temporal_candidate_secret_token(
-            external_plan,
-            workflow_id=workflow.info().workflow_id,
-            run_id=workflow.info().run_id,
-            reconcile_sequence=self._reconcile_sequence,
-        )
-        state = TemporalCloudReconcileState()
-        # Capture for reconcile-level saga compensation: `state` mutates in place
-        # as each resource is created, so a later failure (incl. a child workflow)
-        # can tear down exactly what this pass created.
-        self._tc_state = state
-        self._tc_plan = external_plan
-        self._tc_token = candidate_secret_token
+        """Reconcile every Temporal Cloud namespace this project declares.
 
-        try:
-            await self._stage_temporal_mtls_ca_if_needed(
+        A project that declares none yields exactly one target, whose plan is the
+        plan passed in unchanged -- so the sequence below is the single-namespace
+        saga this grew out of, not a re-derivation of it.
+
+        Fail-fast: an error in any namespace fails the whole project reconcile,
+        which is what a single-namespace project already does. Sequential, never
+        gathered -- namespace-spec updates share resource_version optimistic
+        concurrency, and they share Cloud API rate limits.
+        """
+
+        async def reconcile_one_namespace(
+            target: TemporalCloudNamespaceTarget,
+            external_plan: Any,
+        ) -> dict[str, Any]:
+            is_primary = target.is_primary
+            candidate_secret_token = temporal_candidate_secret_token(
                 external_plan,
-                state,
-                candidate_secret_token,
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                reconcile_sequence=self._reconcile_sequence,
+                target_namespace=None if is_primary else target.label,
             )
-            await self._create_or_verify_temporal_cloud_namespace(
-                external_plan,
-                state,
-                candidate_secret_token,
+            state = TemporalCloudReconcileState()
+            # Capture for reconcile-level saga compensation: `state` mutates in
+            # place as each resource is created, so a later failure (incl. a child
+            # workflow) can tear down exactly what this pass created.
+            self._tc_state = state
+            self._tc_token = candidate_secret_token
+            if is_primary:
+                # Only the primary target's plan is the project-level plan that
+                # _reconcile_external_resources reads back for a moved secret path.
+                self._tc_plan = external_plan
+            # Recorded before the try so a failure here still leaves this target
+            # visible to the unwinder below.
+            self._tc_targets.append(
+                TemporalCloudTargetContext(
+                    target=target,
+                    plan=external_plan,
+                    state=state,
+                    token=candidate_secret_token,
+                )
             )
-            namespace = state.namespace
-            assert namespace is not None
-            if namespace.phase == "RegionDrift":
-                # The namespace exists in a different region than desired. Region
-                # is immutable, so tear it down and recreate it in the new region
-                # (destroys the namespace's data — driven by the region change).
-                await self._teardown_temporal_cloud_namespace_on_region_drift(
+
+            try:
+                await self._stage_temporal_mtls_ca_if_needed(
                     external_plan,
                     state,
                     candidate_secret_token,
@@ -1108,55 +1214,126 @@ class DemoProjectWorkflow:
                 )
                 namespace = state.namespace
                 assert namespace is not None
-            if namespace.phase != "Ready":
-                await self._delete_mtls_ca_candidate_secret_if_needed(
+                if namespace.phase == "RegionDrift":
+                    # The namespace exists in a different region than desired.
+                    # Region is immutable, so tear it down and recreate it in the
+                    # new region (destroys the namespace's data — driven by the
+                    # region change).
+                    if not is_primary:
+                        # That teardown deletes project-scoped resources (api key,
+                        # service account, runtime secret) belonging to the primary
+                        # namespace, so running it for a sibling would destroy the
+                        # wrong namespace. Refuse loudly rather than corrupt.
+                        raise errors.temporal_cloud_application_error(
+                            RuntimeError(
+                                "Region drift on additional namespace "
+                                f"{target.label!r} is not supported: its teardown "
+                                "is project-scoped and would delete the primary "
+                                "namespace."
+                            ),
+                            operation="Reconcile Temporal Cloud namespace",
+                        )
+                    await self._teardown_temporal_cloud_namespace_on_region_drift(
+                        external_plan,
+                        state,
+                        candidate_secret_token,
+                    )
+                    await self._create_or_verify_temporal_cloud_namespace(
+                        external_plan,
+                        state,
+                        candidate_secret_token,
+                    )
+                    namespace = state.namespace
+                    assert namespace is not None
+                if namespace.phase != "Ready":
+                    await self._delete_mtls_ca_candidate_secret_if_needed(
+                        external_plan,
+                        state,
+                        candidate_secret_token,
+                    )
+                    return namespace.status
+
+                await self._ensure_temporal_cloud_namespace_tags(external_plan, state)
+
+                if is_primary:
+                    # The delete delta is computed against one flat status blob, so
+                    # running this per namespace would let one target delete
+                    # another target's attributes. Additional namespaces carry
+                    # their own attributes only once that status is keyed per
+                    # namespace.
+                    await self._reconcile_temporal_cloud_search_attributes(
+                        external_plan,
+                        state,
+                        previous_status=previous_status,
+                    )
+                    if (
+                        isinstance(state.search_attributes, dict)
+                        and state.search_attributes.get("phase") == "Error"
+                    ):
+                        return state.merged_status()
+
+                stage_outcome = await self._stage_temporal_runtime_credential(
+                    external_plan,
+                    state,
+                    candidate_secret_token,
+                    is_primary=is_primary,
+                )
+                external_plan = stage_outcome.external_plan
+                if is_primary:
+                    self._tc_plan = external_plan
+                if not stage_outcome.staged:
+                    return state.merged_status()
+                if state.stage is None or state.stage.phase != "Ready":
+                    return state.merged_status()
+
+                await self._promote_temporal_runtime_credential_if_needed(
                     external_plan,
                     state,
                     candidate_secret_token,
                 )
-                return namespace.status
-
-            await self._ensure_temporal_cloud_namespace_tags(external_plan, state)
-
-            await self._reconcile_temporal_cloud_search_attributes(
-                external_plan,
-                state,
-                previous_status=previous_status,
-            )
-            if (
-                isinstance(state.search_attributes, dict)
-                and state.search_attributes.get("phase") == "Error"
-            ):
+                if is_primary:
+                    # mirror_runtime_kubernetes_secrets writes fixed Secret names
+                    # into the project's Kubernetes namespace. Mirroring a sibling
+                    # would overwrite the workers' live credentials until those
+                    # names are label-scoped end to end.
+                    state.mirror = await self._mirror_temporal_runtime_secret(
+                        external_plan
+                    )
                 return state.merged_status()
+            except Exception:
+                await self._compensate_temporal_cloud_reconcile(
+                    external_plan,
+                    state=state,
+                    candidate_secret_token=candidate_secret_token,
+                )
+                raise
 
-            stage_outcome = await self._stage_temporal_runtime_credential(
-                external_plan,
-                state,
-                candidate_secret_token,
-            )
-            external_plan = stage_outcome.external_plan
-            self._tc_plan = external_plan
-            if not stage_outcome.staged:
-                return state.merged_status()
-            if state.stage is None or state.stage.phase != "Ready":
-                return state.merged_status()
+        self._tc_targets = []
+        results: dict[str | None, dict[str, Any]] = {}
+        for target in temporal_namespace_targets(external_plan):
+            try:
+                results[target.label] = await reconcile_one_namespace(
+                    target,
+                    target.external_plan(external_plan),
+                )
+            except Exception:
+                # The failing target compensated itself above; unwind the targets
+                # that completed before it, newest first.
+                await self._compensate_completed_temporal_targets()
+                raise
+            if results[target.label].get("phase") == "Error":
+                break
+        return merge_temporal_cloud_namespace_status(results)
 
-            await self._promote_temporal_runtime_credential_if_needed(
-                external_plan,
-                state,
-                candidate_secret_token,
-            )
-            state.mirror = await self._mirror_temporal_runtime_secret(
-                external_plan
-            )
-            return state.merged_status()
-        except Exception:
+    async def _compensate_completed_temporal_targets(self) -> None:
+        # Skips the last context: that is the target that just failed, and its own
+        # try/except has already run its compensation.
+        for context in reversed(self._tc_targets[:-1]):
             await self._compensate_temporal_cloud_reconcile(
-                external_plan,
-                state=state,
-                candidate_secret_token=candidate_secret_token,
+                context.plan,
+                state=context.state,
+                candidate_secret_token=context.token,
             )
-            raise
 
     async def _stage_temporal_mtls_ca_if_needed(
         self,
@@ -1370,6 +1547,8 @@ class DemoProjectWorkflow:
         external_plan: Any,
         state: TemporalCloudReconcileState,
         candidate_secret_token: str,
+        *,
+        is_primary: bool = True,
     ) -> TemporalRuntimeStageOutcome:
         project = external_plan.temporal_project
         if state.namespace is None:
@@ -1433,7 +1612,12 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
-            if self._runtime_secret_path_can_move(external_plan, runtime_secret):
+            # The suffix is a single project-level value carried across
+            # continue-as-new, and it is minted with workflow.uuid4() at a fixed
+            # position in history. Only the primary target may move the path.
+            if is_primary and self._runtime_secret_path_can_move(
+                external_plan, runtime_secret
+            ):
                 external_plan = self._external_plan_with_new_runtime_secret_path(
                     external_plan
                 )
@@ -1766,25 +1950,37 @@ class DemoProjectWorkflow:
         return status
 
     async def _compensate_first_time_external_resources(self) -> None:
-        plan = self._tc_plan
-        state = self._tc_state
-        if plan is None or state is None:
-            return
-        # Full teardown of resources created THIS pass, mirroring the finalize
-        # order (api key -> service account -> namespace -> secrets). No `promoted`
-        # guard: a failed first provision must not leave a promoted-but-unused
-        # credential or namespace behind.
-        await self._compensate_temporal_candidate_api_key(plan, state)
-        await self._compensate_temporal_service_account(plan, state)
-        await self._compensate_temporal_namespace(plan, state)
-        if state.namespace is not None and state.namespace.created:
-            await self._delete_temporal_runtime_secret(plan)
-        await self._delete_temporal_candidate_secret(
-            plan,
-            stage=state.stage,
-            ca=state.ca,
-            candidate_secret_token=self._tc_token,
-        )
+        # Newest target first, so a project with additional namespaces unwinds in
+        # the reverse of the order it provisioned. Falls back to the single-slot
+        # capture when no target context was recorded.
+        contexts = self._tc_targets or [
+            TemporalCloudTargetContext(
+                target=TemporalCloudNamespaceTarget(),
+                plan=self._tc_plan,
+                state=self._tc_state,
+                token=self._tc_token,
+            )
+        ]
+        for context in reversed(contexts):
+            plan = context.plan
+            state = context.state
+            if plan is None or state is None:
+                continue
+            # Full teardown of resources created THIS pass, mirroring the finalize
+            # order (api key -> service account -> namespace -> secrets). No
+            # `promoted` guard: a failed first provision must not leave a
+            # promoted-but-unused credential or namespace behind.
+            await self._compensate_temporal_candidate_api_key(plan, state)
+            await self._compensate_temporal_service_account(plan, state)
+            await self._compensate_temporal_namespace(plan, state)
+            if state.namespace is not None and state.namespace.created:
+                await self._delete_temporal_runtime_secret(plan)
+            await self._delete_temporal_candidate_secret(
+                plan,
+                stage=state.stage,
+                ca=state.ca,
+                candidate_secret_token=context.token,
+            )
 
     async def _delete_temporal_runtime_secret(self, external_plan: Any) -> None:
         await workflow.execute_activity(
