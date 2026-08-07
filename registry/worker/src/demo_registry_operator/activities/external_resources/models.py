@@ -16,6 +16,41 @@ class TemporalCloudSearchAttribute:
 
 
 @dataclass(frozen=True)
+class TemporalNamespaceSpec:
+    """One additional namespace declared under spec.temporal.namespaces.
+
+    ``auth_mode`` is inherited from the project rather than declared per
+    namespace, so it is populated by the planner, not read from the label's spec.
+    """
+
+    label: str
+    namespace: str
+    auth_mode: str
+    runtime_secret_path: str
+    mtls_ca_secret_path: str
+    components: dict[str, dict[str, Any]]
+    search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
+    region: str | None = None
+    retention_days: int = 7
+
+
+@dataclass(frozen=True)
+class NexusEndpointSpec:
+    """One entry from spec.temporal.nexusEndpoints, with labels already resolved.
+
+    ``target_namespace`` and ``allowed_caller_namespaces`` hold derived Temporal
+    Cloud namespace names, not the labels the project author wrote. The Cloud API
+    keys off the qualified ``<name>.<account-id>`` form, which the reconciler
+    builds from these plus the account id it already holds.
+    """
+
+    name: str
+    target_namespace: str
+    target_task_queue: str
+    allowed_caller_namespaces: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class TemporalCloudProject:
     name: str
     namespace: str
@@ -34,6 +69,13 @@ class TemporalCloudProject:
     # which selects the AWS region default when no explicit region is set.
     region: str | None = None
     serverless: bool = False
+    # Set only on the per-target projection the saga hands each activity, so that
+    # activity resolves a namespace other than the one derived from ``name``. None
+    # on the project-level model, which is the only shape that exists until a
+    # project declares spec.temporal.namespaces.
+    target_namespace: str | None = None
+    additional_namespaces: tuple[TemporalNamespaceSpec, ...] = ()
+    nexus_endpoints: tuple[NexusEndpointSpec, ...] = ()
 
     @property
     def component_names(self) -> tuple[str, ...]:
@@ -47,6 +89,10 @@ class TemporalCloudProject:
     def namespace_required(self) -> bool:
         return self.temporal_required or bool(self.search_attributes)
 
+    @property
+    def nexus_endpoints_required(self) -> bool:
+        return bool(self.nexus_endpoints)
+
     def as_demo_project(self) -> dict[str, Any]:
         temporal: dict[str, Any] = {
             "auth": {"mode": self.auth_mode},
@@ -59,6 +105,10 @@ class TemporalCloudProject:
                 attribute.name: {"type": attribute.type}
                 for attribute in self.search_attributes
             }
+        # Emitted only when set, so the dict for a project with no additional
+        # namespaces stays byte-identical to what activities have always received.
+        if self.target_namespace:
+            temporal["namespaceOverride"] = self.target_namespace
         return {
             "metadata": {"name": self.name},
             "spec": {
@@ -596,3 +646,29 @@ class TemporalCloudNamespaceRequest:
     checked_at: str
     project: TemporalCloudProject
     namespace: str
+
+
+@dataclass(frozen=True)
+class ReconcileNexusEndpointsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    account_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DeleteNexusEndpointsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class NexusEndpointResult:
+    status: dict[str, Any]
+    # Endpoint name -> Temporal Cloud endpoint id, for the endpoints this project
+    # owns. Carried so finalize can delete by id without re-listing.
+    endpoint_ids: dict[str, str]
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None

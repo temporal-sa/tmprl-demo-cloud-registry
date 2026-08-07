@@ -288,3 +288,80 @@ def test_blank_namespace_override_falls_back_to_the_derived_name():
         assert project_temporal_namespace(demo_project) == project_temporal_namespace(
             project("demo")
         )
+
+
+# --- the activity payload projection ----------------------------------------
+
+
+def temporal_cloud_project(**overrides):
+    from demo_registry_operator.activities.external_resources.models import (
+        TemporalCloudProject,
+    )
+
+    fields = {
+        "name": "banking-money-transfer",
+        "namespace": "tmprl-dem-cld-banking-money-transfer",
+        "kubernetes_namespace": "tmprl-dem-cld-banking-money-transfer",
+        "auth_mode": "apiKey",
+        "components": {"worker": {"build": "app", "worker": True}},
+        "runtime_secret_path": "tmprl-dem-cld/banking-money-transfer/temporal",
+        "mtls_ca_secret_path": "tmprl-dem-cld/banking-money-transfer/temporal/ca",
+    }
+    fields.update(overrides)
+    return TemporalCloudProject(**fields)
+
+
+def test_as_demo_project_is_unchanged_without_a_target_namespace():
+    # Pinned against the literal dict rather than a recomputed one: this is the
+    # projection every activity has always received, and it must not move.
+    assert temporal_cloud_project().as_demo_project() == {
+        "metadata": {"name": "banking-money-transfer"},
+        "spec": {
+            "components": {"worker": {"build": "app", "worker": True}},
+            "temporal": {
+                "auth": {"mode": "apiKey"},
+                "runtimeSecretPath": "tmprl-dem-cld/banking-money-transfer/temporal",
+            },
+        },
+    }
+
+
+def test_as_demo_project_stays_unchanged_when_only_siblings_are_populated():
+    # Declaring namespaces on the project-level model must not alter the payload;
+    # only a per-target projection carries an override.
+    from demo_registry_operator.activities.external_resources.models import (
+        TemporalNamespaceSpec,
+    )
+
+    with_siblings = temporal_cloud_project(
+        additional_namespaces=(
+            TemporalNamespaceSpec(
+                label="alpha",
+                namespace="tmprl-dem-cld-banking-money-transfer-alpha",
+                auth_mode="apiKey",
+                runtime_secret_path="tmprl-dem-cld/banking-money-transfer/temporal-alpha",
+                mtls_ca_secret_path="tmprl-dem-cld/banking-money-transfer/temporal-alpha/ca",
+                components={},
+            ),
+        )
+    )
+    assert with_siblings.as_demo_project() == temporal_cloud_project().as_demo_project()
+
+
+def test_as_demo_project_emits_the_override_for_a_target():
+    projected = temporal_cloud_project(
+        target_namespace="tmprl-dem-cld-banking-money-transfer-alpha"
+    ).as_demo_project()
+    assert (
+        projected["spec"]["temporal"]["namespaceOverride"]
+        == "tmprl-dem-cld-banking-money-transfer-alpha"
+    )
+    # And the operator resolves the projection back to that namespace.
+    assert (
+        project_temporal_namespace(projected)
+        == "tmprl-dem-cld-banking-money-transfer-alpha"
+    )
+
+
+def test_nexus_endpoints_required_is_false_by_default():
+    assert temporal_cloud_project().nexus_endpoints_required is False
