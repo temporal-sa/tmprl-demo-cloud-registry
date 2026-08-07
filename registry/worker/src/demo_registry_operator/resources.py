@@ -415,6 +415,37 @@ def project_temporal_namespace_for_label(
     return derive.temporal_namespace(f"{project_name(demo_project)}-{label}")
 
 
+def temporal_nexus_endpoints(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Endpoints declared under spec.temporal.nexusEndpoints, or {}."""
+    temporal = spec_of(demo_project).get("temporal", {})
+    endpoints = temporal.get("nexusEndpoints") if isinstance(temporal, dict) else None
+    if not isinstance(endpoints, dict):
+        return {}
+    return {
+        name: endpoint
+        for name, endpoint in endpoints.items()
+        if isinstance(name, str) and isinstance(endpoint, dict)
+    }
+
+
+def temporal_search_attributes_for_label(
+    demo_project: dict[str, Any],
+    label: str | None,
+) -> dict[str, str]:
+    """Search attributes for a declared namespace; label=None means the primary."""
+    if not label:
+        return temporal_search_attributes(demo_project)
+    declared = temporal_namespace_labels(demo_project).get(label, {})
+    attributes = declared.get("searchAttributes")
+    if not isinstance(attributes, dict):
+        return {}
+    return {
+        name: (spec.get("type") if isinstance(spec, dict) else None) or "keyword"
+        for name, spec in attributes.items()
+        if isinstance(name, str)
+    }
+
+
 def component_temporal_namespace_label(component: dict[str, Any]) -> str | None:
     """The namespace label a component is bound to, or None for the primary one."""
     label = component.get("temporalNamespace")

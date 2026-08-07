@@ -31,7 +31,9 @@ class TemporalNamespaceSpec:
     components: dict[str, dict[str, Any]]
     search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
     region: str | None = None
-    retention_days: int = 7
+    # None leaves the namespace-creation request's own default in place, which is
+    # what the project's original namespace uses.
+    retention_days: int | None = None
 
 
 @dataclass(frozen=True)

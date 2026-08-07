@@ -365,3 +365,137 @@ def test_as_demo_project_emits_the_override_for_a_target():
 
 def test_nexus_endpoints_required_is_false_by_default():
     assert temporal_cloud_project().nexus_endpoints_required is False
+
+
+# --- end-to-end: a real CR through the planner (deliberately generic labels) --
+
+
+SCENARIO = {
+    "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+    "kind": "DemoProject",
+    "metadata": {"name": "scenario"},
+    "spec": {
+        "source": {"repo": "https://github.com/temporal-sa/scenario"},
+        "builds": {"app": {"context": "."}},
+        "temporal": {
+            "namespaces": {
+                "alpha": {"region": "aws-us-west-2"},
+                "beta": {"retentionDays": 14, "searchAttributes": {"Tier": {"type": "keyword"}}},
+            },
+            "nexusEndpoints": {
+                "scenario-orders": {
+                    "targetNamespace": "beta",
+                    "targetTaskQueue": "orders-tq",
+                    "allowedCallerNamespaces": ["primary", "alpha"],
+                }
+            },
+        },
+        "components": {
+            "unbound": {"build": "app", "worker": True},
+            "alpha-worker": {"build": "app", "worker": True, "temporalNamespace": "alpha"},
+            "beta-worker": {"build": "app", "worker": True, "temporalNamespace": "beta"},
+        },
+    },
+}
+
+
+def scenario_plan():
+    from demo_registry_operator.activities.external_resources import planning
+
+    return planning.plan_external_resources(
+        SCENARIO, checked_at="2026-06-20T00:00:00+00:00"
+    )
+
+
+def test_scenario_plans_one_target_per_declared_namespace():
+    project = scenario_plan().temporal_project
+    assert [spec.label for spec in project.additional_namespaces] == ["alpha", "beta"]
+    assert project.namespace == "tmprl-dem-cld-scenario"
+    assert [spec.namespace for spec in project.additional_namespaces] == [
+        "tmprl-dem-cld-scenario-alpha",
+        "tmprl-dem-cld-scenario-beta",
+    ]
+
+
+def test_scenario_partitions_components_across_namespaces():
+    project = scenario_plan().temporal_project
+    assert sorted(project.components) == ["unbound"]
+    by_label = {spec.label: sorted(spec.components) for spec in project.additional_namespaces}
+    assert by_label == {"alpha": ["alpha-worker"], "beta": ["beta-worker"]}
+
+
+def test_scenario_gives_each_namespace_its_own_secret_paths():
+    project = scenario_plan().temporal_project
+    paths = {spec.label: spec.runtime_secret_path for spec in project.additional_namespaces}
+    assert paths == {
+        "alpha": "tmprl-dem-cld/scenario/temporal-alpha",
+        "beta": "tmprl-dem-cld/scenario/temporal-beta",
+    }
+    # Distinct from the primary, so promotion cannot overwrite it.
+    assert project.runtime_secret_path not in paths.values()
+
+
+def test_scenario_carries_per_namespace_region_retention_and_attributes():
+    specs = {spec.label: spec for spec in scenario_plan().temporal_project.additional_namespaces}
+    assert specs["alpha"].region == "aws-us-west-2"
+    assert specs["alpha"].retention_days is None
+    assert specs["beta"].retention_days == 14
+    assert [a.name for a in specs["beta"].search_attributes] == ["Tier"]
+    assert specs["alpha"].search_attributes == ()
+
+
+def test_scenario_namespaces_inherit_the_project_auth_mode():
+    project = scenario_plan().temporal_project
+    assert {spec.auth_mode for spec in project.additional_namespaces} == {
+        project.auth_mode
+    }
+
+
+def test_scenario_plans_the_nexus_endpoint_with_labels():
+    endpoints = scenario_plan().temporal_project.nexus_endpoints
+    assert len(endpoints) == 1
+    endpoint = endpoints[0]
+    assert endpoint.name == "scenario-orders"
+    assert endpoint.target_namespace == "beta"
+    assert endpoint.target_task_queue == "orders-tq"
+    assert endpoint.allowed_caller_namespaces == ("primary", "alpha")
+
+
+def test_scenario_renders_a_secret_per_namespace_and_binds_components():
+    rendered = {
+        item["metadata"]["name"]: item for item in runtime_secret_resources(SCENARIO)
+    }
+    assert TEMPORAL_SECRET_NAME in rendered
+    assert temporal_secret_name("alpha") in rendered
+    assert temporal_secret_name("beta") in rendered
+
+    # Each labelled ExternalSecret pulls from its own Secrets Manager path.
+    assert {
+        entry["remoteRef"]["key"]
+        for entry in rendered[temporal_secret_name("beta")]["spec"]["data"]
+    } == {"tmprl-dem-cld/scenario/temporal-beta"}
+
+    components = SCENARIO["spec"]["components"]
+    assert env_from_refs(SCENARIO, "unbound", components["unbound"]) == [
+        {"secretRef": {"name": TEMPORAL_SECRET_NAME}}
+    ]
+    assert env_from_refs(SCENARIO, "beta-worker", components["beta-worker"]) == [
+        {"secretRef": {"name": temporal_secret_name("beta")}}
+    ]
+
+
+def test_scenario_passes_the_repository_validator():
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "validate_projects_scenario", ROOT / "scripts/validate_projects.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    document = module.ProjectDocument(path=ROOT / "projects/scenario.yaml", data=SCENARIO)
+    assert module.validate_temporal_namespace_labels(document) == []
+    assert module.validate_component_temporal_namespace_refs(document) == []
+    assert module.validate_nexus_endpoints(document) == []

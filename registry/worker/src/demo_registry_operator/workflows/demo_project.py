@@ -134,6 +134,11 @@ class TemporalCloudNamespaceTarget:
     def is_primary(self) -> bool:
         return self.label is None
 
+    @property
+    def retention_days(self) -> int | None:
+        """Declared retention, or None to leave the request's own default alone."""
+        return None if self.spec is None else self.spec.retention_days
+
     def external_plan(self, external_plan: Any) -> Any:
         """Project the plan onto this target.
 
@@ -1211,6 +1216,7 @@ class DemoProjectWorkflow:
                     external_plan,
                     state,
                     candidate_secret_token,
+                    target.retention_days,
                 )
                 namespace = state.namespace
                 assert namespace is not None
@@ -1401,7 +1407,14 @@ class DemoProjectWorkflow:
         external_plan: Any,
         state: TemporalCloudReconcileState,
         candidate_secret_token: str,
+        retention_days: int | None = None,
     ) -> None:
+        # Only a declared namespace can set retention; omitting it leaves the
+        # request's own default in place, which is what the primary namespace has
+        # always used.
+        retention = (
+            {} if retention_days is None else {"retention_days": retention_days}
+        )
         state.namespace = await workflow.execute_activity(
             external_resources.create_or_verify_temporal_cloud_namespace,
             external_resources.CreateOrVerifyTemporalCloudNamespaceRequest(
@@ -1411,6 +1424,7 @@ class DemoProjectWorkflow:
                     state.ca.candidate_ca_secret_path if state.ca else None
                 ),
                 candidate_secret_token=candidate_secret_token,
+                **retention,
             ),
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(minutes=1),

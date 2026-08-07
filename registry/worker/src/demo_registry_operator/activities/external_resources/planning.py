@@ -35,7 +35,11 @@ def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloud
         namespace=resources.project_temporal_namespace(demo_project),
         kubernetes_namespace=resources.project_namespace(demo_project),
         auth_mode=resources.temporal_auth_mode(demo_project),
-        components=resources.temporal_components(demo_project),
+        # Only the unbound components, which is every component until a project
+        # declares spec.temporal.namespaces.
+        components=resources.components_bound_to_namespace_label(
+            resources.temporal_components(demo_project), None
+        ),
         runtime_secret_path=resources.temporal_secret_remote_path(demo_project),
         mtls_ca_secret_path=resources.temporal_mtls_ca_secret_remote_path(demo_project),
         region=resources.temporal_region(demo_project),
@@ -45,6 +49,67 @@ def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloud
             for name, attribute_type in resources.temporal_search_attributes(
                 demo_project
             ).items()
+        ),
+        additional_namespaces=tuple(
+            temporal_namespace_spec(demo_project, label)
+            for label in sorted(resources.temporal_namespace_labels(demo_project))
+        ),
+        nexus_endpoints=tuple(
+            nexus_endpoint_spec(name, endpoint)
+            for name, endpoint in sorted(
+                resources.temporal_nexus_endpoints(demo_project).items()
+            )
+        ),
+    )
+
+
+def temporal_namespace_spec(
+    demo_project: dict[str, Any],
+    label: str,
+) -> models.TemporalNamespaceSpec:
+    declared = resources.temporal_namespace_labels(demo_project).get(label, {})
+    retention_days = declared.get("retentionDays")
+    region = declared.get("region")
+    return models.TemporalNamespaceSpec(
+        label=label,
+        namespace=resources.project_temporal_namespace_for_label(demo_project, label),
+        # Inherited from the project: auth is not declared per namespace.
+        auth_mode=resources.temporal_auth_mode(demo_project),
+        runtime_secret_path=resources.temporal_secret_remote_path_for_label(
+            demo_project, label
+        ),
+        mtls_ca_secret_path=(
+            f"{resources.temporal_secret_remote_path_for_label(demo_project, label)}/ca"
+        ),
+        components=resources.components_bound_to_namespace_label(
+            resources.temporal_components(demo_project), label
+        ),
+        search_attributes=tuple(
+            models.TemporalCloudSearchAttribute(name=name, type=attribute_type)
+            for name, attribute_type in sorted(
+                resources.temporal_search_attributes_for_label(
+                    demo_project, label
+                ).items()
+            )
+        ),
+        region=region if isinstance(region, str) and region else None,
+        retention_days=retention_days if isinstance(retention_days, int) else None,
+    )
+
+
+def nexus_endpoint_spec(
+    name: str,
+    endpoint: dict[str, Any],
+) -> models.NexusEndpointSpec:
+    callers = endpoint.get("allowedCallerNamespaces")
+    return models.NexusEndpointSpec(
+        name=name,
+        target_namespace=str(endpoint.get("targetNamespace") or "primary"),
+        target_task_queue=str(endpoint.get("targetTaskQueue") or ""),
+        allowed_caller_namespaces=tuple(
+            caller
+            for caller in (callers if isinstance(callers, list) else ())
+            if isinstance(caller, str) and caller
         ),
     )
 
