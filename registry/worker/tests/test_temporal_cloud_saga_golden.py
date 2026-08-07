@@ -591,3 +591,110 @@ def test_both_targets_are_recorded_for_compensation(monkeypatch):
     assert [context.target.label for context in workflow._tc_targets] == [None, "alpha"]
     # The project-level plan slot still tracks the primary target only.
     assert workflow._tc_plan.temporal_project.target_namespace is None
+
+
+# --- Nexus Endpoints ---------------------------------------------------------
+
+
+def with_nexus_endpoint(external_plan, target="primary"):
+    from dataclasses import replace
+
+    endpoint = models.NexusEndpointSpec(
+        name="orders",
+        target_namespace=target,
+        target_task_queue="orders-tq",
+        allowed_caller_namespaces=("alpha",),
+    )
+    return replace(
+        external_plan,
+        temporal_project=replace(
+            external_plan.temporal_project, nexus_endpoints=(endpoint,)
+        ),
+    )
+
+
+def run_nexus_saga(monkeypatch, *, namespace_phase="Ready"):
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    workflow._temporal_runtime_secret_suffix = STABLE_SUFFIX
+    demo_project = demo_project_with_temporal_runtime_secret_path(project(), STABLE_PATH)
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        name = getattr(activity, "__name__", str(activity))
+        calls.append((name, request))
+        if name == "reconcile_nexus_endpoints":
+            return models.NexusEndpointResult(
+                status={"phase": "Ready", "endpoints": []},
+                endpoint_ids={"orders": "endpoint-orders"},
+            )
+        if name == "create_or_verify_temporal_cloud_namespace":
+            return models.TemporalCloudNamespaceResult(
+                status={"phase": namespace_phase, "namespace": NAMESPACE},
+                namespace=NAMESPACE,
+                grpc_address=f"{NAMESPACE}.acct1.tmprl.cloud:7233",
+                auth_mode="apiKey",
+                created=True,
+                region="aws-us-west-2",
+            )
+        return activity_results(STABLE_PATH)[name]
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo", run_id="run-1"),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+
+    external_plan = with_nexus_endpoint(
+        demo_project_workflow.external_resources.plan_external_resources(
+            demo_project, checked_at=CHECKED_AT
+        )
+    )
+    status = asyncio.run(
+        workflow._reconcile_temporal_cloud(external_plan, previous_status={})
+    )
+    return calls, status
+
+
+def test_nexus_endpoints_reconcile_after_the_namespaces(monkeypatch):
+    calls, status = run_nexus_saga(monkeypatch)
+    names = [name for name, _request in calls]
+    assert names[-1] == "reconcile_nexus_endpoints"
+    assert names.index("create_or_verify_temporal_cloud_namespace") < names.index(
+        "reconcile_nexus_endpoints"
+    )
+    assert status["nexusEndpoints"]["phase"] == "Ready"
+
+
+def test_nexus_endpoints_are_skipped_when_a_namespace_is_not_ready(monkeypatch):
+    # An endpoint cannot target a namespace that never came up.
+    calls, status = run_nexus_saga(monkeypatch, namespace_phase="Error")
+    assert "reconcile_nexus_endpoints" not in [name for name, _request in calls]
+    assert "nexusEndpoints" not in status
+
+
+def test_no_nexus_activity_when_none_are_declared(monkeypatch):
+    calls, status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert "reconcile_nexus_endpoints" not in [name for name, _request in calls]
+    assert "nexusEndpoints" not in status
+
+
+def test_finalize_deletes_endpoints_before_any_namespace():
+    import inspect
+
+    source = inspect.getsource(
+        DemoProjectWorkflow._delete_project_temporal_cloud_resources
+    )
+    assert source.index("_delete_nexus_endpoints") < source.index(
+        "delete_temporal_cloud_namespace"
+    )
+    assert source.index("_delete_nexus_endpoints") < source.index(
+        "disable_temporal_cloud_namespace_delete_protection"
+    )

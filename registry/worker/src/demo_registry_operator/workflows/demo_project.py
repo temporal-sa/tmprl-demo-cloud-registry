@@ -1323,7 +1323,47 @@ class DemoProjectWorkflow:
                 raise
             if results[target.label].get("phase") == "Error":
                 break
-        return merge_temporal_cloud_namespace_status(results)
+        status = merge_temporal_cloud_namespace_status(results)
+        # Endpoints reference namespaces by id, so every namespace they can target
+        # or admit as a caller has to exist first.
+        if results and all(
+            result.get("phase") == "Ready" for result in results.values()
+        ):
+            nexus = await self._reconcile_nexus_endpoints(external_plan)
+            if nexus is not None:
+                status["nexusEndpoints"] = nexus.status
+        return status
+
+    async def _reconcile_nexus_endpoints(
+        self,
+        external_plan: Any,
+    ) -> external_resources.NexusEndpointResult | None:
+        if not external_plan.temporal_project.nexus_endpoints:
+            return None
+        return await workflow.execute_activity(
+            external_resources.reconcile_nexus_endpoints,
+            external_resources.ReconcileNexusEndpointsRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
+
+    async def _delete_nexus_endpoints(self, external_plan: Any) -> None:
+        if not external_plan.temporal_project.nexus_endpoints:
+            return
+        await workflow.execute_activity(
+            external_resources.delete_nexus_endpoints,
+            external_resources.DeleteNexusEndpointsRequest(
+                checked_at=external_plan.checked_at,
+                project=external_plan.temporal_project,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(minutes=1),
+            retry_policy=COMMON_RETRY_POLICY,
+        )
 
     async def _compensate_completed_temporal_targets(self) -> None:
         # Skips the last context: that is the target that just failed, and its own
@@ -2174,6 +2214,10 @@ class DemoProjectWorkflow:
         finalize_external_plan: Any,
         temporal_delete_request: external_resources.DeleteTemporalRuntimeCandidateSecretRequest,
     ) -> dict[str, Any]:
+        # First: an endpoint outlives the namespace it targets, and endpoint names
+        # are unique account-wide, so a leaked one blocks that name for every other
+        # project.
+        await self._delete_nexus_endpoints(finalize_external_plan)
         temporal_api_key_teardown = await workflow.execute_activity(
             external_resources.delete_temporal_cloud_api_key,
             temporal_delete_request,
