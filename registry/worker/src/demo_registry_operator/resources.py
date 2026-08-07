@@ -375,7 +375,52 @@ def revision_resource(
 
 
 def project_temporal_namespace(demo_project: dict[str, Any]) -> str:
+    # spec.temporal.namespaceOverride is set by the reconcile saga on the synthetic
+    # project it hands each activity, so one activity can target a namespace other
+    # than the one derived from metadata.name. Project authors cannot set it: both
+    # the CRD and schemas/project.schema.json reject the key. Same escape-hatch
+    # shape as runtimeSecretPath in temporal_secret_remote_path.
+    temporal = spec_of(demo_project).get("temporal", {})
+    if isinstance(temporal, dict):
+        override = temporal.get("namespaceOverride")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
     return derive.temporal_namespace(project_name(demo_project))
+
+
+def temporal_namespace_labels(demo_project: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Additional namespaces declared under spec.temporal.namespaces, or {}."""
+    temporal = spec_of(demo_project).get("temporal", {})
+    namespaces = temporal.get("namespaces") if isinstance(temporal, dict) else None
+    if not isinstance(namespaces, dict):
+        return {}
+    return {
+        label: spec
+        for label, spec in namespaces.items()
+        if isinstance(label, str) and isinstance(spec, dict)
+    }
+
+
+def project_temporal_namespace_for_label(
+    demo_project: dict[str, Any],
+    label: str | None,
+) -> str:
+    """Derived Temporal Cloud namespace for a label; None means the primary one.
+
+    label=None delegates to project_temporal_namespace so the primary namespace is
+    the same value by call, not merely by construction.
+    """
+    if not label:
+        return project_temporal_namespace(demo_project)
+    return derive.temporal_namespace(f"{project_name(demo_project)}-{label}")
+
+
+def component_temporal_namespace_label(component: dict[str, Any]) -> str | None:
+    """The namespace label a component is bound to, or None for the primary one."""
+    label = component.get("temporalNamespace")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    return None
 
 
 def project_host(demo_project: dict[str, Any]) -> str:
@@ -1297,6 +1342,27 @@ def runtime_secret_resources(
                     demo_project,
                     namespace=namespace,
                     name=controller_secret_name,
+                )
+            )
+    # One sibling pair per declared namespace, for the components bound to it.
+    # No-op until a project declares spec.temporal.namespaces.
+    for label in sorted(temporal_namespace_labels(demo_project)):
+        if temporal_credentials_secret_needed(demo_project, label):
+            resources.append(
+                external_secret(
+                    demo_project,
+                    namespace=namespace,
+                    name=temporal_secret_name(label),
+                    label=label,
+                )
+            )
+        if temporal_worker_runtime_secret_needed(demo_project, label):
+            resources.append(
+                worker_runtime_external_secret(
+                    demo_project,
+                    namespace=namespace,
+                    name=temporal_worker_runtime_secret_name(label),
+                    label=label,
                 )
             )
     if is_registry_catalog_project(demo_project):
@@ -2578,12 +2644,13 @@ def env_from_refs(
     component: dict[str, Any],
 ) -> list[dict[str, Any]]:
     refs = []
+    label = component_temporal_namespace_label(component)
     if temporal_proxy_enabled(component):
         pass
     elif worker_versioning_enabled(component):
-        refs.append({"secretRef": {"name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME}})
+        refs.append({"secretRef": {"name": temporal_worker_runtime_secret_name(label)}})
     elif component_receives_default_temporal_env(component):
-        refs.append({"secretRef": {"name": TEMPORAL_SECRET_NAME}})
+        refs.append({"secretRef": {"name": temporal_secret_name(label)}})
     if is_registry_catalog_project(demo_project) and (
         component_name == REGISTRY_WEB_COMPONENT_NAME
     ):
@@ -2693,12 +2760,15 @@ def env_value_from_input_ref(
 
 
 def temporal_input_ref_secret_name(component: dict[str, Any], input_ref: str) -> str:
+    # A component bound to a declared namespace reads that namespace's own Secret.
+    # Unbound (the only case that exists today) keeps the stable constant names.
+    label = component_temporal_namespace_label(component)
     if (
         worker_versioning_enabled(component)
         and input_ref in TEMPORAL_WORKER_RUNTIME_INPUT_REFS
     ):
-        return TEMPORAL_WORKER_RUNTIME_SECRET_NAME
-    return TEMPORAL_SECRET_NAME
+        return temporal_worker_runtime_secret_name(label)
+    return temporal_secret_name(label)
 
 
 def parse_user_secret_input_ref(input_ref: str) -> tuple[str, str] | None:
@@ -3043,12 +3113,14 @@ def external_secret(
     demo_project: dict[str, Any],
     *,
     namespace: str | None = None,
+    name: str = TEMPORAL_SECRET_NAME,
+    label: str | None = None,
 ) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
         "kind": "ExternalSecret",
         "metadata": {
-            "name": TEMPORAL_SECRET_NAME,
+            "name": name,
             "namespace": namespace or project_namespace(demo_project),
             "labels": common_labels(demo_project),
             "annotations": {
@@ -3063,16 +3135,18 @@ def external_secret(
                 "kind": "ClusterSecretStore",
             },
             "target": {
-                "name": TEMPORAL_SECRET_NAME,
+                "name": name,
                 "creationPolicy": "Owner",
             },
-            "data": temporal_credentials_external_secret_data(demo_project),
+            "data": temporal_credentials_external_secret_data(demo_project, label=label),
         },
     }
 
 
 def temporal_credentials_external_secret_data(
     demo_project: dict[str, Any],
+    *,
+    label: str | None = None,
 ) -> list[dict[str, Any]]:
     fields = [
         (STANDARD_TEMPORAL_ENV["endpoint"], "address"),
@@ -3090,11 +3164,12 @@ def temporal_credentials_external_secret_data(
     else:
         fields.append((STANDARD_TEMPORAL_ENV["api_key"], "apiKey"))
 
+    remote_path = temporal_secret_remote_path_for_label(demo_project, label)
     return [
         {
             "secretKey": secret_key,
             "remoteRef": {
-                "key": temporal_secret_remote_path(demo_project),
+                "key": remote_path,
                 "property": property_name,
             },
         }
@@ -3107,6 +3182,7 @@ def worker_runtime_external_secret(
     *,
     namespace: str | None = None,
     name: str = TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+    label: str | None = None,
 ) -> dict[str, Any]:
     return {
         "apiVersion": "external-secrets.io/v1",
@@ -3134,14 +3210,14 @@ def worker_runtime_external_secret(
                 {
                     "secretKey": STANDARD_TEMPORAL_ENV["api_key"],
                     "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
+                        "key": temporal_secret_remote_path_for_label(demo_project, label),
                         "property": "apiKey",
                     },
                 },
                 {
                     "secretKey": STANDARD_TEMPORAL_ENV["tls"],
                     "remoteRef": {
-                        "key": temporal_secret_remote_path(demo_project),
+                        "key": temporal_secret_remote_path_for_label(demo_project, label),
                         "property": "tls",
                     },
                 },
@@ -3167,6 +3243,27 @@ def worker_controller_auth_secret_name(
         return TEMPORAL_WORKER_RUNTIME_SECRET_NAME
     namespace_digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:8]
     return dns_label(f"{TEMPORAL_WORKER_RUNTIME_SECRET_NAME}-{namespace_digest}")
+
+
+def _label_suffixed_secret_name(base: str, label: str | None) -> str:
+    """Stable base name when unlabelled, else a digest-suffixed sibling.
+
+    Hash-suffixed rather than spelling the label out, matching
+    worker_controller_auth_secret_name above: it bounds the name regardless of how
+    long the label is, so no separate length rule is needed.
+    """
+    if not label:
+        return base
+    label_digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:8]
+    return dns_label(f"{base}-{label_digest}")
+
+
+def temporal_secret_name(label: str | None = None) -> str:
+    return _label_suffixed_secret_name(TEMPORAL_SECRET_NAME, label)
+
+
+def temporal_worker_runtime_secret_name(label: str | None = None) -> str:
+    return _label_suffixed_secret_name(TEMPORAL_WORKER_RUNTIME_SECRET_NAME, label)
 
 
 def temporal_api_key_external_secret_annotations(
@@ -4710,18 +4807,50 @@ def unversioned_temporal_components(
     }
 
 
-def temporal_credentials_secret_needed(demo_project: dict[str, Any]) -> bool:
+def components_bound_to_namespace_label(
+    selected: dict[str, dict[str, Any]],
+    label: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Narrow an already-selected component set to those bound to `label`.
+
+    label=None selects the unbound components, which is every component until a
+    project declares spec.temporal.namespaces -- so this is a no-op today.
+    """
+    return {
+        name: component
+        for name, component in selected.items()
+        if component_temporal_namespace_label(component) == label
+    }
+
+
+def temporal_credentials_secret_needed(
+    demo_project: dict[str, Any],
+    label: str | None = None,
+) -> bool:
     return bool(
-        unversioned_temporal_components(demo_project)
-        or temporal_proxy_components(demo_project)
-        or temporal_credentials_input_components(demo_project)
+        components_bound_to_namespace_label(
+            unversioned_temporal_components(demo_project), label
+        )
+        or components_bound_to_namespace_label(
+            temporal_proxy_components(demo_project), label
+        )
+        or components_bound_to_namespace_label(
+            temporal_credentials_input_components(demo_project), label
+        )
     )
 
 
-def temporal_worker_runtime_secret_needed(demo_project: dict[str, Any]) -> bool:
+def temporal_worker_runtime_secret_needed(
+    demo_project: dict[str, Any],
+    label: str | None = None,
+) -> bool:
     return bool(
-        versioned_worker_components(demo_project)
-        or temporal_worker_runtime_input_components(demo_project)
+        components_bound_to_namespace_label(
+            versioned_worker_components(demo_project), label
+        )
+        or components_bound_to_namespace_label(
+            temporal_worker_runtime_input_components(demo_project), label
+        )
     )
 
 
@@ -4866,6 +4995,20 @@ def temporal_secret_remote_path_with_suffix(
     if not token:
         raise ValueError("Temporal runtime secret suffix must not be empty.")
     return f"{project_secret_prefix(demo_project)}/temporal-{token}"
+
+
+def temporal_secret_remote_path_for_label(
+    demo_project: dict[str, Any],
+    label: str | None,
+) -> str:
+    """Secrets Manager path for a namespace label; None means the primary one.
+
+    Deliberately reuses temporal_secret_remote_path_with_suffix rather than
+    rebuilding the path, so the two can never drift.
+    """
+    if not label:
+        return temporal_secret_remote_path(demo_project)
+    return temporal_secret_remote_path_with_suffix(demo_project, label)
 
 
 def temporal_secret_suffix_from_remote_path(
