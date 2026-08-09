@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError
@@ -262,11 +263,16 @@ def test_instruqt_cli_status_reports_missing_token(monkeypatch):
     assert status["ready"] is False
 
 
-def test_instruqt_cli_status_reports_ready(monkeypatch):
+def test_instruqt_cli_status_reports_ready_without_home(monkeypatch):
     monkeypatch.setattr(instruqt_activities.shutil, "which", lambda name: "/usr/bin/instruqt")
     monkeypatch.setenv("INSTRUQT_TOKEN", "token")
+    monkeypatch.delenv("HOME", raising=False)
+    observed = {}
 
     def run(*args, **kwargs):
+        home = Path(kwargs["env"]["HOME"])
+        assert home.is_dir()
+        observed["home"] = home
         return SimpleNamespace(returncode=0, stdout="instruqt version test\n", stderr="")
 
     monkeypatch.setattr(instruqt_activities.subprocess, "run", run)
@@ -277,6 +283,31 @@ def test_instruqt_cli_status_reports_ready(monkeypatch):
     assert status["reason"] == "InstruqtCLIReady"
     assert status["versionOutput"] == "instruqt version test"
     assert status["ready"] is True
+    assert not observed["home"].exists()
+
+
+def test_instruqt_track_validate_supplies_writable_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        instruqt_activities,
+        "instruqt_cli_status",
+        lambda: {"ready": True, "executable": "/usr/bin/instruqt"},
+    )
+    monkeypatch.delenv("HOME", raising=False)
+    observed = {}
+
+    def run(*args, **kwargs):
+        home = Path(kwargs["env"]["HOME"])
+        assert home.is_dir()
+        observed["home"] = home
+        return SimpleNamespace(returncode=0, stdout="track is valid\n", stderr="")
+
+    monkeypatch.setattr(instruqt_activities.subprocess, "run", run)
+
+    status = instruqt_activities.run_instruqt_track_validate(tmp_path)
+
+    assert status["phase"] == "Validated"
+    assert status["output"] == "track is valid"
+    assert not observed["home"].exists()
 
 
 def test_reconcile_instruqt_course_rejects_unresolved_source():

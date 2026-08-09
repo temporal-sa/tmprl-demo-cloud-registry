@@ -1660,13 +1660,15 @@ def instruqt_cli_status() -> dict[str, Any]:
         }
 
     try:
-        result = subprocess.run(
-            [path, "version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        with tempfile.TemporaryDirectory(prefix="instruqt-cli-status-") as home:
+            result = subprocess.run(
+                [path, "version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=instruqt_cli_environment(Path(home)),
+            )
     except (OSError, subprocess.TimeoutExpired) as error:
         return {
             "phase": "Unavailable",
@@ -1701,6 +1703,14 @@ def bounded_text(value: str, limit: int = 500) -> str:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[: limit - 3]}..."
+
+
+def instruqt_cli_environment(home: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "HOME": str(home),
+        "GIT_TERMINAL_PROMPT": "0",
+    }
 
 
 def prepare_managed_instruqt_artifact(
@@ -1895,14 +1905,16 @@ def run_instruqt_track_validate(track_dir: Path) -> dict[str, Any]:
         }
     executable = str(cli.get("executable") or "instruqt")
     try:
-        result = subprocess.run(
-            [executable, "track", "validate"],
-            cwd=track_dir,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        with tempfile.TemporaryDirectory(prefix="instruqt-cli-validate-") as home:
+            result = subprocess.run(
+                [executable, "track", "validate"],
+                cwd=track_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=instruqt_cli_environment(Path(home)),
+            )
     except (OSError, subprocess.TimeoutExpired) as error:
         return {
             "phase": "Blocked",
@@ -1946,11 +1958,7 @@ def run_instruqt_command(
     executable = str(cli.get("executable") or "instruqt")
     home = home_dir or (track_dir.parent / ".instruqt-home")
     home.mkdir(parents=True, exist_ok=True)
-    env = {
-        **os.environ,
-        "HOME": str(home),
-        "GIT_TERMINAL_PROMPT": "0",
-    }
+    env = instruqt_cli_environment(home)
     try:
         result = subprocess.run(
             [executable, *args],
