@@ -409,7 +409,10 @@ async def describe_worker_deployment_version_status(
         workflowservice_pb2.DescribeWorkerDeploymentVersionRequest(
             namespace=namespace,
             deployment_version=deployment_version,
-            report_task_queue_stats=True,
+            # Serverless Worker task queues can be non-root partitions, for which
+            # Temporal does not support DescribeTaskQueue statistics. The response
+            # still includes the task queue names and types used below.
+            report_task_queue_stats=False,
         ),
         retry=False,
         timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,

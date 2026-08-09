@@ -569,6 +569,55 @@ def test_worker_deployment_version_create_requires_existing_deployment():
     )
 
 
+def test_describe_serverless_worker_version_does_not_request_task_queue_stats():
+    class WorkflowService:
+        def __init__(self):
+            self.calls = []
+
+        async def describe_worker_deployment_version(
+            self,
+            request,
+            *,
+            retry,
+            timeout,
+        ):
+            self.calls.append((request, retry, timeout))
+
+            class TaskQueue:
+                name = "money-transfer"
+                type = 1
+
+            class Response:
+                version_task_queues = [TaskQueue()]
+
+            return Response()
+
+    class Client:
+        def __init__(self):
+            self.workflow_service = WorkflowService()
+
+    client = Client()
+
+    status = asyncio.run(
+        serverless_worker.describe_worker_deployment_version_status(
+            client,
+            namespace="tmprl-demo",
+            deployment_version=deployment_pb2.WorkerDeploymentVersion(
+                deployment_name="money-transfer",
+                build_id="git-e12b0ed9d450",
+            ),
+        )
+    )
+
+    assert status == {
+        "taskQueues": [{"name": "money-transfer", "type": "workflow"}],
+    }
+    [(request, retry, timeout)] = client.workflow_service.calls
+    assert request.report_task_queue_stats is False
+    assert retry is False
+    assert timeout == SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT
+
+
 def test_serverless_worker_deployment_status_preserves_version_step_boundaries():
     status = serverless_worker_deployment_status(
         {
