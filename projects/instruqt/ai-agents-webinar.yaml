@@ -1,0 +1,24 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: InstruqtCourse
+metadata:
+  name: ai-agents-webinar
+spec:
+  source:
+    repo: https://github.com/temporal-sa/ai-agents-webinar
+    branch: main
+    path: instruqt
+
+  images:
+    workshop:
+      container: workshop
+      context:
+        source: source
+        path: .
+      dockerfile:
+        source: source
+        path: instruqt/docker/Dockerfile
+      platform: linux/amd64
+
+  track:
+    organization: temporal
+    slug: ai-agents-webinar
