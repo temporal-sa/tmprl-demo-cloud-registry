@@ -4,11 +4,11 @@ metadata:
   name: canonical-ai-demo
 spec:
   registry:
-    title: Durable Support Agent
+    title: Travel Planner Agent
     summary: >-
-      The canonical 101-level agentic demo. A single-agent ReAct loop on Temporal
-      over a music store: LLM + tools as activities, human-in-the-loop
-      purchase approval via signal, crash-recoverable, replay-safe.
+      The canonical 101-level agentic demo. A single-agent ReAct loop on Temporal 
+      that plans a real multi-city trip (Athens, Santorini, Mykonos). LLM and tools 
+      as activities, a durable parallel web-research fan-out, human-in-the-loop booking via signal, crash-recoverable and replay-safe.
     canonical: true
     links:
       speakerNotes:
@@ -62,7 +62,7 @@ spec:
         - name: DB_PORT
           value: "5432"
         - name: DB_NAME
-          value: travel
+          value: music
         - name: DB_USER
           valueFrom:
             inputRef: secrets.db-creds.POSTGRES_USER
