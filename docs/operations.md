@@ -221,7 +221,33 @@ validation leaves the live Pods on the old key.
   can override it with `spec.temporal.region`, and serverless (AWS Lambda) worker
   projects default to `DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`
   (`aws-ca-central-1`). Changing a project's resolved region destroys and
-  recreates its namespace.
+  recreates its namespace. An additional namespace declared under
+  `spec.temporal.namespaces` may pin its own region the same way, but region
+  drift on an additional namespace is **refused** rather than repaired: the
+  teardown that repairs it is project-scoped and would delete the project's own
+  namespace. Repair it by hand (see below).
+
+### Additional namespaces are not torn down automatically
+
+Namespaces declared under `spec.temporal.namespaces` are created and reconciled
+by the operator but **not deleted by it**. Neither removing a label from the CR
+nor finalizing the whole project deletes them — project finalization deletes the
+project's own namespace, service account, API key, and secrets, and nothing
+else. Nexus Endpoints *are* deleted on finalize; namespaces are not.
+
+Every additional namespace therefore leaks on project deletion, along with its
+service account, API key, and Secrets Manager entries. Until per-label teardown
+exists, deleting a project that declared extra namespaces requires manual
+cleanup in Temporal Cloud and Secrets Manager:
+
+- namespace `tmprl-dem-cld-<project>-<label>` and its scoped service account and
+  API key
+- `tmprl-dem-cld/<project>/temporal-<label>` and
+  `tmprl-dem-cld/<project>/temporal-<label>/ca`
+
+The leaked namespace also keeps its derived name claimed, which the registry
+validator will flag as a collision if another project later derives the same
+name.
 - Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
   (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
   watches and CodeBuild checkouts.
