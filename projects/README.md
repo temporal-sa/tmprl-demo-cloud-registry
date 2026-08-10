@@ -322,11 +322,10 @@ Rules:
   inherit `spec.temporal.auth.mode`; auth is not configured per namespace.
   Every declared label must be referenced by a component or a Nexus endpoint.
 
-  **Additional namespaces are not deleted automatically.** Removing a label, or
-  finalizing the whole project, does not tear its namespace down — the operator
-  creates and reconciles them but only ever deletes the project's own namespace.
-  Deleting a project that declared extra namespaces leaves them, their service
-  accounts, API keys, and Secrets Manager entries behind for manual cleanup. See
+  Finalizing the project tears down every declared namespace along with the
+  project's own — Nexus Endpoints first, then each declared namespace newest
+  first, then the project's own last. Removing a label from a live CR is *not*
+  the same thing: it stops reconciling that namespace but leaves it running. See
   `docs/operations.md`.
 - Bind a component to a declared namespace with `temporalNamespace`. Absent, a
   component uses the project's own namespace, which is what every component

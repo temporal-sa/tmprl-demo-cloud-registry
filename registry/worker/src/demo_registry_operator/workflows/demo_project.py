@@ -2232,6 +2232,45 @@ class DemoProjectWorkflow:
         # are unique account-wide, so a leaked one blocks that name for every other
         # project.
         await self._delete_nexus_endpoints(finalize_external_plan)
+        # Then the declared namespaces, newest first, before the project's own --
+        # the reverse of the order they were provisioned. Each reuses the same
+        # project-scoped delete activities: the per-target projection carries
+        # target_namespace and runtime_secret_path, which is what those activities
+        # resolve their namespace and secret paths from.
+        additional_teardown: dict[str, Any] = {}
+        for target in reversed(temporal_namespace_targets(finalize_external_plan)):
+            if target.is_primary:
+                continue
+            target_plan = target.external_plan(finalize_external_plan)
+            additional_teardown[target.label] = await self._delete_one_temporal_namespace(
+                target_plan,
+                replace(
+                    temporal_delete_request,
+                    project=target_plan.temporal_project,
+                ),
+            )
+        statuses = await self._delete_one_temporal_namespace(
+            finalize_external_plan,
+            temporal_delete_request,
+        )
+        status = external_resources.temporal_cloud_finalization_status(
+            finalize_plan,
+            **statuses,
+        )
+        if additional_teardown:
+            status["additionalNamespaces"] = additional_teardown
+        return status
+
+    async def _delete_one_temporal_namespace(
+        self,
+        finalize_external_plan: Any,
+        temporal_delete_request: external_resources.DeleteTemporalRuntimeCandidateSecretRequest,
+    ) -> dict[str, Any]:
+        """Tear down one namespace's Temporal Cloud and Secrets Manager resources.
+
+        Order matters and mirrors the saga's compensation: the API key and service
+        account go before the namespace that scopes them, and the secrets last.
+        """
         temporal_api_key_teardown = await workflow.execute_activity(
             external_resources.delete_temporal_cloud_api_key,
             temporal_delete_request,
@@ -2275,15 +2314,14 @@ class DemoProjectWorkflow:
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=COMMON_RETRY_POLICY,
         )
-        return external_resources.temporal_cloud_finalization_status(
-            finalize_plan,
-            api_key_status=temporal_api_key_teardown.status,
-            service_account_status=temporal_service_account_teardown.status,
-            namespace_protection_status=temporal_namespace_protection_teardown.status,
-            namespace_status=temporal_namespace_teardown.status,
-            runtime_secret_status=temporal_secret_teardown.status,
-            mtls_ca_secret_status=temporal_mtls_ca_teardown.status,
-        )
+        return {
+            "api_key_status": temporal_api_key_teardown.status,
+            "service_account_status": temporal_service_account_teardown.status,
+            "namespace_protection_status": temporal_namespace_protection_teardown.status,
+            "namespace_status": temporal_namespace_teardown.status,
+            "runtime_secret_status": temporal_secret_teardown.status,
+            "mtls_ca_secret_status": temporal_mtls_ca_teardown.status,
+        }
 
     async def _remove_project_finalizer(
         self,

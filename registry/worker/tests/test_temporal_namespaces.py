@@ -520,3 +520,76 @@ def test_scenario_passes_the_repository_validator():
     assert module.validate_temporal_namespace_labels(document) == []
     assert module.validate_component_temporal_namespace_refs(document) == []
     assert module.validate_nexus_endpoints(document) == []
+
+
+# --- what makes a namespace "required" --------------------------------------
+
+
+def cloud_project(**overrides):
+    from demo_registry_operator.activities.external_resources.models import (
+        NexusEndpointSpec,
+        TemporalCloudProject,
+    )
+
+    fields = {
+        "name": "demo",
+        "namespace": "tmprl-dem-cld-demo",
+        "kubernetes_namespace": "tmprl-dem-cld-demo",
+        "auth_mode": "apiKey",
+        "components": {},
+        "runtime_secret_path": "tmprl-dem-cld/demo/temporal",
+        "mtls_ca_secret_path": "tmprl-dem-cld/demo/temporal/ca",
+    }
+    fields.update(overrides)
+    return TemporalCloudProject(**fields), NexusEndpointSpec
+
+
+def test_a_declared_namespace_is_required_even_with_no_components():
+    # Its only reference may be a Nexus endpoint. Without this it is planned and
+    # then never created, and never torn down.
+    project, _ = cloud_project(target_namespace="tmprl-dem-cld-demo-lonely")
+    assert project.temporal_required is True
+    assert project.namespace_required is True
+
+
+def test_the_project_namespace_is_still_not_required_when_unused():
+    project, _ = cloud_project()
+    assert project.temporal_required is False
+    assert project.namespace_required is False
+
+
+def test_the_project_namespace_is_required_when_an_endpoint_references_it():
+    project, endpoint = cloud_project()
+    as_target = project.__class__(
+        **{**project.__dict__, "nexus_endpoints": (
+            endpoint(name="e", target_namespace="primary", target_task_queue="tq"),
+        )}
+    )
+    assert as_target.namespace_required is True
+
+    as_caller = project.__class__(
+        **{**project.__dict__, "nexus_endpoints": (
+            endpoint(
+                name="e",
+                target_namespace="alpha",
+                target_task_queue="tq",
+                allowed_caller_namespaces=("primary",),
+            ),
+        )}
+    )
+    assert as_caller.namespace_required is True
+
+
+def test_an_endpoint_between_other_namespaces_does_not_require_the_project_one():
+    project, endpoint = cloud_project()
+    unrelated = project.__class__(
+        **{**project.__dict__, "nexus_endpoints": (
+            endpoint(
+                name="e",
+                target_namespace="beta",
+                target_task_queue="tq",
+                allowed_caller_namespaces=("alpha",),
+            ),
+        )}
+    )
+    assert unrelated.namespace_required is False

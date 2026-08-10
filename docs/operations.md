@@ -227,27 +227,30 @@ validation leaves the live Pods on the old key.
   teardown that repairs it is project-scoped and would delete the project's own
   namespace. Repair it by hand (see below).
 
-### Additional namespaces are not torn down automatically
+### Finalize tears down every declared namespace
 
-Namespaces declared under `spec.temporal.namespaces` are created and reconciled
-by the operator but **not deleted by it**. Neither removing a label from the CR
-nor finalizing the whole project deletes them — project finalization deletes the
-project's own namespace, service account, API key, and secrets, and nothing
-else. Nexus Endpoints *are* deleted on finalize; namespaces are not.
+Project finalization deletes each namespace declared under
+`spec.temporal.namespaces` along with the project's own, in this order:
 
-Every additional namespace therefore leaks on project deletion, along with its
-service account, API key, and Secrets Manager entries. Until per-label teardown
-exists, deleting a project that declared extra namespaces requires manual
-cleanup in Temporal Cloud and Secrets Manager:
+1. Nexus Endpoints — an endpoint outlives the namespace it targets, and endpoint
+   names are unique account-wide, so a leaked one blocks that name for every
+   other project.
+2. Each declared namespace, newest label first — the reverse of the order they
+   were provisioned. For each: API key, service account, namespace delete
+   protection, namespace, runtime secret, mTLS CA secret.
+3. The project's own namespace, last, with the same six steps.
 
-- namespace `tmprl-dem-cld-<project>-<label>` and its scoped service account and
-  API key
-- `tmprl-dem-cld/<project>/temporal-<label>` and
-  `tmprl-dem-cld/<project>/temporal-<label>/ca`
+Per-namespace teardown reuses the same activities as the project's own: the
+per-target projection carries the namespace and secret path those activities
+resolve from. Per-label results appear under `additionalNamespaces` in the
+finalize status.
 
-The leaked namespace also keeps its derived name claimed, which the registry
-validator will flag as a collision if another project later derives the same
-name.
+**Removing a label from a live CR does not delete its namespace.** Only
+finalizing the whole project does. A label removed from `spec.temporal.namespaces`
+stops being reconciled and its namespace is left running, which also keeps its
+derived name claimed — the registry validator will flag a collision if another
+project later derives the same name. Delete such a namespace by hand, or
+re-add the label and finalize the project.
 - Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
   (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
   watches and CodeBuild checkouts.

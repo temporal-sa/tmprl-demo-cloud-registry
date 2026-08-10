@@ -86,11 +86,25 @@ class TemporalCloudProject:
 
     @property
     def temporal_required(self) -> bool:
-        return bool(self.components)
+        # A projection for a declared namespace is required because it was
+        # declared, even with no component bound to it -- a Nexus endpoint may be
+        # its only reference. target_namespace is None on the project-level model
+        # and on the primary target, so this is unchanged for them.
+        return bool(self.components) or self.target_namespace is not None
 
     @property
     def namespace_required(self) -> bool:
-        return self.temporal_required or bool(self.search_attributes)
+        if self.temporal_required or self.search_attributes:
+            return True
+        # A Nexus endpoint that targets this namespace, or admits it as a caller,
+        # needs it to exist -- even when every component is bound elsewhere.
+        # "primary" is the reference a project writes for its own namespace; it
+        # matches NEXUS_PRIMARY_NAMESPACE_REF on the reconciler side.
+        return any(
+            endpoint.target_namespace == "primary"
+            or "primary" in endpoint.allowed_caller_namespaces
+            for endpoint in self.nexus_endpoints
+        )
 
     @property
     def nexus_endpoints_required(self) -> bool:

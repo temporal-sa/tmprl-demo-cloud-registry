@@ -686,15 +686,110 @@ def test_no_nexus_activity_when_none_are_declared(monkeypatch):
     assert "nexusEndpoints" not in status
 
 
-def test_finalize_deletes_endpoints_before_any_namespace():
-    import inspect
+def run_finalize(monkeypatch, *, namespaces=None):
+    """Drive the real finalize teardown, recording (activity, target namespace)."""
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    demo_project = project()
+    demo_project["spec"]["temporal"] = {
+        "namespaces": namespaces or {},
+        "nexusEndpoints": {
+            "demo-orders": {
+                "targetNamespace": "primary",
+                "targetTaskQueue": "orders-tq",
+                "allowedCallerNamespaces": ["primary"],
+            }
+        },
+    }
+    calls: list[tuple[str, str | None]] = []
 
-    source = inspect.getsource(
-        DemoProjectWorkflow._delete_project_temporal_cloud_resources
+    async def fake_execute_activity(activity, request, **kwargs):
+        name = getattr(activity, "__name__", str(activity))
+        target = getattr(getattr(request, "project", None), "target_namespace", None)
+        calls.append((name, target))
+        if name.startswith("delete_nexus"):
+            return models.NexusEndpointResult(status={"phase": "Deleted"}, endpoint_ids={})
+        return models.TemporalCloudStatusResult(status={"phase": "Deleted"})
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo", run_id="run-1"),
     )
-    assert source.index("_delete_nexus_endpoints") < source.index(
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+
+    plan = workflow._project_finalization_external_plan(
+        demo_project, {"checkedAt": CHECKED_AT}
+    )
+    request = demo_project_workflow.external_resources.DeleteTemporalRuntimeCandidateSecretRequest(
+        checked_at=plan.checked_at, project=plan.temporal_project
+    )
+    status = asyncio.run(
+        workflow._delete_project_temporal_cloud_resources(
+            {"checkedAt": CHECKED_AT}, plan, request
+        )
+    )
+    return calls, status
+
+
+NAMESPACE_TEARDOWN_ACTIVITIES = [
+    "delete_temporal_cloud_api_key",
+    "delete_temporal_cloud_service_account",
+    "disable_temporal_cloud_namespace_delete_protection",
+    "delete_temporal_cloud_namespace",
+    "delete_temporal_cloud_runtime_secret",
+    "delete_temporal_cloud_mtls_ca_secret",
+]
+
+
+def test_finalize_deletes_endpoints_before_any_namespace(monkeypatch):
+    names = [name for name, _t in run_finalize(monkeypatch)[0]]
+    assert names[0] == "delete_nexus_endpoints"
+    assert names.index("delete_nexus_endpoints") < names.index(
         "delete_temporal_cloud_namespace"
     )
-    assert source.index("_delete_nexus_endpoints") < source.index(
-        "disable_temporal_cloud_namespace_delete_protection"
+
+
+def test_finalize_without_declared_namespaces_is_unchanged(monkeypatch):
+    calls, _status = run_finalize(monkeypatch)
+    assert [name for name, _t in calls] == [
+        "delete_nexus_endpoints",
+        *NAMESPACE_TEARDOWN_ACTIVITIES,
+    ]
+    # Nothing is retargeted: every delete resolves the project's own namespace.
+    assert {target for _n, target in calls} == {None}
+
+
+def test_finalize_tears_down_every_declared_namespace(monkeypatch):
+    calls, status = run_finalize(
+        monkeypatch, namespaces={"alpha": {}, "beta": {}}
     )
+    names = [name for name, _t in calls]
+    assert names == [
+        "delete_nexus_endpoints",
+        *NAMESPACE_TEARDOWN_ACTIVITIES,  # beta, newest first
+        *NAMESPACE_TEARDOWN_ACTIVITIES,  # alpha
+        *NAMESPACE_TEARDOWN_ACTIVITIES,  # the project's own, last
+    ]
+    targets = [target for _n, target in calls[1:]]
+    assert targets[0:6] == ["tmprl-dem-cld-demo-beta"] * 6
+    assert targets[6:12] == ["tmprl-dem-cld-demo-alpha"] * 6
+    assert targets[12:18] == [None] * 6
+    assert sorted(status["additionalNamespaces"]) == ["alpha", "beta"]
+
+
+def test_finalize_tears_down_a_namespace_only_a_nexus_endpoint_references(monkeypatch):
+    # No component binds to it, so it is only required because it was declared.
+    calls, _status = run_finalize(monkeypatch, namespaces={"lonely": {}})
+    deleted = [
+        target
+        for name, target in calls
+        if name == "delete_temporal_cloud_namespace"
+    ]
+    assert deleted == ["tmprl-dem-cld-demo-lonely", None]
