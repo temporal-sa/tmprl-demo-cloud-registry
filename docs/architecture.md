@@ -101,9 +101,10 @@ course is dropping one file.
 - The worker image includes the Instruqt CLI, and the operator syncs
   `tmprl-dem-cld/platform/instruqt-cli` as `INSTRUQT_TOKEN`. The
   `InstruqtCourse` workflow builds managed images with CodeBuild, renders the
-  track artifact, validates it, force-pushes it, runs `instruqt track test`, and
-  deploys it. A confirmed missing testing branch removes testing source-watch
-  resources and deletes the managed testing track.
+  track artifact and runs only `instruqt track push --force`; separate
+  validate, test, and deploy commands are not scheduled. A confirmed missing
+  testing branch removes testing source-watch resources and deletes the managed
+  testing track.
 
 ## What works today (proven end-to-end)
 

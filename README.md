@@ -95,8 +95,9 @@ from a non-production branch; deleting that branch tells the operator to tear
 down the testing side while `source.branch` continues to default to `main` for
 production. The workflow reconciles ECR repositories for managed images, builds
 those images with AWS CodeBuild, renders a local track artifact, injects or
-overwrites matching `containers[].image` values, runs `instruqt track validate`,
-then `track push --force`, `track test`, and `track deploy`. VM/lifecycle-only
+overwrites matching `containers[].image` values, then runs only
+`instruqt track push --force`. It does not separately run `track validate`,
+`track test`, or `track deploy`. VM/lifecycle-only
 configs are left alone. The worker image includes the Instruqt CLI and reports
 CLI/token readiness from `tmprl-dem-cld/platform/instruqt-cli`. If the testing
 branch is absent, the workflow deletes the managed testing track.

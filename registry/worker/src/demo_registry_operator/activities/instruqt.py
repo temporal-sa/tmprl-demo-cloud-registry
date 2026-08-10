@@ -138,7 +138,10 @@ def reconcile_instruqt_course(
     message = (
         "; ".join(errors)
         if errors
-        else "Course source contract validated; Instruqt push/test automation is not enabled yet."
+        else (
+            "Course source contract validated; managed images will be built before "
+            "force-pushing the Instruqt track."
+        )
     )
 
     status: dict[str, Any] = {
@@ -956,10 +959,12 @@ def run_instruqt_track_operation(
             instruqt_course,
             workspace_path,
             images,
-            validate=True,
+            # Track commands perform their own required loading/checking, so
+            # do not run the separate `instruqt track validate` preflight.
+            validate=False,
             channel=channel,
         )
-        if artifact_status.get("phase") != "Validated":
+        if artifact_status.get("phase") != "Rendered":
             return {
                 **artifact_status,
                 "channel": channel,

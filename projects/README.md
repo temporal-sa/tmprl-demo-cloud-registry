@@ -127,8 +127,8 @@ strings. If the matching `containers[].image` key is missing, the operator
 injects it. If it is present, the operator overwrites it. Track configs that use
 VMs or lifecycle scripts without managed containers are left alone. The workflow
 reconciles ECR repositories, builds managed images with AWS CodeBuild, renders a
-local track artifact, runs `instruqt track validate`, then `track push --force`,
-`track test`, and `track deploy`.
+local track artifact, then runs only `instruqt track push --force`. It does not
+separately run `track validate`, `track test`, or `track deploy`.
 
 Testing tracks are branch-driven. `source.branch` is the production source of
 truth and defaults to `main`. `source.testingBranch` enables a separate managed

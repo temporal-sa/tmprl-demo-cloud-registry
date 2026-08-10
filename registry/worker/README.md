@@ -156,7 +156,8 @@ Environment variables:
   WorkerDeployment, `RegistryOperatorCanaryWorkflow` verifies it against
   `expectedOperatorSourceSha` gate input.
 - `INSTRUQT_TOKEN`, synced from `tmprl-dem-cld/platform/instruqt-cli`; required
-  for managed `InstruqtCourse` validate/push/test/deploy/delete activities.
+  for managed `InstruqtCourse` force-push/delete activities. Legacy
+  validate/test/deploy activities remain registered so pinned workflows can drain.
   CLI/token readiness is recorded under `status.cli`.
 
 `aws-codebuild` mode requires a pre-created CodeBuild project whose service

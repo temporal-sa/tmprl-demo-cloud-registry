@@ -48,6 +48,7 @@ INCOMPLETE_RECONCILE_PHASES = {
     "WaitingForImages",
 }
 SUCCESSFUL_BUILD_PHASES = {"Pushed", "Resolved", "NotRequired"}
+PUBLISHED_TRACK_PHASES = {"Pushed", "Deployed"}
 
 
 @dataclass
@@ -391,7 +392,7 @@ class InstruqtCourseWorkflow:
                 instruqt_course,
                 ecr_status,
             )
-            if production_deployment_complete(self._status):
+            if production_track_published(self._status):
                 await self._reconcile_testing_channel(
                     instruqt_course,
                     ecr_status,
@@ -445,7 +446,7 @@ class InstruqtCourseWorkflow:
         if build_status.get("phase") not in SUCCESSFUL_BUILD_PHASES:
             return
 
-        deployment_status = await self._deploy_track_channel(
+        deployment_status = await self._push_track_channel(
             instruqt_course,
             images=build_status.get("images", {}),
             channel="production",
@@ -505,6 +506,8 @@ class InstruqtCourseWorkflow:
     ) -> None:
         testing_status = self._status.get("testing")
         testing_status = testing_status if isinstance(testing_status, dict) else {}
+        if testing_status.get("phase") == "Disabled":
+            return
         if testing_status.get("phase") == "BranchMissing":
             testing_delete_activity = await workflow.execute_activity(
                 instruqt_activities.delete_instruqt_course_track,
@@ -547,7 +550,7 @@ class InstruqtCourseWorkflow:
         if testing_build_status.get("phase") not in SUCCESSFUL_BUILD_PHASES:
             return
 
-        testing_deployment_status = await self._deploy_track_channel(
+        testing_deployment_status = await self._push_track_channel(
             instruqt_course,
             images=testing_build_status.get("images", {}),
             channel="testing",
@@ -558,7 +561,7 @@ class InstruqtCourseWorkflow:
             testing=True,
         )
 
-    async def _deploy_track_channel(
+    async def _push_track_channel(
         self,
         instruqt_course: dict[str, Any],
         *,
@@ -578,22 +581,7 @@ class InstruqtCourseWorkflow:
             retry_policy=COMMON_RETRY_POLICY,
         )
         push_status = push_activity.status
-        if push_status.get("phase") != "Pushed":
-            return push_status
-
-        deploy_activity = await workflow.execute_activity(
-            instruqt_activities.deploy_instruqt_course_track,
-            instruqt_activities.InstruqtTrackDeployRequest(
-                instruqt_course=instruqt_course,
-                images=images,
-                channel=channel,
-                push_status=push_status,
-            ),
-            start_to_close_timeout=timedelta(minutes=10),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
-        return deploy_activity.status
+        return push_status
 
     async def _resolve_images(
         self,
@@ -885,9 +873,12 @@ def status_with_force_reconcile(
     }
 
 
-def production_deployment_complete(status: dict[str, Any]) -> bool:
+def production_track_published(status: dict[str, Any]) -> bool:
     deployment = status.get("deployment")
-    return isinstance(deployment, dict) and deployment.get("phase") == "Deployed"
+    return (
+        isinstance(deployment, dict)
+        and deployment.get("phase") in PUBLISHED_TRACK_PHASES
+    )
 
 
 def status_with_ecr_status(
@@ -960,7 +951,10 @@ def finalized_instruqt_status(status: dict[str, Any]) -> dict[str, Any]:
         return reconciled_condition(status, ready=False)
 
     deployment = status.get("deployment")
-    if not isinstance(deployment, dict) or deployment.get("phase") != "Deployed":
+    if (
+        not isinstance(deployment, dict)
+        or deployment.get("phase") not in PUBLISHED_TRACK_PHASES
+    ):
         return reconciled_condition(status, ready=False)
 
     testing = status.get("testing")
@@ -969,19 +963,26 @@ def finalized_instruqt_status(status: dict[str, Any]) -> dict[str, Any]:
     testing_deployment = (
         testing_deployment if isinstance(testing_deployment, dict) else {}
     )
-    if testing.get("resolved") is True and testing_deployment.get("phase") != "Deployed":
+    testing_phase = testing.get("phase")
+    if (
+        testing_phase not in {"Disabled", "BranchMissing"}
+        and testing.get("resolved") is True
+        and testing_deployment.get("phase") not in PUBLISHED_TRACK_PHASES
+    ):
         return reconciled_condition(status, ready=False)
-    if testing.get("phase") == "BranchMissing" and testing_deployment.get("phase") not in {
+    if testing_phase == "BranchMissing" and testing_deployment.get("phase") not in {
         "Deleted",
         "NotFound",
     }:
         return reconciled_condition(status, ready=False)
 
-    message = "Instruqt production track is deployed."
-    if testing_deployment.get("phase") == "Deployed":
-        message = "Instruqt production and testing tracks are deployed."
+    message = "Instruqt production track is force-pushed."
+    if testing_deployment.get("phase") in PUBLISHED_TRACK_PHASES:
+        message = "Instruqt production and testing tracks are force-pushed."
     elif testing_deployment.get("phase") in {"Deleted", "NotFound"}:
-        message = "Instruqt production track is deployed and testing track is absent."
+        message = (
+            "Instruqt production track is force-pushed and testing track is absent."
+        )
     return reconciled_condition(
         {
             **status,

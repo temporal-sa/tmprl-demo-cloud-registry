@@ -733,7 +733,7 @@ def test_instruqt_image_plan_does_not_reuse_mismatched_image_template(monkeypatc
     )
 
 
-def test_instruqt_track_deploy_skips_track_test(monkeypatch):
+def test_instruqt_track_publish_only_force_pushes(monkeypatch):
     calls = []
 
     async def fake_execute_activity(activity, request, **kwargs):
@@ -745,8 +745,6 @@ def test_instruqt_track_deploy_skips_track_test(monkeypatch):
                     "push": {"phase": "Succeeded"},
                 }
             )
-        if activity is instruqt_activities.deploy_instruqt_course_track:
-            return SimpleNamespace(status={"phase": "Deployed"})
         raise AssertionError(f"Unexpected activity: {activity}")
 
     monkeypatch.setattr(
@@ -756,24 +754,117 @@ def test_instruqt_track_deploy_skips_track_test(monkeypatch):
     )
 
     result = asyncio.run(
-        workflow_instance()._deploy_track_channel(
+        workflow_instance()._push_track_channel(
             course(),
             images={},
             channel="production",
         )
     )
 
-    assert result == {"phase": "Deployed"}
-    assert [activity for activity, _, _ in calls] == [
-        instruqt_activities.push_instruqt_course_track,
-        instruqt_activities.deploy_instruqt_course_track,
-    ]
-    deploy_request = calls[1][1]
-    assert deploy_request.push_status == {
+    assert result == {
         "phase": "Pushed",
         "push": {"phase": "Succeeded"},
     }
-    assert deploy_request.test_status is None
+    assert [activity for activity, _, _ in calls] == [
+        instruqt_activities.push_instruqt_course_track,
+    ]
+
+
+def test_instruqt_track_push_skips_explicit_validation(monkeypatch, tmp_path):
+    observed = {}
+
+    class TemporaryDirectory:
+        def __init__(self, *, prefix):
+            observed["prefix"] = prefix
+
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, *_args):
+            return False
+
+    def prepare(_course, _workspace, _images, *, validate, channel):
+        observed["validate"] = validate
+        return {
+            "phase": "Rendered",
+            "channel": channel,
+            "target": "temporal/workflow-fundamentals",
+        }
+
+    def run(_track_dir, args, **_kwargs):
+        observed["args"] = args
+        return {"phase": "Succeeded"}
+
+    monkeypatch.setattr(
+        instruqt_activities.tempfile,
+        "TemporaryDirectory",
+        TemporaryDirectory,
+    )
+    monkeypatch.setattr(
+        instruqt_activities,
+        "prepare_managed_instruqt_artifact",
+        prepare,
+    )
+    monkeypatch.setattr(instruqt_activities, "run_instruqt_command", run)
+
+    result = instruqt_activities.push_instruqt_course_track(
+        InstruqtCourseArtifactRequest(
+            instruqt_course=course(),
+            images={},
+            channel="production",
+        )
+    ).status
+
+    assert observed == {
+        "prefix": "instruqt-push-",
+        "validate": False,
+        "args": ["track", "push", "--force"],
+    }
+    assert result["phase"] == "Pushed"
+    assert result["artifact"]["phase"] == "Rendered"
+
+
+def test_instruqt_disabled_testing_channel_schedules_no_activities(monkeypatch):
+    workflow = workflow_instance()
+    workflow._status = {
+        "testing": {
+            "phase": "Disabled",
+            "reason": "TestingDisabled",
+            "resolved": True,
+        }
+    }
+
+    async def unexpected_execute_activity(*_args, **_kwargs):
+        raise AssertionError("disabled testing channel scheduled an activity")
+
+    monkeypatch.setattr(
+        workflow_module.workflow,
+        "execute_activity",
+        unexpected_execute_activity,
+    )
+
+    asyncio.run(
+        workflow._reconcile_testing_channel(
+            course(),
+            {"phase": "Ready"},
+        )
+    )
+
+    assert workflow._status["testing"]["phase"] == "Disabled"
+
+
+def test_finalized_instruqt_status_accepts_force_push_with_testing_disabled():
+    status = reconcile_instruqt_course(course())
+    status["deployment"] = {"phase": "Pushed"}
+
+    finalized = workflow_module.finalized_instruqt_status(status)
+
+    assert finalized["phase"] == "Ready"
+    assert finalized["message"] == "Instruqt production track is force-pushed."
+    assert any(
+        condition["type"] == "Reconciled" and condition["status"] == "True"
+        for condition in finalized["conditions"]
+    )
 
 
 def test_instruqt_reconcile_key_changes_with_force_reconcile_token():
