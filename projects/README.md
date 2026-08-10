@@ -324,9 +324,11 @@ Rules:
 
   Finalizing the project tears down every declared namespace along with the
   project's own — Nexus Endpoints first, then each declared namespace newest
-  first, then the project's own last. Removing a label from a live CR is *not*
-  the same thing: it stops reconciling that namespace but leaves it running. See
-  `docs/operations.md`.
+  first, then the project's own last. Deleting a single entry from a live
+  project is *not* the same thing: it stops reconciling that namespace but
+  leaves it running. The operator reports those under `orphanedNamespaces` in
+  `status.externalResources.temporalCloud`, with the namespace and secret paths
+  to clean up by hand; it never deletes them itself. See `docs/operations.md`.
 - Bind a component to a declared namespace with `temporalNamespace`. Absent, a
   component uses the project's own namespace, which is what every component
   does today.

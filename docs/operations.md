@@ -245,12 +245,41 @@ per-target projection carries the namespace and secret path those activities
 resolve from. Per-label results appear under `additionalNamespaces` in the
 finalize status.
 
-**Removing a label from a live CR does not delete its namespace.** Only
-finalizing the whole project does. A label removed from `spec.temporal.namespaces`
-stops being reconciled and its namespace is left running, which also keeps its
-derived name claimed — the registry validator will flag a collision if another
-project later derives the same name. Delete such a namespace by hand, or
-re-add the label and finalize the project.
+### Removing one namespace from a live project
+
+Deleting an entry from `spec.temporal.namespaces` does **not** delete that
+namespace. Only finalizing the whole project does. The entry stops being
+reconciled and its namespace keeps running, which also keeps its derived name
+claimed — the registry validator flags a collision if another project later
+derives the same name.
+
+The operator reports this rather than acting on it. When a previously
+reconciled namespace is no longer declared, the next reconcile writes
+`orphanedNamespaces` under `status.externalResources.temporalCloud`:
+
+```json
+{
+  "phase": "Orphaned",
+  "message": "1 Temporal Cloud namespace(s) are no longer declared ...",
+  "namespaces": [
+    {
+      "label": "alpha",
+      "namespace": "tmprl-dem-cld-my-project-alpha",
+      "runtimeSecretPath": "tmprl-dem-cld/my-project/temporal-alpha"
+    }
+  ]
+}
+```
+
+Clean up using the names in that report: delete the namespace and its scoped
+service account and API key in Temporal Cloud, then `<runtimeSecretPath>` and
+`<runtimeSecretPath>/ca` in Secrets Manager. The report clears on the next
+reconcile once the entry is either gone from status or re-declared.
+
+The operator deliberately does not delete these itself. Deleting a Temporal
+Cloud namespace destroys its history irreversibly, and the signal is derived
+from status — a status patch that failed to land would otherwise be enough to
+destroy a live namespace.
 - Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
   (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
   watches and CodeBuild checkouts.

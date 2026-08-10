@@ -186,6 +186,66 @@ def temporal_namespace_targets(external_plan: Any) -> list[TemporalCloudNamespac
     ]
 
 
+def previous_temporal_namespace_labels(status: dict[str, Any]) -> list[str]:
+    """Namespace labels the operator reconciled on the previous pass.
+
+    Read back out of the per-label status this workflow already writes, so
+    detecting a dropped label needs no extra Cloud API call.
+    """
+    external_resources_status = status.get("externalResources")
+    if not isinstance(external_resources_status, dict):
+        return []
+    temporal_cloud = external_resources_status.get("temporalCloud")
+    if not isinstance(temporal_cloud, dict):
+        return []
+    additional = temporal_cloud.get("additionalNamespaces")
+    if not isinstance(additional, dict):
+        return []
+    return sorted(label for label in additional if isinstance(label, str) and label)
+
+
+def orphaned_temporal_namespace_status(
+    checked_at: str,
+    *,
+    demo_project: dict[str, Any],
+    previous_labels: list[str],
+    declared_labels: set[str],
+) -> dict[str, Any] | None:
+    """Report namespaces the operator provisioned that are no longer declared.
+
+    Deliberately reports rather than deletes. Deleting a Temporal Cloud namespace
+    destroys its history irreversibly, and this delta is derived from status --
+    a status patch that did not land would otherwise be enough to destroy a live
+    namespace. Removing a declared namespace is a manual cleanup, and this is how
+    an operator finds out one is outstanding.
+    """
+    orphaned = [label for label in previous_labels if label not in declared_labels]
+    if not orphaned:
+        return None
+    return {
+        "phase": "Orphaned",
+        "checkedAt": checked_at,
+        "message": (
+            f"{len(orphaned)} Temporal Cloud namespace(s) are no longer declared in "
+            "spec.temporal.namespaces but were not deleted. Removing a namespace "
+            "from a live project does not tear it down; delete it and its secrets "
+            "by hand (see docs/operations.md), or the derived name stays claimed."
+        ),
+        "namespaces": [
+            {
+                "label": label,
+                "namespace": resources.project_temporal_namespace_for_label(
+                    demo_project, label
+                ),
+                "runtimeSecretPath": resources.temporal_secret_remote_path_for_label(
+                    demo_project, label
+                ),
+            }
+            for label in orphaned
+        ],
+    }
+
+
 def merge_temporal_cloud_namespace_status(
     results: dict[str | None, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1316,7 +1376,8 @@ class DemoProjectWorkflow:
 
         self._tc_targets = []
         results: dict[str | None, dict[str, Any]] = {}
-        for target in temporal_namespace_targets(external_plan):
+        targets = temporal_namespace_targets(external_plan)
+        for target in targets:
             try:
                 results[target.label] = await reconcile_one_namespace(
                     target,
@@ -1330,6 +1391,17 @@ class DemoProjectWorkflow:
             if results[target.label].get("phase") == "Error":
                 break
         status = merge_temporal_cloud_namespace_status(results)
+        # Surfaced, never acted on: a namespace dropped from the spec keeps running.
+        orphaned = orphaned_temporal_namespace_status(
+            external_plan.checked_at,
+            demo_project=external_plan.demo_project,
+            previous_labels=previous_temporal_namespace_labels(previous_status),
+            declared_labels={
+                target.label for target in targets if target.label is not None
+            },
+        )
+        if orphaned is not None:
+            status["orphanedNamespaces"] = orphaned
         # Endpoints reference namespaces by id, so every namespace they can target
         # or admit as a caller has to exist first.
         if results and all(

@@ -793,3 +793,67 @@ def test_finalize_tears_down_a_namespace_only_a_nexus_endpoint_references(monkey
         if name == "delete_temporal_cloud_namespace"
     ]
     assert deleted == ["tmprl-dem-cld-demo-lonely", None]
+
+
+# --- orphaned namespaces: reported, never deleted ---------------------------
+
+
+def previous_status_with_labels(*labels):
+    return {
+        "externalResources": {
+            "temporalCloud": {
+                "additionalNamespaces": {label: {"phase": "Ready"} for label in labels}
+            }
+        }
+    }
+
+
+def test_no_orphan_report_when_nothing_was_dropped(monkeypatch):
+    _calls, status, _workflow = run_saga(monkeypatch, owned_suffix=STABLE_SUFFIX)
+    assert "orphanedNamespaces" not in status
+
+
+def test_dropping_a_declared_namespace_is_reported(monkeypatch):
+    # The project declares none now, but the previous pass reconciled alpha.
+    _calls, status, _workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        previous_status=previous_status_with_labels("alpha"),
+    )
+    orphaned = status["orphanedNamespaces"]
+    assert orphaned["phase"] == "Orphaned"
+    assert [entry["label"] for entry in orphaned["namespaces"]] == ["alpha"]
+    assert orphaned["namespaces"][0]["namespace"] == "tmprl-dem-cld-demo-alpha"
+    assert orphaned["namespaces"][0]["runtimeSecretPath"] == (
+        "tmprl-dem-cld/demo/temporal-alpha"
+    )
+
+
+def test_orphan_report_never_deletes_anything(monkeypatch):
+    calls, _status, _workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        previous_status=previous_status_with_labels("alpha", "beta"),
+    )
+    # Detection is derived from status; it must not reach for a delete activity.
+    assert not [name for name, _r in calls if name.startswith("delete_temporal_cloud")]
+    assert [name for name, _r in calls] == STEADY_STATE_SEQUENCE
+
+
+def test_previous_label_reader_tolerates_missing_status():
+    from demo_registry_operator.workflows.demo_project import (
+        previous_temporal_namespace_labels,
+    )
+
+    assert previous_temporal_namespace_labels({}) == []
+    assert previous_temporal_namespace_labels({"externalResources": None}) == []
+    assert previous_temporal_namespace_labels(
+        {"externalResources": {"temporalCloud": {}}}
+    ) == []
+    assert previous_temporal_namespace_labels(
+        {"externalResources": {"temporalCloud": {"additionalNamespaces": "nope"}}}
+    ) == []
+    assert previous_temporal_namespace_labels(previous_status_with_labels("b", "a")) == [
+        "a",
+        "b",
+    ]
