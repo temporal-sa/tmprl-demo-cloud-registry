@@ -62,7 +62,7 @@ spec:
         - name: DB_PORT
           value: "5432"
         - name: DB_NAME
-          value: music
+          value: travel
         - name: DB_USER
           valueFrom:
             inputRef: secrets.db-creds.POSTGRES_USER
