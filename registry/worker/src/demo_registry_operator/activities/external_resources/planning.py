@@ -84,14 +84,10 @@ def temporal_namespace_spec(
         components=resources.components_bound_to_namespace_label(
             resources.temporal_components(demo_project), label
         ),
-        search_attributes=tuple(
-            models.TemporalCloudSearchAttribute(name=name, type=attribute_type)
-            for name, attribute_type in sorted(
-                resources.temporal_search_attributes_for_label(
-                    demo_project, label
-                ).items()
-            )
-        ),
+        # search_attributes is left empty on purpose. The reconcile step that
+        # manages them computes its delete set against a single project-scoped
+        # status blob, so it runs for the project's own namespace only, and the
+        # schema rejects the key here rather than accepting it and ignoring it.
         region=region if isinstance(region, str) and region else None,
         retention_days=retention_days if isinstance(retention_days, int) else None,
     )

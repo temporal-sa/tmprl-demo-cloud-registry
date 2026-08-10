@@ -327,7 +327,11 @@ Constraints worth knowing before you author one:
   those are bindable. Rendering the pair would register the deployment in one
   namespace while the pod authenticated to another, so it is refused outright.
   A worker bound to a declared namespace must be unversioned.
-- Search attributes are still managed on the project's own namespace only.
+- Search attributes are managed on the project's own namespace only, via
+  `spec.temporal.searchAttributes`. Declaring them under a namespace entry is a
+  validation error rather than a silent no-op: the step that manages them
+  computes its delete set against one project-scoped status blob, so it cannot
+  run per namespace without risking one namespace deleting another's attributes.
 
 ## Nexus Endpoints
 

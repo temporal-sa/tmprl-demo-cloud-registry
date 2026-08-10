@@ -1244,9 +1244,13 @@ def test_demoproject_temporal_keeps_existing_keys():
 
 def test_demoproject_temporal_declares_additional_namespaces():
     entry = _temporal_schema()["namespaces"]["additionalProperties"]
-    assert sorted(entry["properties"]) == ["region", "retentionDays", "searchAttributes"]
+    assert sorted(entry["properties"]) == ["region", "retentionDays"]
     # Auth mode is inherited from the project, never declared per namespace.
     assert "auth" not in entry["properties"]
+    # Search attributes are project-scoped: the step that manages them computes
+    # its delete set against one status blob, so declaring them per namespace
+    # would be silently ignored. Rejected rather than accepted-and-dropped.
+    assert "searchAttributes" not in entry["properties"]
 
 
 def test_demoproject_temporal_declares_nexus_endpoints():

@@ -774,7 +774,7 @@
     "temporalNamespaceSpec": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Additional namespaces inherit the project's spec.temporal.auth.mode; auth is not per-namespace.",
+      "$comment": "Additional namespaces inherit the project's spec.temporal.auth.mode; auth is not per-namespace. searchAttributes is deliberately absent: the reconcile step that manages them computes its delete set against a single project-scoped status blob, so it runs for the project's own namespace only. Declaring them here would be silently ignored.",
       "properties": {
         "region": {
           "$ref": "#/$defs/temporalRegion"
@@ -783,15 +783,6 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 90
-        },
-        "searchAttributes": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/temporalSearchAttributeName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/temporalSearchAttribute"
-          }
         }
       }
     },

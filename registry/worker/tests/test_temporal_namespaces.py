@@ -401,7 +401,7 @@ SCENARIO = {
         "temporal": {
             "namespaces": {
                 "alpha": {"region": "aws-us-west-2"},
-                "beta": {"retentionDays": 14, "searchAttributes": {"Tier": {"type": "keyword"}}},
+                "beta": {"retentionDays": 14},
             },
             "nexusEndpoints": {
                 "scenario-orders": {
@@ -456,12 +456,13 @@ def test_scenario_gives_each_namespace_its_own_secret_paths():
     assert project.runtime_secret_path not in paths.values()
 
 
-def test_scenario_carries_per_namespace_region_retention_and_attributes():
+def test_scenario_carries_per_namespace_region_and_retention():
     specs = {spec.label: spec for spec in scenario_plan().temporal_project.additional_namespaces}
     assert specs["alpha"].region == "aws-us-west-2"
     assert specs["alpha"].retention_days is None
     assert specs["beta"].retention_days == 14
-    assert [a.name for a in specs["beta"].search_attributes] == ["Tier"]
+    # Never carried per namespace: the schema rejects the key outright.
+    assert specs["beta"].search_attributes == ()
     assert specs["alpha"].search_attributes == ()
 
 
@@ -505,7 +506,8 @@ def test_scenario_renders_a_secret_per_namespace_and_binds_components():
     ]
 
 
-def test_scenario_passes_the_repository_validator():
+def load_validator():
+    """Load scripts/validate_projects.py, which is standalone and not importable."""
     import importlib.util
     import sys
 
@@ -515,7 +517,11 @@ def test_scenario_passes_the_repository_validator():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    return module
 
+
+def test_scenario_passes_the_repository_validator():
+    module = load_validator()
     document = module.ProjectDocument(path=ROOT / "projects/scenario.yaml", data=SCENARIO)
     assert module.validate_temporal_namespace_labels(document) == []
     assert module.validate_component_temporal_namespace_refs(document) == []
@@ -593,3 +599,27 @@ def test_an_endpoint_between_other_namespaces_does_not_require_the_project_one()
         )}
     )
     assert unrelated.namespace_required is False
+
+
+def test_declaring_search_attributes_on_a_namespace_is_rejected():
+    # Accepted-and-ignored was the earlier behavior and the worst option: an
+    # author got no error and no attributes.
+    module = load_validator()
+    document = module.ProjectDocument(
+        path=ROOT / "projects/scenario.yaml",
+        data={
+            "kind": "DemoProject",
+            "metadata": {"name": "scenario"},
+            "spec": {
+                "temporal": {
+                    "namespaces": {"alpha": {"searchAttributes": {"Tier": {}}}}
+                }
+            },
+        },
+    )
+    assert [error.message for error in
+            module.validate_temporal_namespace_labels(document)] == [
+        "temporal.namespaces.alpha.searchAttributes is not supported; search "
+        "attributes are managed on the project's own namespace only, via "
+        "spec.temporal.searchAttributes"
+    ]

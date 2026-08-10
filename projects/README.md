@@ -300,8 +300,11 @@ Rules:
   The operator creates or verifies declared attributes after namespace
   reconciliation. It only deletes removed attributes that it previously created
   and recorded as managed; unrelated namespace attributes are left intact.
-  Search attributes apply to the project's own namespace only — they cannot be
-  declared on an additional namespace.
+  Search attributes apply to the project's own namespace only. Declaring
+  `searchAttributes` under a `spec.temporal.namespaces` entry is a validation
+  error, not a silent no-op: the reconcile step that manages them computes its
+  delete set against one project-scoped status blob, so running it per namespace
+  would let one namespace delete another's attributes.
 - Projects can declare **additional Temporal Cloud namespaces** with
   `spec.temporal.namespaces`, keyed by a label. Each label becomes a real
   namespace `tmprl-dem-cld-<name>-<label>` with its own service account, API

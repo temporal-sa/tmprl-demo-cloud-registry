@@ -872,7 +872,18 @@ def namespace_references(document: ProjectDocument) -> set[str]:
 def validate_temporal_namespace_labels(document: ProjectDocument) -> list[ProjectError]:
     errors: list[ProjectError] = []
 
-    for label in temporal_namespace_labels(document):
+    for label, declared in temporal_namespace_labels(document).items():
+        if "searchAttributes" in declared:
+            # The schema rejects this too; the point of repeating it here is the
+            # message, which says why and where to put them instead.
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.namespaces.{label}.searchAttributes is not supported; "
+                    "search attributes are managed on the project's own namespace "
+                    "only, via spec.temporal.searchAttributes",
+                )
+            )
         if not DNS_LABEL_PATTERN.match(label):
             errors.append(
                 ProjectError(
