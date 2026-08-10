@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from demo_registry_operator.resources import (
@@ -23,6 +24,7 @@ from demo_registry_operator.resources import (
     temporal_secret_remote_path_with_suffix,
     temporal_worker_runtime_secret_name,
     temporal_worker_runtime_secret_needed,
+    worker_deployment_resource,
     worker_runtime_external_secret,
 )
 
@@ -194,19 +196,38 @@ def test_bound_component_reads_the_labelled_secret():
     ]
 
 
-def test_bound_versioned_worker_reads_the_labelled_runtime_secret():
+def test_binding_a_versioned_worker_is_rejected():
+    # The Worker Controller's Connection and WorkerDeployment both resolve the
+    # project's primary namespace and credentials, and neither is label-aware, so
+    # a bound versioned worker would poll one namespace while its pod
+    # authenticates to another. Refuse to render rather than emit that.
     bound = {
         "build": "app",
         "worker": {"versioning": {"enabled": True}},
         "temporalNamespace": "alpha",
     }
-    assert (
-        temporal_input_ref_secret_name(bound, "temporal.apiKey")
-        == temporal_worker_runtime_secret_name("alpha")
+    with pytest.raises(ValueError, match="cannot combine temporalNamespace"):
+        worker_deployment_resource(
+            project("demo"),
+            "worker",
+            bound,
+            "img:git-x",
+            version="v1",
+            external_resources=None,
+        )
+
+
+def test_unbound_versioned_worker_still_renders():
+    unbound = {"build": "app", "worker": {"versioning": {"enabled": True}}}
+    rendered = worker_deployment_resource(
+        project("demo"),
+        "worker",
+        unbound,
+        "img:git-x",
+        version="v1",
+        external_resources=None,
     )
-    assert env_from_refs(project("demo"), "worker", bound) == [
-        {"secretRef": {"name": temporal_worker_runtime_secret_name("alpha")}}
-    ]
+    assert rendered["kind"] == "WorkerDeployment"
 
 
 def test_secret_needed_predicates_partition_components_by_label():

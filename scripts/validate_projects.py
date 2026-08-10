@@ -929,6 +929,17 @@ def validate_component_temporal_namespace_refs(
                     "with temporalProxy",
                 )
             )
+        if worker_versioning_enabled(component):
+            # The Worker Controller's Connection and WorkerDeployment both resolve
+            # the project's primary namespace and credentials, so a bound versioned
+            # worker would poll one namespace while its pod authenticates to another.
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.temporalNamespace cannot be used "
+                    "with worker.versioning",
+                )
+            )
 
     endpoint_targets: set[str] = set()
     for endpoint in nexus_endpoints(document).values():

@@ -282,15 +282,6 @@ def test_worker_update_does_not_restart_when_current_at_start(monkeypatch):
     assert restarts == []
 
 
-@pytest.mark.xfail(
-    reason=(
-        "The describe_namespace round-trip is deliberately disabled in "
-        "liveness_heartbeat (1a9b514, 2026-06-22) so the probe always succeeds "
-        "while the DNS wedge is under investigation. Re-enable the call there and "
-        "this passes again."
-    ),
-    strict=False,
-)
 def test_liveness_heartbeat_refreshes_via_temporal_health_check(tmp_path, monkeypatch):
     # Must drive the heartbeat from the worker's OWN client via a real
     # WorkflowService round-trip (describe_namespace) — an OS-level probe would

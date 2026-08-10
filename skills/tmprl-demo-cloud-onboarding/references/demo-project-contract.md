@@ -321,6 +321,12 @@ Constraints worth knowing before you author one:
 - A declared namespace must be referenced by a component or a Nexus endpoint.
 - `temporalNamespace` is not supported on `serverless.provider: aws-lambda`
   components, or alongside `temporalProxy`.
+- `temporalNamespace` cannot be combined with `worker.versioning`. The Temporal
+  Worker Controller resolves its `Connection` host and credentials, and its
+  `WorkerDeployment` namespace, from the project's own namespace, and none of
+  those are bindable. Rendering the pair would register the deployment in one
+  namespace while the pod authenticated to another, so it is refused outright.
+  A worker bound to a declared namespace must be unversioned.
 - Search attributes are still managed on the project's own namespace only.
 
 ## Nexus Endpoints
@@ -350,6 +356,14 @@ aligned with whatever your worker actually polls is on you, exactly like the
 
 Endpoints reconcile only after every namespace reports Ready, and are deleted
 before any namespace during finalize.
+
+Point `targetTaskQueue` at a task queue served by an **unversioned** worker.
+Recent Temporal Python SDK versions no longer create a versioned Nexus task
+queue automatically, which has already caused Worker Controller promotion
+failures in this registry (June 2026). A Nexus request routed to a versioned
+worker's task queue may therefore fail to dispatch. The platform cannot check
+this — it does not track task queues — so it is a review question, not a
+validation error.
 
 The Nexus contract itself — service definitions, handlers, SDK wiring — lives in
 your app's own code. This is platform plumbing only.

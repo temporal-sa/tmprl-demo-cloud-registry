@@ -969,3 +969,32 @@ def test_declared_namespaces_join_the_temporal_uniqueness_map():
         "duplicate derived Temporal namespace 'tmprl-dem-cld-demo'" in message
         for message in errors
     )
+
+
+def test_temporal_namespace_cannot_be_used_with_worker_versioning():
+    # The Worker Controller's Connection and WorkerDeployment resolve the project's
+    # primary namespace and credentials, and neither is label-aware.
+    spec = base_spec()
+    spec["temporal"] = {"namespaces": {"alpha": {}}}
+    spec["components"]["app"].update(
+        {
+            "worker": {"versioning": {"enabled": True}},
+            "temporalNamespace": "alpha",
+        }
+    )
+    document = project_document(spec)
+
+    errors = validate_projects.validate_component_temporal_namespace_refs(document)
+
+    assert [error.message for error in errors] == [
+        "components.app.temporalNamespace cannot be used with worker.versioning"
+    ]
+
+
+def test_temporal_namespace_is_allowed_on_an_unversioned_worker():
+    spec = base_spec()
+    spec["temporal"] = {"namespaces": {"alpha": {}}}
+    spec["components"]["app"].update({"worker": True, "temporalNamespace": "alpha"})
+    document = project_document(spec)
+
+    assert validate_projects.validate_component_temporal_namespace_refs(document) == []

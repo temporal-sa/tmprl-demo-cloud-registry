@@ -1978,6 +1978,17 @@ def worker_deployment_resource(
     versioning = worker_versioning(component)
     if versioning is None:
         raise ValueError(f"component {component_name!r} is missing worker.versioning")
+    if component_temporal_namespace_label(component) is not None:
+        # The Worker Controller resolves its namespace and credentials from the
+        # project's primary namespace (temporal_worker_namespace,
+        # temporal_connection_host_port, worker_controller_auth_secret_name), none
+        # of which are label-aware. Rendering this would register the deployment
+        # in the primary namespace while the pod authenticates to the bound one.
+        raise ValueError(
+            f"component {component_name!r} cannot combine temporalNamespace with "
+            "worker.versioning: the Worker Controller Connection and "
+            "WorkerDeployment are not namespace-bindable."
+        )
 
     pod_spec = workload_pod_spec(
         demo_project,
