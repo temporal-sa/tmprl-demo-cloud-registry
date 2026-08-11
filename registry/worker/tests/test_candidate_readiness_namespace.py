@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import demo_registry_operator.workflows.demo_project_kubernetes_runtime as kubernetes_runtime_workflow
+import pytest
 from demo_registry_operator.activities import reconcile
 from temporalio.exceptions import ActivityError
 
@@ -102,7 +103,11 @@ def test_worker_rollout_falls_back_to_base_namespace(monkeypatch):
     )
 
 
-def test_worker_rollout_waits_for_temporal_state_fetch_failure(monkeypatch):
+@pytest.mark.parametrize(
+    "reason",
+    ["TemporalStateFetchFailed", "TemporalClientCreationFailed"],
+)
+def test_worker_rollout_waits_for_transient_temporal_failure(monkeypatch, reason):
     attempts = 0
     monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
     monkeypatch.setattr(reconcile.time, "sleep", lambda _: None)
@@ -115,7 +120,7 @@ def test_worker_rollout_waits_for_temporal_state_fetch_failure(monkeypatch):
             {
                 "type": "Ready",
                 "status": "False",
-                "reason": "TemporalStateFetchFailed",
+                "reason": reason,
                 "message": 'Secret "temporal-worker-runtime" not found',
             }
             if attempts == 1

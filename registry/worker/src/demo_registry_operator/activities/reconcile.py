@@ -1638,14 +1638,13 @@ def worker_deployment_failed(status: dict[str, Any]) -> bool:
 
     ready = worker_deployment_condition(status, "Ready")
     if ready and ready.get("status") == "False":
-        # TemporalStateFetchFailed is transient while a newly applied
-        # ExternalSecret is still materializing the connection credential. Keep
-        # polling it until the rollout timeout instead of deleting the candidate.
+        # Temporal state fetch and client creation failures can be transient while
+        # a newly applied connection becomes usable. Keep polling them until the
+        # rollout timeout instead of deleting the candidate.
         return ready.get("reason") in {
             "InvalidSpec",
             "AuthSecretInvalid",
             "ConnectionNotFound",
-            "TemporalClientCreationFailed",
         }
     progressing = worker_deployment_condition(status, "Progressing")
     if progressing and progressing.get("status") == "False":
