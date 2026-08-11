@@ -17,7 +17,7 @@ spec:
         url: https://docs.google.com/presentation/d/1R3aryBIwW-BTxD7TJZfb5ApcC9aI0CXgTgaN3jbX-nk/edit?slide=id.g3ef69db33e0_0_2173#slide=id.g3ef69db33e0_0_2173
       runbook:
         url: https://github.com/temporal-sa/canonical-ai-demo/tree/main#quick-start
-      goldenPathRecording:
+      goldenPath:
         url: https://drive.google.com/file/d/1dA44RxONlAU9cCNNMhmaZl0_1cBXiUne/view?usp=drive_link
     tags: [AI, AI - Agents, Single-Agent]
     temporalSdks: [Python]
