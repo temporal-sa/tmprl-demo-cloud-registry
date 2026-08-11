@@ -22,6 +22,10 @@ def load_validator_module():
 
 
 validate_projects = load_validator_module()
+NEXUS_CANARY_TEMPLATE = (
+    ROOT
+    / "registry/worker/src/demo_registry_operator/canary_templates/nexus.yaml"
+)
 
 
 def project_document(spec: dict):
@@ -51,6 +55,24 @@ def base_spec() -> dict:
         },
         "ingress": {"subdomain": "env-inputs"},
     }
+
+
+def test_nexus_canary_demo_project_template_passes_schema_and_semantics():
+    wrapper, load_errors = validate_projects.load_yaml_document(
+        NEXUS_CANARY_TEMPLATE
+    )
+    assert load_errors == []
+    assert wrapper is not None
+    document = validate_projects.ProjectDocument(
+        path=NEXUS_CANARY_TEMPLATE,
+        data=wrapper["demoProjectTemplate"],
+    )
+
+    assert validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    ) == []
+    assert validate_projects.validate_semantics([document]) == []
 
 
 def instruqt_course_document(

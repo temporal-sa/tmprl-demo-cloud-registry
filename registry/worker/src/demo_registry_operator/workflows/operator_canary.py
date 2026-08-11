@@ -24,8 +24,9 @@ class RegistryOperatorCanaryWorkflow:
     """End-to-end gate workflow for registry-operator WorkerDeployment rollouts.
 
     Loads the external canary templates (one self-contained YAML per type, e.g.
-    api-key / mtls) and launches one branch per template in parallel. Adding a new
-    canary type is just a new template file — no change here or in registry.yaml.
+    api-key, mTLS, Lambda, or Nexus) and launches one branch per template in
+    parallel. Adding a new canary type is just a new template file — no change
+    here or in registry.yaml.
     """
 
     @workflow.run
@@ -61,7 +62,7 @@ class RegistryOperatorCanaryWorkflow:
                 for branch_request in branch_requests
             )
         )
-        canaries = {result.authMode: result for result in canary_results}
+        canaries = canary_results_by_template_name(templates, canary_results)
         ok = all(result.phase == "Succeeded" for result in canary_results)
         result = messages.RegistryOperatorCanaryResult(
             phase="Succeeded" if ok else "Failed",
@@ -75,6 +76,26 @@ class RegistryOperatorCanaryWorkflow:
                 non_retryable=True,
             )
         return result
+
+
+def canary_results_by_template_name(
+    templates: list[dict],
+    canary_results: list[messages.RegistryOperatorAuthCanaryResult],
+) -> dict[str, messages.RegistryOperatorAuthCanaryResult]:
+    """Keep every branch visible even when several use the same auth mode."""
+    canaries: dict[str, messages.RegistryOperatorAuthCanaryResult] = {}
+    for index, (template, result) in enumerate(
+        zip(templates, canary_results, strict=True)
+    ):
+        name = template.get("name") or f"canary-{index + 1}"
+        if name in canaries:
+            raise ApplicationError(
+                f"Duplicate operator canary template name {name!r}",
+                type="RegistryOperatorCanaryConfigurationError",
+                non_retryable=True,
+            )
+        canaries[name] = result
+    return canaries
 
 
 def registry_operator_canary_branch_request(

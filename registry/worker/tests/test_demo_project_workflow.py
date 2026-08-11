@@ -30,12 +30,14 @@ from demo_registry_operator.workflows.demo_project import (
     temporal_search_attributes_reconcile_status,
 )
 from demo_registry_operator.workflows.operator_canary import (
+    canary_results_by_template_name,
     registry_operator_canary_branch_request,
 )
 from demo_registry_operator.workflows.messages import (
     DemoProjectReconcileSignal,
     DemoProjectRunRequest,
     ForceReconcileSignal,
+    RegistryOperatorAuthCanaryResult,
     RegistryOperatorCanaryRequest,
 )
 
@@ -522,6 +524,28 @@ def test_registry_operator_canary_parent_uses_branch_dataclass_fields():
 
     assert 'branch_request["workflowID"]' not in source
     assert "branch_request.workflowID" in source
+
+
+def test_registry_operator_canary_results_are_keyed_by_template_not_auth_mode():
+    templates = [
+        {"name": "api-key", "authMode": "apiKey"},
+        {"name": "lambda", "authMode": "apiKey"},
+        {"name": "nexus", "authMode": "apiKey"},
+        {"name": "mtls", "authMode": "mtls"},
+    ]
+    results = [
+        RegistryOperatorAuthCanaryResult(
+            project=f"operator-canary-{template['name']}",
+            authMode=template["authMode"],
+            phase="Succeeded",
+        )
+        for template in templates
+    ]
+
+    canaries = canary_results_by_template_name(templates, results)
+
+    assert set(canaries) == {"api-key", "lambda", "nexus", "mtls"}
+    assert canaries["nexus"].project == "operator-canary-nexus"
 
 
 def test_check_worker_version_signal_requests_continue_as_new_when_target_changed(

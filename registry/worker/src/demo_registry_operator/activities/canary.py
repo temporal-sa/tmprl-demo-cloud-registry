@@ -26,6 +26,7 @@ from demo_registry_operator.temporal_client import connect
 from demo_registry_operator.workflows import messages
 
 CANARY_TEMPLATES_PACKAGE = "demo_registry_operator.canary_templates"
+CANARY_NEXUS_ENDPOINT_PLACEHOLDER = "operator-canary-nexus-placeholder"
 
 
 @activity.defn
@@ -1080,7 +1081,10 @@ def render_canary_demo_project(
     expected_images: Any,
     auth_mode: Any = None,
 ) -> dict[str, Any]:
-    demo_project = copy.deepcopy(template)
+    demo_project = render_canary_project_scoped_values(
+        copy.deepcopy(template),
+        project_name=project_name,
+    )
     metadata = demo_project.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -1118,6 +1122,49 @@ def render_canary_demo_project(
     if isinstance(ingress, dict):
         ingress["subdomain"] = project_name
     return demo_project
+
+
+def render_canary_project_scoped_values(
+    value: Any,
+    *,
+    project_name: str,
+) -> Any:
+    """Replace exact project-scoped placeholders in a canary template.
+
+    Nexus Endpoint names are unique across a Temporal Cloud account. The Nexus
+    canary template therefore uses a schema-valid sentinel for both the endpoint
+    map key and its worker/gate references; each branch replaces that sentinel
+    with its already-unique canary project name before applying the DemoProject.
+    """
+    if isinstance(value, dict):
+        rendered: dict[Any, Any] = {}
+        for key, item in value.items():
+            rendered_key = (
+                project_name
+                if key == CANARY_NEXUS_ENDPOINT_PLACEHOLDER
+                else key
+            )
+            if rendered_key in rendered:
+                raise errors.non_retryable_error(
+                    (
+                        "Canary template project-scoped rendering produced "
+                        f"duplicate key {rendered_key!r}."
+                    ),
+                    error_type=errors.CONFIGURATION_ERROR,
+                )
+            rendered[rendered_key] = render_canary_project_scoped_values(
+                item,
+                project_name=project_name,
+            )
+        return rendered
+    if isinstance(value, list):
+        return [
+            render_canary_project_scoped_values(item, project_name=project_name)
+            for item in value
+        ]
+    if value == CANARY_NEXUS_ENDPOINT_PLACEHOLDER:
+        return project_name
+    return value
 
 
 @activity.defn
