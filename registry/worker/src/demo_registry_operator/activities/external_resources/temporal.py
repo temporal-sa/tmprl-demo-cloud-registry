@@ -84,6 +84,81 @@ def create_or_verify_temporal_cloud_namespace(
 
 
 @activity.defn
+def reconcile_nexus_endpoints(
+    request: models.ReconcileNexusEndpointsRequest,
+) -> models.NexusEndpointResult:
+    if not request.project.nexus_endpoints_required:
+        return nexus_endpoint_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return nexus_endpoint_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return nexus_endpoint_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.reconcile_nexus_endpoints(
+            request.project.as_demo_project(),
+            endpoints=request.project.nexus_endpoints,
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+            account_id=(
+                request.account_id or bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID")
+            ),
+        )
+
+    try:
+        return nexus_endpoint_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Reconcile Nexus Endpoints",
+        ) from error
+
+
+@activity.defn
+def delete_nexus_endpoints(
+    request: models.DeleteNexusEndpointsRequest,
+) -> models.NexusEndpointResult:
+    if not request.project.nexus_endpoints_required:
+        return nexus_endpoint_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return nexus_endpoint_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return nexus_endpoint_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.delete_nexus_endpoints(
+            request.project.as_demo_project(),
+            endpoints=request.project.nexus_endpoints,
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return nexus_endpoint_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Delete Nexus Endpoints",
+        ) from error
+
+
+@activity.defn
 def ensure_temporal_cloud_namespace_tags(
     request: models.EnsureTemporalCloudNamespaceTagsRequest,
 ) -> models.TemporalCloudNamespaceTagsResult:
@@ -995,6 +1070,14 @@ def promotion_result(status: dict[str, Any]) -> models.TemporalCloudPromotionRes
 
 def status_result(status: dict[str, Any]) -> models.TemporalCloudStatusResult:
     return models.TemporalCloudStatusResult(status=status)
+
+
+def nexus_endpoint_result(status: dict[str, Any]) -> models.NexusEndpointResult:
+    endpoint_ids = status.get("endpointIds")
+    return models.NexusEndpointResult(
+        status=status,
+        endpoint_ids=endpoint_ids if isinstance(endpoint_ids, dict) else {},
+    )
 
 
 def string_value(value: Any) -> str | None:

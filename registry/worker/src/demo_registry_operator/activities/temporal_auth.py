@@ -942,7 +942,15 @@ def parse_datetime(value: str) -> datetime | None:
 def mirror_runtime_kubernetes_secrets(
     demo_project: dict[str, Any],
     secret_value: dict[str, Any],
+    *,
+    label: str | None = None,
 ) -> dict[str, str]:
+    """Write the runtime credential straight into the project's Kubernetes namespace.
+
+    `label` selects which declared Temporal namespace's Secrets to write, and which
+    components decide whether they are needed. None means the project's original
+    namespace and the stable Secret names -- the only case that exists today.
+    """
     namespace = resources.project_namespace(demo_project)
     if kube.read_namespace(namespace) is None:
         return {"phase": "Skipped", "reason": "NamespaceMissing"}
@@ -964,19 +972,21 @@ def mirror_runtime_kubernetes_secrets(
         )
     credential_data = runtime_secret_data(secret_value)
     worker_runtime_data = worker_runtime_secret_data(secret_value)
+    credentials_secret = resources.temporal_secret_name(label)
+    worker_runtime_secret = resources.temporal_worker_runtime_secret_name(label)
     actions: dict[str, str] = {}
-    if resources.temporal_credentials_secret_needed(demo_project):
-        actions[resources.TEMPORAL_SECRET_NAME] = kube.upsert_secret_data(
+    if resources.temporal_credentials_secret_needed(demo_project, label):
+        actions[credentials_secret] = kube.upsert_secret_data(
             namespace,
-            resources.TEMPORAL_SECRET_NAME,
+            credentials_secret,
             credential_data,
             labels=labels,
             annotations=annotations,
         )
-    if resources.temporal_worker_runtime_secret_needed(demo_project):
-        actions[resources.TEMPORAL_WORKER_RUNTIME_SECRET_NAME] = kube.upsert_secret_data(
+    if resources.temporal_worker_runtime_secret_needed(demo_project, label):
+        actions[worker_runtime_secret] = kube.upsert_secret_data(
             namespace,
-            resources.TEMPORAL_WORKER_RUNTIME_SECRET_NAME,
+            worker_runtime_secret,
             worker_runtime_data,
             labels=labels,
             annotations=annotations,

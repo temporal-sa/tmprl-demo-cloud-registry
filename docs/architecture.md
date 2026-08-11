@@ -61,6 +61,9 @@ course is dropping one file.
    `tmprl-dem-cld-<name>` (sha-256-8 hash-truncated to 39 chars when needed),
    secret prefix `tmprl-dem-cld/<name>`, ECR prefix `tmprl-dem-cld`, host
    `<subdomain>.tmprl-demo.cloud`. The CR carries **no** `derived` block.
+   A project that declares `spec.temporal.namespaces` derives one further
+   Temporal namespace per label as `tmprl-dem-cld-<name>-<label>`, under the
+   same truncation rule; every other derived name stays project-scoped.
 4. **Candidate rollout.** Each reconcile renders versioned candidate
    Deployments/Services (`<component>-git-<sha>`); the public Traefik route + TLS
    cert are created only at **promotion**, gated on readiness + smoke success, so
@@ -128,6 +131,15 @@ The operator now splits side effects on retry/failure boundaries:
   `reconcile_ecr_repositories` → `reconcile_temporal_cloud_resource` →
   `verify_secrets_manager_resources`, with the workflow assembling the aggregate
   status.
+- The Temporal Cloud step reconciles a **list** of namespace targets, sequentially
+  and fail-fast. A project that declares no additional namespaces yields exactly
+  one target whose plan is the plan passed in unchanged. Namespace creation,
+  credential staging, canary, and promotion run per target; search attributes,
+  the runtime-secret-path move, the Kubernetes Secret mirror, and the API-key
+  rotation deadline stay project-scoped. Targets are never reconciled
+  concurrently: namespace-spec updates share `resource_version` optimistic
+  concurrency and Cloud API rate limits. Nexus Endpoints reconcile after every
+  target reports Ready, and are torn down before any namespace during finalize.
 - Image builds run as `plan_project_images` → `start_project_image_build` →
   `wait_for_project_image_build`. Build IDs are heartbeated so retries can
   re-attach instead of starting duplicate CodeBuild runs; terminal build

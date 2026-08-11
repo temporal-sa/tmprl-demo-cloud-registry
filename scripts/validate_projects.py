@@ -42,6 +42,11 @@ ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
 TEMPORAL_AUTH_MODE_MTLS = "mtls"
 SERVERLESS_PROVIDER_AWS_LAMBDA = "aws-lambda"
+# Both collide with the credential-rotation staging paths
+# tmprl-dem-cld/<project>/temporal-<suffix>, so no namespace may claim them.
+RESERVED_TEMPORAL_NAMESPACE_LABELS = frozenset({"candidate", "ca-candidate"})
+NEXUS_PRIMARY_NAMESPACE_REF = "primary"
+NEXUS_ENDPOINT_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]*[a-zA-Z0-9]$")
 SERVERLESS_PACKAGE_TYPE_IMAGE = "image"
 TEMPORAL_API_KEY_INPUT_REFS = {
     "temporal.address",
@@ -179,6 +184,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         validate_unique_field(documents, ("metadata", "name"), "resource name")
     )
     errors.extend(validate_unique_derived_namespaces(demo_projects))
+    errors.extend(validate_unique_nexus_endpoint_names(demo_projects))
     errors.extend(
         validate_unique_field(
             demo_projects,
@@ -198,6 +204,9 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_temporal_mtls_cert_files(document))
         errors.extend(validate_project_secrets(document))
         errors.extend(validate_temporal_proxy(document))
+        errors.extend(validate_temporal_namespace_labels(document))
+        errors.extend(validate_component_temporal_namespace_refs(document))
+        errors.extend(validate_nexus_endpoints(document))
         errors.extend(validate_serverless_components(document))
         errors.extend(validate_registry(document))
 
@@ -240,24 +249,56 @@ def validate_unique_field(
 def validate_unique_derived_namespaces(
     documents: list[ProjectDocument],
 ) -> list[ProjectError]:
-    by_namespace: dict[str, list[Path]] = defaultdict(list)
+    """Guard both derived names against collision.
+
+    The Kubernetes namespace truncates at 63 characters and the Temporal Cloud one
+    at 39, so two projects can collide on the Temporal name while their Kubernetes
+    names stay distinct. Declared namespaces make that materially likelier: the
+    label lengthens the name being truncated, and several projects already sit at
+    the 39-character limit.
+    """
+    by_kubernetes_namespace: dict[str, list[Path]] = defaultdict(list)
+    # Keyed by derived Temporal namespace -> the paths (and labels) claiming it.
+    by_temporal_namespace: dict[str, list[tuple[Path, str]]] = defaultdict(list)
 
     for document in documents:
         project_name = get_nested(document.data, ("metadata", "name"))
-        if isinstance(project_name, str):
-            by_namespace[derive_namespace(project_name)].append(document.path)
+        if not isinstance(project_name, str):
+            continue
+        by_kubernetes_namespace[derive_namespace(project_name)].append(document.path)
+        by_temporal_namespace[derive_temporal_namespace(project_name)].append(
+            (document.path, "the project namespace")
+        )
+        for label in temporal_namespace_labels(document):
+            by_temporal_namespace[
+                derive_temporal_namespace(f"{project_name}-{label}")
+            ].append((document.path, f"temporal.namespaces.{label}"))
 
     errors: list[ProjectError] = []
-    for namespace, paths in sorted(by_namespace.items()):
+    for namespace, paths in sorted(by_kubernetes_namespace.items()):
         if len(paths) < 2:
             continue
-
         locations = ", ".join(relative_path(path) for path in paths)
         for path in paths:
             errors.append(
                 ProjectError(
                     path,
                     f"duplicate derived namespace {namespace!r}; declared in: {locations}",
+                )
+            )
+
+    for namespace, claims in sorted(by_temporal_namespace.items()):
+        if len(claims) < 2:
+            continue
+        locations = ", ".join(
+            f"{relative_path(path)} ({source})" for path, source in claims
+        )
+        for path, _source in claims:
+            errors.append(
+                ProjectError(
+                    path,
+                    f"duplicate derived Temporal namespace {namespace!r}; "
+                    f"claimed by: {locations}",
                 )
             )
 
@@ -805,6 +846,233 @@ def validate_project_secrets(document: ProjectDocument) -> list[ProjectError]:
                 f"secrets.{secret_name} must be referenced by at least one component",
             )
         )
+
+    return errors
+
+
+def temporal_namespace_labels(document: ProjectDocument) -> dict[str, dict[str, Any]]:
+    value = get_nested(document.data, ("spec", "temporal", "namespaces"))
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(item, dict)}
+
+
+def nexus_endpoints(document: ProjectDocument) -> dict[str, dict[str, Any]]:
+    value = get_nested(document.data, ("spec", "temporal", "nexusEndpoints"))
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(item, dict)}
+
+
+def namespace_references(document: ProjectDocument) -> set[str]:
+    """Every reference a Nexus endpoint may name: "primary" plus declared labels."""
+    return {NEXUS_PRIMARY_NAMESPACE_REF, *temporal_namespace_labels(document)}
+
+
+def validate_temporal_namespace_labels(document: ProjectDocument) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+
+    for label, declared in temporal_namespace_labels(document).items():
+        if "searchAttributes" in declared:
+            # The schema rejects this too; the point of repeating it here is the
+            # message, which says why and where to put them instead.
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.namespaces.{label}.searchAttributes is not supported; "
+                    "search attributes are managed on the project's own namespace "
+                    "only, via spec.temporal.searchAttributes",
+                )
+            )
+        if not DNS_LABEL_PATTERN.match(label):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.namespaces.{label} must be a DNS label",
+                )
+            )
+        if label in RESERVED_TEMPORAL_NAMESPACE_LABELS:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.namespaces.{label} uses a reserved name; "
+                    f"{sorted(RESERVED_TEMPORAL_NAMESPACE_LABELS)} collide with the "
+                    "Temporal credential rotation staging paths",
+                )
+            )
+    return errors
+
+
+def validate_component_temporal_namespace_refs(
+    document: ProjectDocument,
+) -> list[ProjectError]:
+    declared = set(temporal_namespace_labels(document))
+    errors: list[ProjectError] = []
+    referenced: set[str] = set()
+
+    for component_name, component in components(document).items():
+        label = component.get("temporalNamespace")
+        if not isinstance(label, str) or not label:
+            continue
+        referenced.add(label)
+
+        if label not in declared:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.temporalNamespace {label!r} must "
+                    "match a declared temporal.namespaces entry",
+                )
+            )
+        if serverless_lambda_enabled(component):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.temporalNamespace is not supported "
+                    "for serverless aws-lambda components",
+                )
+            )
+        if temporal_proxy_enabled(component):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.temporalNamespace cannot be used "
+                    "with temporalProxy",
+                )
+            )
+        if worker_versioning_enabled(component):
+            # The Worker Controller's Connection and WorkerDeployment both resolve
+            # the project's primary namespace and credentials, so a bound versioned
+            # worker would poll one namespace while its pod authenticates to another.
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"components.{component_name}.temporalNamespace cannot be used "
+                    "with worker.versioning",
+                )
+            )
+
+    endpoint_targets: set[str] = set()
+    for endpoint in nexus_endpoints(document).values():
+        target = endpoint.get("targetNamespace", NEXUS_PRIMARY_NAMESPACE_REF)
+        if isinstance(target, str):
+            endpoint_targets.add(target)
+        callers = endpoint.get("allowedCallerNamespaces")
+        if isinstance(callers, list):
+            endpoint_targets.update(item for item in callers if isinstance(item, str))
+
+    for label in sorted(declared - referenced - endpoint_targets):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"temporal.namespaces.{label} must be referenced by at least one "
+                "component or Nexus endpoint",
+            )
+        )
+
+    return errors
+
+
+def validate_nexus_endpoints(document: ProjectDocument) -> list[ProjectError]:
+    allowed = namespace_references(document)
+    errors: list[ProjectError] = []
+
+    for endpoint_name, endpoint in nexus_endpoints(document).items():
+        if not NEXUS_ENDPOINT_NAME_PATTERN.match(endpoint_name):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.nexusEndpoints.{endpoint_name} must start with a "
+                    "letter, end alphanumeric, and use only letters, digits, and "
+                    "hyphens",
+                )
+            )
+
+        target = endpoint.get("targetNamespace", NEXUS_PRIMARY_NAMESPACE_REF)
+        if not isinstance(target, str) or target not in allowed:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.nexusEndpoints.{endpoint_name}.targetNamespace "
+                    f"{target!r} must be {NEXUS_PRIMARY_NAMESPACE_REF!r} or a "
+                    "declared temporal.namespaces entry",
+                )
+            )
+
+        task_queue = endpoint.get("targetTaskQueue")
+        if not isinstance(task_queue, str) or not task_queue.strip():
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.nexusEndpoints.{endpoint_name}.targetTaskQueue must "
+                    "be a non-empty string",
+                )
+            )
+
+        callers = endpoint.get("allowedCallerNamespaces")
+        if not isinstance(callers, list) or not callers:
+            # Temporal admits no callers by default, even from the target's own
+            # namespace, so an empty allowlist makes the endpoint unreachable.
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.nexusEndpoints.{endpoint_name}.allowedCallerNamespaces "
+                    "must list at least one namespace",
+                )
+            )
+            continue
+
+        seen: dict[str, int] = {}
+        for index, caller in enumerate(callers):
+            if not isinstance(caller, str) or caller not in allowed:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"temporal.nexusEndpoints.{endpoint_name}"
+                        f".allowedCallerNamespaces[{index}] {caller!r} must be "
+                        f"{NEXUS_PRIMARY_NAMESPACE_REF!r} or a declared "
+                        "temporal.namespaces entry",
+                    )
+                )
+                continue
+            if caller in seen:
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"temporal.nexusEndpoints.{endpoint_name}"
+                        f".allowedCallerNamespaces[{index}] {caller!r} duplicates "
+                        f"allowedCallerNamespaces[{seen[caller]}]",
+                    )
+                )
+            else:
+                seen[caller] = index
+
+    return errors
+
+
+def validate_unique_nexus_endpoint_names(
+    documents: list[ProjectDocument],
+) -> list[ProjectError]:
+    """Endpoint names are unique per Temporal Cloud account, not per project."""
+    by_name: dict[str, list[Path]] = defaultdict(list)
+
+    for document in documents:
+        for endpoint_name in nexus_endpoints(document):
+            by_name[endpoint_name].append(document.path)
+
+    errors: list[ProjectError] = []
+    for endpoint_name, paths in sorted(by_name.items()):
+        if len(paths) < 2:
+            continue
+        locations = ", ".join(relative_path(path) for path in paths)
+        for path in paths:
+            errors.append(
+                ProjectError(
+                    path,
+                    f"duplicate Nexus endpoint name {endpoint_name!r}; declared in: "
+                    f"{locations}. Endpoint names are unique account-wide.",
+                )
+            )
 
     return errors
 

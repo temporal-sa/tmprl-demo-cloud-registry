@@ -288,6 +288,90 @@ spec:
 The smoke check runs against the candidate before public routing is promoted, so
 the path must work in the candidate namespace.
 
+## Additional Temporal Namespaces
+
+By default a project gets exactly one Temporal Cloud namespace, derived from
+`metadata.name`. Declare `spec.temporal.namespaces` to get more, and bind a
+component to one with `temporalNamespace`:
+
+```yaml
+spec:
+  temporal:
+    namespaces:
+      alpha:
+        region: aws-us-west-2       # optional; defaults like the project's
+        retentionDays: 7            # optional
+        searchAttributes: {}        # optional
+  components:
+    alpha-worker:
+      build: app
+      worker: true
+      temporalNamespace: alpha      # absent means the project's own namespace
+```
+
+Each declared namespace derives as `tmprl-dem-cld-<metadata.name>-<label>` with
+the same 39-character hash truncation, gets its own credentials and its own
+Secrets Manager path, and inherits the project's `spec.temporal.auth.mode` —
+auth is not configured per namespace.
+
+Constraints worth knowing before you author one:
+
+- `candidate` and `ca-candidate` are reserved labels; they collide with the
+  credential-rotation staging paths.
+- A declared namespace must be referenced by a component or a Nexus endpoint.
+- `temporalNamespace` is not supported on `serverless.provider: aws-lambda`
+  components, or alongside `temporalProxy`.
+- `temporalNamespace` cannot be combined with `worker.versioning`. The Temporal
+  Worker Controller resolves its `Connection` host and credentials, and its
+  `WorkerDeployment` namespace, from the project's own namespace, and none of
+  those are bindable. Rendering the pair would register the deployment in one
+  namespace while the pod authenticated to another, so it is refused outright.
+  A worker bound to a declared namespace must be unversioned.
+- Search attributes are managed on the project's own namespace only, via
+  `spec.temporal.searchAttributes`. Declaring them under a namespace entry is a
+  validation error rather than a silent no-op: the step that manages them
+  computes its delete set against one project-scoped status blob, so it cannot
+  run per namespace without risking one namespace deleting another's attributes.
+
+## Nexus Endpoints
+
+`spec.temporal.nexusEndpoints` declares an endpoint between this project's own
+namespaces. Endpoints cannot reference another project.
+
+```yaml
+spec:
+  temporal:
+    nexusEndpoints:
+      my-project-orders:
+        targetNamespace: alpha        # "primary" or a declared label
+        targetTaskQueue: orders-tq
+        allowedCallerNamespaces:      # required; no caller is allowed by default
+          - primary
+```
+
+Endpoint names are unique across the whole Temporal Cloud account, not just your
+project, so prefix them with the project name. They must start with a letter and
+use only letters, digits, and hyphens.
+
+`targetTaskQueue` is a free-form string that is not cross-checked against
+anything: the platform has never tracked a component's task queue. Keeping it
+aligned with whatever your worker actually polls is on you, exactly like the
+`TASK_QUEUE` env vars already are.
+
+Endpoints reconcile only after every namespace reports Ready, and are deleted
+before any namespace during finalize.
+
+Point `targetTaskQueue` at a task queue served by an **unversioned** worker.
+Recent Temporal Python SDK versions no longer create a versioned Nexus task
+queue automatically, which has already caused Worker Controller promotion
+failures in this registry (June 2026). A Nexus request routed to a versioned
+worker's task queue may therefore fail to dispatch. The platform cannot check
+this — it does not track task queues — so it is a review question, not a
+validation error.
+
+The Nexus contract itself — service definitions, handlers, SDK wiring — lives in
+your app's own code. This is platform plumbing only.
+
 ## Worker Settings
 
 Ordinary worker:

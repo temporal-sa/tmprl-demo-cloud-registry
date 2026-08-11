@@ -221,7 +221,65 @@ validation leaves the live Pods on the old key.
   can override it with `spec.temporal.region`, and serverless (AWS Lambda) worker
   projects default to `DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`
   (`aws-ca-central-1`). Changing a project's resolved region destroys and
-  recreates its namespace.
+  recreates its namespace. An additional namespace declared under
+  `spec.temporal.namespaces` may pin its own region the same way, but region
+  drift on an additional namespace is **refused** rather than repaired: the
+  teardown that repairs it is project-scoped and would delete the project's own
+  namespace. Repair it by hand (see below).
+
+### Finalize tears down every declared namespace
+
+Project finalization deletes each namespace declared under
+`spec.temporal.namespaces` along with the project's own, in this order:
+
+1. Nexus Endpoints — an endpoint outlives the namespace it targets, and endpoint
+   names are unique account-wide, so a leaked one blocks that name for every
+   other project.
+2. Each declared namespace, newest label first — the reverse of the order they
+   were provisioned. For each: API key, service account, namespace delete
+   protection, namespace, runtime secret, mTLS CA secret.
+3. The project's own namespace, last, with the same six steps.
+
+Per-namespace teardown reuses the same activities as the project's own: the
+per-target projection carries the namespace and secret path those activities
+resolve from. Per-label results appear under `additionalNamespaces` in the
+finalize status.
+
+### Removing one namespace from a live project
+
+Deleting an entry from `spec.temporal.namespaces` does **not** delete that
+namespace. Only finalizing the whole project does. The entry stops being
+reconciled and its namespace keeps running, which also keeps its derived name
+claimed — the registry validator flags a collision if another project later
+derives the same name.
+
+The operator reports this rather than acting on it. When a previously
+reconciled namespace is no longer declared, the next reconcile writes
+`orphanedNamespaces` under `status.externalResources.temporalCloud`:
+
+```json
+{
+  "phase": "Orphaned",
+  "message": "1 Temporal Cloud namespace(s) are no longer declared ...",
+  "namespaces": [
+    {
+      "label": "alpha",
+      "namespace": "tmprl-dem-cld-my-project-alpha",
+      "runtimeSecretPath": "tmprl-dem-cld/my-project/temporal-alpha"
+    }
+  ]
+}
+```
+
+Clean up using the names in that report: delete the namespace and its scoped
+service account and API key in Temporal Cloud, then `<runtimeSecretPath>` and
+`<runtimeSecretPath>/ca` in Secrets Manager. The report clears on the next
+reconcile once the entry is either gone from status or re-declared.
+
+The operator deliberately does not delete these itself. Deleting a Temporal
+Cloud namespace destroys its history irreversibly, and the signal is derived
+from status — a status patch that failed to land would otherwise be enough to
+destroy a live namespace.
 - Secrets Manager: `tmprl-dem-cld/platform/github-temporal-sa-readonly`
   (`username`, `password`, optional `expiresAt`) for temporal-sa HTTPS source
   watches and CodeBuild checkouts.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from temporalio import workflow
 from temporalio.common import WorkerDeploymentVersion
 from temporalio.converter import DataConverter

@@ -1,0 +1,67 @@
+# Operator-canary project template: a cross-namespace Nexus call.
+#
+# The schema-valid endpoint sentinel is replaced with the unique canary project
+# name before the DemoProject is applied. One image starts either worker role:
+# the caller is a versioned WorkerDeployment whose rollout gate makes the Nexus
+# call, while the handler is an unversioned worker in the additional namespace.
+name: nexus
+authMode: apiKey
+demoProjectTemplate:
+  apiVersion: registry.tmprl-demo.cloud/v1alpha1
+  kind: DemoProject
+  metadata:
+    name: operator-canary-template
+  spec:
+    temporal:
+      auth:
+        mode: apiKey
+      namespaces:
+        handler: {}
+      nexusEndpoints:
+        operator-canary-nexus-placeholder:
+          targetNamespace: handler
+          targetTaskQueue: nexus-handler
+          allowedCallerNamespaces:
+            - primary
+    builds:
+      app:
+        context: .
+        dockerfile: Dockerfile
+    components:
+      caller:
+        build: app
+        env:
+          - name: WORKER_ROLE
+            value: caller
+          - name: TEMPORAL_TASK_QUEUE
+            value: nexus-caller
+          - name: NEXUS_ENDPOINT
+            value: operator-canary-nexus-placeholder
+        worker:
+          versioning:
+            enabled: true
+            deploymentName: nexus-caller
+            rollout:
+              strategy: AllAtOnce
+              gate:
+                workflowType: NexusE2ECanaryWorkflow
+                input:
+                  endpoint: operator-canary-nexus-placeholder
+                  expectedResponse: nexus-e2e-ok
+                  scheduleToStartSeconds: 300
+                  scheduleToCloseSeconds: 600
+                  timeoutSeconds: 600
+            sunset:
+              scaledownDelay: 1m
+              deleteDelay: 5m
+      handler:
+        build: app
+        env:
+          - name: WORKER_ROLE
+            value: handler
+          - name: TEMPORAL_TASK_QUEUE
+            value: nexus-handler
+        worker: true
+        temporalNamespace: handler
+    source:
+      repo: https://github.com/temporal-sa/catalog-project-example-nexus

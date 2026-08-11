@@ -16,6 +16,44 @@ class TemporalCloudSearchAttribute:
 
 
 @dataclass(frozen=True)
+class TemporalNamespaceSpec:
+    """One additional namespace declared under spec.temporal.namespaces.
+
+    ``auth_mode`` is inherited from the project rather than declared per
+    namespace, so it is populated by the planner, not read from the label's spec.
+    """
+
+    label: str
+    namespace: str
+    auth_mode: str
+    runtime_secret_path: str
+    mtls_ca_secret_path: str
+    components: dict[str, dict[str, Any]]
+    search_attributes: tuple[TemporalCloudSearchAttribute, ...] = ()
+    region: str | None = None
+    # None leaves the namespace-creation request's own default in place, which is
+    # what the project's original namespace uses.
+    retention_days: int | None = None
+
+
+@dataclass(frozen=True)
+class NexusEndpointSpec:
+    """One entry from spec.temporal.nexusEndpoints.
+
+    Namespaces are held as the labels the project author wrote, with "primary"
+    meaning the project's original namespace. Resolving a label to a derived
+    namespace name -- and then to the qualified ``<name>.<account-id>`` id the
+    Cloud API keys off -- happens in the activity, which is where every other
+    namespace name is resolved too.
+    """
+
+    name: str
+    target_namespace: str
+    target_task_queue: str
+    allowed_caller_namespaces: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class TemporalCloudProject:
     name: str
     namespace: str
@@ -34,6 +72,13 @@ class TemporalCloudProject:
     # which selects the AWS region default when no explicit region is set.
     region: str | None = None
     serverless: bool = False
+    # Set only on the per-target projection the saga hands each activity, so that
+    # activity resolves a namespace other than the one derived from ``name``. None
+    # on the project-level model, which is the only shape that exists until a
+    # project declares spec.temporal.namespaces.
+    target_namespace: str | None = None
+    additional_namespaces: tuple[TemporalNamespaceSpec, ...] = ()
+    nexus_endpoints: tuple[NexusEndpointSpec, ...] = ()
 
     @property
     def component_names(self) -> tuple[str, ...]:
@@ -41,11 +86,29 @@ class TemporalCloudProject:
 
     @property
     def temporal_required(self) -> bool:
-        return bool(self.components)
+        # A projection for a declared namespace is required because it was
+        # declared, even with no component bound to it -- a Nexus endpoint may be
+        # its only reference. target_namespace is None on the project-level model
+        # and on the primary target, so this is unchanged for them.
+        return bool(self.components) or self.target_namespace is not None
 
     @property
     def namespace_required(self) -> bool:
-        return self.temporal_required or bool(self.search_attributes)
+        if self.temporal_required or self.search_attributes:
+            return True
+        # A Nexus endpoint that targets this namespace, or admits it as a caller,
+        # needs it to exist -- even when every component is bound elsewhere.
+        # "primary" is the reference a project writes for its own namespace; it
+        # matches NEXUS_PRIMARY_NAMESPACE_REF on the reconciler side.
+        return any(
+            endpoint.target_namespace == "primary"
+            or "primary" in endpoint.allowed_caller_namespaces
+            for endpoint in self.nexus_endpoints
+        )
+
+    @property
+    def nexus_endpoints_required(self) -> bool:
+        return bool(self.nexus_endpoints)
 
     def as_demo_project(self) -> dict[str, Any]:
         temporal: dict[str, Any] = {
@@ -59,6 +122,14 @@ class TemporalCloudProject:
                 attribute.name: {"type": attribute.type}
                 for attribute in self.search_attributes
             }
+        # Emitted only when set, so the dict for a project with no additional
+        # namespaces stays byte-identical to what activities have always received.
+        if self.target_namespace:
+            temporal["namespaceOverride"] = self.target_namespace
+        # additional_namespaces and nexus_endpoints are deliberately not emitted:
+        # they are planning inputs the workflow and the Nexus activity read off
+        # this model directly, and emitting them would change the dict every
+        # existing activity receives.
         return {
             "metadata": {"name": self.name},
             "spec": {
@@ -596,3 +667,29 @@ class TemporalCloudNamespaceRequest:
     checked_at: str
     project: TemporalCloudProject
     namespace: str
+
+
+@dataclass(frozen=True)
+class ReconcileNexusEndpointsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    account_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DeleteNexusEndpointsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+
+
+@dataclass(frozen=True)
+class NexusEndpointResult:
+    status: dict[str, Any]
+    # Endpoint name -> Temporal Cloud endpoint id, for the endpoints this project
+    # owns. Carried so finalize can delete by id without re-listing.
+    endpoint_ids: dict[str, str]
+
+    @property
+    def phase(self) -> str | None:
+        phase = self.status.get("phase")
+        return phase if isinstance(phase, str) else None

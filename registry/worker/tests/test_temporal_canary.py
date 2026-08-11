@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import timedelta
 from types import SimpleNamespace
@@ -284,10 +285,45 @@ def _canary_template(name: str) -> dict:
 def test_load_canary_templates_returns_external_self_contained_templates():
     templates = _canary.load_canary_templates()
     names = {t["name"] for t in templates}
-    assert {"api-key", "mtls", "lambda"} <= names
+    assert {"api-key", "mtls", "lambda", "nexus"} <= names
     for t in templates:
         assert t["authMode"] in ("apiKey", "mtls")
         assert t["demoProjectTemplate"]["kind"] == "DemoProject"
+
+
+def test_nexus_canary_renders_unique_endpoint_and_cross_namespace_gate():
+    nexus = _canary_template("nexus")["demoProjectTemplate"]
+    project_name = "operator-canary-nexus-deadbeef"
+
+    rendered = _canary.render_canary_demo_project(
+        nexus,
+        project_name=project_name,
+        expected_source_sha=None,
+        expected_images=None,
+    )
+    spec = rendered["spec"]
+    endpoint = spec["temporal"]["nexusEndpoints"][project_name]
+    assert endpoint == {
+        "targetNamespace": "handler",
+        "targetTaskQueue": "nexus-handler",
+        "allowedCallerNamespaces": ["primary"],
+    }
+    assert spec["source"]["repo"] == (
+        "https://github.com/temporal-sa/catalog-project-example-nexus"
+    )
+
+    caller = spec["components"]["caller"]
+    caller_env = {item["name"]: item["value"] for item in caller["env"]}
+    gate = caller["worker"]["versioning"]["rollout"]["gate"]
+    assert caller_env["NEXUS_ENDPOINT"] == project_name
+    assert gate["workflowType"] == "NexusE2ECanaryWorkflow"
+    assert gate["input"]["endpoint"] == project_name
+    assert caller["worker"]["versioning"]["enabled"] is True
+
+    handler = spec["components"]["handler"]
+    assert handler["worker"] is True
+    assert handler["temporalNamespace"] == "handler"
+    assert _canary.CANARY_NEXUS_ENDPOINT_PLACEHOLDER not in json.dumps(rendered)
 
 
 def test_mtls_canary_template_worker_exposes_app_cert_env_and_no_api_key():

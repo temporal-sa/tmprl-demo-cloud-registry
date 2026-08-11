@@ -202,6 +202,9 @@ Rules:
   it: Kubernetes namespace `tmprl-dem-cld-<name>`, Temporal namespace
   `tmprl-dem-cld-<name>` (hash-truncated to 39 chars when needed), secret prefix
   `tmprl-dem-cld/<name>`, and ECR prefix `tmprl-dem-cld`. Do not hand-write these.
+  A project that declares extra namespaces derives each as
+  `tmprl-dem-cld-<name>-<label>` under the same truncation rule — see
+  "Additional Temporal namespaces" below.
 - `spec.registry` is **optional** catalog metadata (title/summary/tags/links/
   assets). When omitted, the catalog title falls back to a humanized name. Use
   it for runbooks, decks, recordings, and canonical docs.
@@ -297,6 +300,82 @@ Rules:
   The operator creates or verifies declared attributes after namespace
   reconciliation. It only deletes removed attributes that it previously created
   and recorded as managed; unrelated namespace attributes are left intact.
+  Search attributes apply to the project's own namespace only. Declaring
+  `searchAttributes` under a `spec.temporal.namespaces` entry is a validation
+  error, not a silent no-op: the reconcile step that manages them computes its
+  delete set against one project-scoped status blob, so running it per namespace
+  would let one namespace delete another's attributes.
+- Projects can declare **additional Temporal Cloud namespaces** with
+  `spec.temporal.namespaces`, keyed by a label. Each label becomes a real
+  namespace `tmprl-dem-cld-<name>-<label>` with its own service account, API
+  key, Secrets Manager path, and Kubernetes Secret. Omitting the block is the
+  default and leaves a project with the single namespace it has always had.
+
+  ```yaml
+  temporal:
+    namespaces:
+      alpha: {}
+      beta:
+        region: aws-us-west-2     # optional; defaults like the project's own
+        retentionDays: 14         # optional; defaults to 7
+  ```
+
+  Labels are DNS labels. `candidate` and `ca-candidate` are reserved — they
+  collide with the credential-rotation staging paths. Additional namespaces
+  inherit `spec.temporal.auth.mode`; auth is not configured per namespace.
+  Every declared label must be referenced by a component or a Nexus endpoint.
+
+  Finalizing the project tears down every declared namespace along with the
+  project's own — Nexus Endpoints first, then each declared namespace newest
+  first, then the project's own last. Deleting a single entry from a live
+  project is *not* the same thing: it stops reconciling that namespace but
+  leaves it running. The operator reports those under `orphanedNamespaces` in
+  `status.externalResources.temporalCloud`, with the namespace and secret paths
+  to clean up by hand; it never deletes them itself. See `docs/operations.md`.
+- Bind a component to a declared namespace with `temporalNamespace`. Absent, a
+  component uses the project's own namespace, which is what every component
+  does today.
+
+  ```yaml
+  components:
+    alpha-worker:
+      build: app
+      worker: true
+      temporalNamespace: alpha
+  ```
+
+  `temporalNamespace` cannot be combined with `worker.versioning`,
+  `temporalProxy`, or `serverless.provider: aws-lambda`. The Worker Controller's
+  `Connection` and `WorkerDeployment` resolve the project's own namespace and
+  credentials and are not namespace-bindable, so a bound versioned worker would
+  be registered in one namespace while its pod authenticated to another. A
+  project may still have versioned workers *and* additional namespaces — what is
+  refused is one component being both versioned and bound.
+- Projects can declare **Nexus Endpoints** between their own namespaces with
+  `spec.temporal.nexusEndpoints`. Endpoints cannot reference another project.
+
+  ```yaml
+  temporal:
+    nexusEndpoints:
+      my-project-orders:
+        targetNamespace: beta            # "primary" or a declared label
+        targetTaskQueue: orders-tq
+        allowedCallerNamespaces:         # required; no caller is allowed by default
+          - primary
+          - alpha
+  ```
+
+  Endpoint names are unique across the whole Temporal Cloud account, not just
+  your project, so prefix them with the project name. They must start with a
+  letter and use only letters, digits, and hyphens. `targetTaskQueue` is not
+  cross-checked against anything — the platform does not track task queues, so
+  keeping it aligned with whatever your worker polls is on you, exactly like the
+  `TASK_QUEUE` env vars already are. Point it at a task queue served by an
+  **unversioned** worker: recent Temporal Python SDK versions no longer create a
+  versioned Nexus task queue automatically. Endpoints reconcile only after every
+  namespace reports Ready, and are deleted before any namespace during finalize.
+  The Nexus contract itself — service definitions, handlers, SDK wiring — lives
+  in your app's own code.
 - Worker versioning is opt-in via the object form:
   `components.<name>.worker.versioning` with `enabled`, optional
   `deploymentName`, and optional `rollout`/`sunset` settings. `deploymentName`

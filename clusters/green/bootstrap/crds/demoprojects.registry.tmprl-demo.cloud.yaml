@@ -153,6 +153,68 @@ spec:
                               - datetime
                               - keywordList
                             default: keyword
+                    namespaces:
+                      type: object
+                      # Additional Temporal Cloud namespaces beyond the project's
+                      # implicit one. Absent means today's behavior: exactly one
+                      # namespace, derived from metadata.name. Each entry inherits the
+                      # project's spec.temporal.auth.mode; auth is not per-namespace.
+                      #
+                      # NOTE: label keys are intentionally not validated here, for the
+                      # same reason searchAttributes keys are not (see above):
+                      # `propertyNames` is not a field of apiextensions/v1
+                      # JSONSchemaProps. Label format, the reserved `candidate` and
+                      # `ca-candidate` names, and the 39-character derived-name limit
+                      # are enforced by the operator and scripts/validate_projects.py.
+                      additionalProperties:
+                        type: object
+                        properties:
+                          region:
+                            type: string
+                            pattern: "^(aws|gcp|azure)-[a-z0-9-]+$"
+                            x-kubernetes-validations:
+                              - rule: "self.startsWith('aws-') || self.startsWith('gcp-') || self.startsWith('azure-')"
+                                message: "spec.temporal.namespaces[].region must use Temporal Cloud provider notation (aws-*, gcp-*, azure-*), e.g. aws-ca-central-1, gcp-us-central1, azure-centralus"
+                          retentionDays:
+                            type: integer
+                            minimum: 1
+                            maximum: 90
+                          # No searchAttributes here: the step that manages them
+                          # computes its delete set against a single
+                          # project-scoped status blob, so it runs for the
+                          # project's own namespace only. Declaring them per
+                          # namespace would be silently ignored, so the key is
+                          # rejected instead.
+                    nexusEndpoints:
+                      type: object
+                      # Nexus Endpoints between this project's own namespaces. Endpoint
+                      # names are account-wide unique in Temporal Cloud, so uniqueness is
+                      # enforced across the whole registry by scripts/validate_projects.py.
+                      #
+                      # targetTaskQueue is deliberately not cross-validated: the platform
+                      # has never tracked a component's task queue, and this feature does
+                      # not introduce that tracking. Keeping it aligned with whatever the
+                      # worker polls is the project author's responsibility.
+                      additionalProperties:
+                        type: object
+                        required:
+                          - targetTaskQueue
+                          - allowedCallerNamespaces
+                        properties:
+                          targetNamespace:
+                            type: string
+                            minLength: 1
+                            default: primary
+                          targetTaskQueue:
+                            type: string
+                            minLength: 1
+                          allowedCallerNamespaces:
+                            type: array
+                            minItems: 1
+                            x-kubernetes-list-type: set
+                            items:
+                              type: string
+                              minLength: 1
                 ingress:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

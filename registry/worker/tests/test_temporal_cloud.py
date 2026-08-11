@@ -8,6 +8,10 @@ from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     CloudApiReconciler,
     NamespaceInfo,
+    NexusEndpointInfo,
+    delete_nexus_endpoints,
+    nexus_namespace_id,
+    reconcile_nexus_endpoints,
     check_temporal_api_key_runtime_secret,
     configure_temporal_cloud_namespace_mtls,
     create_temporal_api_key_candidate_secret,
@@ -58,11 +62,13 @@ class FakeReconciler:
         existing_sa=None,
         regions=None,
         search_attributes=None,
+        nexus_endpoints=None,
     ):
         self.existing_namespace = existing_namespace
         self.existing_sa = existing_sa
         self.regions = regions or ["aws-us-west-2", "aws-ca-central-1", "gcp-us-central1"]
         self.search_attributes = dict(search_attributes or {})
+        self.nexus_endpoints = dict(nexus_endpoints or {})
         self.calls: list[tuple] = []
 
     async def list_regions(self):
@@ -198,6 +204,75 @@ class FakeReconciler:
     async def delete_service_account(self, service_account_id):
         self.calls.append(("delete_service_account", service_account_id))
         return "deleted"
+
+    async def find_nexus_endpoint(self, name):
+        self.calls.append(("find_nexus_endpoint", name))
+        return self.nexus_endpoints.get(name)
+
+    async def create_nexus_endpoint(
+        self,
+        name,
+        target_namespace_id,
+        target_task_queue,
+        allowed_caller_namespace_ids,
+    ):
+        self.calls.append(
+            (
+                "create_nexus_endpoint",
+                name,
+                target_namespace_id,
+                target_task_queue,
+                tuple(allowed_caller_namespace_ids),
+            )
+        )
+        info = NexusEndpointInfo(
+            endpoint_id=f"endpoint-{name}",
+            name=name,
+            target_namespace_id=target_namespace_id,
+            target_task_queue=target_task_queue,
+            allowed_caller_namespace_ids=tuple(allowed_caller_namespace_ids),
+            resource_version="v1",
+            created=True,
+        )
+        self.nexus_endpoints[name] = info
+        return info
+
+    async def update_nexus_endpoint(
+        self,
+        endpoint_id,
+        name,
+        target_namespace_id,
+        target_task_queue,
+        allowed_caller_namespace_ids,
+    ):
+        self.calls.append(
+            (
+                "update_nexus_endpoint",
+                endpoint_id,
+                name,
+                target_namespace_id,
+                target_task_queue,
+                tuple(allowed_caller_namespace_ids),
+            )
+        )
+        info = NexusEndpointInfo(
+            endpoint_id=endpoint_id,
+            name=name,
+            target_namespace_id=target_namespace_id,
+            target_task_queue=target_task_queue,
+            allowed_caller_namespace_ids=tuple(allowed_caller_namespace_ids),
+            resource_version="v2",
+        )
+        self.nexus_endpoints[name] = info
+        return info
+
+    async def delete_nexus_endpoint(self, endpoint_id):
+        self.calls.append(("delete_nexus_endpoint", endpoint_id))
+        for name, info in list(self.nexus_endpoints.items()):
+            if info.endpoint_id == endpoint_id:
+                del self.nexus_endpoints[name]
+                return "deleted"
+        return "not-found"
 
     def called(self, name):
         return [call for call in self.calls if call[0] == name]
@@ -1581,3 +1656,223 @@ def test_ensure_namespace_unknown_region_never_signals_drift():
 
     assert status["phase"] == "Ready"
     assert reconciler.called("create_namespace") == []
+
+
+# --- Nexus Endpoints --------------------------------------------------------
+
+
+def nexus_endpoint(name="orders", target="primary", queue="orders-tq", callers=("alpha",)):
+    return SimpleNamespace(
+        name=name,
+        target_namespace=target,
+        target_task_queue=queue,
+        allowed_caller_namespaces=tuple(callers),
+    )
+
+
+NEXUS_PROJECT = {
+    "metadata": {"name": "demo"},
+    "spec": {
+        "components": {"worker": {"build": "app", "worker": True}},
+        "temporal": {"namespaces": {"alpha": {}}},
+    },
+}
+
+
+def test_nexus_namespace_id_qualifies_primary_and_labels():
+    assert nexus_namespace_id(NEXUS_PROJECT, "primary", "acct1") == "tmprl-dem-cld-demo.acct1"
+    assert (
+        nexus_namespace_id(NEXUS_PROJECT, "alpha", "acct1")
+        == "tmprl-dem-cld-demo-alpha.acct1"
+    )
+
+
+def test_nexus_namespace_id_falls_back_when_account_is_unknown():
+    assert nexus_namespace_id(NEXUS_PROJECT, "primary", None) == "tmprl-dem-cld-demo"
+
+
+def test_creates_nexus_endpoint_when_absent():
+    reconciler = FakeReconciler()
+    status = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(),),
+            reconciler=reconciler,
+            checked_at="2026-06-20T00:00:00+00:00",
+            account_id="acct1",
+        )
+    )
+    assert status["phase"] == "Ready"
+    assert status["endpointIds"] == {"orders": "endpoint-orders"}
+    assert reconciler.called("create_nexus_endpoint") == [
+        (
+            "create_nexus_endpoint",
+            "orders",
+            "tmprl-dem-cld-demo.acct1",
+            "orders-tq",
+            ("tmprl-dem-cld-demo-alpha.acct1",),
+        )
+    ]
+    assert status["endpoints"][0]["action"] == "created"
+
+
+def test_nexus_endpoint_reconcile_is_idempotent():
+    reconciler = FakeReconciler()
+    args = dict(
+        endpoints=(nexus_endpoint(),),
+        reconciler=reconciler,
+        checked_at="2026-06-20T00:00:00+00:00",
+        account_id="acct1",
+    )
+    asyncio.run(reconcile_nexus_endpoints(NEXUS_PROJECT, **args))
+    status = asyncio.run(reconcile_nexus_endpoints(NEXUS_PROJECT, **args))
+    assert len(reconciler.called("create_nexus_endpoint")) == 1
+    assert reconciler.called("update_nexus_endpoint") == []
+    assert status["endpoints"][0]["action"] == "verified"
+
+
+def test_updates_nexus_endpoint_when_task_queue_drifts():
+    reconciler = FakeReconciler()
+    common = dict(
+        reconciler=reconciler,
+        checked_at="2026-06-20T00:00:00+00:00",
+        account_id="acct1",
+    )
+    asyncio.run(
+        reconcile_nexus_endpoints(NEXUS_PROJECT, endpoints=(nexus_endpoint(),), **common)
+    )
+    status = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT, endpoints=(nexus_endpoint(queue="moved-tq"),), **common
+        )
+    )
+    assert status["endpoints"][0]["action"] == "updated"
+    # Updated in place: callers resolve the endpoint id, so it must not be recreated.
+    assert reconciler.called("update_nexus_endpoint")[0][1] == "endpoint-orders"
+    assert len(reconciler.called("create_nexus_endpoint")) == 1
+
+
+def test_updates_nexus_endpoint_when_caller_allowlist_drifts():
+    reconciler = FakeReconciler()
+    common = dict(
+        reconciler=reconciler,
+        checked_at="2026-06-20T00:00:00+00:00",
+        account_id="acct1",
+    )
+    asyncio.run(
+        reconcile_nexus_endpoints(NEXUS_PROJECT, endpoints=(nexus_endpoint(),), **common)
+    )
+    status = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(callers=("alpha", "primary")),),
+            **common,
+        )
+    )
+    assert status["endpoints"][0]["action"] == "updated"
+    assert set(reconciler.called("update_nexus_endpoint")[0][5]) == {
+        "tmprl-dem-cld-demo-alpha.acct1",
+        "tmprl-dem-cld-demo.acct1",
+    }
+
+
+def test_caller_allowlist_order_does_not_cause_an_update():
+    reconciler = FakeReconciler()
+    common = dict(
+        reconciler=reconciler,
+        checked_at="2026-06-20T00:00:00+00:00",
+        account_id="acct1",
+    )
+    asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(callers=("alpha", "primary")),),
+            **common,
+        )
+    )
+    status = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(callers=("primary", "alpha")),),
+            **common,
+        )
+    )
+    assert status["endpoints"][0]["action"] == "verified"
+    assert reconciler.called("update_nexus_endpoint") == []
+
+
+def test_deletes_nexus_endpoints_and_tolerates_missing_ones():
+    reconciler = FakeReconciler()
+    asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(),),
+            reconciler=reconciler,
+            checked_at="2026-06-20T00:00:00+00:00",
+            account_id="acct1",
+        )
+    )
+    status = asyncio.run(
+        delete_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(), nexus_endpoint(name="never-created")),
+            reconciler=reconciler,
+            checked_at="2026-06-20T00:00:00+00:00",
+        )
+    )
+    assert status["phase"] == "Deleted"
+    assert [entry["action"] for entry in status["endpoints"]] == ["deleted", "not-found"]
+    assert reconciler.called("delete_nexus_endpoint") == [
+        ("delete_nexus_endpoint", "endpoint-orders")
+    ]
+
+
+def test_nexus_endpoint_spec_matches_the_real_protobuf_shape():
+    # FakeReconciler above is hand-written, so nothing else here would notice a
+    # wrong protobuf field name. This builds the real messages and reads one back.
+    from temporalio.api.cloud.cloudservice.v1 import (
+        CreateNexusEndpointRequest,
+        DeleteNexusEndpointRequest,
+        GetNexusEndpointsRequest,
+        UpdateNexusEndpointRequest,
+    )
+    from temporalio.api.cloud.nexus.v1 import Endpoint
+
+    spec = CloudApiReconciler._nexus_endpoint_spec(
+        "scenario-orders",
+        "tmprl-dem-cld-scenario-beta.acct1",
+        "orders-tq",
+        ("tmprl-dem-cld-scenario.acct1", "tmprl-dem-cld-scenario-alpha.acct1"),
+    )
+    assert spec.target_spec.worker_target_spec.namespace_id == (
+        "tmprl-dem-cld-scenario-beta.acct1"
+    )
+    assert spec.target_spec.worker_target_spec.task_queue == "orders-tq"
+    assert len(spec.policy_specs) == 2
+
+    for request in (
+        CreateNexusEndpointRequest(spec=spec),
+        UpdateNexusEndpointRequest(endpoint_id="e1", spec=spec, resource_version="v1"),
+        DeleteNexusEndpointRequest(endpoint_id="e1", resource_version="v1"),
+        GetNexusEndpointsRequest(page_size=100, name="scenario-orders"),
+    ):
+        assert request.SerializeToString() is not None
+
+    info = CloudApiReconciler._nexus_endpoint_info(
+        Endpoint(id="endpoint-1", resource_version="v1", spec=spec)
+    )
+    assert info.endpoint_id == "endpoint-1"
+    assert info.target_namespace_id == "tmprl-dem-cld-scenario-beta.acct1"
+    assert set(info.allowed_caller_namespace_ids) == {
+        "tmprl-dem-cld-scenario.acct1",
+        "tmprl-dem-cld-scenario-alpha.acct1",
+    }
+    # Allowlist comparison is order-insensitive, so a reordered spec is not drift.
+    assert info.matches(
+        target_namespace_id="tmprl-dem-cld-scenario-beta.acct1",
+        target_task_queue="orders-tq",
+        allowed_caller_namespace_ids=(
+            "tmprl-dem-cld-scenario-alpha.acct1",
+            "tmprl-dem-cld-scenario.acct1",
+        ),
+    )
