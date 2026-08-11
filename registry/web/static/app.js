@@ -78,7 +78,7 @@ function normalizeDemo(project) {
       externalRecording: links.externalRecording && links.externalRecording.url,
     },
     additional: Array.isArray(links.additional) ? links.additional : [],
-    cloud: { namespace: project.temporalNamespace },
+    cloud: { namespace: project.temporalNamespace.includes("a2dd6") ? project.temporalNamespace : `${project.temporalNamespace}.a2dd6` },
     authRequired: !!project.authRequired,
     crashable: !!(project.crashable && project.crashable.enabled),
   };
@@ -347,7 +347,7 @@ function renderDemoRow(demo) {
     quickLaunchTile(
       "Temporal Cloud",
       demo.cloud.namespace
-        ? `https://cloud.temporal.io/namespaces/${demo.cloud.namespace}`
+        ? `https://cloud.temporal.io/namespaces/${demo.cloud.namespace}/workflows`
         : null,
       "Open Namespace"
     ),
