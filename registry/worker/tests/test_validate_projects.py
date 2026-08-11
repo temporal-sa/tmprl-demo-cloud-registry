@@ -664,7 +664,7 @@ def test_schema_accepts_named_registry_link_slots():
             "speakerNotes": {"url": "https://example.com/notes"},
             "slideDeck": {"url": "https://example.com/slides"},
             "runbook": {"url": "https://example.com/runbook"},
-            "goldenPathRecording": {"url": "https://example.com/recording"},
+            "goldenPath": {"url": "https://example.com/recording"},
             "externalRecording": {"url": "https://example.com/external"},
         },
     }

@@ -519,7 +519,7 @@
         "runbook": {
           "$ref": "#/$defs/registryLink"
         },
-        "goldenPathRecording": {
+        "goldenPath": {
           "$ref": "#/$defs/registryLink"
         },
         "externalRecording": {
