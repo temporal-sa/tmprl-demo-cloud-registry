@@ -22,6 +22,7 @@ from demo_registry_operator.activities.temporal_cloud import (
     delete_temporal_runtime_candidate_secret,
     delete_temporal_cloud_search_attribute_value,
     ensure_temporal_cloud_namespace,
+    ensure_temporal_cloud_service_account,
     finalize_temporal_cloud,
     namespace_info_from_status,
     namespace_status,
@@ -1040,6 +1041,63 @@ def test_create_mtls_namespace_uses_tokenized_candidate_ca_material():
     assert create_call[4] == "mtls"
     assert create_call[5] is True
     assert create_call[6] == "temporal-namespace:tmprl-dem-cld-banking-money-transfer"
+
+
+def test_create_namespace_honors_internal_namespace_override():
+    project = json.loads(json.dumps(PROJECT))
+    project["spec"]["temporal"] = {
+        "namespaceOverride": "tmprl-dem-cld-banking-handler-a1b2c3d4"
+    }
+    reconciler = FakeReconciler()
+
+    status = asyncio.run(
+        ensure_temporal_cloud_namespace(
+            project,
+            reconciler=reconciler,
+            secret_store=FakeSecretStore(),
+            account_id="acct1",
+            region="aws-us-west-2",
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    target = "tmprl-dem-cld-banking-handler-a1b2c3d4"
+    assert reconciler.called("find_namespace") == [("find_namespace", target)]
+    assert reconciler.called("create_namespace")[0][1] == target
+    assert status["namespace"]["name"] == f"{target}.acct1"
+
+
+def test_additional_namespace_gets_its_own_service_account():
+    project = json.loads(json.dumps(PROJECT))
+    target = "tmprl-dem-cld-banking-handler-a1b2c3d4"
+    project["spec"]["temporal"] = {"namespaceOverride": target}
+    reconciler = FakeReconciler()
+    namespace = NamespaceInfo(
+        qualified_name=f"{target}.acct1",
+        grpc_address=f"{target}.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region="aws-us-west-2",
+    )
+
+    status = asyncio.run(
+        ensure_temporal_cloud_service_account(
+            project,
+            namespace_status_value={"namespace": namespace_status(namespace, True)},
+            reconciler=reconciler,
+            checked_at="2026-06-13T00:00:00+00:00",
+        )
+    )
+
+    expected_name = f"{target}-runtime"
+    assert reconciler.called("find_service_account") == [
+        ("find_service_account", expected_name)
+    ]
+    assert reconciler.called("create_service_account")[0][1:3] == (
+        expected_name,
+        f"{target}.acct1",
+    )
+    assert status["serviceAccount"]["name"] == expected_name
 
 
 def test_configure_mtls_namespace_uses_tokenized_candidate_ca_material():

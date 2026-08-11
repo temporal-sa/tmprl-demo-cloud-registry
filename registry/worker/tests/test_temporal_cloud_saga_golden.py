@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import demo_registry_operator.workflows.demo_project as demo_project_workflow
 from demo_registry_operator.activities.external_resources import models
 from demo_registry_operator.workflows.demo_project import (
@@ -481,7 +483,7 @@ def test_additional_namespace_status_hangs_off_a_sibling_key():
     }
 
 
-def run_two_namespace_saga(monkeypatch):
+def run_two_namespace_saga(monkeypatch, *, barrier_names: set[str] | None = None):
     workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
     workflow._temporal_runtime_secret_suffix = STABLE_SUFFIX
     demo_project = demo_project_with_temporal_runtime_secret_path(
@@ -490,11 +492,19 @@ def run_two_namespace_saga(monkeypatch):
     demo_project["spec"]["temporal"]["searchAttributes"] = {"OrderId": {"type": "keyword"}}
 
     calls: list[tuple[str, Any]] = []
+    barriers = {name: asyncio.Event() for name in barrier_names or set()}
+    arrivals: dict[str, list[str]] = {name: [] for name in barriers}
 
     async def fake_execute_activity(activity, request, **kwargs):
         name = getattr(activity, "__name__", str(activity))
         calls.append((name, request))
         target = getattr(request, "project", None)
+        target_name = target.target_namespace or NAMESPACE
+        if name in barriers:
+            arrivals[name].append(target_name)
+            if len(arrivals[name]) == 2:
+                barriers[name].set()
+            await barriers[name].wait()
         path = getattr(target, "runtime_secret_path", STABLE_PATH)
         results = activity_results(path)
         if name not in results:
@@ -530,14 +540,18 @@ def run_two_namespace_saga(monkeypatch):
             demo_project, checked_at=CHECKED_AT
         )
     )
-    status = asyncio.run(
-        workflow._reconcile_temporal_cloud(external_plan, previous_status={})
-    )
-    return calls, status, workflow
+    async def run_reconcile():
+        return await asyncio.wait_for(
+            workflow._reconcile_temporal_cloud(external_plan, previous_status={}),
+            timeout=2,
+        )
+
+    status = asyncio.run(run_reconcile())
+    return calls, status, workflow, arrivals
 
 
 def test_both_namespaces_are_created(monkeypatch):
-    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    calls, _status, _workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     created = [
         request.project.target_namespace or NAMESPACE
         for name, request in calls
@@ -547,7 +561,7 @@ def test_both_namespaces_are_created(monkeypatch):
 
 
 def test_each_namespace_stages_against_its_own_secret_path(monkeypatch):
-    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    calls, _status, _workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     paths = [
         request.project.runtime_secret_path
         for name, request in calls
@@ -557,7 +571,7 @@ def test_each_namespace_stages_against_its_own_secret_path(monkeypatch):
 
 
 def test_each_namespace_uses_a_distinct_candidate_token(monkeypatch):
-    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    calls, _status, _workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     tokens = [
         request.candidate_secret_token
         for _name, request in calls
@@ -568,7 +582,7 @@ def test_each_namespace_uses_a_distinct_candidate_token(monkeypatch):
 
 
 def test_project_scoped_steps_run_only_for_the_primary_namespace(monkeypatch):
-    calls, _status, _workflow = run_two_namespace_saga(monkeypatch)
+    calls, _status, _workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     names = [name for name, _request in calls]
     # Search attributes would delete the other namespace's attributes; the mirror
     # would overwrite the workers' live credentials.
@@ -577,7 +591,7 @@ def test_project_scoped_steps_run_only_for_the_primary_namespace(monkeypatch):
 
 
 def test_two_namespace_status_keeps_the_primary_blob_in_place(monkeypatch):
-    _calls, status, _workflow = run_two_namespace_saga(monkeypatch)
+    _calls, status, _workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     assert status["namespace"] == NAMESPACE
     assert status["apiKey"] == {"keyId": "key-abc"}
     assert set(status["additionalNamespaces"]) == {"alpha"}
@@ -587,10 +601,116 @@ def test_two_namespace_status_keeps_the_primary_blob_in_place(monkeypatch):
 
 
 def test_both_targets_are_recorded_for_compensation(monkeypatch):
-    _calls, _status, workflow = run_two_namespace_saga(monkeypatch)
+    _calls, _status, workflow, _arrivals = run_two_namespace_saga(monkeypatch)
     assert [context.target.label for context in workflow._tc_targets] == [None, "alpha"]
     # The project-level plan slot still tracks the primary target only.
     assert workflow._tc_plan.temporal_project.target_namespace is None
+
+
+def test_namespace_pipelines_run_independent_steps_concurrently(monkeypatch):
+    barrier_names = {
+        "create_or_verify_temporal_cloud_namespace",
+        "ensure_temporal_cloud_namespace_tags",
+        "create_or_verify_temporal_cloud_service_account",
+        "check_temporal_runtime_secret",
+        "create_temporal_api_key_candidate_secret",
+        "run_temporal_runtime_candidate_canary",
+        "promote_temporal_runtime_credential",
+        "delete_temporal_runtime_candidate_secret",
+    }
+
+    _calls, status, _workflow, arrivals = run_two_namespace_saga(
+        monkeypatch,
+        barrier_names=barrier_names,
+    )
+
+    expected = {NAMESPACE, "tmprl-dem-cld-demo-alpha"}
+    assert {name: set(targets) for name, targets in arrivals.items()} == {
+        name: expected for name in barrier_names
+    }
+    assert status["phase"] == "Ready"
+    assert status["additionalNamespaces"]["alpha"]["phase"] == "Ready"
+
+
+def test_namespace_failure_waits_for_sibling_to_settle_before_raising(monkeypatch):
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    workflow._temporal_runtime_secret_suffix = STABLE_SUFFIX
+    demo_project = demo_project_with_temporal_runtime_secret_path(
+        project(), STABLE_PATH
+    )
+    handler = "tmprl-dem-cld-demo-alpha"
+    handler_failed = asyncio.Event()
+    primary_finished = asyncio.Event()
+    compensations: list[str] = []
+
+    async def fake_execute_activity(activity, request, **kwargs):
+        name = getattr(activity, "__name__", str(activity))
+        target = getattr(request, "project", None)
+        target_name = target.target_namespace or NAMESPACE
+        path = getattr(target, "runtime_secret_path", STABLE_PATH)
+        results = activity_results(path)
+        if name == "create_or_verify_temporal_cloud_namespace":
+            return models.TemporalCloudNamespaceResult(
+                status={"phase": "Ready", "namespace": target_name},
+                namespace=target_name,
+                grpc_address=f"{target_name}.acct1.tmprl.cloud:7233",
+                auth_mode="apiKey",
+                created=True,
+                region="aws-us-west-2",
+            )
+        if name == "run_temporal_runtime_candidate_canary":
+            if target_name == handler:
+                handler_failed.set()
+                raise RuntimeError("handler candidate failed")
+            await handler_failed.wait()
+        result = results[name]
+        if name == "mirror_temporal_runtime_secret":
+            primary_finished.set()
+        return result
+
+    async def fake_compensate(
+        external_plan,
+        *,
+        state,
+        candidate_secret_token,
+    ):
+        compensations.append(
+            external_plan.temporal_project.target_namespace or NAMESPACE
+        )
+
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="DemoProject/demo", run_id="run-1"),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        workflow, "_compensate_temporal_cloud_reconcile", fake_compensate
+    )
+    external_plan = with_additional_namespace(
+        demo_project_workflow.external_resources.plan_external_resources(
+            demo_project, checked_at=CHECKED_AT
+        )
+    )
+
+    async def run_reconcile():
+        return await asyncio.wait_for(
+            workflow._reconcile_temporal_cloud(external_plan, previous_status={}),
+            timeout=2,
+        )
+
+    with pytest.raises(RuntimeError, match="handler candidate failed"):
+        asyncio.run(run_reconcile())
+
+    assert primary_finished.is_set()
+    assert compensations == [handler, NAMESPACE]
 
 
 # --- Nexus Endpoints ---------------------------------------------------------

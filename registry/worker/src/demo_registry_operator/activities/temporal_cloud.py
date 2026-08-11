@@ -195,7 +195,22 @@ class SecretStore(Protocol):
 
 
 def desired_namespace_name(demo_project: dict[str, Any]) -> str:
-    return derive.temporal_namespace(resources.project_name(demo_project))
+    return resources.project_temporal_namespace(demo_project)
+
+
+def desired_service_account_name(demo_project: dict[str, Any]) -> str:
+    """Keep the primary name stable and isolate additional namespaces.
+
+    Temporal Cloud service accounts are account-scoped, while the role created
+    for each account is scoped to one namespace. Reusing ``<project>-runtime``
+    for an additional namespace would therefore adopt the primary namespace's
+    account instead of creating one with access to the additional namespace.
+    """
+    project = resources.project_name(demo_project)
+    namespace = resources.project_temporal_namespace(demo_project)
+    if namespace == derive.temporal_namespace(project):
+        return f"{project}-runtime"
+    return f"{namespace}-runtime"
 
 
 async def reconcile_temporal_cloud(
@@ -999,7 +1014,7 @@ async def ensure_temporal_cloud_service_account(
 
     namespace = namespace_info_from_status(namespace_status_value)
     project = resources.project_name(demo_project)
-    name = f"{project}-runtime"
+    name = desired_service_account_name(demo_project)
     service_account_id = await reconciler.find_service_account(name)
     created = False
     if service_account_id is None:

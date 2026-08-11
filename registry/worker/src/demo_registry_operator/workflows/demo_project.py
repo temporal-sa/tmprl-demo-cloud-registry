@@ -1227,44 +1227,22 @@ class DemoProjectWorkflow:
         plan passed in unchanged -- so the sequence below is the single-namespace
         saga this grew out of, not a re-derivation of it.
 
-        Fail-fast: an error in any namespace fails the whole project reconcile,
-        which is what a single-namespace project already does. Sequential, never
-        gathered -- namespace-spec updates share resource_version optimistic
-        concurrency, and they share Cloud API rate limits.
+        An error in any namespace fails the whole project reconcile, which is what
+        a single-namespace project already does. Namespace pipelines are gathered
+        concurrently: operations within one namespace retain their dependency
+        order, while independent namespaces can create, stage, canary, and promote
+        at the same time. The gather waits for every pipeline to settle before an
+        error is raised so no sibling work is left running during compensation.
         """
 
         async def reconcile_one_namespace(
-            target: TemporalCloudNamespaceTarget,
-            external_plan: Any,
+            context: TemporalCloudTargetContext,
         ) -> dict[str, Any]:
+            target = context.target
+            external_plan = context.plan
             is_primary = target.is_primary
-            candidate_secret_token = temporal_candidate_secret_token(
-                external_plan,
-                workflow_id=workflow.info().workflow_id,
-                run_id=workflow.info().run_id,
-                reconcile_sequence=self._reconcile_sequence,
-                target_namespace=None if is_primary else target.label,
-            )
-            state = TemporalCloudReconcileState()
-            # Capture for reconcile-level saga compensation: `state` mutates in
-            # place as each resource is created, so a later failure (incl. a child
-            # workflow) can tear down exactly what this pass created.
-            self._tc_state = state
-            self._tc_token = candidate_secret_token
-            if is_primary:
-                # Only the primary target's plan is the project-level plan that
-                # _reconcile_external_resources reads back for a moved secret path.
-                self._tc_plan = external_plan
-            # Recorded before the try so a failure here still leaves this target
-            # visible to the unwinder below.
-            self._tc_targets.append(
-                TemporalCloudTargetContext(
-                    target=target,
-                    plan=external_plan,
-                    state=state,
-                    token=candidate_secret_token,
-                )
-            )
+            candidate_secret_token = context.token
+            state = context.state
 
             try:
                 await self._stage_temporal_mtls_ca_if_needed(
@@ -1345,6 +1323,7 @@ class DemoProjectWorkflow:
                     is_primary=is_primary,
                 )
                 external_plan = stage_outcome.external_plan
+                context.plan = external_plan
                 if is_primary:
                     self._tc_plan = external_plan
                 if not stage_outcome.staged:
@@ -1374,22 +1353,59 @@ class DemoProjectWorkflow:
                 )
                 raise
 
-        self._tc_targets = []
-        results: dict[str | None, dict[str, Any]] = {}
         targets = temporal_namespace_targets(external_plan)
+        workflow_info = workflow.info()
+        self._tc_targets = []
         for target in targets:
-            try:
-                results[target.label] = await reconcile_one_namespace(
-                    target,
-                    target.external_plan(external_plan),
+            target_plan = target.external_plan(external_plan)
+            self._tc_targets.append(
+                TemporalCloudTargetContext(
+                    target=target,
+                    plan=target_plan,
+                    state=TemporalCloudReconcileState(),
+                    token=temporal_candidate_secret_token(
+                        target_plan,
+                        workflow_id=workflow_info.workflow_id,
+                        run_id=workflow_info.run_id,
+                        reconcile_sequence=self._reconcile_sequence,
+                        target_namespace=(
+                            None if target.is_primary else target.label
+                        ),
+                    ),
                 )
-            except Exception:
-                # The failing target compensated itself above; unwind the targets
-                # that completed before it, newest first.
-                await self._compensate_completed_temporal_targets()
-                raise
-            if results[target.label].get("phase") == "Error":
-                break
+            )
+        # Preserve the original single-target capture contract. The ordered target
+        # contexts above are authoritative for multi-namespace compensation.
+        primary_context = self._tc_targets[0]
+        self._tc_state = primary_context.state
+        self._tc_plan = primary_context.plan
+        self._tc_token = primary_context.token
+
+        outcomes = await asyncio.gather(
+            *(reconcile_one_namespace(context) for context in self._tc_targets),
+            return_exceptions=True,
+        )
+        failures = [
+            outcome for outcome in outcomes if isinstance(outcome, BaseException)
+        ]
+        if failures:
+            # A failed pipeline compensated itself. Unwind every pipeline that
+            # returned normally, newest target first, then surface the first error
+            # in declared target order for deterministic failure reporting.
+            for context, outcome in reversed(list(zip(self._tc_targets, outcomes))):
+                if isinstance(outcome, BaseException):
+                    continue
+                await self._compensate_temporal_cloud_reconcile(
+                    context.plan,
+                    state=context.state,
+                    candidate_secret_token=context.token,
+                )
+            raise failures[0]
+
+        results: dict[str | None, dict[str, Any]] = {}
+        for context, outcome in zip(self._tc_targets, outcomes):
+            assert not isinstance(outcome, BaseException)
+            results[context.target.label] = outcome
         status = merge_temporal_cloud_namespace_status(results)
         # Surfaced, never acted on: a namespace dropped from the spec keeps running.
         orphaned = orphaned_temporal_namespace_status(
@@ -1442,16 +1458,6 @@ class DemoProjectWorkflow:
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )
-
-    async def _compensate_completed_temporal_targets(self) -> None:
-        # Skips the last context: that is the target that just failed, and its own
-        # try/except has already run its compensation.
-        for context in reversed(self._tc_targets[:-1]):
-            await self._compensate_temporal_cloud_reconcile(
-                context.plan,
-                state=context.state,
-                candidate_secret_token=context.token,
-            )
 
     async def _stage_temporal_mtls_ca_if_needed(
         self,
