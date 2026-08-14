@@ -10,6 +10,10 @@ spec:
       that plans a real multi-city trip. LLM and tools as activities, a durable parallel web-research fan-out, 
       human-in-the-loop booking via signal, crash-recoverable and replay-safe.
     canonical: true
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: travel-agent
     links:
       speakerNotes:
         url: https://docs.google.com/document/d/1sPlLnnrNiIiJCAI4jE5NCVRCA4QuOnApOmePm55xapM/edit?tab=t.0
