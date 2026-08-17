@@ -1,0 +1,362 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: agent-gateway
+spec:
+  registry:
+    title: Agent Gateway - Durable Human Approval for Agentic Tool Calls
+    summary: >-
+      An MCP server that suspends a protected agentic tool call on a durable
+      Temporal workflow until a named human approves it, then resumes the agent
+      exactly where it stopped. Two teams, two Temporal Cloud namespaces, and a
+      Nexus Endpoint in each direction. Driven from a hosted Claude Code IDE in
+      the browser.
+    tags: [AI, AI - Agents, Human-in-the-Loop, MCP, Nexus, Multi-Namespace]
+    temporalSdks: [Python]
+    readiness:
+      score: 4
+      maxScore: 5
+      note: >-
+        First project to use multi-namespace and Nexus Endpoints; expect
+        first-use issues in the reconcile path.
+    links:
+      runbook:
+        label: Walkthrough
+        url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/apps/agent-gateway/WALKTHROUGH.md
+
+  # The application lives in this repository, under apps/agent-gateway, the same
+  # way registry/web and apps/instruqt-litellm do. The ignore filter keeps
+  # unrelated registry commits from rebuilding this demo -- without it every
+  # change to the operator or another project's CR would start a new rollout.
+  #
+  # gitRepository.url is required whenever the gitRepository block is present
+  # (activities/builds/source.py raises without it). The shared temporal-sa
+  # read-only PAT still applies because the URL is an HTTPS temporal-sa
+  # repository, so no per-project source auth is needed.
+  source:
+    repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
+    gitRepository:
+      url: https://github.com/temporal-sa/tmprl-demo-cloud-registry.git
+      ignore: |
+        /*
+        !/apps/
+        /apps/*
+        !/apps/agent-gateway/
+        !/apps/agent-gateway/**
+
+  temporal:
+    auth:
+      mode: apiKey
+
+    # The Security team's namespace. On a laptop this was a second namespace on
+    # one dev server, which made CASE-2b's isolation a claim. Here it is a
+    # separate Temporal Cloud namespace with its own service account, its own API
+    # key, and its own Secrets Manager path -- so the gateway's pod does not have
+    # the Security team's credential mounted, and vice versa. The claim became
+    # structural.
+    namespaces:
+      security: {}
+
+    # Temporal Cloud scopes Nexus Endpoint names to the ACCOUNT, not the
+    # namespace, so both are project-prefixed: a bare "security" would claim that
+    # name against every other demo in the account, and a leaked one blocks it
+    # permanently. These two strings are also literal constants in
+    # apps/agent-gateway/common/nexus_contracts.py and
+    # apps/agent-gateway/security_scan/nexus_contracts.py -- workflow code passes
+    # them to Nexus calls, so the value lands in Event History and has to be a
+    # code fact rather than configuration. Renaming either is a drain-first
+    # migration on both sides at once.
+    #
+    # targetTaskQueue is cross-validated by nothing. Each must match the
+    # TASK_QUEUE env on the worker that serves it, below.
+    nexusEndpoints:
+      # The gateway's front door. Only the Security team calls it.
+      agent-gateway-waypoint:
+        targetNamespace: primary
+        targetTaskQueue: agentic-gateway
+        allowedCallerNamespaces: [security]
+      # The Security team's front door. Only the release pipeline calls it.
+      agent-gateway-security:
+        targetNamespace: security
+        targetTaskQueue: security-tq
+        allowedCallerNamespaces: [primary]
+
+  # Every secret declared here must exist in AWS Secrets Manager before the
+  # first reconcile, at tmprl-dem-cld/agent-gateway/<name>. The operator verifies
+  # them; it does not create them. Each JSON key becomes an environment variable
+  # in the components that list the secret.
+  #
+  # Deliberately NOT here: the demo's bearer tokens and persona maps. They are
+  # printed verbatim in this demo's own README and WALKTHROUGH -- they are cast
+  # names, not credentials -- so they are plain env below where a reader of the
+  # CR can see who is on which team.
+  secrets:
+    # Claude Code's credential, for the hosted IDE. Same secret name as
+    # canonical-ai-demo and flourish-and-blotts, so it is the familiar ask.
+    anthropic-credentials:
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+    # The Gemini credential for CASE-3. Attached to the worker only -- see the
+    # worker component below for why the browser-facing adk-web does not get it.
+    google-credentials:
+      requiredProperties:
+        - GOOGLE_API_KEY
+
+  builds:
+    # One image for all five Python processes, as docker-compose does it: the
+    # components differ only by `command`.
+    app:
+      context: apps/agent-gateway
+      dockerfile: apps/agent-gateway/Dockerfile.app
+    # nginx. Exists because the platform gives one hostname and Traefik matches
+    # PathPrefix without stripping it, while both code-server and the ADK dev UI
+    # need the prefix removed before they see the request.
+    edge:
+      context: apps/agent-gateway
+      dockerfile: apps/agent-gateway/edge/Dockerfile
+    # code-server with Claude Code in its terminal. This demo is driven by
+    # talking to a coding agent, so the agent is part of the deployment.
+    ide:
+      context: apps/agent-gateway
+      dockerfile: apps/agent-gateway/ide/Dockerfile
+
+  components:
+    # Pretend deployment backend. Fleet, quality-gate, security-scan and
+    # idempotency state are all module globals, so a second replica would mean
+    # two fleets and an idempotency store that lets a retried promotion apply
+    # twice. replicas: 1 is correctness here, not thrift.
+    mock-tool:
+      build: app
+      replicas: 1
+      command: [python, -m, mock_tool.server]
+      ports:
+        - name: http
+          containerPort: 9000
+          servicePort: 9000
+      env:
+        - name: MOCK_TOOL_PORT
+          value: "9000"
+        # Cutting this version runs long and trips the gateway's
+        # convert-to-async path, which is a CASE-1 beat.
+        - name: SLOW_CUT_VERSION
+          value: "2.3.1"
+        - name: SLOW_CUT_DELAY_SECONDS
+          value: "12"
+
+    # The Waypoint team's worker: the chain entity workflow, the release child
+    # workflows, the ADK session workflow, and the agent-gateway-waypoint Nexus
+    # service handler. Holds the Gemini key, because the model call runs here as
+    # an Activity rather than in the ADK web process.
+    worker:
+      build: app
+      replicas: 1
+      worker: true
+      command: [python, worker.py]
+      # GOOGLE_API_KEY lands here and nowhere else. TemporalSessionProxyAgent, in
+      # the adk-web pod, makes no model call at all: it starts a workflow and
+      # streams that workflow's answers back as ADK events. The Gemini call
+      # happens inside TemporalAdkSessionWorkflow, through TemporalModel, which
+      # runs as an Activity on this worker.
+      #
+      # So the component a browser can reach holds no model credential, and that
+      # is structural rather than a hardening choice -- putting the key on
+      # adk-web would be a real regression, not a convenience.
+      secrets:
+        - google-credentials
+      env:
+        - name: TASK_QUEUE
+          value: agentic-gateway
+        - name: MOCK_TOOL_URL
+          value: http://mock-tool:9000/invoke
+        - name: PROTECTED_ENVIRONMENTS
+          value: prod,production
+        - name: AGENT_GATEWAY_MCP_URL
+          value: http://gateway:8080/mcp
+        - name: ADK_MODEL
+          value: gemini-3.6-flash
+        # How this worker's MCP activities authenticate to the gateway. tok_adk
+        # resolves to release-agent@google-adk, which is a requester and never an
+        # approver -- it is not in GATEWAY_APPROVERS, so it cannot decide its own
+        # runs.
+        - name: AGENT_GATEWAY_TOKEN
+          value: tok_adk
+
+    # The Security team's worker. temporalNamespace binds it to the security
+    # namespace, so it receives that namespace's address, name and API key under
+    # the same four env var names -- and never the gateway's. Unversioned by
+    # necessity: the platform rejects worker.versioning on a bound component,
+    # and Nexus target task queues must be served by unversioned workers anyway.
+    security-worker:
+      build: app
+      replicas: 1
+      worker: true
+      temporalNamespace: security
+      command: [python, -m, security_scan.worker]
+      env:
+        - name: TASK_QUEUE
+          value: security-tq
+        - name: SECURITY_SCAN_BACKEND_URL
+          value: http://mock-tool:9000/invoke
+
+    # MCP server plus approver dashboard. Single replica: _session_chains maps an
+    # MCP session to its chain workflow id, and MANDATE_TOGGLE and
+    # SCAN_MODE_TOGGLE are per-process. A second replica would silently open a
+    # second chain and make the dashboard switches apply to a coin flip.
+    gateway:
+      build: app
+      replicas: 1
+      temporalAccess: true
+      command: [python, -m, gateway.server]
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 8080
+      env:
+        # The cast. These are demo personas, not credentials -- the same values
+        # are printed in this demo's README and WALKTHROUGH, because a reader has
+        # to know that Abe is on the Security team to follow why only he can
+        # approve a scanned promotion. Hiding them in Secrets Manager would cost
+        # that legibility and buy nothing.
+        #
+        # What they are NOT is an authorization boundary for anything real: the
+        # host sits behind the platform's Temporal SSO gate, and every action
+        # they permit is against a pretend deployment backend.
+        - name: GATEWAY_PRINCIPALS
+          value: >-
+            {"tok_dustin":"Dustin Sweet <dustin.sweet@quickmeals.com>",
+            "tok_sam":"Sam Ingbar <sam.ingbar@quickmeals.com>",
+            "tok_abe":"Abe Roover <abe.roover@quickmeals.com>",
+            "tok_adk":"release-agent@google-adk",
+            "tok_approver":"approver@demo",
+            "tok_legacy_scanner":"legacy-scanner@security"}
+        - name: GATEWAY_APPROVERS
+          value: >-
+            approver@demo,Dustin Sweet <dustin.sweet@quickmeals.com>,Sam Ingbar
+            <sam.ingbar@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>
+        # Which QuickMeals team each persona belongs to. Explicit rather than
+        # inferred from the email domain: an implicit rule would break silently
+        # the first time a persona's address changed.
+        - name: GATEWAY_PRINCIPAL_TEAMS
+          value: >-
+            {"dustin.sweet@quickmeals.com":"waypoint",
+            "sam.ingbar@quickmeals.com":"waypoint",
+            "abe.roover@quickmeals.com":"security"}
+        # Which service a principal calls on behalf of, resolved from the token
+        # rather than read from the request -- "I am a scanner, do not scan me"
+        # is not a claim a caller gets to make about itself.
+        - name: GATEWAY_PRINCIPAL_SERVICES
+          value: '{"legacy-scanner@security":"security"}'
+        - name: TASK_QUEUE
+          value: agentic-gateway
+        - name: GATEWAY_PORT
+          value: "8080"
+        - name: APPROVAL_TIMEOUT_SECONDS
+          value: "300"
+        - name: MOCK_TOOL_STATE_URL
+          value: http://mock-tool:9000/state
+        - name: PROTECTED_ENVIRONMENTS
+          value: prod,production
+        # The MCP DNS-rebinding guard matches the Host header. gateway:* covers
+        # the in-cluster callers that matter here -- the IDE pod and the worker's
+        # own MCP activities -- and the public hostname is listed without a port
+        # because an HTTPS request arrives with a bare host and the "name:*"
+        # wildcard only matches when a port is actually present.
+        - name: GATEWAY_MCP_ALLOWED_HOSTS
+          value: agent-gateway.tmprl-demo.cloud,gateway:*,127.0.0.1:*,localhost:*
+        - name: GATEWAY_MCP_ALLOWED_ORIGINS
+          value: https://agent-gateway.tmprl-demo.cloud,http://127.0.0.1:*,http://localhost:*
+        # Namespace-base URLs; the dashboard appends /workflows/<id>. Two of
+        # them, because the security scan runs in a namespace this process holds
+        # no credential for and therefore cannot name for itself.
+        - name: TEMPORAL_UI_URL
+          value: https://cloud.temporal.io/namespaces/tmprl-dem-cld-agent-gateway.a2dd6
+        - name: TEMPORAL_UI_SECURITY_URL
+          value: https://cloud.temporal.io/namespaces/tmprl-dem-cld-agent-gateway-security.a2dd6
+        # The approver session cookie is only sent over HTTPS. Correct here and
+        # wrong on http://localhost, which is why it is a setting.
+        - name: GATEWAY_COOKIE_SECURE
+          value: "1"
+
+    # Google ADK dev UI. --url_prefix rewrites the Angular app's backend URL and
+    # the root redirect but leaves the server's own routes at the root, so the
+    # edge strips /adk before this sees a request. --no-reload matters: the
+    # default file watcher would restart this process mid-demo.
+    #
+    # No GOOGLE_API_KEY here on purpose -- see the worker.
+    adk-web:
+      build: app
+      replicas: 1
+      temporalAccess: true
+      command:
+        [adk, web, --host, 0.0.0.0, --port, "8000", --url_prefix, /adk,
+         --no-reload, --session_service_uri, "memory://", adk_agents]
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 8000
+      env:
+        - name: PYTHONPATH
+          value: /app
+        - name: TASK_QUEUE
+          value: agentic-gateway
+        - name: ADK_MODEL
+          value: gemini-3.6-flash
+
+    # code-server with Claude Code, opened on the stage-prop repository. It is
+    # the demo's MCP client, and it reaches the gateway over cluster DNS -- which
+    # is what lets the platform SSO gate stay on, since no bearer-token client
+    # has to survive an interactive login.
+    ide:
+      build: ide
+      replicas: 1
+      # ANTHROPIC_API_KEY arrives as an environment variable; the entrypoint uses
+      # the key's last 20 characters to pre-approve it so Claude Code raises no
+      # prompt on stage.
+      #
+      # code-server itself runs with --auth none: the platform SSO gate
+      # (temporalAuthRequired, below) is the access control for this component.
+      secrets:
+        - anthropic-credentials
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 8080
+      env:
+        - name: AGENT_GATEWAY_MCP_URL
+          value: http://gateway:8080/mcp
+        # The session drives the demo as Dustin, a Waypoint-team principal --
+        # which is what makes the CASE-2 refusal land: Waypoint cannot approve a
+        # Security-gated promotion, and the 403 is the point of that beat.
+        - name: AGENT_GATEWAY_TOKEN
+          value: tok_dustin
+
+    # The only component with a public route. Path fan-out happens in nginx,
+    # where longest-prefix matching is contractual and a trailing slash on
+    # proxy_pass strips -- neither of which Traefik offers here.
+    edge:
+      build: edge
+      replicas: 1
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+
+  # One hostname, and the platform SSO gate left on. That is affordable only
+  # because the IDE is hosted: the MCP client lives in the cluster and never
+  # crosses this ingress, so nothing that speaks bearer tokens has to complete a
+  # browser login. It also covers the ADK dev UI, every endpoint of which is
+  # unauthenticated by design.
+  ingress:
+    subdomain: agent-gateway
+    temporalAuthRequired: true
+    component: edge
+    port: http
+
+  # Resolves through the edge to gateway:8080/healthz, so one probe exercises
+  # edge-to-gateway wiring plus gateway startup rather than just nginx being
+  # alive. Deliberately not Temporal-dependent: that would turn transient
+  # API-key sync lag into a blocked promotion.
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
+    timeoutSeconds: 10
