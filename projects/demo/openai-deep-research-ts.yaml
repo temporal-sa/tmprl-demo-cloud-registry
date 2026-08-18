@@ -1,0 +1,73 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: openai-deep-research-ts
+spec:
+  registry:
+    title: OpenAI Deep Research — TypeScript
+    summary: >-
+      Interactive deep research with OpenAI Agents SDK and Temporal: clarifying
+      questions, parallel web search, durable retries, a detailed report,
+      generated imagery, and PDF export.
+    tags: [AI, AI - Agents, Research, Human-in-the-Loop]
+    temporalSdks: [TypeScript]
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/openai-agents-sdk-deep-research-demo-typescript#readme
+
+  source:
+    repo: https://github.com/temporal-sa/openai-agents-sdk-deep-research-demo-typescript
+
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile
+
+  secrets:
+    openai-credentials:
+      requiredProperties:
+        - OPENAI_API_KEY
+
+  components:
+    app:
+      build: app
+      replicas: 1
+      worker: true
+      ports:
+        - name: http
+          containerPort: 8234
+          servicePort: 80
+      env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "8234"
+        - name: PROJECT_ROOT
+          value: /app
+        - name: ARTIFACT_ROOT
+          value: /app/artifacts
+        - name: TEMPORAL_TASK_QUEUE
+          value: research-queue
+        - name: AUTH_MODE
+          value: temporal-ingress
+        - name: AUTH_ALLOWED_DOMAIN
+          value: temporal.io
+        - name: FRONTEND_ORIGINS
+          value: https://openai-deep-research-ts.tmprl-demo.cloud
+        - name: BYPASS_TRIAGE_AGENT
+          value: "Y"
+
+  ingress:
+    subdomain: openai-deep-research-ts
+    temporalAuthRequired: true
+    component: app
+    port: http
+
+  smokeCheck:
+    path: /api/ready
+    expectedStatus: 200
+    timeoutSeconds: 10
