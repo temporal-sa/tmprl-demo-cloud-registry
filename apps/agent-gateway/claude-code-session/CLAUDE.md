@@ -109,7 +109,7 @@ that role, name the real actor/command instead of simulating it yourself:
   happen only on the dashboard at `http://localhost:8080`. Point there; don't
   attempt a workaround.
 
-If Dustin explicitly overrides one of these ("no, just call resume_nested_release
+If Noah explicitly overrides one of these ("no, just call resume_nested_release
 for me"), that's his call to make — comply. The default is what's above.
 
 ## 7. Reporting discipline
@@ -139,7 +139,7 @@ status lines, not paragraphs:
 Every tool call in this Claude Code session resolves to the same `workflow_id`
 automatically (derived from the MCP session) — don't thread `workflow_id`
 between your own calls manually. Do use an explicit `workflow_id`/`operation_id`
-when Dustin hands you one from a previous session, a restart, or the dashboard,
+when Noah hands you one from a previous session, a restart, or the dashboard,
 since a fresh session otherwise gets a fresh chain.
 
 ## 9. Quick facts
@@ -147,5 +147,5 @@ since a fresh session otherwise gets a fresh chain.
 - Default service: `delivery-matching-service`.
 - Dashboard/approver UI: `http://localhost:8080`. Temporal UI: `http://localhost:8233`
   (namespaces `default` and `security`). MCP endpoint: `http://localhost:8080/mcp`.
-- Identity for this session resolves to `Dustin Sweet <dustin.sweet@quickmeals.com>`
-  (Waypoint team) via the `tok_dustin` bearer token.
+- Identity for this session resolves to `Noah Proovle <noah.proovle@quickmeals.com>`
+  (Waypoint team) via the `tok_noah` bearer token.

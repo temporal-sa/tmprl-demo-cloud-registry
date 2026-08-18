@@ -91,7 +91,7 @@ Register Agent Gateway as the only MCP server Claude Code needs:
 
 ```bash
 claude mcp add --transport http agent-gateway http://localhost:8080/mcp \
-  --header "Authorization: Bearer tok_dustin"
+  --header "Authorization: Bearer tok_noah"
 ```
 
 Confirm the connection:
@@ -104,14 +104,14 @@ Optional identity check:
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer tok_dustin" \
+  -H "Authorization: Bearer tok_noah" \
   http://localhost:8080/whoami
 ```
 
 The resolved identity should be:
 
 ```text
-Dustin Sweet <dustin.sweet@quickmeals.com>
+Noah Proovle <noah.proovle@quickmeals.com>
 ```
 
 Then copy the demo's session instructions into the repo you have open in the IDE:
@@ -128,14 +128,23 @@ lives in the gateway. Background and caveats:
 
 ## 3. Sign in as the approver
 
-Open http://localhost:8080 and enter:
+Open http://localhost:8080. The sign-in page lists the two demo accounts in a
+note at the bottom, so you never have to remember which is which mid-demo:
 
 ```text
-tok_approver
+tok_noah    Noah Proovle, Waypoint engineering
+tok_abe     Abe Roover, Security
 ```
 
-Approval decisions will be recorded as `approver@demo`. Keep the dashboard open
-in a browser tab.
+Sign in as **`tok_noah`** for everything up to CASE-2. Noah approves ordinary
+production promotions but is refused -- with a visible 403 -- on a promotion that
+came out of a security scan, because that decision belongs to the Security team.
+That refusal is a demo beat, not an obstacle: switch to `tok_abe` when you reach
+it.
+
+Keep the dashboard open in a browser tab. The strip along the top of it opens the
+Temporal UI (both namespaces), the IDE and the Google ADK surface in new tabs,
+and holds the two worker kill switches used later on.
 
 ## 4. CASE-1: simple approval-gated tool
 
@@ -377,6 +386,18 @@ you used for the tests).
   --gateway-workflow-id wf-legacy
 ```
 
+In the hosted deployment, run it from a terminal in the IDE
+(**Terminal &rarr; New Terminal**). There is no `.venv` there and the terminal
+opens in the stage-prop workspace rather than the application, so use the wrapper
+that handles both:
+
+```bash
+legacy-scan \
+  --service delivery-matching-service \
+  --version <staged version> \
+  --gateway-workflow-id wf-legacy
+```
+
 It imports no `temporalio`. No workflow, no Event History, no task queue, no
 worker, no supervisor. All four stages run and pass:
 
@@ -449,6 +470,12 @@ system, and it is gone.
 docker compose kill worker && docker compose up -d worker
 ```
 
+In the hosted deployment there is no compose to reach for: use **Kill Waypoint
+worker** in the strip at the top of the dashboard, and **Restart Waypoint
+worker** to bring it back. It is the same outage -- the Temporal Worker stops
+polling and the task queue loses its poller -- reached by a button instead of a
+shell, and reversible on your own timing rather than immediately.
+
 Not the script. The script is already gone.
 
 **6. Look at what survived.** Open the Temporal Web UI at http://localhost:8233,
@@ -462,13 +489,13 @@ completely unaffected by the restart.
 > -- it was already durable, on the gateway side, the moment the script made this
 > call.
 
-**7. Try to approve it as Waypoint.** Sign in to the dashboard as `tok_dustin` and
+**7. Try to approve it as Waypoint.** Sign in to the dashboard as `tok_noah` and
 click **Approve** on that row.
 
 ```text
 Not authorized to decide this operation
 operation op-... requires approval from the security team;
-'Dustin Sweet <dustin.sweet@quickmeals.com>' is not authorized to decide it
+'Noah Proovle <noah.proovle@quickmeals.com>' is not authorized to decide it
 ```
 
 Even now, mandate or not, Waypoint cannot clear this. It has to be Security.
@@ -550,6 +577,11 @@ not before the nested call, not after approval, precisely during the suspension:
 docker compose kill security-scan-worker && \
   docker compose up -d security-scan-worker
 ```
+
+Hosted: **Kill Security scanner worker** in the dashboard strip, then
+**Restart** it. This also stops the capability heartbeat, so leaving it down is
+how you show a release refusing to proceed with its mandated scanner
+unreachable.
 
 **5. Look at what survived.** In the Temporal Web UI, switch the namespace
 selector to `security` and open the scan's Event History. Every stage, the

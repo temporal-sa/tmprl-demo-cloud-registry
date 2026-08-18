@@ -180,6 +180,12 @@ spec:
         # runs.
         - name: AGENT_GATEWAY_TOKEN
           value: tok_adk
+        # Where this worker asks whether it should still be polling. The
+        # dashboard's kill switch writes that state; this worker reads it every
+        # couple of seconds and shuts its Temporal Worker down when it flips, so
+        # the outage a presenter demonstrates in the Temporal UI is a real one.
+        - name: WORKER_POWER_URL
+          value: http://gateway:8080/worker-power
 
     # The Security team's worker. temporalNamespace binds it to the security
     # namespace, so it receives that namespace's address, name and API key under
@@ -197,6 +203,13 @@ spec:
           value: security-tq
         - name: SECURITY_SCAN_BACKEND_URL
           value: http://mock-tool:9000/invoke
+        # The kill switch, as on the Waypoint worker. Worth noting what this is
+        # not: it is the only gateway address this team's process holds, and it
+        # is a demo control rather than a call path. Scans still reach the
+        # gateway over Nexus, with no address, namespace or credential for the
+        # gateway's cluster on this side.
+        - name: WORKER_POWER_URL
+          value: http://gateway:8080/worker-power
 
     # MCP server plus approver dashboard. Single replica: _session_chains maps an
     # MCP session to its chain workflow id, and MANDATE_TOGGLE and
@@ -214,8 +227,8 @@ spec:
       env:
         # The cast. These are demo personas, not credentials -- the same values
         # are printed in this demo's README and WALKTHROUGH, because a reader has
-        # to know that Abe is on the Security team to follow why only he can
-        # approve a scanned promotion. Hiding them in Secrets Manager would cost
+        # to know that Abe is on the Security team, and Noah is not, to follow
+        # why only Abe can approve a scanned promotion. Hiding them in Secrets Manager would cost
         # that legibility and buy nothing.
         #
         # What they are NOT is an authorization boundary for anything real: the
@@ -223,23 +236,21 @@ spec:
         # they permit is against a pretend deployment backend.
         - name: GATEWAY_PRINCIPALS
           value: >-
-            {"tok_dustin":"Dustin Sweet <dustin.sweet@quickmeals.com>",
-            "tok_sam":"Sam Ingbar <sam.ingbar@quickmeals.com>",
+            {"tok_noah":"Noah Proovle <noah.proovle@quickmeals.com>",
             "tok_abe":"Abe Roover <abe.roover@quickmeals.com>",
             "tok_adk":"release-agent@google-adk",
             "tok_approver":"approver@demo",
             "tok_legacy_scanner":"legacy-scanner@security"}
         - name: GATEWAY_APPROVERS
           value: >-
-            approver@demo,Dustin Sweet <dustin.sweet@quickmeals.com>,Sam Ingbar
-            <sam.ingbar@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>
+            approver@demo,Noah Proovle
+            <noah.proovle@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>
         # Which QuickMeals team each persona belongs to. Explicit rather than
         # inferred from the email domain: an implicit rule would break silently
         # the first time a persona's address changed.
         - name: GATEWAY_PRINCIPAL_TEAMS
           value: >-
-            {"dustin.sweet@quickmeals.com":"waypoint",
-            "sam.ingbar@quickmeals.com":"waypoint",
+            {"noah.proovle@quickmeals.com":"waypoint",
             "abe.roover@quickmeals.com":"security"}
         # Which service a principal calls on behalf of, resolved from the token
         # rather than read from the request -- "I am a scanner, do not scan me"
@@ -324,11 +335,19 @@ spec:
       env:
         - name: AGENT_GATEWAY_MCP_URL
           value: http://gateway:8080/mcp
-        # The session drives the demo as Dustin, a Waypoint-team principal --
+        # The session drives the demo as Noah, a Waypoint-team principal --
         # which is what makes the CASE-2 refusal land: Waypoint cannot approve a
         # Security-gated promotion, and the 403 is the point of that beat.
         - name: AGENT_GATEWAY_TOKEN
-          value: tok_dustin
+          value: tok_noah
+        # What `legacy-scan` needs to reach from this pod. The script's own
+        # defaults are localhost, which is right when a developer runs it beside
+        # a compose stack and wrong in every hosted case -- so the two addresses
+        # are supplied here rather than baked into the script.
+        - name: GATEWAY_MCP_URL
+          value: http://gateway:8080/mcp
+        - name: SECURITY_SCAN_BACKEND_URL
+          value: http://mock-tool:9000/invoke
 
     # The only component with a public route. Path fan-out happens in nginx,
     # where longest-prefix matching is contractual and a trailing slash on

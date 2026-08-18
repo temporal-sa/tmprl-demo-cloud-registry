@@ -481,11 +481,11 @@ claude mcp add --transport http agent-gateway http://localhost:8080/mcp
 
 To have the approval card show a verified requester, connect with a bearer token
 that matches a principal in `GATEWAY_PRINCIPALS` (the compose file ships with
-`tok_dustin`):
+`tok_noah`):
 
 ```
 claude mcp add --transport http agent-gateway http://localhost:8080/mcp \
-  --header "Authorization: Bearer tok_dustin"
+  --header "Authorization: Bearer tok_noah"
 ```
 
 Confirm it is connected:
@@ -758,7 +758,7 @@ Temporal. Each ends in exactly one worker kill.
    be re-run from scratch; the request would not, because it was never the
    script's state — it was durable on the gateway side from the moment the call
    was made.
-7. Approving as `tok_dustin` is refused with a 403: mandate or not, Waypoint
+7. Approving as `tok_noah` is refused with a 403: mandate or not, Waypoint
    cannot clear this.
 8. Approving as `tok_abe` works. Because the caller was uncontrolled, a human then
    finishes it with `resume_nested_release`, and `PromoteReleaseChildWorkflow`
@@ -1054,11 +1054,11 @@ Set via environment in `docker-compose.yml`.
 - `GATEWAY_MCP_ALLOWED_ORIGINS` comma-separated browser origins accepted by MCP
   DNS-rebinding protection. Defaults include local browser origins.
 - `GATEWAY_PRINCIPALS` JSON map of bearer token to requester identity, for
-  example `{"tok_dustin":"Dustin Sweet <dustin.sweet@quickmeals.com>"}`. When unset,
+  example `{"tok_noah":"Noah Proovle <noah.proovle@quickmeals.com>"}`. When unset,
   the requester is reported as `claude-code (unverified)`.
 - `GATEWAY_APPROVERS` comma-separated principal identities authorized to review
   and decide operations. The compose demo authorizes `tok_approver`
-  (`approver@demo`), `tok_dustin`, and `tok_abe`.
+  (`approver@demo`), `tok_noah`, and `tok_abe`.
 - `GATEWAY_PRINCIPAL_TEAMS` JSON map of principal to QuickMeals engineering team,
   for example `{"abe.roover@quickmeals.com":"security"}`. Keys may be the full
   principal string or just the address inside it. Consulted only for an operation

@@ -91,8 +91,8 @@ retelling. Two things in it are worth knowing about before you reuse it:
   still knows what the tool is when it comes up in conversation. If you want to
   demo the bump-driven path, delete that line.
 
-Personal details are also left in place — the identity is `Dustin Sweet
-<dustin.sweet@quickmeals.com>` via the `tok_dustin` bearer token, and §6 refers
-to "Dustin" as the operator who can override. Swap in your own principal from
+Personal details are also left in place — the identity is `Noah Proovle
+<noah.proovle@quickmeals.com>` via the `tok_noah` bearer token, and §6 refers
+to "Noah" as the operator who can override. Swap in your own principal from
 `GATEWAY_PRINCIPALS` if you want the approval card to show a different verified
 requester.
