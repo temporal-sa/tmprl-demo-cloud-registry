@@ -4,7 +4,7 @@
       "type": "http",
       "url": "${AGENT_GATEWAY_MCP_URL:-http://gateway:8080/mcp}",
       "headers": {
-        "Authorization": "Bearer ${AGENT_GATEWAY_TOKEN:-tok_dustin}"
+        "Authorization": "Bearer ${AGENT_GATEWAY_TOKEN:-tok_noah}"
       }
     }
   }

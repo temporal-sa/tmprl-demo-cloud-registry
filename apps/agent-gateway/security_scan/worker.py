@@ -17,7 +17,7 @@ import os
 import requests
 from temporalio.worker import Worker
 
-from security_scan import temporal_client
+from security_scan import temporal_client, worker_power
 from security_scan.security_scan_activities import (
     check_cve_database,
     check_license_compliance,
@@ -50,6 +50,14 @@ async def _announce_forever() -> None:
     looks to see whether the scan is there.
     """
     while True:
+        # A scanner the demonstrator has taken offline stops advertising itself.
+        # Its registration then ages out on the TTL below, and the gateway's
+        # provider health check starts reporting the scanner unreachable --
+        # which is the behaviour a release is supposed to stop on, and the
+        # reason killing this worker is worth demonstrating at all.
+        if worker_power.is_down_now(worker_power.WORKER_SECURITY):
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            continue
         try:
             await asyncio.to_thread(
                 lambda: requests.post(
@@ -80,31 +88,40 @@ async def main() -> None:
     # run_scan_check and publish_scan_state are synchronous, so they need a
     # thread pool; the two gateway-facing Activities are async and do not.
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        worker = Worker(
-            client,
-            task_queue=TASK_QUEUE,
-            workflows=[SecurityScanWorkflow],
-            activities=[
-                run_scan_check,
-                publish_scan_state,
-                # The three sub-steps dependency_scan is actually made of.
-                generate_sbom,
-                check_cve_database,
-                check_license_compliance,
-            ],
-            # This team's Nexus front door. Agent Gateway reaches it through the
-            # `security` Endpoint and never learns what is behind it.
-            nexus_service_handlers=[SecurityScanServiceHandler()],
-            activity_executor=executor,
-            identity=f"security-scan-worker@{os.getenv('HOSTNAME', 'local')}",
-        )
+
+        def make_worker() -> Worker:
+            # Rebuilt on every restart: a Temporal Worker is single-use, so the
+            # dashboard's kill switch needs a factory rather than an instance.
+            return Worker(
+                client,
+                task_queue=TASK_QUEUE,
+                workflows=[SecurityScanWorkflow],
+                activities=[
+                    run_scan_check,
+                    publish_scan_state,
+                    # The three sub-steps dependency_scan is actually made of.
+                    generate_sbom,
+                    check_cve_database,
+                    check_license_compliance,
+                ],
+                # This team's Nexus front door. Agent Gateway reaches it through the
+                # `security` Endpoint and never learns what is behind it.
+                nexus_service_handlers=[SecurityScanServiceHandler()],
+                activity_executor=executor,
+                identity=f"security-scan-worker@{os.getenv('HOSTNAME', 'local')}",
+            )
+
         print(
             f"security scan worker started, namespace {client.namespace!r}, "
             f"task queue {TASK_QUEUE!r}",
             flush=True,
         )
         try:
-            await worker.run()
+            await worker_power.supervise(
+                worker_power.WORKER_SECURITY,
+                make_worker,
+                label="security scan worker",
+            )
         finally:
             heartbeat.cancel()
 

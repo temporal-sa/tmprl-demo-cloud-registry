@@ -36,6 +36,11 @@ COPY ide/mcp.json /opt/agent-gateway-ide/mcp.json
 COPY ide/entrypoint.sh /usr/local/bin/ide-entrypoint
 RUN chmod +x /usr/local/bin/ide-entrypoint
 
+# The one host-side command the walkthrough asks a presenter to type, wrapped so
+# it works from the workspace directory their terminal actually opens in.
+COPY ide/legacy-scan /usr/local/bin/legacy-scan
+RUN chmod +x /usr/local/bin/legacy-scan
+
 USER demo
 ENV HOME=/home/demo \
     PATH=/home/demo/.local/bin:$PATH \

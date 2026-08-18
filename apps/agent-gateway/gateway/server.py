@@ -70,6 +70,12 @@ GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "8080"))
 TEMPORAL_UI_URL = os.getenv(
     "TEMPORAL_UI_URL", "http://localhost:8233/namespaces/waypoint"
 ).rstrip("/")
+# The other two demo surfaces, linked from the dashboard's top bar so a
+# presenter never types a URL on stage. Relative by default because the edge
+# serves all three on one hostname; overridable because a developer running the
+# gateway directly on :8080 has no edge in front of it and needs absolute URLs.
+GATEWAY_IDE_URL = os.getenv("GATEWAY_IDE_URL", "/ide/")
+GATEWAY_ADK_URL = os.getenv("GATEWAY_ADK_URL", "/adk/")
 TEMPORAL_UI_SECURITY_URL = os.getenv(
     "TEMPORAL_UI_SECURITY_URL", "http://localhost:8233/namespaces/security"
 ).rstrip("/")
@@ -177,7 +183,7 @@ _DEFAULT_CHAIN = "wf-" + uuid.uuid4().hex[:6]
 def _load_principals() -> dict[str, str]:
     """Static bearer token to identity map from GATEWAY_PRINCIPALS (JSON).
 
-    Example: {"tok_dustin": "Dustin Sweet <dustin.sweet@quickmeals.com>"}
+    Example: {"tok_noah": "Noah Proovle <noah.proovle@quickmeals.com>"}
     """
     raw = os.getenv("GATEWAY_PRINCIPALS", "").strip()
     if not raw:
@@ -204,7 +210,7 @@ def _load_principal_teams() -> dict[str, str]:
     """Principal to QuickMeals engineering team map from GATEWAY_PRINCIPAL_TEAMS.
 
     Example:
-      {"dustin.sweet@quickmeals.com": "waypoint",
+      {"noah.proovle@quickmeals.com": "waypoint",
        "abe.roover@quickmeals.com": "security"}
 
     Explicit rather than inferred. An Operation gated by the Security team's
@@ -347,6 +353,59 @@ class _ScanModeToggle:
 
 
 SCAN_MODE_TOGGLE = _ScanModeToggle()
+
+# The two Workers a demonstrator can take offline, and the label each one wears
+# on the dashboard. Keys are what the Worker processes send when they ask
+# whether they should be polling.
+WORKER_WAYPOINT = "waypoint"
+WORKER_SECURITY = "security"
+WORKER_LABELS = {
+    WORKER_WAYPOINT: "Waypoint worker",
+    WORKER_SECURITY: "Security scanner worker",
+}
+
+
+class _WorkerKillSwitch:
+    """Which Temporal Workers the demonstrator has taken offline.
+
+    This is a real outage, not a rendering trick. Each Worker process polls this
+    state and shuts its Temporal Worker down when its own key flips: pollers
+    disappear from the task queue, and the Temporal UI shows what an outage
+    actually looks like -- which is the whole point, because the claim being
+    made on stage is that the work survives the worker, and a fake outage would
+    not test it.
+
+    Polled rather than pushed, and that is deliberate. The alternative -- an
+    HTTP control port on each Worker -- means a Service and an exposed port on a
+    component whose whole job is to hold no inbound surface. Polling inverts it:
+    the Workers already reach the gateway for their MCP activities, so this
+    needs no new listener, no new Service, and no new network path.
+
+    In memory and non-durable, like the other two demo switches above. A gateway
+    restart brings every Worker back, which is the right failure mode for a
+    control whose entire purpose is being reversible in one click.
+    """
+
+    def __init__(self) -> None:
+        self._down: set[str] = set()
+
+    def is_down(self, worker: str) -> bool:
+        return worker in self._down
+
+    def set(self, worker: str, down: bool) -> bool:
+        if worker not in WORKER_LABELS:
+            raise KeyError(worker)
+        if down:
+            self._down.add(worker)
+        else:
+            self._down.discard(worker)
+        return down
+
+    def state(self) -> dict:
+        return {name: (name in self._down) for name in WORKER_LABELS}
+
+
+WORKER_KILL = _WorkerKillSwitch()
 
 
 def _team_for_principal(principal: str) -> Optional[str]:
@@ -1415,7 +1474,7 @@ async def whoami(request: Request) -> JSONResponse:
     """Diagnostic. Reports what the gateway resolves for the incoming request.
 
     Test the gateway side directly (bypasses Claude Code):
-      curl -s -H "Authorization: Bearer tok_dustin" http://localhost:8080/whoami
+      curl -s -H "Authorization: Bearer tok_noah" http://localhost:8080/whoami
     If this returns your identity, the gateway, middleware, and principal map all
     work, and any remaining "unverified" is Claude Code not sending the header.
     A 404 here means the container is running an older image; rebuild it.
@@ -1539,6 +1598,40 @@ async def scan_mode(request: Request) -> Response:
         return RedirectResponse("/login", status_code=303)
     form = await request.form()
     SCAN_MODE_TOGGLE.set(str(form.get("mode") or ""))
+    return RedirectResponse("/", status_code=303)
+
+
+@mcp.custom_route("/worker-power", methods=["GET"])
+async def worker_power_state(request: Request) -> JSONResponse:
+    """Which Workers should be polling right now.
+
+    Read by the Worker processes themselves, on a short timer, which is why it
+    is the one demo-control route with no approver gate: a Worker holds a
+    machine token for MCP, not an approver session, and giving it one purely to
+    read a two-key boolean map would be a worse trade than leaving a state
+    endpoint open behind the platform's SSO gate. It discloses nothing that the
+    dashboard does not already render, and it mutates nothing.
+    """
+    return JSONResponse(WORKER_KILL.state())
+
+
+@mcp.custom_route("/worker-power", methods=["POST"])
+async def worker_power(request: Request) -> Response:
+    """Take a Worker offline, or bring it back.
+
+    Gated on approver identity like /mandate and /scan-mode, and equally
+    non-durable. The effect is not instant: the Worker notices on its next poll,
+    a second or two later, and a Worker mid-Activity finishes it before it stops
+    -- which is a graceful shutdown rather than a kill, and is the more honest
+    demonstration anyway. Work already scheduled stays on the task queue, which
+    is exactly what the Temporal UI is being opened to show.
+    """
+    if not _is_approver(_resolve_principal()):
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    worker = str(form.get("worker") or "")
+    if worker in WORKER_LABELS:
+        WORKER_KILL.set(worker, str(form.get("state") or "").lower() == "down")
     return RedirectResponse("/", status_code=303)
 
 
@@ -1838,6 +1931,39 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 .approve { background: #13c4b0; }
 .reject { background: #ef4444; }
 .toggle { background: transparent; border: 1px solid var(--border); color: var(--fg); }
+/* The demonstrator's crib sheet on the sign-in page. Quiet by construction:
+   smaller than body text and muted, so it sits below the fold of attention for
+   anyone reading the page as QuickMeals staff. */
+.demo-note { margin-top: 2rem; padding-top: 0.9rem; border-top: 1px dashed var(--border);
+        font-size: 0.72rem; color: var(--muted); line-height: 1.5; }
+.demo-note dl { margin: 0.4rem 0 0; }
+.demo-note dt { margin-top: 0.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--fg); }
+.demo-note dd { margin: 0.1rem 0 0; }
+/* The demonstrator's strip: the three other surfaces of this demo, and the two
+   Worker kill switches. Separated from the header because everything here acts
+   on the demo rather than on a release -- a presenter reaches for it between
+   beats, and an audience should be able to see that it is not part of the
+   product being shown. */
+.demobar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
+        margin: 0.6rem 0 0.2rem; padding: 0.5rem 0.7rem; border: 1px dashed var(--border);
+        border-radius: 6px; }
+.demobar .eyebrow { margin-right: 0.3rem; }
+.demobar form { display: inline; margin: 0; }
+.demobar .sep { flex: 1 1 auto; }
+/* Anchors need the button box explicitly: the base `button` rule above selects
+   the element, not a class, so a link styled as a button inherits none of it. */
+.linkbtn { display: inline-block; padding: 0.3rem 0.7rem; border-radius: 4px;
+        border: 1px solid var(--border); color: var(--fg); text-decoration: none;
+        margin-left: 0.25rem; font-size: 0.8rem; }
+.linkbtn:hover { border-color: var(--protect); }
+.kill { background: #ef4444; }
+.restore { background: #13c4b0; }
+/* A Worker that is down says so where the switch is, because the consequence
+   shows up somewhere else entirely -- in the Temporal UI, on another tab. */
+.downtag { display: inline-block; margin-left: 0.35rem; padding: 0.12rem 0.45rem;
+        border: 1px solid #ef4444; border-radius: 999px; color: #ef4444;
+        font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .countdown.urgent { color: #ef4444; font-weight: 600; }
 /* Only one QuickMeals team may decide this entry. Reads as a constraint on the
    row rather than a status of the operation, so it sits under the requested
@@ -3050,17 +3176,115 @@ _MAIN_JS = """
     });
   }
 
-  setInterval(function () {
+  // Refresh the server-rendered tables in place, on the same cadence a full
+  // reload used to run at.
+  //
+  // window.location.reload() re-fetched, re-parsed and re-painted the entire
+  // document every five seconds, and the browser has to blank the viewport to
+  // do that: a visible white flash, on a screen someone is presenting from,
+  // often mid-sentence. Nothing about the data needed it. Only three regions
+  // actually change between polls, so only those three are replaced.
+  //
+  // What is deliberately NOT touched here is the fleet panel. It polls /fleet
+  // on its own two-second timer and animates promotions as they land; swapping
+  // its DOM from underneath would cut every animation off partway.
+  function swapRegion(doc, id) {
+    var incoming = doc.getElementById(id);
+    var current = document.getElementById(id);
+    if (!incoming || !current) return false;
+    // Compare before writing. An unconditional assignment would rebuild these
+    // rows twenty times a minute whether or not anything changed, dropping any
+    // text selection an audience member is being shown.
+    if (incoming.innerHTML === current.innerHTML) return false;
+    current.innerHTML = incoming.innerHTML;
+    return true;
+  }
+
+  function refresh() {
+    // Every guard the reload had, for the same reasons: do not yank a field
+    // someone is typing in, and never interrupt a fleet transition.
     var a = document.activeElement;
     if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
-    // Never reload through a fleet transition; the animation is the point.
     if (FLEET.holdsReload()) return;
     var reasons = document.querySelectorAll('input.reason');
     for (var i = 0; i < reasons.length; i++) { if (reasons[i].value.trim() !== '') return; }
-    window.location.reload();
-  }, 5000);
+
+    fetch(window.location.href, { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) {
+        // Session expiry lands here as a redirect to /login. Follow it for
+        // real, rather than quietly swapping a login page's (absent) tables in
+        // and leaving a dead dashboard on screen.
+        if (r.redirected && r.url.indexOf('/login') !== -1) {
+          window.location.href = r.url;
+          return null;
+        }
+        return r.ok ? r.text() : null;
+      })
+      .then(function (body) {
+        if (!body) return;
+        var doc = new DOMParser().parseFromString(body, 'text/html');
+        var changed = false;
+        if (swapRegion(doc, 'pending-body')) changed = true;
+        if (swapRegion(doc, 'history-body')) changed = true;
+        if (swapRegion(doc, 'wf-list')) changed = true;
+        // Replaced rows are new nodes: the workflow filter and the approval
+        // countdowns have to be re-applied to them or they render unfiltered
+        // and frozen until the next tick.
+        if (changed) {
+          applyFilter(filter ? filter.value : '');
+          tick();
+        }
+      })
+      .catch(function () { /* a dropped poll is not worth a visible error */ });
+  }
+  setInterval(refresh, 5000);
 })();
 """
+
+
+def _render_demo_bar() -> str:
+    """The presenter's control strip: other surfaces, and the two kill switches.
+
+    Links open in new tabs on purpose. Every one of them is somewhere a
+    demonstrator goes to show a consequence -- an Event History, an editor, an
+    agent -- and then comes straight back to this page to cause the next one.
+    Navigating away in place would lose the approval queue mid-story.
+    """
+    surfaces = [
+        ("Temporal UI &middot; Waypoint", TEMPORAL_UI_URL),
+        ("Temporal UI &middot; Security", TEMPORAL_UI_SECURITY_URL),
+        ("IDE", GATEWAY_IDE_URL),
+        ("Google ADK", GATEWAY_ADK_URL),
+    ]
+    links = "".join(
+        f'<a class="linkbtn" href="{html.escape(url)}" target="_blank" '
+        f'rel="noopener noreferrer">{label}</a>'
+        for label, url in surfaces
+    )
+
+    switches = []
+    for worker, label in WORKER_LABELS.items():
+        down = WORKER_KILL.is_down(worker)
+        action, css, verb = (
+            ("up", "restore", "Restart") if down else ("down", "kill", "Kill")
+        )
+        tag = '<span class="downtag">down</span>' if down else ""
+        switches.append(
+            f'<form method="post" action="/worker-power">'
+            f'<input type="hidden" name="worker" value="{worker}">'
+            f'<input type="hidden" name="state" value="{action}">'
+            f'<button class="{css}" type="submit">{verb} {html.escape(label)}</button>'
+            f"</form>{tag}"
+        )
+
+    return (
+        '<div class="demobar">'
+        '<span class="eyebrow muted">Demo</span>'
+        f"{links}"
+        '<span class="sep"></span>'
+        f"{''.join(switches)}"
+        "</div>"
+    )
 
 
 def _render_mandate_switch(mandate_on: bool, scan_mode: str) -> str:
@@ -3195,6 +3419,7 @@ def _render_dashboard(
       {_render_mandate_switch(mandate_on, scan_mode)}
     </div>
   </header>
+  {_render_demo_bar()}
   <section class="fleet" id="fleet">
     <div class="section-head">
       <h2>Release fleet</h2>
@@ -3231,7 +3456,7 @@ def _render_dashboard(
         <th>Submitted</th><th>Deadline</th><th>Decision</th>
       </tr>
     </thead>
-    <tbody>{pending_rows}</tbody>
+    <tbody id="pending-body">{pending_rows}</tbody>
   </table>
 
   <div class="filterbar">
@@ -3248,7 +3473,7 @@ def _render_dashboard(
         <th>Approver</th><th>Reason</th>
       </tr>
     </thead>
-    <tbody>{history_rows}</tbody>
+    <tbody id="history-body">{history_rows}</tbody>
   </table>
 
   <!-- Where the fleet panel's one outbound link points. Server-injected because
@@ -3316,6 +3541,28 @@ def _render_login(error: str = "") -> str:
       <input id="token" name="token" type="password" autocomplete="current-password" required>
       <button class="approve" type="submit">Sign in</button>
     </form>
+    <!-- Stage directions, and the only text on this page addressed to the
+         person running the demo rather than to the character they are playing.
+         Set small and muted so it reads as a margin note from the back of the
+         room rather than as part of the product.
+
+         These are not secrets. They are cast names for a pretend deployment
+         backend, on a host already behind the platform's Temporal SSO gate,
+         and printing them here removes the one thing most likely to stall a
+         demo: forgetting which of the two accounts can approve the scan. -->
+    <div class="demo-note">
+      <p><strong>Note to demonstrator:</strong> use the following accounts.</p>
+      <dl>
+        <dt>tok_noah</dt>
+        <dd>Noah Proovle, Waypoint engineering. Approves ordinary production
+        promotions. <em>Cannot</em> approve a promotion that came out of a
+        security scan &mdash; that decision belongs to the Security team, and
+        the gateway refuses it with a 403.</dd>
+        <dt>tok_abe</dt>
+        <dd>Abe Roover, Security. Approves everything Noah can, <em>and</em> the
+        scan-gated production promotions only his team may sign off.</dd>
+      </dl>
+    </div>
   </main>
 </body>
 </html>"""

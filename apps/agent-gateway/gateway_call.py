@@ -26,7 +26,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 GATEWAY_MCP_URL = os.getenv("GATEWAY_MCP_URL", "http://localhost:8080/mcp")
-GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "tok_dustin")
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "tok_noah")
 
 
 def _parse_value(raw: str):

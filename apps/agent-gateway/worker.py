@@ -6,7 +6,7 @@ import os
 
 from temporalio.worker import Worker
 
-from common import temporal_client
+from common import temporal_client, worker_power
 from common.models import WAYPOINT_NAMESPACE
 from activities.gateway_activities import (
     archive_artifacts,
@@ -60,57 +60,69 @@ async def main() -> None:
     )
     # Sync activities use requests, so they run on a thread pool executor.
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        worker = Worker(
-            client,
-            task_queue=TASK_QUEUE,
-            workflows=[
-                AgenticChainWorkflow,
-                AutonomousAgentWorkflow,
-                TemporalAdkSessionWorkflow,
-                # Services one external tool request each, for as long as the
-                # approval takes.
-                ProtectedActionWorkflow,
-                # The Waypoint team's own release steps, as children of the
-                # chain. Same namespace, same task queue, same worker: depth,
-                # not a team boundary.
-                CutReleaseChildWorkflow,
-                PromoteReleaseChildWorkflow,
-                QualityGateChildWorkflow,
-            ],
-            activities=[
-                evaluate_policy,
-                invoke_tool,
-                # All stay inside this namespace. Nothing on this worker holds
-                # a client for anyone else's cluster.
-                submit_tool_call,
-                submit_nested_tool_call,
-                signal_operation_callback,
-                # The individual steps inside the release children. Separate
-                # Activity functions rather than one parameterized call, so
-                # Event History names what actually happened.
-                tag_commit_in_source_control,
-                archive_artifacts,
-                calculate_integrity_hashes,
-                deploy_binaries,
-                health_check_new_instances,
-                update_traffic_routing,
-                update_release_notes,
-                run_quality_check,
-                publish_quality_gate_state,
-                await_quality_gate,
-            ],
-            # The gateway's Nexus front door, behind the `agent-gateway`
-            # Endpoint. This is how another team's tool asks for a protected
-            # action without any access to this namespace.
-            nexus_service_handlers=[AgentGatewayServiceHandler()],
-            activity_executor=executor,
-        )
+
+        def make_worker() -> Worker:
+            # A factory rather than a single instance: the dashboard's kill
+            # switch stops this Worker and starts it again, and a Temporal
+            # Worker is single-use -- once shut down it cannot be re-run, so a
+            # restart builds a new one on the same client, executor and queue.
+            return Worker(
+                client,
+                task_queue=TASK_QUEUE,
+                workflows=[
+                    AgenticChainWorkflow,
+                    AutonomousAgentWorkflow,
+                    TemporalAdkSessionWorkflow,
+                    # Services one external tool request each, for as long as the
+                    # approval takes.
+                    ProtectedActionWorkflow,
+                    # The Waypoint team's own release steps, as children of the
+                    # chain. Same namespace, same task queue, same worker: depth,
+                    # not a team boundary.
+                    CutReleaseChildWorkflow,
+                    PromoteReleaseChildWorkflow,
+                    QualityGateChildWorkflow,
+                ],
+                activities=[
+                    evaluate_policy,
+                    invoke_tool,
+                    # All stay inside this namespace. Nothing on this worker holds
+                    # a client for anyone else's cluster.
+                    submit_tool_call,
+                    submit_nested_tool_call,
+                    signal_operation_callback,
+                    # The individual steps inside the release children. Separate
+                    # Activity functions rather than one parameterized call, so
+                    # Event History names what actually happened.
+                    tag_commit_in_source_control,
+                    archive_artifacts,
+                    calculate_integrity_hashes,
+                    deploy_binaries,
+                    health_check_new_instances,
+                    update_traffic_routing,
+                    update_release_notes,
+                    run_quality_check,
+                    publish_quality_gate_state,
+                    await_quality_gate,
+                ],
+                # The gateway's Nexus front door, behind the `agent-gateway`
+                # Endpoint. This is how another team's tool asks for a protected
+                # action without any access to this namespace.
+                nexus_service_handlers=[AgentGatewayServiceHandler()],
+                activity_executor=executor,
+            )
+
         print(
             f"worker started, namespace '{client.namespace}', "
             f"task queue '{TASK_QUEUE}'",
             flush=True,
         )
-        await worker.run()
+        # Supervised rather than simply run: the demo needs this Worker to stop
+        # polling on request and come back on request, and to be genuinely
+        # absent from the task queue in between.
+        await worker_power.supervise(
+            worker_power.WORKER_WAYPOINT, make_worker, label="waypoint worker"
+        )
 
 
 if __name__ == "__main__":

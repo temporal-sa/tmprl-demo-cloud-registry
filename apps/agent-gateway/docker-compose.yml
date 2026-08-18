@@ -92,6 +92,9 @@ services:
       PROTECTED_ENVIRONMENTS: "prod,production"
       AGENT_GATEWAY_MCP_URL: "http://gateway:8080/mcp"
       AGENT_GATEWAY_TOKEN: "tok_adk"
+      # Where this worker asks whether it should still be polling. The dashboard
+      # kill switch writes it; the worker reads it every couple of seconds.
+      WORKER_POWER_URL: "http://gateway:8080/worker-power"
       ADK_MODEL: "${ADK_MODEL:-gemini-3.6-flash}"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
       # Quality gate checks are Activities on this worker now, not a call into
@@ -146,6 +149,10 @@ services:
       # goes through the `agent-gateway` Nexus Endpoint, so this team holds no
       # address, namespace, or credential for the gateway's cluster.
       SECURITY_SCAN_BACKEND_URL: "http://mock-tool:9000/invoke"
+      # The kill switch, same as the Waypoint worker. Note this is the ONLY
+      # gateway address this team's process holds, and it is a demo control
+      # rather than a call path: scans still reach the gateway over Nexus.
+      WORKER_POWER_URL: "http://gateway:8080/worker-power"
       # Which versions this team's scan rejects. Read here, on the Security team's
       # side, rather than relayed in by the caller.
       SCAN_FAIL_VERSIONS: "${SCAN_FAIL_VERSIONS:-}"
@@ -169,9 +176,9 @@ services:
       PROTECTED_ENVIRONMENTS: "prod,production"
       # Static bearer-token to identity map. The gateway sets the approval
       # requester from a matching token, never from anything the agent says.
-      # Connect Claude Code with: --header "Authorization: Bearer tok_dustin"
-      GATEWAY_PRINCIPALS: '{"tok_dustin":"Dustin Sweet <dustin.sweet@quickmeals.com>","tok_sam":"Sam Ingbar <sam.ingbar@quickmeals.com>","tok_abe":"Abe Roover <abe.roover@quickmeals.com>","tok_adk":"release-agent@google-adk","tok_approver":"approver@demo","tok_legacy_scanner":"legacy-scanner@security"}'
-      GATEWAY_APPROVERS: "approver@demo,Dustin Sweet <dustin.sweet@quickmeals.com>,Sam Ingbar <sam.ingbar@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>"
+      # Connect Claude Code with: --header "Authorization: Bearer tok_noah"
+      GATEWAY_PRINCIPALS: '{"tok_noah":"Noah Proovle <noah.proovle@quickmeals.com>","tok_abe":"Abe Roover <abe.roover@quickmeals.com>","tok_adk":"release-agent@google-adk","tok_approver":"approver@demo","tok_legacy_scanner":"legacy-scanner@security"}'
+      GATEWAY_APPROVERS: "approver@demo,Noah Proovle <noah.proovle@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>"
       # Which service, if any, a principal is calling on behalf of. Read from the
       # token the same way the principal itself is, and for the same reason: a
       # caller does not get to name its own service. The Security team's legacy
@@ -188,7 +195,7 @@ services:
       # a persona's address changed. Keys may be the full principal string or
       # just the address inside it; anything absent has no team and therefore
       # cannot approve a team-restricted Operation.
-      GATEWAY_PRINCIPAL_TEAMS: '{"dustin.sweet@quickmeals.com":"waypoint","sam.ingbar@quickmeals.com":"waypoint","abe.roover@quickmeals.com":"security"}'
+      GATEWAY_PRINCIPAL_TEAMS: '{"noah.proovle@quickmeals.com":"waypoint","abe.roover@quickmeals.com":"security"}'
       # Where a workflow id on the dashboard links to. Namespace bases: the page
       # appends /workflows/<id>, which is the same path on the OSS Web UI and on
       # Temporal Cloud. Two of them because there are two namespaces, and the
@@ -270,7 +277,10 @@ services:
       - gateway
     environment:
       AGENT_GATEWAY_MCP_URL: "http://gateway:8080/mcp"
-      AGENT_GATEWAY_TOKEN: "tok_dustin"
+      AGENT_GATEWAY_TOKEN: "tok_noah"
+      # What `legacy-scan` reaches from inside this container.
+      GATEWAY_MCP_URL: "http://gateway:8080/mcp"
+      SECURITY_SCAN_BACKEND_URL: "http://mock-tool:9000/invoke"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     # code-server runs with --auth none. Locally that is covered by binding to
     # 127.0.0.1 below; in the cluster it is covered by the platform SSO gate.
