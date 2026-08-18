@@ -29,6 +29,13 @@ legacy scanner in step 6 Act One, and `gateway_call.py resume_nested_release` â€
 run in the IDE's terminal, where the repository and its dependencies are already
 present. Drop the `.venv/bin/` prefix; `python` is the right interpreter there.
 
+Claude Code is available two ways in that IDE, and both drive the same session:
+the **Claude Code panel** in the activity bar down the left edge, and the
+`claude` command in any terminal. The panel is a front end for that same CLI, so
+the MCP server, the workspace `CLAUDE.md`, and the permission rules apply
+identically whichever you open. Use the panel on stage â€” it is visible to an
+audience and survives someone else taking the keyboard.
+
 ## 1. Start the stack
 
 You need Docker with Compose v2.

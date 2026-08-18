@@ -47,6 +47,20 @@ ENV HOME=/home/demo \
 RUN curl -fsSL https://claude.ai/install.sh | bash -s stable
 RUN curl -fsSL https://code-server.dev/install.sh | sh -s -- --method standalone
 
+# Anthropic's Claude Code extension, so the presenter has a panel in the
+# activity bar rather than only a terminal command. code-server resolves
+# extensions from Open VSX rather than Microsoft's marketplace; the official
+# extension is published there as Anthropic.claude-code.
+#
+# The extension is a front end for the `claude` CLI installed above, not a
+# replacement for it -- it shells out to that binary, so both are required and
+# the terminal remains a working entry point.
+#
+# Deliberately unpinned, matching the `stable` channel the CLI installer uses:
+# a pinned extension against a moving CLI is the pairing most likely to break,
+# and the image is rebuilt on every deploy anyway.
+RUN code-server --install-extension Anthropic.claude-code
+
 # The stage dressing. This tree is inert by design -- claude-code-session's
 # CLAUDE.md §1 forbids reading it -- so its only job is to look like a service
 # repository in the file explorer while a presenter talks about releases.
