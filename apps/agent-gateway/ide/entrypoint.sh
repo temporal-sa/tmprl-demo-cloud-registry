@@ -99,6 +99,34 @@ cat > "$HOME/.claude/settings.json" <<'EOF'
 }
 EOF
 
+# ------------------------------------------ code-server User/settings.json
+#
+# Opens the demonstrator's script the moment the editor loads, so a presenter
+# who has never seen this environment is not looking at an empty editor
+# wondering where Claude Code is.
+#
+# `readme` is the only value that opens a file at all -- VS Code has no setting
+# that names one -- and it opens the workspace root's README.md, which is why
+# the script is installed under that name.
+#
+# Written to USER settings rather than the workspace's .vscode/settings.json for
+# two reasons: workspace settings are restricted in an untrusted folder, and
+# claude-code-session's CLAUDE.md declares this tree inert, so adding a .vscode
+# directory to it would contradict the instruction the agent is given about it.
+CS_USER_DIR="$HOME/.local/share/code-server/User"
+mkdir -p "$CS_USER_DIR"
+cat > "$CS_USER_DIR/settings.json" <<'EOF'
+{
+  "workbench.startupEditor": "readme",
+  "workbench.colorTheme": "Default Dark Modern",
+  "telemetry.telemetryLevel": "off",
+  "update.mode": "none",
+  "workbench.enableExperiments": false,
+  "security.workspace.trust.enabled": false,
+  "explorer.confirmDelete": false
+}
+EOF
+
 # The MCP server definition. Written into the workspace because that is where a
 # presenter would look for it, and because Claude Code expands ${VAR} in `url`
 # and `headers`, so the bearer token stays in the environment rather than on disk.
