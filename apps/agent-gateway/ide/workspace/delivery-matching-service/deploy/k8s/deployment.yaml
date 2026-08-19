@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delivery-matching-service
+  labels:
+    app: delivery-matching-service
+    team: fleet-assignment
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: delivery-matching-service
+  template:
+    metadata:
+      labels:
+        app: delivery-matching-service
+    spec:
+      containers:
+        - name: delivery-matching-service
+          image: registry.internal.quickmeals.com/fleet/delivery-matching-service:2.3.1
+          ports:
+            - containerPort: 8291
+            - containerPort: 9102
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            grpc:
+              port: 8291
+            initialDelaySeconds: 10

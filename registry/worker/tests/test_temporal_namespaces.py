@@ -110,10 +110,36 @@ def test_env_from_refs_unchanged_for_unbound_components():
     ) == [{"secretRef": {"name": TEMPORAL_WORKER_RUNTIME_SECRET_NAME}}]
 
 
-def test_real_projects_render_only_the_stable_temporal_secret_names():
-    # None of the shipped projects declare namespaces, so no labelled sibling
-    # ExternalSecret may appear for any of them.
+def test_real_projects_render_exactly_the_temporal_secrets_they_declare():
+    # A project renders a labelled sibling ExternalSecret if and only if it
+    # declares that namespace label. This used to assert that no shipped project
+    # declared any -- true until agent-gateway became the first to, so the test
+    # now checks the derivation rather than the era. Anything outside the
+    # allowed set means a Secret name was derived from something other than a
+    # declared label, which is the failure worth catching.
     for demo_project in real_demo_projects():
+        rendered = runtime_secret_resources(demo_project)
+        temporal_names = {
+            item["metadata"]["name"]
+            for item in rendered
+            if item["metadata"]["name"].startswith("temporal-")
+        }
+        allowed = {TEMPORAL_SECRET_NAME, TEMPORAL_WORKER_RUNTIME_SECRET_NAME}
+        for label in temporal_namespace_labels(demo_project):
+            allowed.add(temporal_secret_name(label))
+            allowed.add(temporal_worker_runtime_secret_name(label))
+        assert temporal_names <= allowed, (
+            f"{demo_project['metadata']['name']} rendered {temporal_names}, "
+            f"allowed {allowed}"
+        )
+
+
+def test_projects_without_declared_namespaces_render_only_stable_names():
+    # The other half of the pair, kept separate so a regression that started
+    # rendering labelled Secrets for an unlabelled project still fails loudly.
+    for demo_project in real_demo_projects():
+        if temporal_namespace_labels(demo_project):
+            continue
         rendered = runtime_secret_resources(demo_project)
         temporal_names = {
             item["metadata"]["name"]

@@ -1,0 +1,314 @@
+name: agent-gateway-approval-demo
+
+services:
+  temporal:
+    build:
+      context: .
+      dockerfile: Dockerfile.temporal
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    volumes:
+      - temporal-data:/data
+    healthcheck:
+      # Probes the namespace the rest of the stack actually needs, not just "is
+      # the server up". start-dev creates namespaces at launch, so this also
+      # gates dependents on `waypoint` existing rather than racing it.
+      test: ["CMD", "temporal", "operator", "namespace", "describe", "-n", "waypoint", "--address", "127.0.0.1:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Registers the two Nexus Endpoints, then exits. Endpoints are cluster-level
+  # objects rather than worker config: each one names a target namespace and task
+  # queue, and callers address the endpoint by name and learn neither. This is
+  # what lets either team restructure behind their endpoint without the other
+  # team's code changing.
+  #
+  # Creation is idempotent here by ignoring "already exists", so repeated
+  # `docker compose up` is safe.
+  #
+  # The names must match the constants in common/nexus_contracts.py and
+  # security_scan/nexus_contracts.py exactly. They are project-prefixed because
+  # Temporal Cloud scopes Endpoint names to an entire ACCOUNT, and the hosted
+  # deployment shares one with every other demo -- so a bare "security" is not
+  # this demo's to claim. Local dev carries the same names so that the thing
+  # rehearsed here is the thing that runs there.
+  #
+  # If you are seeing a stale "agent-gateway"/"security" pair alongside these,
+  # the endpoints outlived a rename: `already exists` is ignored above, so old
+  # names survive in the volume. `docker compose down -v` clears them.
+  nexus-endpoints:
+    build:
+      context: .
+      dockerfile: Dockerfile.temporal
+    depends_on:
+      temporal:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        temporal operator nexus endpoint create \
+          --name agent-gateway-waypoint \
+          --target-namespace waypoint \
+          --target-task-queue agentic-gateway \
+          --address temporal:7233 2>&1 | grep -v "already exists" || true
+        temporal operator nexus endpoint create \
+          --name agent-gateway-security \
+          --target-namespace security \
+          --target-task-queue security-tq \
+          --address temporal:7233 2>&1 | grep -v "already exists" || true
+        temporal operator nexus endpoint list --address temporal:7233
+
+  mock-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: ["python", "-m", "mock_tool.server"]
+    environment:
+      MOCK_TOOL_PORT: "9000"
+      # Cutting this release runs long and trips the gateway convert-to-async path.
+      SLOW_CUT_VERSION: "2.3.1"
+      SLOW_CUT_DELAY_SECONDS: "12"
+      # Versions whose security scan fails. Read on the Security team's own side
+      # too; kept here so a single .env value configures the whole demo.
+      SCAN_FAIL_VERSIONS: "${SCAN_FAIL_VERSIONS:-}"
+    ports:
+      - "127.0.0.1:9000:9000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: ["python", "worker.py"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TASK_QUEUE: "agentic-gateway"
+      MOCK_TOOL_URL: "http://mock-tool:9000/invoke"
+      PROTECTED_ENVIRONMENTS: "prod,production"
+      AGENT_GATEWAY_MCP_URL: "http://gateway:8080/mcp"
+      AGENT_GATEWAY_TOKEN: "tok_adk"
+      # Where this worker asks whether it should still be polling. The dashboard
+      # kill switch writes it; the worker reads it every couple of seconds.
+      WORKER_POWER_URL: "http://gateway:8080/worker-power"
+      ADK_MODEL: "${ADK_MODEL:-gemini-3.6-flash}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      # Quality gate checks are Activities on this worker now, not a call into
+      # the deployment backend, so the fail-closed knob is read here. Empty by
+      # default, so gates pass. Set it and recreate this service to show a
+      # candidate being refused before anyone is asked to approve it.
+      QUALITY_GATE_FAIL_VERSIONS: "${QUALITY_GATE_FAIL_VERSIONS:-}"
+      # Same shape for the promotion health check: a version listed here fails
+      # its post-deploy health check, so update_traffic_routing never runs and
+      # the environment keeps serving what it was serving. Implemented and
+      # correct, deliberately not part of the default scripted run.
+      HEALTH_CHECK_FAIL_VERSIONS: "${HEALTH_CHECK_FAIL_VERSIONS:-}"
+      # This worker's own namespace, and the only one it connects to. Reaching
+      # the Security team needs no configuration here at all: the `security`
+      # Nexus Endpoint is a cluster object, and the endpoint name is in the code
+      # as part of the contract.
+      #
+      # It is also the namespace the `agent-gateway` Endpoint targets, and this
+      # worker hosts that Endpoint's service handler -- so this value and
+      # `--target-namespace` above have to agree or the Security team's calls into
+      # the gateway go to a namespace nobody is polling and quietly time out.
+      TEMPORAL_NAMESPACE: "waypoint"
+
+  # The Security team's pre-prod scanning platform. A separate process on purpose,
+  # so the Temporal UI shows two workers with two identities in two namespaces
+  # rather than one worker wearing two hats.
+  #
+  # Started with everything else. `docker compose up -d` brings the whole demo up
+  # and `docker compose down -v` takes it all down; there is no profile to
+  # remember and none to forget under pressure in front of an audience.
+  #
+  # This worker being up is deliberately NOT what decides whether a release gets
+  # scanned. That is the scan-mode switch on the dashboard: legacy runs the
+  # Security team's old host script, platform routes through the workflow this
+  # worker serves. An idle worker with nothing routed to it is invisible, so
+  # CASE-1 and CASE-2a look exactly as they did while it sat behind a profile,
+  # and Act One of CASE-2 stays a switch position rather than a container state.
+  security-scan-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: ["python", "-m", "security_scan.worker"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TEMPORAL_NAMESPACE: "security"
+      TASK_QUEUE: "security-tq"
+      # The shared observability backend the scan reports progress to.
+      # Note what is absent: nothing here points at Agent Gateway. Calling them
+      # goes through the `agent-gateway` Nexus Endpoint, so this team holds no
+      # address, namespace, or credential for the gateway's cluster.
+      SECURITY_SCAN_BACKEND_URL: "http://mock-tool:9000/invoke"
+      # The kill switch, same as the Waypoint worker. Note this is the ONLY
+      # gateway address this team's process holds, and it is a demo control
+      # rather than a call path: scans still reach the gateway over Nexus.
+      WORKER_POWER_URL: "http://gateway:8080/worker-power"
+      # Which versions this team's scan rejects. Read here, on the Security team's
+      # side, rather than relayed in by the caller.
+      SCAN_FAIL_VERSIONS: "${SCAN_FAIL_VERSIONS:-}"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: ["python", "-m", "gateway.server"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TEMPORAL_NAMESPACE: "waypoint"
+      TASK_QUEUE: "agentic-gateway"
+      APPROVAL_TIMEOUT_SECONDS: "300"
+      GATEWAY_PORT: "8080"
+      # Read only fleet state for the dashboard's release panel.
+      MOCK_TOOL_STATE_URL: "http://mock-tool:9000/state"
+      PROTECTED_ENVIRONMENTS: "prod,production"
+      # Static bearer-token to identity map. The gateway sets the approval
+      # requester from a matching token, never from anything the agent says.
+      # Connect Claude Code with: --header "Authorization: Bearer tok_noah"
+      GATEWAY_PRINCIPALS: '{"tok_noah":"Noah Proovle <noah.proovle@quickmeals.com>","tok_abe":"Abe Roover <abe.roover@quickmeals.com>","tok_adk":"release-agent@google-adk","tok_approver":"approver@demo","tok_legacy_scanner":"legacy-scanner@security"}'
+      GATEWAY_APPROVERS: "approver@demo,Noah Proovle <noah.proovle@quickmeals.com>,Abe Roover <abe.roover@quickmeals.com>"
+      # Which service, if any, a principal is calling on behalf of. Read from the
+      # token the same way the principal itself is, and for the same reason: a
+      # caller does not get to name its own service. The Security team's legacy
+      # host script authenticates as `tok_legacy_scanner`, so the promotion it
+      # asks for carries caller_service=security -- which makes it the Security
+      # team's to approve, and exempts it from having a second scan put in front
+      # of it. Their Temporal workflow states the same thing over Nexus, so both
+      # of their scanners identify identically no matter which one is in use.
+      GATEWAY_PRINCIPAL_SERVICES: '{"legacy-scanner@security":"security"}'
+      # Which QuickMeals engineering team each principal belongs to. Explicit and
+      # auditable on purpose: an Operation gated by the Security team's scan may
+      # only be approved by a Security-team member, and inferring that from an
+      # email domain or a token-name pattern would break silently the first time
+      # a persona's address changed. Keys may be the full principal string or
+      # just the address inside it; anything absent has no team and therefore
+      # cannot approve a team-restricted Operation.
+      GATEWAY_PRINCIPAL_TEAMS: '{"noah.proovle@quickmeals.com":"waypoint","abe.roover@quickmeals.com":"security"}'
+      # Where a workflow id on the dashboard links to. Namespace bases: the page
+      # appends /workflows/<id>, which is the same path on the OSS Web UI and on
+      # Temporal Cloud. Two of them because there are two namespaces, and the
+      # gateway holds no credential for the Security team's -- so it cannot name
+      # that one for itself and has to be told.
+      #
+      # These match the code defaults exactly; they are stated anyway so the
+      # local and hosted deployments are symmetric and neither reads as magic.
+      TEMPORAL_UI_URL: "http://localhost:8233/namespaces/waypoint"
+      TEMPORAL_UI_SECURITY_URL: "http://localhost:8233/namespaces/security"
+      GATEWAY_DEBUG: "1"
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  # Named adk-web, not adk-agent, so the Compose service name and the deployed
+  # Kubernetes Service name are the same string -- which is what makes the edge's
+  # `proxy_pass http://adk-web:8000` mean the same thing in both places.
+  adk-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    # Three flags that are not cosmetic:
+    #
+    #   --url_prefix /adk  makes the Angular app call /adk/* and points the root
+    #                      redirect at /adk/dev-ui/. It does NOT move the server's
+    #                      own routes, which stay at /, /dev-ui/ and /list-apps --
+    #                      so it assumes a proxy that strips the prefix. The edge
+    #                      is that proxy, here and in the cluster.
+    #   --no-reload        `adk web` defaults reload=True, which runs uvicorn's
+    #                      file watcher over the agents directory. A session write
+    #                      into that tree can restart the process mid-demo.
+    #   --session_service_uri memory://
+    #                      keeps sessions out of the watched tree entirely, and is
+    #                      honest about being ephemeral: the hosted platform has no
+    #                      volumes, so a SQLite session file would not survive a
+    #                      pod restart either.
+    command:
+      - adk
+      - web
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --url_prefix
+      - /adk
+      - --no-reload
+      - --session_service_uri
+      - memory://
+      - adk_agents
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: "/app"
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TEMPORAL_NAMESPACE: "waypoint"
+      TASK_QUEUE: "agentic-gateway"
+      ADK_MODEL: "${ADK_MODEL:-gemini-3.6-flash}"
+      # Deliberately no GOOGLE_API_KEY. TemporalSessionProxyAgent makes no model
+      # call -- it starts a workflow and streams that workflow's answers back --
+      # so the Gemini call happens on the worker, as an Activity. The component a
+      # browser can reach holds no model credential at all.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # code-server with Claude Code in its terminal, opened on the stage-prop repo.
+  # In the hosted deployment this is how the demo is driven; here it is how that
+  # is rehearsed, which matters because the parts most likely to go wrong -- the
+  # first-run prompt suppression and the MCP handshake -- are the parts you want
+  # to have already seen work.
+  #
+  # It reaches the gateway over the Compose network on the same URL it uses in
+  # the cluster, so .mcp.json is identical in both.
+  ide:
+    build:
+      context: .
+      dockerfile: ide/Dockerfile
+    depends_on:
+      - gateway
+    environment:
+      AGENT_GATEWAY_MCP_URL: "http://gateway:8080/mcp"
+      AGENT_GATEWAY_TOKEN: "tok_noah"
+      # What `legacy-scan` reaches from inside this container.
+      GATEWAY_MCP_URL: "http://gateway:8080/mcp"
+      SECURITY_SCAN_BACKEND_URL: "http://mock-tool:9000/invoke"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    # code-server runs with --auth none. Locally that is covered by binding to
+    # 127.0.0.1 below; in the cluster it is covered by the platform SSO gate.
+    ports:
+      - "127.0.0.1:8443:8080"
+
+  # The same single front door the hosted deployment gets, so path routing is
+  # rehearsed locally rather than discovered in the cluster. Every service above
+  # is still published on its own port for direct access during development;
+  # this is the composed view, and the only one that matches production:
+  #
+  #   http://localhost:8081/       approver dashboard
+  #   http://localhost:8081/adk/   Google ADK dev UI
+  #   http://localhost:8081/ide/   hosted IDE
+  #   http://localhost:8081/mcp    MCP endpoint
+  #
+  # nginx resolves all three upstreams at startup and exits if one is missing,
+  # which is why every service it names is listed under depends_on.
+  edge:
+    build:
+      context: .
+      dockerfile: edge/Dockerfile
+    depends_on:
+      - gateway
+      - adk-web
+      - ide
+    ports:
+      - "127.0.0.1:8081:8080"
+
+volumes:
+  temporal-data:
