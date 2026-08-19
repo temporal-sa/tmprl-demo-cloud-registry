@@ -146,6 +146,22 @@ Keep the dashboard open in a browser tab. The strip along the top of it opens th
 Temporal UI (both namespaces), the IDE and the Google ADK surface in new tabs,
 and holds the two worker kill switches used later on.
 
+**Reset demo** is on that strip too, and it is how you start a second run. It
+terminates the running workflows, puts the fleet back to 2.2.0 everywhere with
+the release rail seeded, and hides everything from before it, so the approval
+queue and tool call history both start empty. Nothing is deleted from Temporal
+-- the previous run is still there in the Temporal UI for anyone who asks, it
+just stops showing up on the dashboard.
+
+Two things a reset deliberately leaves alone: the mandate and scanner switches,
+and the worker kill switches. Those are how you have staged the room rather than
+run state, and quietly flipping them back would undo the beat you were setting
+up. Note also that it is per-process state, so restarting the gateway un-hides
+the older runs.
+
+Chains close themselves after 20 minutes idle, so a demo left half-finished does
+not leave workflows running behind you.
+
 ## 4. CASE-1: simple approval-gated tool
 
 Before you run anything, look at the **Release fleet** panel. Between staging and
