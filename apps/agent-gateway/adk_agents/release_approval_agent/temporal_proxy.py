@@ -7,7 +7,7 @@ import hashlib
 import os
 from typing import AsyncGenerator
 
-from google.adk.agents import BaseAgent
+from google.adk.agents import LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.genai import types
@@ -84,8 +84,27 @@ def _text_event(ctx: InvocationContext, author: str, text: str) -> Event:
     )
 
 
-class TemporalSessionProxyAgent(BaseAgent):
-    """Render a Temporal-owned Dashy session through the standard ADK Web UI."""
+class TemporalSessionProxyAgent(LlmAgent):
+    """Render a Temporal-owned Dashy session through the standard ADK Web UI.
+
+    Subclasses LlmAgent, and does not use it. `_run_async_impl` below replaces
+    the LLM turn entirely: this agent starts or resumes a Temporal Workflow and
+    streams that Workflow's events back as ADK events, and the actual Gemini
+    call happens inside the Workflow, on the Waypoint worker, through
+    TemporalModel. Nothing here calls a model, which is why the ADK web process
+    holds no GOOGLE_API_KEY.
+
+    So why inherit from it? The dev UI asks for /apps/<app>/app-info on load and
+    the ADK answers 400 "Root agent is not an LlmAgent" for anything else. The
+    Angular app does not recover from that: it renders its dark shell and stops,
+    which reads as a completely black page with no error anywhere on screen.
+
+    BaseAgent was the honest description of what this agent does, and it cost
+    the entire UI. LlmAgent is the type the dev UI requires, `model` is the
+    model the session really does use -- named here, called in the Workflow --
+    and the inherited LLM behaviour is unreachable because the one method that
+    would invoke it is overridden.
+    """
 
     async def _run_async_impl(
         self,

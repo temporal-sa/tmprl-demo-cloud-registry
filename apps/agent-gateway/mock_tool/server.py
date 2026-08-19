@@ -4,6 +4,8 @@ import asyncio
 import os
 import time
 
+import copy
+
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -101,6 +103,13 @@ _scan_provider: dict | None = None
 # attempt with the same key returns the original result and does not apply the
 # effect a second time.
 _seen: dict[str, dict] = {}
+
+# The boot picture, captured once at import so /reset can restore it exactly.
+# Deep-copied on both sides: these are the originals, and handing them out by
+# reference would let the first promotion after a reset mutate the thing every
+# later reset restores from.
+_SEED_DEPLOYED = copy.deepcopy(_deployed)
+_SEED_RELEASES = copy.deepcopy(_releases)
 
 # Demo knob: cutting this release runs long, which trips the gateway's
 # monitor-and-convert budget and demonstrates the sync-to-async conversion. The
@@ -462,6 +471,36 @@ async def state(request: Request) -> JSONResponse:
     )
 
 
+async def reset(request: Request) -> JSONResponse:
+    """Put the fleet back to the picture a fresh container starts with.
+
+    Restarting this service already did this, and that is exactly the problem:
+    it takes the gateway's dashboard down with it, drops the security team's
+    capability registration, and costs a rollout on the hosted deployment. A
+    presenter between runs wants the story reset, not the stack bounced.
+
+    Everything mutable goes back to boot state, including `_seen`. Leaving the
+    idempotency store populated would mean a replayed promotion from a previous
+    run silently returning its old result against a fleet that no longer has
+    that history -- a bug that would surface minutes later, as a promotion that
+    reports success and changes nothing.
+
+    The scan provider registration is deliberately NOT cleared. It is not demo
+    state: it is the Security team's worker saying it is alive, and that worker
+    re-heartbeats every few seconds regardless. Clearing it would briefly claim
+    the scanner is unreachable when it is running perfectly well.
+    """
+    global _quality_gates, _scan
+    _deployed.clear()
+    _deployed.update(copy.deepcopy(_SEED_DEPLOYED))
+    _releases.clear()
+    _releases.update(copy.deepcopy(_SEED_RELEASES))
+    _quality_gates = dict(_IDLE_GATES)
+    _scan = None
+    _seen.clear()
+    return JSONResponse({"reset": True})
+
+
 async def healthz(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
@@ -470,6 +509,7 @@ app = Starlette(
     routes=[
         Route("/invoke", invoke, methods=["POST"]),
         Route("/state", state, methods=["GET"]),
+        Route("/reset", reset, methods=["POST"]),
         Route("/healthz", healthz, methods=["GET"]),
     ]
 )

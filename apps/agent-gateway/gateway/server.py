@@ -9,7 +9,7 @@ import uuid
 from http.cookies import SimpleCookie
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import requests
@@ -88,6 +88,13 @@ GATEWAY_COOKIE_SECURE = os.getenv("GATEWAY_COOKIE_SECURE", "").strip().lower() i
     "yes",
     "on",
 }
+# Derived from the state URL rather than configured separately: they are two
+# routes on one service, and a deployment that got them pointing at different
+# places would be a silent reset that resets nothing.
+def _mock_tool_reset_url() -> str:
+    return MOCK_TOOL_STATE_URL.rsplit("/", 1)[0] + "/reset"
+
+
 MOCK_TOOL_STATE_URL = os.getenv(
     "MOCK_TOOL_STATE_URL", "http://mock-tool:9000/state"
 )
@@ -406,6 +413,43 @@ class _WorkerKillSwitch:
 
 
 WORKER_KILL = _WorkerKillSwitch()
+
+
+class _DemoEpoch:
+    """When the current demo run started, for hiding everything before it.
+
+    Temporal keeps closed Workflows for the namespace's retention period, and
+    the dashboard's history is a list_workflows query, so yesterday's runs keep
+    showing up under today's. Terminating them does not help -- a terminated
+    Workflow is still a closed Workflow, and still returned.
+
+    So a reset moves a line rather than deleting anything: Workflows that
+    started before it are filtered out of the dashboard. Nothing is destroyed,
+    the Temporal UI still shows the full picture for anyone who wants it, and
+    the audience-facing surface starts empty.
+
+    In memory, like the other switches, which means a gateway restart un-hides
+    the old runs. That is the honest trade for holding no database, and it is
+    recoverable in one click.
+    """
+
+    def __init__(self) -> None:
+        self._since: Optional[datetime] = None
+
+    def since(self) -> Optional[datetime]:
+        return self._since
+
+    def mark(self) -> datetime:
+        self._since = datetime.now(timezone.utc)
+        return self._since
+
+    def hides(self, started_at: Optional[datetime]) -> bool:
+        if self._since is None or started_at is None:
+            return False
+        return started_at < self._since
+
+
+DEMO_EPOCH = _DemoEpoch()
 
 
 def _team_for_principal(principal: str) -> Optional[str]:
@@ -1546,6 +1590,12 @@ async def dashboard(request: Request) -> HTMLResponse:
     ]
     for query, status_query in queries:
         async for wf in client.list_workflows(query):
+            # Everything from before the last reset stays in Temporal and stays
+            # out of this page. See _DemoEpoch: closed Workflows are still
+            # returned by list_workflows, so a reset has to filter rather than
+            # delete.
+            if DEMO_EPOCH.hides(getattr(wf, "start_time", None)):
+                continue
             handle = client.get_workflow_handle(wf.id, run_id=wf.run_id)
             try:
                 summary = await handle.query(status_query)
@@ -1599,6 +1649,66 @@ async def scan_mode(request: Request) -> Response:
     form = await request.form()
     SCAN_MODE_TOGGLE.set(str(form.get("mode") or ""))
     return RedirectResponse("/", status_code=303)
+
+
+@mcp.custom_route("/reset", methods=["POST"])
+async def reset_demo(request: Request) -> Response:
+    """Put the demo back to its opening picture, without restarting anything.
+
+    Three things happen, in an order that matters.
+
+    First the running Workflows are terminated. A chain left open from the
+    previous run would keep its pending approvals alive and keep answering
+    queries, so a reset that skipped this would clear the tables and then watch
+    them repopulate seconds later.
+
+    Then the fleet backend is reset, so staging and production go back to 2.2.0
+    with the release rail seeded and the gate card idle.
+
+    Last, the epoch moves. It is last on purpose: everything terminated above is
+    now a closed Workflow, still inside Temporal's retention and still returned
+    by list_workflows, so the line has to land after the terminations to hide
+    them too.
+
+    Deliberately not reset: the mandate and scanner switches. They are how a
+    presenter has staged the room, not run state, and silently flipping them
+    back mid-setup would be its own surprise. Nor the Worker kill switches --
+    same reasoning, and a reset that quietly restarted a Worker you had just
+    killed would undo the beat you were about to show.
+    """
+    if not _is_approver(_resolve_principal()):
+        return RedirectResponse("/login", status_code=303)
+
+    terminated = 0
+    client = await get_client()
+    for wf_type in ("AgenticChainWorkflow", "AutonomousAgentWorkflow"):
+        query = f'WorkflowType = "{wf_type}" AND ExecutionStatus = "Running"'
+        async for wf in client.list_workflows(query):
+            try:
+                await client.get_workflow_handle(
+                    wf.id, run_id=wf.run_id
+                ).terminate("demo reset")
+                terminated += 1
+            except Exception as err:  # noqa: BLE001 - best effort by design
+                # A Workflow that closed on its own between the query and the
+                # terminate is the common case here, and is not a failure.
+                print(f"[reset] could not terminate {wf.id}: {err}", flush=True)
+
+    try:
+        await asyncio.to_thread(
+            lambda: requests.post(_mock_tool_reset_url(), timeout=5).raise_for_status()
+        )
+    except Exception as err:  # noqa: BLE001
+        print(f"[reset] fleet reset failed: {err}", flush=True)
+
+    since = DEMO_EPOCH.mark()
+    print(
+        f"[reset] terminated {terminated} workflow(s); hiding runs before {since.isoformat()}",
+        flush=True,
+    )
+    # ?reset=1 is read once by the page's JS to clear the fleet panel's own
+    # localStorage memory of which releases it has already animated.
+    return RedirectResponse("/?reset=1", status_code=303)
 
 
 @mcp.custom_route("/worker-power", methods=["GET"])
@@ -3237,6 +3347,17 @@ _MAIN_JS = """
       })
       .catch(function () { /* a dropped poll is not worth a visible error */ });
   }
+  // A reset clears the server's state, but the fleet panel also keeps its own
+  // note of which releases it has already animated, so that a promotion is
+  // animated once rather than on every poll. Left behind, that memory makes a
+  // freshly-reset fleet skip the animations the reset exists to replay.
+  if (window.location.search.indexOf('reset=1') !== -1) {
+    try { localStorage.removeItem('gw-fleet-seen'); } catch (e) {}
+    // Drop the marker so a later refresh does not look like another reset.
+    window.history.replaceState({}, '', window.location.pathname);
+    window.location.reload();
+  }
+
   setInterval(refresh, 5000);
 })();
 """
@@ -3277,12 +3398,25 @@ def _render_demo_bar() -> str:
             f"</form>{tag}"
         )
 
+    # Confirmed in the browser rather than server-side: it terminates running
+    # Workflows, and the one thing worse than a demo with stale state is a demo
+    # whose chain vanished because a presenter's cursor was one button to the
+    # left of Log out.
+    reset = (
+        '<form method="post" action="/reset" '
+        "onsubmit=\"return confirm('Reset the demo? This terminates running "
+        "workflows and clears the fleet and history.');\">"
+        '<button class="kill" type="submit">Reset demo</button>'
+        "</form>"
+    )
+
     return (
         '<div class="demobar">'
         '<span class="eyebrow muted">Demo</span>'
         f"{links}"
         '<span class="sep"></span>'
         f"{''.join(switches)}"
+        f"{reset}"
         "</div>"
     )
 

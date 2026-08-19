@@ -74,9 +74,18 @@ CALLBACK_TIMEOUT = timedelta(seconds=30)
 # no new tool call or decision for this long completes on its own. This is a fixed
 # constant rather than an environment read, because Workflow code must not read
 # non-deterministic sources: every Worker replaying this Workflow must agree on the
-# value. To demo the idle close live, lower this and rebuild the worker image. To
-# make it per-chain configurable, carry it on ChainInput instead of here.
-IDLE_TIMEOUT_SECONDS = 24 * 60 * 60
+# value. To make it per-chain configurable, carry it on ChainInput instead of here.
+#
+# Twenty minutes, sized for a demo rather than for production. It was 24 hours,
+# which is a defensible number for a real agentic session and the wrong one here:
+# every chain a presenter opened stayed open until the next day, so a Temporal UI
+# put on screen to show one workflow showed a week of abandoned ones alongside it,
+# and the namespace accumulated running executions nobody had any intention of
+# finishing. A demo chain is finished when the story is finished.
+#
+# The timer resets on every tool call and decision, so this bounds idleness, not
+# total length: an actively-driven chain runs as long as it is being driven.
+IDLE_TIMEOUT_SECONDS = 20 * 60
 
 TERMINAL = {
     OperationStatus.COMPLETED,

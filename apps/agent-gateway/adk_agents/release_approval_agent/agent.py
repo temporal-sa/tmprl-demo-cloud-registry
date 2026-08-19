@@ -107,4 +107,10 @@ root_agent = TemporalSessionProxyAgent(
     description=(
         "Dashy Web client for the durable Temporal-backed ADK session."
     ),
+    # Declared for the dev UI, which shows the root agent's model on load and
+    # requires an LlmAgent to answer for it at all. It is not called from this
+    # process: the turn runs as an Activity on the Waypoint worker, which is
+    # where the credential for it lives. Same env var the worker reads, so the
+    # name the UI shows is the model the session actually uses.
+    model=os.getenv("ADK_MODEL", DEFAULT_MODEL),
 )
