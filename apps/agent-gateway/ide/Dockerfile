@@ -77,5 +77,20 @@ COPY --chown=demo:demo ide/workspace /home/demo/workspace
 COPY --chown=demo:demo claude-code-session/CLAUDE.md \
      /home/demo/workspace/delivery-matching-service/CLAUDE.md
 
+# The presenter's script, and the file the editor opens on load.
+#
+# It has to be called README.md, and that is not a naming preference. VS Code's
+# only "open something on startup" setting is workbench.startupEditor, and its
+# `readme` mode opens the workspace root's README.md specifically -- there is no
+# setting that names an arbitrary file, and this code-server build has no
+# ?payload=openFile support either. So the file that opens is the readme, and
+# the readme is the script.
+#
+# The stage-prop repository's own README moved to docs-service-overview.md
+# rather than being deleted: the tree still needs to read as a service
+# repository, it just no longer competes for the one filename that opens.
+COPY --chown=demo:demo ide/README.md \
+     /home/demo/workspace/delivery-matching-service/README.md
+
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/ide-entrypoint"]
