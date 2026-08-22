@@ -1,0 +1,41 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: deep-research-python
+spec:
+  registry:
+    title: OpenAI Deep Research — Python
+    summary: >-
+      Multi-agent deep research with Temporal and the OpenAI Responses API:
+      durable planning, parallel web search, partial-failure resilience, and
+      cited report synthesis.
+    tags: [AI, AI - Agents, Research]
+    temporalSdks: [Python]
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/deep-research-python-refactor#readme
+
+  source:
+    repo: https://github.com/temporal-sa/deep-research-python-refactor
+
+  builds:
+    worker:
+      context: .
+      dockerfile: Dockerfile
+
+  secrets:
+    openai-credentials:
+      requiredProperties:
+        - OPENAI_API_KEY
+
+  components:
+    worker:
+      build: worker
+      worker: true
+      env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+        - name: TEMPORAL_TASK_QUEUE
+          value: deep-research
