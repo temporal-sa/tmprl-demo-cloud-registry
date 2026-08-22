@@ -1,12 +1,14 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
+  # Preserve the internal ID so the existing Temporal namespace and project
+  # owner-managed OpenAI secret remain in place.
   name: deep-research-python
 spec:
   registry:
     title: OpenAI Deep Research — Python
     summary: >-
-      Multi-agent deep research with Temporal and the OpenAI Responses API:
+      Interactive deep research with Temporal and the OpenAI Responses API:
       durable planning, parallel web search, partial-failure resilience, and
       cited report synthesis.
     tags: [AI, AI - Agents, Research]
@@ -14,10 +16,10 @@ spec:
     links:
       runbook:
         label: README
-        url: https://github.com/temporal-sa/deep-research-python-refactor#readme
+        url: https://github.com/temporal-sa/openai-deep-research-py#readme
 
   source:
-    repo: https://github.com/temporal-sa/deep-research-python-refactor
+    repo: https://github.com/temporal-sa/openai-deep-research-py
 
   builds:
     worker:
@@ -30,12 +32,30 @@ spec:
         - OPENAI_API_KEY
 
   components:
-    worker:
+    app:
       build: worker
+      replicas: 1
       worker: true
+      ports:
+        - name: http
+          containerPort: 8234
+          servicePort: 80
       env:
         - name: OPENAI_API_KEY
           valueFrom:
             inputRef: secrets.openai-credentials.OPENAI_API_KEY
         - name: TEMPORAL_TASK_QUEUE
           value: deep-research
+        - name: PORT
+          value: "8234"
+
+  ingress:
+    subdomain: openai-deep-research-py
+    temporalAuthRequired: true
+    component: app
+    port: http
+
+  smokeCheck:
+    path: /api/ready
+    expectedStatus: 200
+    timeoutSeconds: 10
