@@ -1,0 +1,100 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: canonical-adk
+spec:
+  registry:
+    title: Travel Planner — Google ADK
+    summary: >-
+      The canonical Temporal travel-planner experience with Google ADK owning
+      the agent loop. Python and Go implementations show durable ADK model and
+      tool calls, human approval, parallel grounded research, crash recovery,
+      and a compensating checkout child workflow.
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: travel-agent
+    links:
+      runbook:
+        url: https://github.com/temporal-sa/canonical-adk-demo#quick-start
+    tags: [AI, AI - Agents, Google ADK, Human-in-the-Loop, Single-Agent]
+    temporalSdks: [Python, Go]
+
+  source:
+    repo: https://github.com/temporal-sa/canonical-adk-demo
+
+  builds:
+    app:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    worker:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    postgres:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+
+  components:
+    postgres:
+      build: postgres
+      replicas: 1
+      ports:
+        - name: db
+          containerPort: 5432
+          servicePort: 5432
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_PASSWORD
+
+    worker:
+      build: worker
+      worker: true
+      secrets:
+        - google-credentials
+      env:
+        - name: ADK_MODEL
+          value: gemini-3.6-flash
+        - name: DB_HOST
+          value: postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: travel
+        - name: DB_USER
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            inputRef: secrets.db-creds.POSTGRES_PASSWORD
+
+    app:
+      build: app
+      temporalAccess: true
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 80
+      env:
+        - name: LLM_PROVIDER
+          value: google
+        - name: ADK_MODEL
+          value: gemini-3.6-flash
+
+  secrets:
+    google-credentials:
+      requiredProperties:
+        - GOOGLE_API_KEY
+    db-creds:
+      requiredProperties:
+        - POSTGRES_USER
+        - POSTGRES_PASSWORD
+
+  ingress:
+    subdomain: canonical-adk
+    temporalAuthRequired: true
+    component: app
+    port: http
