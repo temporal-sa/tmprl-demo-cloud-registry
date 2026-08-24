@@ -2743,7 +2743,6 @@ var FLEET = (function () {
   var seen = {};
   var railSeen = {};
   var railPainted = false;
-  var holdUntil = 0;
 
   function label(env) { return LABELS[env] || env; }
   function readJson(key, fallback) {
@@ -2958,10 +2957,7 @@ var FLEET = (function () {
     // A protected environment is the point of the whole demo, so it gets the
     // loudest treatment: card shine plus a toast.
     if (protectedEnvs[rec.environment]) toast(rec);
-    hold();
   }
-
-  function hold() { holdUntil = Date.now() + ANIM_MS + 600; }
 
   // How long the scan card's arrival animation still has to run. Every paint
   // rebuilds the card's class list, and the first poll lands within a few
@@ -3026,7 +3022,6 @@ var FLEET = (function () {
     // security scan card once that exists.
     var out = linkInto(pipeline.querySelector('.gate.scan') ? 'scan' : 'prod');
     if (out) out.classList.toggle('blocked', failed);
-    if (running) hold();
   }
 
   // phase -> [card class, verdict label]. The phases come straight from
@@ -3181,7 +3176,6 @@ var FLEET = (function () {
       card.querySelector('.scan-stale-note').style.display = 'none';
       var idleOut = linkInto('prod');
       if (idleOut) idleOut.classList.remove('blocked');
-      if (appearing) hold();
       return;
     }
 
@@ -3256,7 +3250,6 @@ var FLEET = (function () {
 
     var out = linkInto('prod');
     if (out) out.classList.toggle('blocked', phase[0] === 'failed' || stale);
-    if ((running && !stale) || appearing) hold();
   }
 
   function paint(state, animate) {
@@ -3379,12 +3372,10 @@ var FLEET = (function () {
       rail.appendChild(el('span', 'rail-empty', 'No releases are cut and ready to promote.'));
       return;
     }
-    var fresh = false;
     releases.forEach(function (rel) {
       var key = rel.service + '@' + rel.version;
       var isNew = railPainted && !railSeen[key];
       railSeen[key] = true;
-      if (isNew) fresh = true;
       var chip = el('span', 'chip' + (isNew ? ' fresh' : ''));
       chip.appendChild(el('span', 'cv', rel.version));
       var envs = where[key] || [];
@@ -3404,7 +3395,6 @@ var FLEET = (function () {
       rail.appendChild(chip);
     });
     railPainted = true;
-    if (fresh) hold();
   }
 
   function setStatus(ok, message) {
@@ -3458,7 +3448,7 @@ var FLEET = (function () {
     setInterval(poll, 2000);
   }
 
-  return { init: init, tickTimes: tickTimes, holdsReload: function () { return Date.now() < holdUntil; } };
+  return { init: init, tickTimes: tickTimes };
 })();
 """
 
@@ -3527,6 +3517,12 @@ _MAIN_JS = """
   // What is deliberately NOT touched here is the fleet panel. It polls /fleet
   // on its own two-second timer and animates promotions as they land; swapping
   // its DOM from underneath would cut every animation off partway.
+  //
+  // That separation is also why this needs no interlock with those animations.
+  // It used to have one, left over from when this was a whole-page reload, and
+  // it starved the queue: the fleet re-armed the interlock on every poll while
+  // a gate or a scan was running, so the tables stopped updating for exactly as
+  // long as something was in flight -- which is when operations arrive.
   function swapRegion(doc, id) {
     var incoming = doc.getElementById(id);
     var current = document.getElementById(id);
@@ -3540,11 +3536,13 @@ _MAIN_JS = """
   }
 
   function refresh() {
-    // Every guard the reload had, for the same reasons: do not yank a field
-    // someone is typing in, and never interrupt a fleet transition.
+    // Do not yank a field someone is typing in. Only the pending table's own
+    // inputs are at risk, because they are inside a region this replaces; the
+    // workflow filter sits outside every swapped region and used to block the
+    // refresh for as long as it had focus, which during a demo is exactly while
+    // someone is looking for a workflow.
     var a = document.activeElement;
-    if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
-    if (FLEET.holdsReload()) return;
+    if (a && a.closest && a.closest('#pending-body')) return;
     var reasons = document.querySelectorAll('input.reason');
     for (var i = 0; i < reasons.length; i++) { if (reasons[i].value.trim() !== '') return; }
 
