@@ -479,7 +479,33 @@ async def submit_tool_call(input: ToolCallRequest) -> dict[str, Any]:
     update = await client.start_update_with_start_workflow(
         "request_tool_call",
         request,
-        id=f"tool-call::{request.operation_id or request.idempotency_key}",
+        # Scoped to THIS autonomous run, and that scoping is the whole fix for
+        # a demo that wedged on its second showing.
+        #
+        # Every id on this path is derived from the agent run id, which the
+        # agent derives as release-<service>-<version>-<environment>. So a
+        # second run of the same release produced the same operation id and
+        # therefore the same Update ID. Temporal retains a completed update's
+        # outcome per Update ID, so the repeat did not reach a workflow at all:
+        # it was served the FIRST run's response -- "security is running a
+        # pre-prod security scan" -- while that scan had long since finished.
+        # No chain started, no scan started, and the caller waited forever on a
+        # resolution that had already been delivered to its predecessor.
+        #
+        # activity.info().workflow_run_id is the calling AutonomousAgentWorkflow's
+        # run, so it is identical across retries of this Activity (which is the
+        # deduplication that was actually wanted) and different for every new
+        # run of the same release (which is the collision that was not).
+        #
+        # Recovery semantics are unchanged and now actually work: if the earlier
+        # chain is still RUNNING, USE_EXISTING attaches to it, the update is new,
+        # and the chain's own idempotency_index recognises the request and
+        # returns its LIVE state while re-pointing the callback at this caller.
+        # If it has closed, a fresh chain starts and the release runs again.
+        id=(
+            f"tool-call::{activity.info().workflow_run_id}"
+            f"::{request.operation_id or request.idempotency_key}"
+        ),
         wait_for_stage=WorkflowUpdateStage.ACCEPTED,
         start_workflow_operation=start_op,
         result_type=ToolCallResponse,
