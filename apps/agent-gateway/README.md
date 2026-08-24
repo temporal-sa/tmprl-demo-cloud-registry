@@ -872,14 +872,18 @@ for the expanded flow.
 When a prod promotion pauses, the approver sees the full context the requirements
 call for: the requested action as a sentence, the requester, an arguments summary,
 the requester justification, the policy risk reason, the submit time, and the
-approval window and deadline. On decision, the ledger and the "Tool Call History"
+approval window and deadline. The queue is sized to be read beside an editor, so
+the references an approver looks up rather than reads across -- the workflow id,
+the operation id, and the submit time -- sit on one small line under the action
+instead of holding three columns of their own. On decision, the ledger and the "Tool Call History"
 table record who approved or rejected, when, and the rejection reason.
 
 ## Release fleet panel
 
 Above the approval queue, the dashboard shows the fleet the decision acts on: the
-releases that are cut and ready under "Ready for release", then the staging card
-directly above the production card, matching the promotion path. Production is
+releases that are cut and ready under "Ready for release", on the panel's own
+heading line, and the pipeline beneath it running left to right from staging to
+production, matching the promotion path. Production is
 marked as the environment that requires approval. A release older than the oldest
 version still running drops off the ready list, and a version running in both
 environments carries a badge for each.
