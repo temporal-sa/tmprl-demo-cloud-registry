@@ -20,6 +20,7 @@ from activities.gateway_activities import (
     run_quality_check,
     signal_operation_callback,
     submit_nested_tool_call,
+    submit_release_pipeline,
     submit_tool_call,
     tag_commit_in_source_control,
     update_release_notes,
@@ -89,6 +90,7 @@ async def main() -> None:
                     # All stay inside this namespace. Nothing on this worker holds
                     # a client for anyone else's cluster.
                     submit_tool_call,
+                    submit_release_pipeline,
                     submit_nested_tool_call,
                     signal_operation_callback,
                     # The individual steps inside the release children. Separate

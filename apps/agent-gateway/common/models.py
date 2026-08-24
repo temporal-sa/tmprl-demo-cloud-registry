@@ -227,6 +227,12 @@ class NestedToolCallRequest:
     # caller naming a version up front. Empty means the caller supplied an
     # explicit version in tool1_arguments/tool2_arguments.
     bump: str = ""
+    # Run the full release pipeline even though the caller named the version
+    # rather than a bump type. Without it an explicit version means CASE-2a --
+    # an orchestrator whose only step is to discover the protected promotion --
+    # which is a different demo and must keep behaving the way it does. Implied
+    # by bump, which cannot be anything else.
+    orchestrate: bool = False
     controlled_tool1: bool = True
     replay_safe: bool = False
     safe_tool1_arguments: dict[str, Any] = field(default_factory=dict)
@@ -241,6 +247,15 @@ class NestedToolCallRequest:
     # resolve. CASE-2b sets it to the release pipeline's own operation, which
     # handed off to the security scan and is parked until the promotion lands.
     origin_operation_id: str = ""
+    # As callback_workflow_id, but delivered from the PARENT operation rather
+    # than the nested child. CASE-3 sets it, and the distinction is not cosmetic:
+    # the child promotion does not exist until Tool1 has cut, staged, gated and
+    # scanned the release, so a pipeline that stops at any of those steps has no
+    # child to report through. The autonomous run waiting on the whole pipeline
+    # has to hear about that, and the parent is the operation that always
+    # reaches a terminal state. Left empty by CASE-2b, whose caller is suspended
+    # on the child specifically.
+    parent_callback_workflow_id: str = ""
     # As on ToolCallRequest: the gateway's security-mandate toggle, snapshotted
     # at the boundary. Only the gateway's own MCP surface sets it; a nested call
     # that arrives over Nexus from the Security team already carries its own team
@@ -721,6 +736,18 @@ class AutonomousAgentInput:
     # before delegation leave this None and retain the original workflow command
     # sequence, while new runs submit it to a companion AgenticChainWorkflow.
     governed_request: Optional[ToolCallRequest] = None
+    # And newer CASE-3 runs carry a full release pipeline instead of a single
+    # promotion, which is the same NestedToolCallRequest Claude Code sends for
+    # CASE-2. Same replay-guard discipline as governed_request above: an
+    # execution that started before this field existed has None and keeps its
+    # original command sequence, so a rollout does not break runs in flight.
+    #
+    # Exactly one of the two is set. A bare promotion cannot express what a
+    # release request actually asks for -- "create and push 2.5.0 all the way
+    # into prod" means cut it, stage it, gate it, scan it, and only then ask
+    # about production -- and promoting a version nothing ever staged moves
+    # production to an artifact that was never built.
+    governed_nested_request: Optional[NestedToolCallRequest] = None
 
 
 @dataclass

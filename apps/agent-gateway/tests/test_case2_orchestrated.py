@@ -259,6 +259,51 @@ def _orchestrated_request(
     )
 
 
+def _named_version_request(
+    workflow_id: str,
+    key: str,
+    *,
+    version: str,
+    environment: str,
+) -> NestedToolCallRequest:
+    """The request gateway.server.start_google_adk_release_run builds.
+
+    The same pipeline as _orchestrated_request above, asked for the other way
+    round: the caller names the version instead of a bump type, which is how a
+    person talks to an autonomous agent ("ship 2.3.0", not "ship the next
+    minor"). orchestrate is what says so -- an explicit version without it is
+    CASE-2a, a Tool1 whose only step is to discover the protected promotion.
+    """
+    arguments = {
+        "service": SERVICE,
+        "version": version,
+        "environment": environment,
+    }
+    return NestedToolCallRequest(
+        tool1_name="release_orchestrator",
+        tool1_arguments=dict(arguments),
+        tool2_name="promote_release",
+        tool2_arguments=dict(arguments),
+        safe_tool1_arguments=dict(arguments),
+        safe_tool2_arguments=dict(arguments),
+        idempotency_key=key,
+        correlation=CorrelationContext(
+            workflow_id=workflow_id,
+            workflow_id_source="derived_from_autonomous_run",
+            caller_principal=PRINCIPAL,
+            runtime="GoogleADKAgent",
+            call_path=["GoogleADKAgent", "release_orchestrator"],
+        ),
+        requested_action=(
+            f"Promote {SERVICE} {version} to {environment}"
+        ),
+        parent_operation_id=f"{key}-parent",
+        nested_operation_id=f"{key}-child",
+        orchestrate=True,
+        controlled_tool1=True,
+    )
+
+
 def test_case2_orchestrated_controlled_prod_staging_dedup_and_bad_version() -> None:
     async def run() -> None:
         async with await _environment() as env:
@@ -974,3 +1019,100 @@ if __name__ == "__main__":  # pragma: no cover
     test_case2_orchestrated_controlled_prod_staging_dedup_and_bad_version()
     test_case2_orchestrated_uncontrolled_fail_closed_and_replay_safe_retry()
     print("ok")
+
+
+def test_a_caller_named_version_runs_the_very_same_pipeline() -> None:
+    """CASE-3's shape: the version is chosen by the caller, not by a bump.
+
+    This is the difference between an autonomous agent that releases and one
+    that merely promotes. Asked to ship a version, it has to cut that version,
+    put it on staging, and get a green gate verdict before production is asked
+    about anything -- otherwise the promotion moves production to an artifact
+    nothing ever built, and the fleet shows staging still holding the old
+    release while production is asked to jump past it.
+    """
+
+    async def run() -> None:
+        async with await _environment() as env:
+            async with _worker(env):
+                await _a_named_version_is_cut_staged_and_gated(env)
+                await _a_version_behind_production_is_refused_before_cutting(env)
+
+    asyncio.run(run())
+
+
+async def _a_named_version_is_cut_staged_and_gated(
+    env: WorkflowEnvironment,
+) -> None:
+    _reset_backend()
+    handle = await _start_chain(env, "named-prod")
+
+    waiting = await handle.execute_update(
+        AgenticChainWorkflow.request_nested_tool_call,
+        _named_version_request(
+            handle.id, "named-minor", version="2.3.0", environment="prod"
+        ),
+    )
+
+    # Identical to the bump run above, step for step. Production is still read,
+    # because a named version has to be checked against what customers are on,
+    # but the number comes from the caller rather than from arithmetic.
+    assert _tool_names() == [
+        "get_deployed_version",
+        "cut_release",
+        "promote_release",
+    ]
+    assert "release_orchestrator_prepare" not in _tool_names()
+    assert _call("cut_release")[1] == {"service": SERVICE, "version": "2.3.0"}
+    assert _call("promote_release")[1] == {
+        "service": SERVICE,
+        "version": "2.3.0",
+        "environment": "staging",
+    }
+    assert backend._deployed["staging"]["version"] == "2.3.0"
+    assert backend._quality_gates["status"] == "passed"
+    assert backend._quality_gates["version"] == "2.3.0"
+    # Production has NOT moved. It is the thing being asked about.
+    assert backend._deployed["prod"]["version"] == "2.2.0"
+
+    assert waiting.status == "waiting_for_approval"
+    assert waiting.call_path == [
+        "GoogleADKAgent",
+        "release_orchestrator",
+        "promote_release",
+    ]
+    child = await _operation_view(handle, "named-minor-child")
+    assert child.arguments == {
+        "service": SERVICE,
+        "environment": "prod",
+        "version": "2.3.0",
+    }
+    ledger = await handle.query(AgenticChainWorkflow.get_ledger)
+    resolved = [e for e in ledger if e.event == "tool1_version_resolved"]
+    assert resolved and resolved[0].detail["version_source"] == "caller"
+    assert resolved[0].detail["resolved_version"] == "2.3.0"
+
+
+async def _a_version_behind_production_is_refused_before_cutting(
+    env: WorkflowEnvironment,
+) -> None:
+    _reset_backend()
+    handle = await _start_chain(env, "named-backwards")
+
+    response = await handle.execute_update(
+        AgenticChainWorkflow.request_nested_tool_call,
+        _named_version_request(
+            handle.id, "named-back", version="2.1.0", environment="prod"
+        ),
+    )
+
+    # Cutting it would succeed and promoting it would move production backwards.
+    # Refused at the read, before anything is cut and before a child exists, so
+    # nothing reaches an approver -- the same shape as an unreadable version.
+    assert response.status == "failed"
+    assert "2.1.0" in response.reason
+    assert _tool_names() == ["get_deployed_version"]
+    parent = await _operation_view(handle, "named-back-parent")
+    assert parent.status == "failed"
+    assert parent.child_operation_id is None
+    assert backend._deployed["prod"]["version"] == "2.2.0"

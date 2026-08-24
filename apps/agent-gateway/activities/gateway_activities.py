@@ -521,6 +521,67 @@ async def submit_tool_call(input: ToolCallRequest) -> dict[str, Any]:
 
 
 @activity.defn
+async def submit_release_pipeline(input: NestedToolCallRequest) -> dict[str, Any]:
+    """Submit a full release pipeline to the same chain Claude Code drives.
+
+    The CASE-3 counterpart to submit_tool_call, and the reason it exists rather
+    than that one being reused: an autonomous agent asked to release a version
+    is asking for the whole pipeline, not a bare production promotion. The
+    request is already fully formed at the gateway boundary; this Activity is
+    the adapter that gets it there, because workflow code cannot issue an Update
+    against another workflow.
+
+    The Update id is scoped to this Activity's Workflow RUN, not just to the
+    operation. Temporal retains a completed Update's outcome per Update id, so an
+    id derived only from the operation -- and CASE-3's operation id is derived
+    from service, version and environment, which a presenter repeats every time
+    they run the demo -- makes the second run re-serve the first run's stale
+    outcome. No pipeline starts, no scan starts, and the caller waits forever on
+    a result that was actually produced minutes ago. Scoping to the run id keeps
+    idempotency exactly where it belongs: a retry of THIS run dedups, a genuinely
+    new run does not.
+    """
+    request = input
+    workflow_id = request.correlation.workflow_id
+    if not workflow_id:
+        raise ApplicationError(
+            "governed release pipeline is missing its chain workflow_id",
+            non_retryable=True,
+        )
+
+    client = activity.client()
+    start_op = WithStartWorkflowOperation(
+        "AgenticChainWorkflow",
+        ChainInput(
+            workflow_id=workflow_id,
+            owner_principal=request.correlation.caller_principal or "",
+        ),
+        id=workflow_id,
+        task_queue=TASK_QUEUE,
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+    )
+    update = await client.start_update_with_start_workflow(
+        "request_nested_tool_call",
+        request,
+        id=(
+            f"release-pipeline::{activity.info().workflow_run_id}"
+            f"::{request.parent_operation_id or request.idempotency_key}"
+        ),
+        wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+        start_workflow_operation=start_op,
+        result_type=ToolCallResponse,
+    )
+    response: ToolCallResponse = await update.result()
+    activity.logger.info(
+        "chain %s accepted governed release pipeline %s with status %s",
+        workflow_id,
+        response.operation_id,
+        response.status,
+    )
+    return dataclasses.asdict(response)
+
+
+@activity.defn
 async def submit_nested_tool_call(
     input: SubmitNestedToolCallInput,
 ) -> dict[str, Any]:
