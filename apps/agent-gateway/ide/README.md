@@ -181,8 +181,14 @@ Please create and push version 2.3.0 of the delivery matching service from
 staging all the way into prod.
 ```
 
-> Same gateway, same approvals, same durability — a different agent framework in
-> front of it. Approve on the dashboard when it suspends.
+> Same gateway, same pipeline, same approvals, same durability — a different
+> agent framework in front of it. Watch the fleet: the ADK agent cuts 2.3.0,
+> puts it on staging, waits for the gates, takes the security scan, and only
+> then asks about production. Approve on the dashboard when it suspends.
+>
+> The version in the prompt has to be ahead of what production is on. Straight
+> after a **Reset demo** production is 2.2.0, so 2.3.0 is right; if you have
+> already run CASE 2, name the next one up from whatever production shows.
 
 ---
 

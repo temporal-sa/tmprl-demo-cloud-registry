@@ -271,13 +271,27 @@ def test_adk_start_snapshots_the_same_security_controls_as_direct_calls(
         server.SCAN_MODE_TOGGLE.set(old_scan_mode)
 
     assert response.status == "waiting_for_approval"
-    governed = captured["input"].governed_request
+    # A release pipeline, not a bare promotion: the agent was asked to ship a
+    # version, and shipping it means cutting it and putting it through staging
+    # and the gates first. A promote_release on its own would move production to
+    # a version nothing had built.
+    governed = captured["input"].governed_nested_request
     assert governed is not None
+    assert captured["input"].governed_request is None
+    assert governed.tool1_name == "release_orchestrator"
+    assert governed.tool2_name == "promote_release"
+    assert governed.tool1_arguments["version"] == "2.5.0"
     assert governed.security_mandate is True
     assert governed.scan_mode == SCAN_MODE_PLATFORM
     assert governed.correlation.workflow_id == "wf-adk-controls:gateway"
     assert governed.correlation.caller_service == "google-adk-agent"
-    assert governed.callback_workflow_id == "wf-adk-controls"
+    # Delivered from the parent. The pipeline can stop at a quality gate long
+    # before a child promotion exists to report through, and the autonomous run
+    # still has to be told.
+    assert governed.parent_callback_workflow_id == "wf-adk-controls"
+    assert governed.callback_workflow_id == ""
+    # The id the resolution signal must carry, or the run ignores it.
+    assert governed.parent_operation_id == captured["input"].operation_id
 
 
 class _FakeHandle:

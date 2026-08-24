@@ -1286,6 +1286,12 @@ async def start_google_adk_release_run(
 ) -> ToolCallResponse:
     """Start or recover a durable autonomous Google ADK-style agent run.
 
+    Runs the whole release, not just its last step: the named version is cut,
+    promoted to staging, put through the quality gates, security-scanned if the
+    company mandate is in force, and only then submitted for human approval to
+    production. Pass the version the user named and the environment they want it
+    to end up in.
+
     The Temporal workflow checkpoints the agent plan while Agent Gateway owns the
     approval decision. Dependent external work is executed only after the
     protected promotion completes.
@@ -1298,6 +1304,8 @@ async def start_google_adk_release_run(
         )
     if not agent_run_id:
         raise ValueError("agent_run_id is required")
+    if not version:
+        raise ValueError("version is required")
     if workflow_id:
         resolved_workflow_id, source = _resolve_workflow_id(workflow_id, ctx)
     else:
@@ -1306,6 +1314,17 @@ async def start_google_adk_release_run(
             "wf-adk-" + hashlib.sha256(seed.encode()).hexdigest()[:16]
         )
         source = "inferred_from_agent_run"
+
+    # The whole release, not just its last step. An autonomous agent asked to
+    # ship a version is asking for the same pipeline Claude Code drives in
+    # CASE-2: cut it, promote it to staging, run the quality gates, take the
+    # security scan if the mandate is in force, and only then ask a human about
+    # production. Sending a bare promote_release instead would move production
+    # to a version nothing ever cut and nothing ever staged, which is both wrong
+    # and visibly wrong -- the fleet shows staging still holding the old release
+    # while production is asked to jump past it.
+    tool1_name = "release_orchestrator"
+    tool2_name = "promote_release"
     arguments = {
         "service": service,
         "version": version,
@@ -1313,12 +1332,18 @@ async def start_google_adk_release_run(
     }
     idem = _caller_idempotency_key(
         resolved_workflow_id,
-        "promote_release",
+        f"{tool1_name}->{tool2_name}",
         {**arguments, "agent_run_id": agent_run_id},
         idempotency_key or agent_run_id,
         principal,
     )
-    operation_id = _derive_operation_id(idem)
+    # The parent is the operation the autonomous run is waiting on, so it is the
+    # one whose id has to match the resolution signal the chain sends back. See
+    # AutonomousAgentWorkflow.operation_resolved, which ignores any other.
+    operation_id = _derive_operation_id(f"{idem}:tool1")
+    child_operation_id = _derive_operation_id(f"{idem}:tool2")
+    governance_workflow_id = f"{resolved_workflow_id}:gateway"
+    call_path = ["GoogleADKAgent", tool1_name]
     correlation = CorrelationContext(
         workflow_id=resolved_workflow_id,
         workflow_id_source=source,
@@ -1331,28 +1356,43 @@ async def start_google_adk_release_run(
         caller_service="google-adk-agent",
         caller_principal=principal,
         runtime="GoogleADKAgent",
-        call_path=["GoogleADKAgent", "AgentGateway", "promote_release"],
+        call_path=list(call_path),
     )
-    governance_workflow_id = f"{resolved_workflow_id}:gateway"
-    governed_request = _build_tool_call_request(
-        tool_name="promote_release",
-        arguments=arguments,
+    governed_request = NestedToolCallRequest(
+        tool1_name=tool1_name,
+        tool1_arguments=dict(arguments),
+        tool2_name=tool2_name,
+        tool2_arguments=dict(arguments),
         idempotency_key=idem,
-        operation_id=operation_id,
         correlation=CorrelationContext(
             workflow_id=governance_workflow_id,
             workflow_id_source="derived_from_autonomous_run",
             operation_id=operation_id,
+            parent_operation_id=operation_id,
             idempotency_key=idem,
             agent_session_id=correlation.agent_session_id,
             agent_run_id=agent_run_id,
             caller_service="google-adk-agent",
             caller_principal=principal,
             runtime="GoogleADKAgent",
-            call_path=list(correlation.call_path),
+            call_path=list(call_path),
         ),
+        approval_timeout_seconds=APPROVAL_TIMEOUT_SECONDS,
+        requested_action=_requested_action(tool2_name, arguments),
         justification=justification or None,
-        callback_workflow_id=resolved_workflow_id,
+        parent_operation_id=operation_id,
+        nested_operation_id=child_operation_id,
+        orchestrate=True,
+        controlled_tool1=True,
+        replay_safe=False,
+        safe_tool1_arguments=_safe_arguments(arguments),
+        safe_tool2_arguments=_safe_arguments(arguments),
+        security_mandate=MANDATE_TOGGLE.is_on(),
+        scan_mode=SCAN_MODE_TOGGLE.mode(),
+        # Reported from the parent, because the pipeline can stop at a quality
+        # gate or an unreachable scan, with no child promotion ever created to
+        # report through.
+        parent_callback_workflow_id=resolved_workflow_id,
     )
     input = AutonomousAgentInput(
         workflow_id=resolved_workflow_id,
@@ -1361,15 +1401,15 @@ async def start_google_adk_release_run(
         owner_principal=principal,
         agent_run_id=agent_run_id,
         agent_identity=principal,
-        tool_name="promote_release",
+        tool_name=tool1_name,
         arguments=arguments,
         safe_arguments=_safe_arguments(arguments),
-        requested_action=_requested_action("promote_release", arguments),
+        requested_action=_requested_action(tool2_name, arguments),
         justification=justification or None,
         correlation=correlation,
         approval_timeout_seconds=APPROVAL_TIMEOUT_SECONDS,
         callback=callback,
-        governed_request=governed_request,
+        governed_nested_request=governed_request,
     )
     client = await get_client()
     handle = await client.start_workflow(

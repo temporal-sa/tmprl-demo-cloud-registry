@@ -12,6 +12,7 @@ with workflow.unsafe.imports_passed_through():
     from activities.gateway_activities import (
         evaluate_policy,
         invoke_tool,
+        submit_release_pipeline,
         submit_tool_call,
     )
     from common.models import (
@@ -26,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         GatewayOperationResolution,
         InvokeToolInput,
         LedgerEntry,
+        NestedToolCallRequest,
         Operation,
         OperationStatus,
         OperationView,
@@ -100,7 +102,10 @@ class AutonomousAgentWorkflow:
         # started before ADK delegation have None and retain their exact original
         # policy/approval/child-workflow command sequence below. New executions
         # use AgenticChainWorkflow, the same governance path as Claude Code.
-        if input.governed_request is not None:
+        if (
+            input.governed_request is not None
+            or input.governed_nested_request is not None
+        ):
             return await self._run_governed(input)
         return await self._run_legacy(input)
 
@@ -192,27 +197,42 @@ class AutonomousAgentWorkflow:
     async def _run_governed(self, input: AutonomousAgentInput) -> AgentRunSummary:
         """Delegate the protected call to the shared AgenticChainWorkflow path."""
 
+        # One of the two, never both. A pipeline request is what a release
+        # actually is; the single-promotion form is kept because histories
+        # created under it are still replayable.
+        pipeline = input.governed_nested_request
         request = input.governed_request
-        assert request is not None
+        assert pipeline is not None or request is not None
+        correlation = (
+            pipeline.correlation if pipeline is not None else request.correlation
+        )
         self._operation.protected = True
         self._checkpoint = {
             "step": "submitting_to_gateway_chain",
             "next_step": "await_gateway_resolution",
-            "governance_workflow_id": request.correlation.workflow_id,
+            "governance_workflow_id": correlation.workflow_id,
             "protected_action_executed": False,
             "dependent_action_executed": False,
         }
         self._log(
             "gateway_delegation_started",
-            {"governance_workflow_id": request.correlation.workflow_id},
+            {"governance_workflow_id": correlation.workflow_id},
         )
         try:
-            response = await workflow.execute_activity(
-                submit_tool_call,
-                request,
-                start_to_close_timeout=GATEWAY_SUBMIT_TIMEOUT,
-                retry_policy=RetryPolicy(maximum_attempts=5),
-            )
+            if pipeline is not None:
+                response = await workflow.execute_activity(
+                    submit_release_pipeline,
+                    pipeline,
+                    start_to_close_timeout=GATEWAY_SUBMIT_TIMEOUT,
+                    retry_policy=RetryPolicy(maximum_attempts=5),
+                )
+            else:
+                response = await workflow.execute_activity(
+                    submit_tool_call,
+                    request,
+                    start_to_close_timeout=GATEWAY_SUBMIT_TIMEOUT,
+                    retry_policy=RetryPolicy(maximum_attempts=5),
+                )
         except ActivityError as err:
             self._fail(
                 f"Agent Gateway did not accept the governed request: {err}",
@@ -235,7 +255,7 @@ class AutonomousAgentWorkflow:
         self._log(
             "gateway_delegation_accepted",
             {
-                "governance_workflow_id": request.correlation.workflow_id,
+                "governance_workflow_id": correlation.workflow_id,
                 "gateway_status": self._gateway_initial_status,
             },
         )
@@ -266,11 +286,11 @@ class AutonomousAgentWorkflow:
                 self._log(
                     "gateway_cancellation_forwarded",
                     {
-                        "governance_workflow_id": request.correlation.workflow_id,
+                        "governance_workflow_id": correlation.workflow_id,
                     },
                 )
                 await workflow.get_external_workflow_handle(
-                    request.correlation.workflow_id
+                    correlation.workflow_id
                 ).signal("cancel_operation", self._cancel_requested)
 
         resolution = self._gateway_resolution
@@ -305,7 +325,7 @@ class AutonomousAgentWorkflow:
         # is a durable Workflow command: a Worker restart after receiving the
         # callback replays this close request before the outer run advances.
         await workflow.get_external_workflow_handle(
-            request.correlation.workflow_id
+            correlation.workflow_id
         ).signal("close_chain")
         self._checkpoint = {
             **self._checkpoint,
@@ -313,7 +333,7 @@ class AutonomousAgentWorkflow:
         }
         self._log(
             "gateway_chain_close_requested",
-            {"governance_workflow_id": request.correlation.workflow_id},
+            {"governance_workflow_id": correlation.workflow_id},
         )
 
         self._operation.status = terminal_status

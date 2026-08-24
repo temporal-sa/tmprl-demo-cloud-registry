@@ -37,7 +37,12 @@ with workflow.unsafe.imports_passed_through():
         SecurityScanService,
         StartSecurityScanInput,
     )
-    from common.semver import InvalidVersionError, next_version, normalize_bump
+    from common.semver import (
+        InvalidVersionError,
+        next_version,
+        normalize_bump,
+        parse_version,
+    )
     from activities.gateway_activities import (
         await_quality_gate,
         evaluate_policy,
@@ -585,12 +590,14 @@ class AgenticChainWorkflow:
             resolved_version = ""
             resolved_tool2_arguments: dict | None = None
             resolved_requested_action: str | None = None
+            orchestrated = bool(req.bump or req.orchestrate)
             try:
-                if req.bump:
+                if orchestrated:
                     prepare, resolved_version = await self._orchestrate_tool1(
                         parent,
                         req.bump,
                         req.idempotency_key,
+                        version=str(req.tool1_arguments.get("version", "")),
                         allow_scan=_scan_required_for(
                             req.correlation.caller_service,
                             str(req.tool2_arguments.get("environment", "")),
@@ -667,6 +674,10 @@ class AgenticChainWorkflow:
                 # version this run actually cut, and so an explicit replay can
                 # detect that the fleet moved underneath it.
                 parent.checkpoint["bump"] = req.bump
+                # Which mode this ran in, so a replay picks the same one. bump
+                # alone cannot say: an orchestrated run with a caller-named
+                # version has no bump to remember.
+                parent.checkpoint["orchestrated"] = True
                 parent.checkpoint["resolved_version"] = resolved_version
                 parent.arguments = {
                     **parent.arguments,
@@ -702,7 +713,7 @@ class AgenticChainWorkflow:
                     self._log("nested_request_stopped_with_origin", parent)
                     return self._response_for(parent)
 
-            handoff = prepare.get("scan_handoff") if req.bump else None
+            handoff = prepare.get("scan_handoff") if orchestrated else None
             if handoff:
                 return await self._hand_off_to_scan(
                     parent, req.idempotency_key, handoff, resolved_version
@@ -827,8 +838,9 @@ class AgenticChainWorkflow:
                 {"parent_operation_id": parent.operation_id},
             )
             bump = str(parent.arguments.get("bump", ""))
+            replay_orchestrated = bool(bump or parent.checkpoint.get("orchestrated"))
             try:
-                if bump:
+                if replay_orchestrated:
                     # Replaying a bump-driven Tool1 reruns the whole pipeline. The
                     # mutating steps carry their original idempotency keys, so the
                     # cut and the staging promotion are found already done rather
@@ -842,6 +854,7 @@ class AgenticChainWorkflow:
                         parent.idempotency_key,
                         pass_label="replay",
                         expect_version=str(child.arguments.get("version", "")),
+                        version=str(parent.arguments.get("version", "")),
                     )
                 else:
                     replay_prepare = await self._execute_tool_step(
@@ -1626,6 +1639,7 @@ class AgenticChainWorkflow:
         pass_label: str = "prepare",
         expect_version: str = "",
         allow_scan: bool = False,
+        version: str = "",
     ) -> tuple[dict, str]:
         """Run the release pipeline up to the target promotion, and report it.
 
@@ -1694,7 +1708,7 @@ class AgenticChainWorkflow:
         _TOOL_STRATEGY), not something a tool returns, and inside the Workflow the
         Activity await already is the durable wait for the real result.
         """
-        kind = normalize_bump(bump)
+        kind = normalize_bump(bump) if bump else ""
         service = str(parent.arguments.get("service", ""))
         target = str(parent.arguments.get("environment", ""))
 
@@ -1713,7 +1727,33 @@ class AgenticChainWorkflow:
                 f"{PIPELINE_PRODUCTION_ENVIRONMENT!r}, so there is no version "
                 "to bump"
             )
-        resolved = next_version(str(current), kind)
+        if kind:
+            resolved = next_version(str(current), kind)
+        else:
+            # The caller named the version instead of a bump type, which is how
+            # an autonomous agent asks: a person says "ship 2.5.0", not "ship the
+            # next minor". Everything after this point is identical -- the same
+            # cut, the same staging promotion, the same gates, the same scan --
+            # because what makes this a pipeline is the sequence, not who chose
+            # the number.
+            resolved = str(version).strip()
+            if not resolved:
+                raise InvalidVersionError(
+                    "the release pipeline was given neither a version to cut nor "
+                    "a bump type to derive one from"
+                )
+            # parse_version raises InvalidVersionError on anything that is not a
+            # version, which the caller turns into a failed operation with no
+            # child. A typo never reaches an approver as a promotion.
+            candidate = parse_version(resolved)
+            if candidate <= parse_version(str(current)):
+                # Cutting it would succeed and promoting it would move production
+                # backwards, which is the one direction a release pipeline must
+                # not go. Refused here, before anything is cut.
+                raise InvalidVersionError(
+                    f"production is on {current}, so {resolved} is not a release "
+                    "to move forward to. Name a higher version."
+                )
         if expect_version and resolved != expect_version:
             raise PipelineVersionDrift(
                 f"production is now on {current}, so a {kind} bump resolves to "
@@ -1727,6 +1767,7 @@ class AgenticChainWorkflow:
                 "source_environment": PIPELINE_PRODUCTION_ENVIRONMENT,
                 "current_version": str(current),
                 "bump": kind,
+                "version_source": "bump" if kind else "caller",
                 "resolved_version": resolved,
                 "target_environment": target,
             },
@@ -1757,6 +1798,15 @@ class AgenticChainWorkflow:
             },
         )
 
+        # How the version was arrived at, said the same way in every summary
+        # below. A caller who named it does not want to be told what bump it
+        # would have been.
+        chose = (
+            f"read {current} from production, computed {resolved} for a "
+            f"{kind} bump"
+            if kind
+            else f"read {current} from production and took {resolved} as asked"
+        )
         result = {
             "orchestrated": True,
             "service": service,
@@ -1772,10 +1822,7 @@ class AgenticChainWorkflow:
         }
 
         if target == PIPELINE_STAGING_ENVIRONMENT:
-            result["message"] = (
-                f"Tool1 read {current} from production, computed {resolved} for "
-                f"a {kind} bump, and cut it"
-            )
+            result["message"] = f"Tool1 {chose}, and cut it"
             return result, resolved
 
         staging_arguments = {
@@ -1904,8 +1951,7 @@ class AgenticChainWorkflow:
 
         if handoff:
             result["message"] = (
-                f"Tool1 read {current} from production, computed {resolved} for "
-                f"a {kind} bump, cut it, promoted it to "
+                f"Tool1 {chose}, cut it, promoted it to "
                 f"{PIPELINE_STAGING_ENVIRONMENT}, passed quality gates, and "
                 f"handed off to {handoff['provider']} for a pre-prod "
                 f"security scan before the protected {target} promotion"
@@ -1913,8 +1959,7 @@ class AgenticChainWorkflow:
             return result, resolved
 
         result["message"] = (
-            f"Tool1 read {current} from production, computed {resolved} for a "
-            f"{kind} bump, cut it, promoted it to "
+            f"Tool1 {chose}, cut it, promoted it to "
             f"{PIPELINE_STAGING_ENVIRONMENT}, passed quality gates, and stopped "
             f"at the protected {target} promotion"
         )
@@ -2299,6 +2344,12 @@ class AgenticChainWorkflow:
             # whole nested unit is done, so it is the right thing to key the
             # waiting pipeline operation off.
             origin_operation_id=req.origin_operation_id,
+            # And for the same reason, this is where CASE-3's autonomous run is
+            # told what happened. It is waiting on the whole pipeline, and a
+            # pipeline can stop at a quality gate or an unreachable scan, long
+            # before there is a child promotion to report through. Empty for
+            # every caller that waits on the child instead.
+            callback_workflow_id=req.parent_callback_workflow_id,
         )
 
     def _new_nested_child(
