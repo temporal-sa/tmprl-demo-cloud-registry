@@ -30,10 +30,12 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+import logging
 import os
 import shutil
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from temporalio import activity, workflow
 from temporalio.api.nexus.v1 import EndpointSpec, EndpointTarget
@@ -57,6 +59,8 @@ from common.models import (
     GatewayOperationResolution,
     InvokeToolInput,
     NestedToolCallRequest,
+    Operation,
+    OperationStatus,
     PolicyDecision,
     ToolCallRequest,
 )
@@ -79,7 +83,11 @@ from workflows.nexus_handlers import AgentGatewayServiceHandler
 from workflows.protected_action import ProtectedActionWorkflow
 from tests import release_step_fakes
 from tests.release_step_fakes import RELEASE_STEP_ACTIVITIES
-from workflows.chain import AgenticChainWorkflow
+from workflows.chain import (
+    SCAN_REPORT_DEADLINE_SECONDS,
+    AgenticChainWorkflow,
+)
+import workflows.chain as chain_module
 from workflows.release_children import (
     CutReleaseChildWorkflow,
     PromoteReleaseChildWorkflow,
@@ -468,6 +476,13 @@ async def _scan_runs_and_suspends(
     # An endpoint, not a namespace. The pipeline recorded who it handed to and
     # how to reach them, and that is the entire extent of what it knows.
     assert parent.checkpoint["scan_endpoint"] == SECURITY_ENDPOINT
+    # The park is bounded. A scan that started and then said nothing forever
+    # would otherwise hold this operation open for the life of the chain.
+    parked_at = datetime.fromisoformat(parent.created_iso).timestamp()
+    assert (
+        parent.checkpoint["scan_deadline_epoch"] - parked_at
+        <= SCAN_REPORT_DEADLINE_SECONDS + 60
+    )
     assert "scan_namespace" not in parent.checkpoint
     assert "scan_task_queue" not in parent.checkpoint
     scan_workflow_id = parent.checkpoint["scan_workflow_id"]
@@ -1112,3 +1127,144 @@ def test_without_the_mandate_the_scan_is_not_in_the_flow_at_all() -> None:
                 assert promotion.required_approver_team is None
 
     asyncio.run(run())
+
+
+# ------------------------------------------------- the bound on a parked scan
+#
+# These three run against the chain object directly rather than against a
+# Worker, and that is not a shortcut taken to keep them fast. The behaviour
+# under test is what happens after fifteen minutes of silence, and there is no
+# honest way to reach that point on a real dev server: this suite needs two
+# namespaces and real Nexus, so it runs on a real server, and a real server does
+# not skip time. Driving the decision function with a clock the test controls
+# tests the actual rule. That the rule is wired into the running Workflow, and
+# that the deadline it reads is really written at handoff, is pinned by
+# _scan_runs_and_suspends above.
+
+
+def _parked_chain(monkeypatch, *, now: datetime) -> AgenticChainWorkflow:
+    """A chain holding one pipeline operation parked on a security scan."""
+    monkeypatch.setattr(chain_module.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        chain_module.workflow, "logger", logging.getLogger("test-chain")
+    )
+    chain = AgenticChainWorkflow(
+        ChainInput(workflow_id="wf-parked", owner_principal=PRINCIPAL)
+    )
+    chain._state.operations["op-pipeline"] = Operation(
+        operation_id="op-pipeline",
+        tool_name="run_nested_release",
+        arguments={"service": SERVICE, "environment": "prod"},
+        idempotency_key="idem-parked",
+        status=OperationStatus.WAITING_FOR_DEPENDENCY,
+        requester=PRINCIPAL,
+        created_iso=now.isoformat(),
+        checkpoint={
+            "stage": "awaiting_security_scan",
+            "scan_provider": "security",
+            "scan_endpoint": SECURITY_ENDPOINT,
+            "scan_workflow_id": "security::scan::abc123",
+            "scan_deadline_epoch": now.timestamp() + SCAN_REPORT_DEADLINE_SECONDS,
+        },
+    )
+    return chain
+
+
+def test_a_scan_that_never_reports_fails_the_release_rather_than_hanging(
+    monkeypatch,
+) -> None:
+    start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    chain = _parked_chain(monkeypatch, now=start)
+    parked = chain._state.operations["op-pipeline"]
+
+    # A minute before the deadline nothing happens, and the loop is still
+    # planning to wake up for it.
+    monkeypatch.setattr(
+        chain_module.workflow,
+        "now",
+        lambda: start + timedelta(seconds=SCAN_REPORT_DEADLINE_SECONDS - 60),
+    )
+    chain._expire_stalled_scans()
+    assert parked.status == OperationStatus.WAITING_FOR_DEPENDENCY
+    assert chain._scan_deadline(parked) is not None
+
+    monkeypatch.setattr(
+        chain_module.workflow,
+        "now",
+        lambda: start + timedelta(seconds=SCAN_REPORT_DEADLINE_SECONDS + 1),
+    )
+    chain._expire_stalled_scans()
+
+    # Failed, not completed and not quietly abandoned: the mandate asked for a
+    # scan, no scan was produced, and production does not move.
+    assert parked.status == OperationStatus.FAILED
+    assert parked.checkpoint["stage"] == "security_scan_timed_out"
+    # The message has to be usable by someone watching a demo go wrong, so it
+    # names the scan that vanished and the switch that brings it back.
+    assert "security::scan::abc123" in parked.error
+    assert "Security scanner worker" in parked.error
+    assert [entry.event for entry in chain._state.ledger] == [
+        "security_scan_timed_out"
+    ]
+    # And the operation is terminal, which is what makes the rest of the machine
+    # notice: the caller gets a callback and the dashboard stops showing a
+    # pipeline that is going nowhere.
+    assert parked.status in chain_module.TERMINAL
+    assert chain._scan_deadline(parked) is None
+
+
+def test_the_scan_clock_stops_once_the_scan_has_reported(monkeypatch) -> None:
+    """A slow approver is not a stalled scan.
+
+    A scan that clears reports by opening a nested production promotion, and the
+    pipeline operation stays parked on the same checkpoint stage while that
+    promotion sits in front of a human. The approver has their own clock; this
+    one must be off by then, or a long approval would fail the release.
+    """
+    start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    chain = _parked_chain(monkeypatch, now=start)
+    parked = chain._state.operations["op-pipeline"]
+    chain._state.operations["op-promotion"] = Operation(
+        operation_id="op-promotion",
+        tool_name="promote_release",
+        arguments={"service": SERVICE, "environment": "prod"},
+        idempotency_key="idem-promotion",
+        status=OperationStatus.WAITING_FOR_APPROVAL,
+        requester=PRINCIPAL,
+        created_iso=start.isoformat(),
+        origin_operation_id="op-pipeline",
+    )
+
+    assert chain._scan_deadline(parked) is None
+    monkeypatch.setattr(
+        chain_module.workflow,
+        "now",
+        lambda: start + timedelta(seconds=SCAN_REPORT_DEADLINE_SECONDS * 4),
+    )
+    chain._expire_stalled_scans()
+
+    assert parked.status == OperationStatus.WAITING_FOR_DEPENDENCY
+    assert chain._state.ledger == []
+
+
+def test_a_chain_parked_by_an_older_build_carries_no_scan_deadline(
+    monkeypatch,
+) -> None:
+    """Rollout safety: chains already parked when this code ships stay parked.
+
+    Their checkpoint has no deadline in it, and inventing one for them would
+    mean failing releases that were mid-flight during a deploy.
+    """
+    start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    chain = _parked_chain(monkeypatch, now=start)
+    parked = chain._state.operations["op-pipeline"]
+    del parked.checkpoint["scan_deadline_epoch"]
+
+    monkeypatch.setattr(
+        chain_module.workflow,
+        "now",
+        lambda: start + timedelta(days=1),
+    )
+    assert chain._scan_deadline(parked) is None
+    chain._expire_stalled_scans()
+    assert parked.status == OperationStatus.WAITING_FOR_DEPENDENCY

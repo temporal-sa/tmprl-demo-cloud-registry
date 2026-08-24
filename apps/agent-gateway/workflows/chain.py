@@ -66,6 +66,25 @@ QUALITY_GATE_WAIT_TIMEOUT = timedelta(minutes=5)
 # hands back its id rather than waiting for the scan to finish. See
 # _hand_off_to_scan for why it must not be the other way round.
 SCAN_HANDOFF_TIMEOUT = timedelta(seconds=30)
+# How long the pipeline stays parked waiting for a scan it has already started to
+# report back. Once the Nexus call returns, the scan is the Security team's
+# workflow and nothing in this one is waiting on a Future -- the pipeline
+# operation is parked on durable state, and durable state does not time out on
+# its own. Without a bound, a scan that never reports leaves the operation parked
+# for the life of the chain, which shows on screen as nothing at all: no card, no
+# error, no progress. That is the worst possible failure mode for a demo.
+#
+# Fifteen minutes, chosen against the one legitimate long wait this demo has.
+# CASE-2b's whole point is that killing the Security team's Worker mid-scan does
+# not lose the scan, so a presenter is expected to stop it, talk for a few
+# minutes, and start it again -- and that must not fail the release. Fifteen
+# minutes is several times the longest version of that beat, and still inside
+# IDLE_TIMEOUT_SECONDS, so a wedged pipeline fails visibly before the chain
+# reaps itself for idleness.
+#
+# An absolute epoch on the operation rather than a Timer, for the same reason
+# approval deadlines are: it has to survive Continue-As-New. See _hand_off_to_scan.
+SCAN_REPORT_DEADLINE_SECONDS = 15 * 60
 # Delivering a decision to whatever is holding a request open. Same namespace,
 # but worth retrying hard: it is what wakes a system that is deliberately asleep.
 CALLBACK_TIMEOUT = timedelta(seconds=30)
@@ -339,6 +358,10 @@ class AgenticChainWorkflow:
 
             self._reschedule = False
             self._expire_overdue()
+            # Before _settle_handoffs, not after: this is what turns a stalled
+            # scan into a terminal operation, and _settle_handoffs is what
+            # delivers that terminal operation to whoever is waiting on it.
+            self._expire_stalled_scans()
             await self._process_approved()
             await self._settle_handoffs()
 
@@ -1206,6 +1229,9 @@ class AgenticChainWorkflow:
                 and now >= op.deadline_epoch
             ):
                 return True
+            scan_deadline = self._scan_deadline(op)
+            if scan_deadline is not None and now >= scan_deadline:
+                return True
             # A rejection or a cancellation lands in a Signal handler, which only
             # mutates state. Waking here is what turns that into a delivered
             # callback and a settled pipeline operation.
@@ -1220,6 +1246,14 @@ class AgenticChainWorkflow:
             for op in self._state.operations.values()
             if op.status == OperationStatus.WAITING_FOR_APPROVAL
             and op.deadline_epoch is not None
+        ]
+        # A parked scan has a deadline too, and unlike an approval it is not
+        # attached to op.deadline_epoch -- that field is the approver's clock,
+        # and an operation can hold both over its lifetime.
+        candidates += [
+            deadline
+            for op in self._state.operations.values()
+            if (deadline := self._scan_deadline(op)) is not None
         ]
         # Idle completion only applies when no work is pending. A pending
         # approved-awaiting-retry operation has no timer and should sleep until an
@@ -1251,6 +1285,83 @@ class AgenticChainWorkflow:
                 op.decided_iso = workflow.now().isoformat()
                 self._log("expired", op)
                 self._propagate_child_terminal(op)
+
+    def _scan_deadline(self, op: Operation) -> float | None:
+        """When a parked security scan stops being worth waiting for.
+
+        This clock bounds one specific thing: a scan that has started and said
+        nothing. It stops the moment the scan says anything at all, because the
+        wait after that is a different wait with a different owner. A scan that
+        clears reports by opening a nested production promotion in this chain,
+        and that promotion sits in front of a human for as long as the human
+        takes -- the pipeline operation stays parked on the same checkpoint
+        stage throughout. Timing that out would mean failing releases because an
+        approver was slow, which is neither this method's business nor a thing
+        the approval deadline needs help with.
+
+        Returns None for every operation that is not currently parked on a scan,
+        including one parked by an older build of this Workflow: chains carried
+        across a rollout have no deadline in their checkpoint, and the honest
+        answer for those is "no deadline" rather than a made-up one.
+        """
+        if op.status != OperationStatus.WAITING_FOR_DEPENDENCY:
+            return None
+        if op.checkpoint.get("stage") != "awaiting_security_scan":
+            return None
+        # Anything carrying this operation as its origin is the scan having
+        # reported in. The clock is off from that point on.
+        if any(
+            candidate.origin_operation_id == op.operation_id
+            for candidate in self._state.operations.values()
+        ):
+            return None
+        deadline = op.checkpoint.get("scan_deadline_epoch")
+        return float(deadline) if isinstance(deadline, (int, float)) else None
+
+    def _expire_stalled_scans(self) -> None:
+        """Fail a release whose security scan started and never reported back.
+
+        The scan reports one of two ways, and this is the safety net under both:
+        a clearing scan calls back in to request the production promotion, and a
+        failing one sends scan_verdict_reported. If neither ever arrives -- the
+        Security team's Worker is gone for good, their scan workflow was
+        terminated, a Nexus reply was lost -- the pipeline operation stays parked
+        forever, because it is waiting on durable state rather than on a Future
+        that could time out.
+
+        Failing here is not a judgement that the release is unsafe. It is the
+        same judgement _scan_unavailable makes: the mandate requires a scan, no
+        scan has been produced, and an unmet checkpoint is not a promotion.
+        """
+        now = workflow.now().timestamp()
+        for op in self._state.operations.values():
+            deadline = self._scan_deadline(op)
+            if deadline is None or now < deadline:
+                continue
+            provider = str(op.checkpoint.get("scan_provider") or "The Security team")
+            scan_workflow_id = str(op.checkpoint.get("scan_workflow_id") or "")
+            minutes = SCAN_REPORT_DEADLINE_SECONDS // 60
+            op.status = OperationStatus.FAILED
+            op.error = (
+                f"{provider} started a pre-prod security scan"
+                + (f" ({scan_workflow_id})" if scan_workflow_id else "")
+                + f" and has not reported a verdict in {minutes} minutes. The "
+                "release stops here rather than promoting to production on a "
+                "scan that never finished. Restart the Security scanner worker "
+                "from the demo bar if it is stopped, then run the release again."
+            )
+            op.decided_iso = workflow.now().isoformat()
+            op.checkpoint = {**op.checkpoint, "stage": "security_scan_timed_out"}
+            self._log(
+                "security_scan_timed_out",
+                op,
+                {
+                    "scan_workflow_id": scan_workflow_id,
+                    "provider": provider,
+                    "waited_seconds": SCAN_REPORT_DEADLINE_SECONDS,
+                },
+            )
+            self._propagate_child_terminal(op)
 
     async def _process_approved(self) -> None:
         approved_ids = [
@@ -1981,7 +2092,15 @@ class AgenticChainWorkflow:
             "scan_provider": handoff["provider"],
             "scan_endpoint": SECURITY_ENDPOINT,
             "scan_workflow_id": opened.scan_workflow_id,
+            "scan_deadline_epoch": (
+                workflow.now().timestamp() + SCAN_REPORT_DEADLINE_SECONDS
+            ),
         }
+        # The main loop computed its sleep before this operation existed, so tell
+        # it there is a new deadline to take into account. Without this the loop
+        # would not look again until whatever it was already sleeping on fired,
+        # and would notice the stall late rather than on time.
+        self._reschedule = True
         self._log(
             "security_scan_handoff",
             parent,
