@@ -1889,18 +1889,93 @@ def _fmt(value: Optional[str]) -> str:
 
 
 def _args_summary(arguments: dict) -> str:
-    return html.escape(", ".join(f"{k}={v}" for k, v in arguments.items()))
+    """One argument per line.
+
+    Comma-joined, this was a single unbroken string that either widened its
+    column or broke mid-identifier. A pair per line breaks where the meaning
+    already breaks, and an approver reads down the three values rather than
+    scanning a sentence for them.
+    """
+    return "".join(
+        f'<span class="arg">{html.escape(f"{k}={v}")}</span>'
+        for k, v in arguments.items()
+    )
+
+
+def _innermost_message(value: Any) -> str:
+    """The most specific "message" inside a nested result.
+
+    Results nest as the chain nests: a phase wraps the tool call that did the
+    work, which wraps the deployment that actually happened, and each level
+    writes its own sentence. The innermost one is the one that says what
+    happened -- "promoted delivery-matching-service 2.6.0 to production" rather
+    than "the security scan recorded the approved promotion" -- so a walk in
+    document order keeps the last message it finds.
+    """
+    found = ""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "message" and isinstance(item, str) and item.strip():
+                found = item.strip()
+            else:
+                nested = _innermost_message(item)
+                if nested:
+                    found = nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = _innermost_message(item)
+            if nested:
+                found = nested
+    return found
 
 
 def _result_summary(result: Any) -> str:
+    """What the call did, in a sentence per phase -- never the whole object.
+
+    Most tools return {"message": ...} and that message is the whole story. A
+    CASE-3 promotion returns the entire nested record of what the chain did:
+    the checkpointed tool1 call, the deployment tool2 performed, the dependent
+    action that ran afterwards, and every flag each of them set. Dumped as JSON
+    that was several hundred characters in a column a tenth of the page wide,
+    which is a way of showing nothing at all.
+
+    So a nested result is reduced to its phases: one line per top level phase,
+    labelled, carrying that phase's innermost message. Everything else in the
+    object -- the flags, the instance ids, the timestamps -- is recoverable from
+    the Event History, which is where somebody who wants it is going anyway.
+    """
     if result is None:
         return ""
-    if isinstance(result, dict):
-        msg = result.get("message")
-        if msg:
-            return html.escape(str(msg))
-        return html.escape(json.dumps(result))
-    return html.escape(str(result))
+    if not isinstance(result, dict):
+        return html.escape(str(result))
+
+    message = result.get("message")
+    if message:
+        return html.escape(str(message))
+
+    lines = []
+    for key, value in result.items():
+        phase = _innermost_message(value)
+        if not phase:
+            continue
+        label = key.rsplit("_", 1)[0] if key.endswith(("_action", "_result")) else key
+        lines.append(
+            f'<span class="res"><span class="res-key">'
+            f'{html.escape(label.replace("_", " "))}</span>'
+            f"{html.escape(phase)}</span>"
+        )
+    if lines:
+        return "".join(lines)
+
+    # Nothing in it said anything in words. Rather than let an arbitrary object
+    # set the column's height, it gets one clipped line and keeps the rest on
+    # hover.
+    dumped = json.dumps(result)
+    short = dumped if len(dumped) <= 90 else dumped[:89] + "\u2026"
+    return (
+        f'<span class="res-raw" title="{html.escape(dumped)}">'
+        f"{html.escape(short)}</span>"
+    )
 
 
 def _short_ts(iso: Optional[str]) -> str:
@@ -1910,6 +1985,23 @@ def _short_ts(iso: Optional[str]) -> str:
         return datetime.fromisoformat(iso).strftime("%m-%d %H:%M:%S")
     except Exception:
         return iso.split(".")[0].replace("T", " ")
+
+
+def _ts_cell(iso: Optional[str]) -> str:
+    """Date over time, each unbreakable.
+
+    "08-24 13:58:40" is one token as far as a narrow column is concerned, and
+    left to itself it broke in the middle of the clock. Two lines, and the break
+    lands where a reader would have put it.
+    """
+    stamp = _short_ts(iso)
+    if not stamp:
+        return ""
+    date, _, clock = stamp.partition(" ")
+    out = f'<span class="ts-part">{html.escape(date)}</span>'
+    if clock:
+        out += f'<span class="ts-part">{html.escape(clock)}</span>'
+    return out
 
 
 def _team_badge(op: Any) -> str:
@@ -1928,21 +2020,78 @@ def _team_badge(op: Any) -> str:
     )
 
 
+def _breakable(value: Any) -> str:
+    """An identifier with break opportunities where its own words divide.
+
+    Tool names and ids are longer than any column here can hold, so they have to
+    wrap somewhere, and left to the browser they wrap two characters from the
+    end. A <wbr> after each underscore and hyphen puts the break where the
+    identifier already divides: "promote_release" and "op-2ca19e70" split after
+    the separator, where a reader would have paused anyway.
+    """
+    text = html.escape(str(value))
+    for sep in ("_", "-"):
+        text = text.replace(sep, f"{sep}<wbr>")
+    return text
+
+
+def _call_path_cell(call_path: Any) -> str:
+    """The chain, one hop per line.
+
+    " -> " on one line was the widest thing in either table: three hops of
+    snake_case either forced the column past 20rem or wrapped mid-identifier.
+    Stacked, the same chain reads downward, costs a tenth of the row, and the
+    indent says which way it runs.
+    """
+    hops = list(call_path or [])
+    if not hops:
+        return ""
+    cells = [f'<span class="hop">{_breakable(hops[0])}</span>']
+    cells += [f'<span class="hop sub">{_breakable(hop)}</span>' for hop in hops[1:]]
+    return "".join(cells)
+
+
+def _principal_cell(value: Optional[str]) -> str:
+    """A person in a narrow column: name in full, address clipped.
+
+    "Noah Proovle <noah.proovle@quickmeals.com>" does not fit in a column this
+    page can afford, and the two halves are not worth the same. The name is what
+    an approver reads across the room, so it wraps and is never cut. The address
+    is the disambiguator, so it gets one clipped line underneath and shows in
+    full on hover.
+    """
+    if not value:
+        return ""
+    name, address = value.strip(), ""
+    if "<" in name and name.endswith(">"):
+        address = name[name.index("<") + 1 : name.rindex(">")].strip()
+        name = name[: name.index("<")].strip()
+    if not name:
+        name, address = address, ""
+    out = f'<span class="who-name">{html.escape(name)}</span>'
+    if address:
+        out += (
+            f'<span class="who-addr" title="{html.escape(address)}">'
+            f"{html.escape(address)}</span>"
+        )
+    return out
+
+
 def _render_pending_row(workflow_id: str, op: Any) -> str:
     wf = html.escape(workflow_id)
     op_id = html.escape(op.operation_id)
     deadline = op.deadline_epoch or 0
     return f"""
     <tr>
-      <td class="mono">{wf}</td>
-      <td class="mono">{op_id}</td>
-      <td>{_fmt(op.requested_action)}{_team_badge(op)}</td>
-      <td>{_fmt(op.requester)}</td>
+      <td>{_fmt(op.requested_action)}{_team_badge(op)}
+        <div class="row-ids mono">{_breakable(workflow_id)} &middot;
+        {_breakable(op.operation_id)}
+        &middot; {html.escape(_short_ts(op.created_iso))}</div></td>
+      <td>{_principal_cell(op.requester)}</td>
       <td class="mono">{_args_summary(op.arguments)}</td>
       <td>{_fmt(op.justification)}</td>
       <td>{_fmt(op.risk_reason)}</td>
-      <td class="mono">{html.escape(" -> ".join(op.call_path))}</td>
-      <td class="mono">{html.escape(_short_ts(op.created_iso))}</td>
+      <td class="mono">{_call_path_cell(op.call_path)}</td>
       <td class="mono"><span class="countdown" data-deadline="{deadline}"></span></td>
       <td>
         <form method="post" action="/approve" class="inline">
@@ -1953,7 +2102,7 @@ def _render_pending_row(workflow_id: str, op: Any) -> str:
         <form method="post" action="/reject" class="inline">
           <input type="hidden" name="workflow_id" value="{wf}">
           <input type="hidden" name="operation_id" value="{op_id}">
-          <input type="text" name="reason" class="reason" placeholder="reason for rejection">
+          <input type="text" name="reason" class="reason" placeholder="reason">
           <button class="reject" type="submit">Reject</button>
         </form>
       </td>
@@ -1963,24 +2112,29 @@ def _render_pending_row(workflow_id: str, op: Any) -> str:
 
 def _render_history_row(workflow_id: str, op: Any) -> str:
     wf = html.escape(workflow_id)
-    prot = "Y" if op.protected else "N"
-    prot_class = "prot-y" if op.protected else "prot-n"
     reason = op.decision_reason
     if not reason and op.status == "expired":
         reason = "approval timed out"
+    # An unprotected call was never put to anybody, which is the whole of what
+    # the old Protected column said. Said here instead, in the column whose
+    # emptiness it explains, so the row is one column narrower for it.
+    if not op.protected:
+        approver = '<span class="muted">N/A</span>'
+    elif op.approver:
+        approver = _principal_cell(op.approver)
+    else:
+        approver = '<span class="muted">&mdash;</span>'
     return f"""
     <tr data-wf="{wf}">
-      <td class="mono">{html.escape(_short_ts(op.decided_iso))}</td>
-      <td class="mono">{wf}</td>
-      <td>{_fmt(op.requester)}</td>
-      <td class="mono">{html.escape(op.operation_id)}</td>
-      <td class="mono">{html.escape(op.tool_name)}</td>
-      <td class="mono">{html.escape(" -> ".join(op.call_path))}</td>
-      <td class="{prot_class}">{prot}</td>
+      <td class="mono">{_ts_cell(op.decided_iso)}</td>
+      <td class="mono">{_breakable(workflow_id)}</td>
+      <td>{_principal_cell(op.requester)}</td>
+      <td class="mono">{_breakable(op.operation_id)}</td>
+      <td class="mono">{_call_path_cell(op.call_path)}</td>
       <td>{_fmt(op.requested_action)}</td>
       <td>{_result_summary(op.result)}</td>
       <td><span class="badge badge-{html.escape(op.status)}">{html.escape(op.status)}</span></td>
-      <td>{_fmt(op.approver)}</td>
+      <td>{approver}</td>
       <td>{_fmt(reason)}</td>
     </tr>
     """
@@ -2023,20 +2177,81 @@ _CSS = """
   --fence-line: #a7aeba;
 }
 body { background: var(--bg); color: var(--fg); font-family: Inter, system-ui, sans-serif; margin: 2rem; }
-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+/* Top aligned, not centred: the mandate controls grow a row when the mandate is
+   switched on, and with the two blocks centred against each other that growth
+   pushed the page title down the screen mid-demo. */
+header { display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 1rem; flex-wrap: wrap; }
 header h1 { margin: 0; }
+.brand { display: flex; align-items: flex-start; gap: 0.7rem; min-width: 0; flex: 1 1 16rem; }
+.brand-text { min-width: 0; }
+.logo { flex: none; width: 2.1rem; height: 2.1rem; margin-top: 0.05rem; }
+/* Sized by its contents, never squeezed -- and held at the width of its widest
+   state, so switching the mandate on does not narrow the brand block beside it
+   and rewrap the strapline under the title. */
+.account { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end;
+        gap: 0.45rem; min-width: min(32.5rem, 100%); }
+.account-row { display: flex; align-items: center; gap: 0.45rem; white-space: nowrap; }
+.whoami { white-space: nowrap; }
 .brandline { margin: 0.25rem 0 0; max-width: 44rem; }
 h1 { font-size: 1.25rem; }
 h2 { font-size: 1rem; margin: 0; }
-table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+/* Fixed layout, with the widths declared per column in the markup. This page is
+   shown on two thirds of a screen with an editor in the other third, and under
+   auto layout a single long call path or argument string widens its column
+   until the table runs out past the header controls and the whole page scrolls
+   sideways. Fixed layout makes column width a decision instead of an outcome:
+   the table is exactly as wide as the page, whatever lands in it. */
+table { border-collapse: collapse; table-layout: fixed; width: 100%; margin-top: 0.5rem; }
 th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 0.85rem; }
-th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--th); }
-.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.74rem; }
+/* Headings are single words in columns a tenth of the page wide, so they are set
+   a size down from where they were: a heading that collides with the next one is
+   not doing its job. */
+th { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--th); }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.71rem; }
+/* Identifiers have no spaces to break at, so they are allowed to break rather
+   than overhang the column they were given -- but only where they have to, so
+   "op-2ca19e70" splits after its hyphen and not two characters from the end.
+   Prose cells are left alone: they wrap at spaces, which is what prose should
+   do. */
+td.mono { overflow-wrap: break-word; }
+/* The chain, one hop per line. The indent carries the direction that " -> " used
+   to, in a column an eighth of the width. */
+.hop { display: block; }
+.ts-part { display: block; white-space: nowrap; }
+.hop.sub { padding-left: 0.6rem; }
+.hop.sub::before { content: "\\21b3 "; margin-right: 0.2rem; opacity: 0.55; }
+/* Which workflow, which operation, and when it was submitted -- under the action
+   they belong to. They were three columns of reference material that nobody
+   reads across, only looks up; here they cost the table nothing and are still
+   there to copy into the Temporal UI. */
+.row-ids { margin-top: 0.3rem; color: var(--muted); overflow-wrap: break-word; }
+.arg { display: block; }
+.arg + .arg { margin-top: 0.1rem; }
+/* One phase of a chained result per line, each headed by the phase it belongs
+   to, because two sentences of outcome run together read as one confused one. */
+.res { display: block; }
+.res + .res { margin-top: 0.35rem; }
+.res-key { display: block; font-size: 0.6rem; text-transform: uppercase;
+        letter-spacing: 0.06em; color: var(--muted); }
+.res-raw { display: block; overflow-wrap: break-word; color: var(--muted);
+        font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.68rem; }
+/* A person in a narrow column: the name never truncates, the address always may
+   -- and does, with the whole of it on hover. */
+.who-name { display: block; }
+.who-addr { display: block; margin-top: 0.05rem; font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 0.62rem; color: var(--muted); overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap; }
 .muted { color: var(--muted); font-size: 0.82rem; }
 .empty { color: var(--muted); text-align: center; padding: 1.5rem; }
 .inline { display: block; margin: 0 0 0.35rem 0; }
 input[type=text] { padding: 0.28rem 0.4rem; border: 1px solid var(--border); border-radius: 4px; background: var(--field); color: var(--fg); }
-input.reason { width: 15rem; }
+input.reason { width: 100%; box-sizing: border-box; margin-bottom: 0.3rem; font-size: 0.78rem; }
+/* Stacked in the decision column, each at the width the column has. Side by side
+   they set a floor on how narrow that column could be, and the floor was wider
+   than the column is worth. Scoped to the queue: the same .inline wrapper holds
+   Log out up in the header, which is sized by its own text. */
+.queue .inline button { margin-left: 0; width: 100%; }
 button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cursor: pointer; margin-left: 0.25rem; }
 .approve { background: #13c4b0; }
 .reject { background: #ef4444; }
@@ -2067,27 +2282,43 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
         border: 1px solid var(--border); color: var(--fg); text-decoration: none;
         margin-left: 0.25rem; font-size: 0.8rem; }
 .linkbtn:hover { border-color: var(--protect); }
-.kill { background: #ef4444; }
-.restore { background: #13c4b0; }
+/* Outlined rather than filled. These are the presenter's own controls, not the
+   product's, and three solid red blocks above the fleet panel pulled a room's
+   eye away from the thing being demonstrated every time the page repainted.
+   Red is still the whole signal -- it is just carried by the border and the
+   word instead of by a field of colour, and the transparent background takes
+   whichever page it is on. */
+.kill { background: transparent; border: 1px solid #ef4444; color: #ef4444; }
+.kill:hover { background: rgba(239,68,68,0.12); }
+.restore { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+.restore:hover { background: var(--accent-wash); }
 /* A Worker that is down says so where the switch is, because the consequence
    shows up somewhere else entirely -- in the Temporal UI, on another tab. */
 .downtag { display: inline-block; margin-left: 0.35rem; padding: 0.12rem 0.45rem;
         border: 1px solid #ef4444; border-radius: 999px; color: #ef4444;
         font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.countdown { white-space: nowrap; }
 .countdown.urgent { color: #ef4444; font-weight: 600; }
 /* Only one QuickMeals team may decide this entry. Reads as a constraint on the
    row rather than a status of the operation, so it sits under the requested
    action instead of in the outcome column. */
-.team-req { display: inline-block; margin-top: 0.3rem; padding: 0.12rem 0.45rem;
-        border: 1px solid var(--protect); border-radius: 999px; color: var(--protect);
-        font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; }
+/* A rectangle rather than a pill, because in a column this narrow the label
+   wraps to two or three lines, and a 999px radius on a three-line box cuts
+   through its own text. */
+.team-req { display: inline-block; margin-top: 0.3rem; padding: 0.16rem 0.4rem;
+        border: 1px solid var(--protect); border-radius: 5px; color: var(--protect);
+        font-size: 0.62rem; line-height: 1.35; text-transform: uppercase;
+        letter-spacing: 0.06em; }
 /* Company-wide security mandate. Deliberately the quietest control on the page:
    an unlabelled switch tucked under Log out, because it is set once at the start
    of a demo and then wants to be forgotten. What it is, it says only when it is
    on -- and then it says it in a sentence, since "mandate: on" means nothing to
    anyone who did not flip it. */
-.mandate { display: flex; flex-direction: column; align-items: flex-end;
-        margin-top: 0.5rem; gap: 0.3rem; }
+/* The row is reserved at the height of its fullest state, so switching the
+   mandate on adds the sentence and the scanner control without moving anything
+   below the header down the page. */
+.mandate { display: flex; align-items: center; justify-content: flex-end;
+        flex-wrap: wrap; gap: 0.3rem 0.6rem; margin-top: 0.1rem; min-height: 1.55rem; }
 .switch { width: 2.1rem; height: 1.1rem; padding: 0; margin: 0; flex: none;
         border: 1px solid var(--border); border-radius: 999px;
         background: var(--muted); position: relative; cursor: pointer;
@@ -2113,35 +2344,40 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 .forbidden { max-width: 34rem; margin: 12vh auto; padding: 2rem;
         border: 1px solid #ef4444; border-radius: 8px; }
 .forbidden h1 { color: #ef4444; }
-.prot-y { color: #f59e0b; font-weight: 600; }
-.prot-n { color: var(--muted); }
-.badge { padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.7rem; color: white; }
+.badge { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 999px;
+        font-size: 0.64rem; color: white; white-space: nowrap; }
 .badge-completed { background: #13c4b0; }
 .badge-rejected { background: #ef4444; }
 .badge-expired { background: #f59e0b; }
 .badge-failed { background: #6b7280; }
 .filterbar { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.75rem; }
 .login { max-width: 28rem; margin: 12vh auto; padding: 2rem; border: 1px solid var(--border); border-radius: 8px; }
+.login-brand { display: flex; align-items: center; gap: 0.7rem; }
 .login input { width: 100%; box-sizing: border-box; margin: 0.5rem 0 1rem; }
 
 /* --------------------------------------------------------- release fleet panel
    Cards, not a table. The approval queue below answers "what needs a decision";
    this answers "what is running", so it is deliberately a different visual form
    while sharing the palette, radii, and type scale. */
-/* One row: what is ready, then the environments it can move through. Bounded so
-   the cards stay card-shaped instead of stretching across the whole window. */
-.fleet { margin-top: 1.5rem; --fleet-width: 66rem; }
-.fleet:has(.gate) { --fleet-width: 80rem; }
-.fleet .subtle, .fleet .fleet-flow { max-width: var(--fleet-width); }
-.fleet-flow { display: flex; align-items: stretch; margin-top: 0.85rem; }
-.ready { flex: 0 0 13.5rem; min-width: 0; }
-.ready .rail-head { margin-top: 0; }
+/* What is ready rides on the panel heading; the environments it can move through
+   are the row below it, starting at the page's left edge. Bounded so the cards
+   stay card-shaped instead of stretching across the whole window. */
+.fleet { margin-top: 1.5rem; --fleet-width: 62rem; }
+.fleet:has(.gate) { --fleet-width: 74rem; }
+.fleet .section-head, .fleet .fleet-flow { max-width: var(--fleet-width); }
+.fleet-flow { display: flex; align-items: stretch; margin-top: 1.15rem; }
+/* On the heading line, hard right, so the pipeline underneath gets the full
+   width of the panel. Wraps to its own line before it would crowd the heading. */
+.ready { display: flex; align-items: flex-start; gap: 0.55rem; min-width: 0;
+       flex: 0 1 auto; max-width: 62%; margin-left: auto; }
+/* Line height matched to a chip, so with two rows of candidates the label sits
+   on the first one instead of floating between them. */
+.ready .rail-head { margin-top: 0; flex: none; line-height: 1.75rem; }
 .fleet-service { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 1.05rem;
        font-weight: 600; letter-spacing: -0.01em; }
-.section-head { display: flex; align-items: center; gap: 0; }
+.section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0; }
 .section-head .live { margin-left: 0.7rem; }
 .eyebrow { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--card-title); }
-.subtle { margin: 0.3rem 0 0; font-size: 0.78rem; }
 .divider { border: 0; border-top: 1px solid var(--border); margin: 1.9rem 0 0; }
 .queue-head { margin-top: 1.6rem; }
 .live { display: inline-flex; align-items: center; gap: 0.38rem; font-size: 0.68rem;
@@ -2160,13 +2396,11 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 .pipeline { display: flex; flex: 1 1 0; min-width: 0; }
 .link { flex: 0 0 2.6rem; position: relative; display: flex; align-items: center; }
 .link[data-into="gate"], .pipeline:has(.gate) .link[data-into="prod"] { flex-basis: 1.8rem; }
-.link:first-child { flex-basis: 3.1rem; margin-right: 0.9rem; }
-.link:first-child .link-line { margin-right: 0.55rem; }
-.link:first-child::after { right: 0.55rem; }
-/* The pipe: promotable on the left, running on the right. Faded at both ends so a
-   full-height rule does not cut the row in half. */
-.link:first-child::before { content: ""; position: absolute; right: 0; top: -0.35rem; bottom: -0.35rem;
-       width: 1px; background: linear-gradient(180deg, transparent, var(--th), transparent); opacity: 0.8; }
+/* The inlet, kept but slimmed: with the ready rail moved up to the heading there
+   is no longer a promotable half and a running half for a divider to separate,
+   and the pipeline should start as close to the page edge as it can. The arrow
+   stays because a promotion into staging animates along it. */
+.link:first-child { flex-basis: 1.6rem; }
 .link-line { position: relative; flex: 1 1 auto; height: 2px; border-radius: 2px;
              background: var(--border); overflow: hidden; }
 .link-line::after { content: ""; position: absolute; inset: 0; opacity: 0;
@@ -2178,7 +2412,7 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 .link.flowing::after { border-left-color: var(--accent); }
 @keyframes flow { from { transform: translateX(-100%); opacity: 1; } to { transform: translateX(100%); opacity: 1; } }
 
-.env { flex: 1 1 0; min-width: 0; position: relative; overflow: hidden; --stripe: var(--accent);
+.env { flex: 1 1 9rem; min-width: 0; position: relative; overflow: hidden; --stripe: var(--accent);
        padding: 0.85rem 1.1rem 0.95rem; border: 1px solid var(--card-edge); border-radius: 14px;
        background: var(--card); transition: border-color 0.5s ease, box-shadow 0.5s ease; }
 .env.protected { --stripe: var(--protect); }
@@ -2239,7 +2473,7 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 
    Only the SECURITY SCAN card keeps the first-appearance reveal, because that
    one really does arrive mid-demo, when the mandate puts it in the path. */
-.gate { flex: 0 0 11rem; min-width: 0; position: relative; overflow: hidden;
+.gate { flex: 0 1 11rem; min-width: 0; position: relative; overflow: hidden;
         padding: 0.7rem 0.8rem 0.8rem; border: 1px dashed var(--card-edge);
         border-radius: 14px; background: var(--card);
         transition: border-color 0.4s ease, box-shadow 0.4s ease; }
@@ -2324,7 +2558,7 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
    the step belongs to the Security team whether or not they have adopted
    Temporal. Ownership is carried by colour; how durable the thing is gets
    carried by the card's contents, further down. */
-.gate.scan { flex: 0 0 15.5rem; overflow: visible;
+.gate.scan { flex: 0 1 15.5rem; overflow: visible;
         border-color: var(--cobalt-edge); background:
         linear-gradient(var(--cobalt-tint), var(--cobalt-tint)), var(--card); }
 /* Cobalt wins over the status border colours the other cards use. On this one
@@ -2434,13 +2668,14 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 }
 
 .rail-head { margin-top: 1.1rem; }
-/* Stacked in the ready column, so each release is a block that wraps its badges
-   rather than a pill that would overflow a narrow column. */
-.candidates { display: flex; flex-direction: column; align-items: stretch; gap: 0.4rem; margin-top: 0.5rem; }
-.chip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
-        padding: 0.34rem 0.5rem 0.34rem 0.62rem;
-        border: 1px solid var(--card-edge); border-radius: 10px; background: var(--card); }
-.chip .when { margin-left: auto; }
+/* Side by side on the heading line: two or three candidates, each a pill, so the
+   row reads at a glance and takes one line of height instead of a column of
+   width. */
+.candidates { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; min-width: 0; }
+.chip { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 0.4rem;
+        padding: 0.28rem 0.5rem 0.28rem 0.62rem;
+        border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card); }
+.chip .when { margin-left: 0.1rem; }
 .chip .cv { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.76rem; font-weight: 600; }
 .chip .cw { font-size: 0.66rem; color: var(--muted); }
 .where { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.42rem;
@@ -2467,16 +2702,10 @@ button { padding: 0.3rem 0.7rem; border: 0; border-radius: 4px; color: white; cu
 @keyframes toast-out { to { transform: translateY(-8px); opacity: 0; } }
 
 @media (max-width: 900px) {
-  /* Not enough width for three columns: the ready list goes back to a wrapping
-     row above the two environment cards. */
-  .fleet-flow { flex-direction: column; }
-  .ready { flex: 0 0 auto; }
-  .candidates { flex-direction: row; flex-wrap: wrap; }
-  .chip { border-radius: 999px; }
-  .chip .when { margin-left: 0; }
-  .pipeline { flex: 0 0 auto; margin-top: 1rem; }
-  /* The ready list is above the cards now, not to their left, so an inlet arrow
-     from the page edge would point at nothing. */
+  /* Too narrow for the heading to hold the candidates as well: they drop to
+     their own line, still above the pipeline. */
+  .ready { margin-left: 0; flex-basis: 100%; }
+  /* And too narrow for the inlet to be worth the room it takes. */
   .link:first-child { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2514,7 +2743,6 @@ var FLEET = (function () {
   var seen = {};
   var railSeen = {};
   var railPainted = false;
-  var holdUntil = 0;
 
   function label(env) { return LABELS[env] || env; }
   function readJson(key, fallback) {
@@ -2729,10 +2957,7 @@ var FLEET = (function () {
     // A protected environment is the point of the whole demo, so it gets the
     // loudest treatment: card shine plus a toast.
     if (protectedEnvs[rec.environment]) toast(rec);
-    hold();
   }
-
-  function hold() { holdUntil = Date.now() + ANIM_MS + 600; }
 
   // How long the scan card's arrival animation still has to run. Every paint
   // rebuilds the card's class list, and the first poll lands within a few
@@ -2797,7 +3022,6 @@ var FLEET = (function () {
     // security scan card once that exists.
     var out = linkInto(pipeline.querySelector('.gate.scan') ? 'scan' : 'prod');
     if (out) out.classList.toggle('blocked', failed);
-    if (running) hold();
   }
 
   // phase -> [card class, verdict label]. The phases come straight from
@@ -2952,7 +3176,6 @@ var FLEET = (function () {
       card.querySelector('.scan-stale-note').style.display = 'none';
       var idleOut = linkInto('prod');
       if (idleOut) idleOut.classList.remove('blocked');
-      if (appearing) hold();
       return;
     }
 
@@ -3027,7 +3250,6 @@ var FLEET = (function () {
 
     var out = linkInto('prod');
     if (out) out.classList.toggle('blocked', phase[0] === 'failed' || stale);
-    if ((running && !stale) || appearing) hold();
   }
 
   function paint(state, animate) {
@@ -3150,12 +3372,10 @@ var FLEET = (function () {
       rail.appendChild(el('span', 'rail-empty', 'No releases are cut and ready to promote.'));
       return;
     }
-    var fresh = false;
     releases.forEach(function (rel) {
       var key = rel.service + '@' + rel.version;
       var isNew = railPainted && !railSeen[key];
       railSeen[key] = true;
-      if (isNew) fresh = true;
       var chip = el('span', 'chip' + (isNew ? ' fresh' : ''));
       chip.appendChild(el('span', 'cv', rel.version));
       var envs = where[key] || [];
@@ -3175,7 +3395,6 @@ var FLEET = (function () {
       rail.appendChild(chip);
     });
     railPainted = true;
-    if (fresh) hold();
   }
 
   function setStatus(ok, message) {
@@ -3229,7 +3448,7 @@ var FLEET = (function () {
     setInterval(poll, 2000);
   }
 
-  return { init: init, tickTimes: tickTimes, holdsReload: function () { return Date.now() < holdUntil; } };
+  return { init: init, tickTimes: tickTimes };
 })();
 """
 
@@ -3298,6 +3517,12 @@ _MAIN_JS = """
   // What is deliberately NOT touched here is the fleet panel. It polls /fleet
   // on its own two-second timer and animates promotions as they land; swapping
   // its DOM from underneath would cut every animation off partway.
+  //
+  // That separation is also why this needs no interlock with those animations.
+  // It used to have one, left over from when this was a whole-page reload, and
+  // it starved the queue: the fleet re-armed the interlock on every poll while
+  // a gate or a scan was running, so the tables stopped updating for exactly as
+  // long as something was in flight -- which is when operations arrive.
   function swapRegion(doc, id) {
     var incoming = doc.getElementById(id);
     var current = document.getElementById(id);
@@ -3311,11 +3536,13 @@ _MAIN_JS = """
   }
 
   function refresh() {
-    // Every guard the reload had, for the same reasons: do not yank a field
-    // someone is typing in, and never interrupt a fleet transition.
+    // Do not yank a field someone is typing in. Only the pending table's own
+    // inputs are at risk, because they are inside a region this replaces; the
+    // workflow filter sits outside every swapped region and used to block the
+    // refresh for as long as it had focus, which during a demo is exactly while
+    // someone is looking for a workflow.
     var a = document.activeElement;
-    if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
-    if (FLEET.holdsReload()) return;
+    if (a && a.closest && a.closest('#pending-body')) return;
     var reasons = document.querySelectorAll('input.reason');
     for (var i = 0; i < reasons.length; i++) { if (reasons[i].value.trim() !== '') return; }
 
@@ -3360,6 +3587,22 @@ _MAIN_JS = """
 
   setInterval(refresh, 5000);
 })();
+"""
+
+
+# QuickMeals' mark: a served cloche -- dome, knob, tray -- on the accent tile.
+# Three solid shapes and no facial geometry, which matters at this size: an
+# earlier attempt at a bowl under two curls of steam read from across a room as
+# a smiling robot. Inline rather than a file, because the page is served as one
+# self-contained document and an <img> would be the only network request on it,
+# and drawn in the theme's own two colours so one asset works on both grounds.
+_BRAND_MARK = """
+<svg class="logo" viewBox="0 0 32 32" role="img" aria-label="QuickMeals">
+  <rect x="0" y="0" width="32" height="32" rx="9" fill="var(--accent)"/>
+  <circle cx="16" cy="7.8" r="1.7" fill="var(--on-accent)"/>
+  <path d="M5.8 21a10.2 10.2 0 0 1 20.4 0Z" fill="var(--on-accent)"/>
+  <rect x="3.6" y="23" width="24.8" height="2.8" rx="1.4" fill="var(--on-accent)"/>
+</svg>
 """
 
 
@@ -3441,8 +3684,14 @@ def _render_mandate_switch(mandate_on: bool, scan_mode: str) -> str:
         if mandate_on
         else ""
     )
+    # One row, reading right to left in order of how permanent it is: the switch
+    # itself on the far right under Log out, then which scanner it is using, then
+    # the sentence saying what it did. Stacked, those were three rows that pushed
+    # the page title down the moment the mandate came on.
     return f"""
     <div class="mandate">
+      {note}
+      {_render_scan_mode_switch(mandate_on, scan_mode) if mandate_on else ""}
       <form method="post" action="/mandate" style="display:block;margin:0">
         <input type="hidden" name="state" value="{action}">
         <button class="{cls}" type="submit" role="switch"
@@ -3450,8 +3699,6 @@ def _render_mandate_switch(mandate_on: bool, scan_mode: str) -> str:
                 title="Security mandate"
                 aria-label="Security mandate"></button>
       </form>
-      {note}
-      {_render_scan_mode_switch(mandate_on, scan_mode) if mandate_on else ""}
     </div>
     """
 
@@ -3518,12 +3765,12 @@ def _render_dashboard(
     pending_rows = (
         "".join(_render_pending_row(wf, op) for wf, op in pending)
         if pending
-        else '<tr><td colspan="11" class="empty">No operations are waiting for approval.</td></tr>'
+        else '<tr><td colspan="8" class="empty">No operations are waiting for approval.</td></tr>'
     )
     history_rows = (
         "".join(_render_history_row(wf, op) for wf, op in history)
         if history
-        else '<tr><td colspan="12" class="empty">No tool calls recorded yet.</td></tr>'
+        else '<tr><td colspan="10" class="empty">No tool calls recorded yet.</td></tr>'
     )
     wf_ids = sorted({wf for wf, _ in history})
     options = "".join(f'<option value="{html.escape(w)}">' for w in wf_ids)
@@ -3538,18 +3785,25 @@ def _render_dashboard(
 </head>
 <body>
   <header>
-    <div>
-      <h1>QuickMeals Release Control</h1>
-      <p class="muted brandline">Release management for the Waypoint engineering
-      team &middot; delivery matching. Approvers from other QuickMeals teams sign
-      in here too.</p>
+    <div class="brand">
+      {_BRAND_MARK}
+      <div class="brand-text">
+        <h1>QuickMeals Release Control</h1>
+        <p class="muted brandline">Release management for the Waypoint engineering
+        team &middot; delivery matching.</p>
+      </div>
     </div>
-    <div>
-      <span class="muted">{html.escape(_resolve_principal())}</span>
-      <button id="theme-btn" class="toggle" type="button">Light mode</button>
-      <form method="post" action="/logout" class="inline" style="display:inline">
-        <button class="toggle" type="submit">Log out</button>
-      </form>
+    <!-- The account block never gives ground: it is sized by its own contents and
+         the brand block takes the rest, so Log out cannot be pushed onto a second
+         line by a long name or a long service. -->
+    <div class="account">
+      <div class="account-row">
+        <span class="muted whoami">{html.escape(_resolve_principal())}</span>
+        <button id="theme-btn" class="toggle" type="button">Light mode</button>
+        <form method="post" action="/logout" style="display:inline;margin:0">
+          <button class="toggle" type="submit">Log out</button>
+        </form>
+      </div>
       {_render_mandate_switch(mandate_on, scan_mode)}
     </div>
   </header>
@@ -3559,13 +3813,19 @@ def _render_dashboard(
       <h2>Release fleet</h2>
       <span class="fleet-service" id="fleet-service"></span>
       <span class="live" id="fleet-status"><span class="live-dot"></span><span class="live-text">live</span></span>
-    </div>
-    <p class="muted subtle">What is cut, what is running where, and every promotion as it lands.</p>
-    <div class="fleet-flow">
+      <!-- What is promotable rides along the panel's own heading rather than
+           standing as a column to the left of the pipeline. As a column it cost
+           the row a fixed 13.5rem, and the cards it was pushing rightward are
+           what an audience is looking at; up here the pipeline starts at the
+           page's left edge and the panel fits the width a demonstrator actually
+           has. Reading order is unchanged: what is ready, then where it can
+           go. -->
       <div class="ready">
-        <div class="rail-head eyebrow">Ready for release</div>
+        <span class="rail-head eyebrow">Ready for release</span>
         <div class="candidates" id="fleet-rail"></div>
       </div>
+    </div>
+    <div class="fleet-flow">
       <!-- The mandate is stamped here as well as served on /fleet. Flipping the
            switch redirects back to this page, and the panel's first paint comes
            from the cached fleet state, which was written before the flip. Without
@@ -3582,12 +3842,24 @@ def _render_dashboard(
   <div class="queue-head">
     <h2>Waiting for approval</h2>
   </div>
-  <table>
+  <!-- Fixed layout with declared column widths, here and in the history table
+       below. Both tables have to fit inside the page's own width -- a
+       demonstrator gives this window two thirds of a screen and keeps an editor
+       in the other third -- and auto layout will not do that: one long call
+       path or argument string and the table pushes out past the header
+       controls, taking the whole page into a horizontal scroll. Fixed layout
+       makes the widths a decision rather than an outcome. -->
+  <table class="queue">
+    <colgroup>
+      <col style="width:16%"><col style="width:11%"><col style="width:14%">
+      <col style="width:14%"><col style="width:13%"><col style="width:11%">
+      <col style="width:9%"><col style="width:12%">
+    </colgroup>
     <thead>
       <tr>
-        <th>Workflow</th><th>Operation</th><th>Requested action</th><th>Requester</th>
-        <th>Arguments</th><th>Justification</th><th>Risk reason</th><th>Call path</th>
-        <th>Submitted</th><th>Deadline</th><th>Decision</th>
+        <th>Requested action</th><th>Requester</th><th>Arguments</th>
+        <th>Justification</th><th>Risk reason</th><th>Call path</th>
+        <th>Deadline</th><th>Decision</th>
       </tr>
     </thead>
     <tbody id="pending-body">{pending_rows}</tbody>
@@ -3599,11 +3871,17 @@ def _render_dashboard(
     <datalist id="wf-list">{options}</datalist>
     <button id="wf-clear" class="toggle" type="button">Clear</button>
   </div>
-  <table>
+  <table class="history">
+    <colgroup>
+      <col style="width:8%"><col style="width:9%"><col style="width:12%">
+      <col style="width:9%"><col style="width:12%"><col style="width:11%">
+      <col style="width:12%"><col style="width:9%"><col style="width:10%">
+      <col style="width:8%">
+    </colgroup>
     <thead>
       <tr>
-        <th>Timestamp</th><th>Workflow</th><th>Requester</th><th>Operation</th><th>Tool</th><th>Call path</th>
-        <th>Protected</th><th>Requested action</th><th>Result</th><th>Outcome</th>
+        <th>Time</th><th>Workflow</th><th>Requester</th><th>Operation</th>
+        <th>Call path</th><th>Requested action</th><th>Result</th><th>Outcome</th>
         <th>Approver</th><th>Reason</th>
       </tr>
     </thead>
@@ -3664,7 +3942,9 @@ def _render_login(error: str = "") -> str:
 </head>
 <body>
   <main class="login">
-    <h1>Approver sign in</h1>
+    <!-- Same mark as the dashboard header, because this is the first screen of
+         the demo and the two should read as one product. -->
+    <div class="login-brand">{_BRAND_MARK}<h1>Approver sign in</h1></div>
     <p class="muted">QuickMeals Release Control. Use a gateway-issued approver
     token. Decisions are recorded under the identity mapped to the token, not a
     form-supplied name, and the token is what determines which QuickMeals team
