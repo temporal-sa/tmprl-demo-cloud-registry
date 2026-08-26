@@ -79,6 +79,8 @@ spec:
           value: lakebase-agent-task-queue
         - name: TEMPORAL_UI_URL
           value: https://cloud.temporal.io
+        - name: DEMO_CONTROLS_ENABLED
+          value: "true"
       ports:
         - name: http
           containerPort: 8000
@@ -111,6 +113,8 @@ spec:
           value: scripted
         - name: DEMO_TOOL_DELAY_SECONDS
           value: "3"
+        - name: DEMO_CONTROLS_ENABLED
+          value: "true"
       worker:
         versioning:
           enabled: true
