@@ -31,7 +31,6 @@ spec:
 
   source:
     repo: https://github.com/temporal-sa/temporal-lakebase-agent
-    branch: deploy/tmprl-demo-cloud-registry
 
   builds:
     web:
