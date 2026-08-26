@@ -2,6 +2,9 @@ apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
   name: lakebase-agent
+  annotations:
+    registry.tmprl-demo.cloud/force-reconcile: worker-rollout-retry-20260826t1700z
+    registry.tmprl-demo.cloud/force-reconcile-reason: retry-worker-rollout-promotion
 spec:
   registry:
     title: Temporal + Lakebase Underwriting Agent
