@@ -1,4 +1,0 @@
-# Fleet Assignment owns the matching engine and scoring model.
-*                                   @quickmeals/fleet-assignment
-/src/main/kotlin/.../scoring/       @quickmeals/fleet-assignment @quickmeals/ml-logistics
-/proto/                             @quickmeals/fleet-assignment @quickmeals/platform-api
