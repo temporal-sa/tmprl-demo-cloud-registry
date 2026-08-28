@@ -22,27 +22,17 @@ spec:
     links:
       runbook:
         label: Walkthrough
-        url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/apps/agent-gateway/WALKTHROUGH.md
+        url: https://github.com/temporal-sa/agent-gateway-demo/blob/main/WALKTHROUGH.md
 
-  # The application lives in this repository, under apps/agent-gateway, the same
-  # way registry/web and apps/instruqt-litellm do. The ignore filter keeps
-  # unrelated registry commits from rebuilding this demo -- without it every
-  # change to the operator or another project's CR would start a new rollout.
-  #
-  # gitRepository.url is required whenever the gitRepository block is present
-  # (activities/builds/source.py raises without it). The shared temporal-sa
-  # read-only PAT still applies because the URL is an HTTPS temporal-sa
-  # repository, so no per-project source auth is needed.
+  # A private temporal-sa repository, so the shared platform read-only PAT at
+  # tmprl-dem-cld/platform/github-temporal-sa-readonly applies automatically and
+  # no per-project source auth is needed. No gitRepository block: it existed only
+  # to carry an ignore filter while the application lived in this repo under
+  # apps/agent-gateway, where every unrelated registry commit would otherwise
+  # have started a rollout.
   source:
-    repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
-    gitRepository:
-      url: https://github.com/temporal-sa/tmprl-demo-cloud-registry.git
-      ignore: |
-        /*
-        !/apps/
-        /apps/*
-        !/apps/agent-gateway/
-        !/apps/agent-gateway/**
+    repo: https://github.com/temporal-sa/agent-gateway-demo
+    # branch defaults to main
 
   temporal:
     auth:
@@ -60,9 +50,9 @@ spec:
     # Temporal Cloud scopes Nexus Endpoint names to the ACCOUNT, not the
     # namespace, so both are project-prefixed: a bare "security" would claim that
     # name against every other demo in the account, and a leaked one blocks it
-    # permanently. These two strings are also literal constants in
-    # apps/agent-gateway/common/nexus_contracts.py and
-    # apps/agent-gateway/security_scan/nexus_contracts.py -- workflow code passes
+    # permanently. These two strings are also literal constants in the
+    # application repository, in common/nexus_contracts.py and
+    # security_scan/nexus_contracts.py -- workflow code passes
     # them to Nexus calls, so the value lands in Event History and has to be a
     # code fact rather than configuration. Renaming either is a drain-first
     # migration on both sides at once.
@@ -106,19 +96,19 @@ spec:
     # One image for all five Python processes, as docker-compose does it: the
     # components differ only by `command`.
     app:
-      context: apps/agent-gateway
-      dockerfile: apps/agent-gateway/Dockerfile.app
+      context: .
+      dockerfile: Dockerfile.app
     # nginx. Exists because the platform gives one hostname and Traefik matches
     # PathPrefix without stripping it, while both code-server and the ADK dev UI
     # need the prefix removed before they see the request.
     edge:
-      context: apps/agent-gateway
-      dockerfile: apps/agent-gateway/edge/Dockerfile
+      context: .
+      dockerfile: edge/Dockerfile
     # code-server with Claude Code in its terminal. This demo is driven by
     # talking to a coding agent, so the agent is part of the deployment.
     ide:
-      context: apps/agent-gateway
-      dockerfile: apps/agent-gateway/ide/Dockerfile
+      context: .
+      dockerfile: ide/Dockerfile
 
   components:
     # Pretend deployment backend. Fleet, quality-gate, security-scan and
