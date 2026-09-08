@@ -57,8 +57,11 @@ def build_workspace_manifests(
         workspace_id,
     )
 
-    # The isolation seam: point every worker / temporal-access component at the
-    # workspace task queue via a literal env override the workload renders.
+    # The isolation seams: versioned workers need their own Temporal Worker
+    # Deployment identity, and every worker / temporal-access component needs the
+    # workspace task queue. A crashable clone must never change the always-on
+    # demo's current Worker Deployment version.
+    _isolate_worker_deployments(cloned, workspace_id)
     if isinstance(task_queue_env, str) and task_queue_env:
         _inject_task_queue_env(cloned, task_queue_env, task_queue)
 
@@ -86,6 +89,30 @@ def build_workspace_manifests(
         if manifest.get("kind") == "Deployment"
     ]
     return ordered, task_queue, host, namespace, deployment_names
+
+
+def _isolate_worker_deployments(
+    cloned: dict[str, Any],
+    workspace_id: str,
+) -> None:
+    for component_name, component in resources.kubernetes_versioned_worker_components(
+        cloned
+    ).items():
+        versioning = resources.worker_versioning(component)
+        if versioning is None:
+            continue
+        source_name = resources.worker_deployment_name(
+            cloned,
+            component_name,
+            component,
+        )
+        versioning["deploymentName"] = resources.suffixed_dns_name(
+            source_name,
+            workspace_id,
+        )
+        # Ephemeral clones have no previous version to ramp from and must not run
+        # a source demo's rollout gate with production-oriented inputs.
+        versioning["rollout"] = {"strategy": "AllAtOnce"}
 
 
 def _namespace_manifest(

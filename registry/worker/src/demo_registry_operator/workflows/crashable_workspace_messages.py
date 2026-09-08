@@ -73,6 +73,7 @@ class BuildWorkspacePlanResult:
     host: str = ""
     namespace: str = ""
     deployment_names: list[str] = field(default_factory=list)
+    worker_deployment_names: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class ApplyWorkspaceResourceResult:
 class WaitWorkspaceReadyRequest:
     namespace: str
     deployment_names: list[str] = field(default_factory=list)
+    worker_deployment_names: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

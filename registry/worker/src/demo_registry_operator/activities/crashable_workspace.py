@@ -1,6 +1,6 @@
 """Activities for the crashable-workspace entity workflow.
 
-Each activity owns exactly one external side effect and is idempotent so the
+Each activity owns one bounded external-operation step and is idempotent so the
 workflow can retry it safely. The workflow owns all sequencing and the saga.
 
 The bounded retry policies live here (used by the workflow) so provisioning,
@@ -16,7 +16,7 @@ from datetime import timedelta
 from temporalio import activity
 from temporalio.common import RetryPolicy
 
-from demo_registry_operator import derive, errors, kube
+from demo_registry_operator import derive, errors, kube, resources
 from demo_registry_operator.crashable_workspace_resources import (
     build_workspace_manifests,
 )
@@ -79,19 +79,74 @@ def resolve_source_images(
 ) -> ResolveSourceImagesResult:
     """Read the live demo's running images so the clone reuses them (no rebuild).
 
-    One side effect: list the demo namespace's Deployments and map each build to
-    its running image.
+    Read the DemoProject's promoted runtime namespace, then list its Deployments
+    and WorkerDeployments and map each build to its running image.
     """
 
-    namespace = derive.kubernetes_namespace(request.demo_name)
+    demo_project = kube.read_demo_project(request.demo_name)
+    namespace = _source_runtime_namespace(demo_project, request.demo_name)
     images = kube.list_deployment_images(namespace)
+    if _versioned_worker_builds(demo_project):
+        images.update(kube.list_worker_deployment_images(namespace))
+
+    missing_builds = sorted(_runtime_component_builds(demo_project) - images.keys())
+    if missing_builds:
+        raise errors.non_retryable_error(
+            f"could not resolve running images for builds {missing_builds!r} "
+            f"from namespace {namespace!r}; is the demo "
+            f"{request.demo_name!r} fully deployed?",
+            error_type=errors.CONFIGURATION_ERROR,
+        )
     if not images:
         raise errors.non_retryable_error(
-            f"could not resolve any running images from namespace "
-            f"{namespace!r}; is the demo {request.demo_name!r} deployed?",
+            f"could not resolve any running images from namespace {namespace!r}; "
+            f"is the demo {request.demo_name!r} deployed?",
             error_type=errors.CONFIGURATION_ERROR,
         )
     return ResolveSourceImagesResult(images=dict(images))
+
+
+def _source_runtime_namespace(
+    demo_project: dict | None,
+    demo_name: str,
+) -> str:
+    """Return the namespace that contains the demo's promoted workloads."""
+
+    status = demo_project.get("status") if isinstance(demo_project, dict) else None
+    if isinstance(status, dict):
+        active_revision = status.get("activeRevision")
+        if isinstance(active_revision, dict):
+            namespace = active_revision.get("runtimeNamespace")
+            if isinstance(namespace, str) and namespace:
+                return namespace
+
+        namespace = status.get("activeRuntimeNamespace")
+        if isinstance(namespace, str) and namespace:
+            return namespace
+
+    return derive.kubernetes_namespace(demo_name)
+
+
+def _runtime_component_builds(demo_project: dict | None) -> set[str]:
+    if not isinstance(demo_project, dict):
+        return set()
+    return {
+        build
+        for component in resources.kubernetes_components(demo_project).values()
+        if isinstance((build := component.get("build")), str) and build
+    }
+
+
+def _versioned_worker_builds(demo_project: dict | None) -> set[str]:
+    if not isinstance(demo_project, dict):
+        return set()
+    return {
+        build
+        for component in resources.kubernetes_versioned_worker_components(
+            demo_project
+        ).values()
+        if isinstance((build := component.get("build")), str) and build
+    }
 
 
 @activity.defn
@@ -138,6 +193,11 @@ def build_workspace_plan(
         host=host,
         namespace=namespace,
         deployment_names=deployment_names,
+        worker_deployment_names=[
+            manifest["metadata"]["name"]
+            for manifest in manifests
+            if manifest.get("kind") == "WorkerDeployment"
+        ],
     )
 
 
@@ -160,7 +220,7 @@ def apply_workspace_resource(
 def wait_workspace_ready(
     request: WaitWorkspaceReadyRequest,
 ) -> WaitWorkspaceReadyResult:
-    """Poll until every workspace Deployment is ready, heartbeating each pass.
+    """Poll until every workspace workload is ready, heartbeating each pass.
 
     Bounded internally (~5m) and by the caller's start_to_close timeout: if the
     workspace never becomes ready the activity raises and the workflow tears the
@@ -168,17 +228,25 @@ def wait_workspace_ready(
     """
 
     deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
-    pending = set(request.deployment_names)
+    pending_deployments = set(request.deployment_names)
+    pending_worker_deployments = set(request.worker_deployment_names)
     while True:
-        for name in list(pending):
+        for name in list(pending_deployments):
             if _deployment_ready(request.namespace, name):
-                pending.discard(name)
-        activity.heartbeat({"namespace": request.namespace, "pending": sorted(pending)})
-        if not pending:
+                pending_deployments.discard(name)
+        for name in list(pending_worker_deployments):
+            if _worker_deployment_ready(request.namespace, name):
+                pending_worker_deployments.discard(name)
+        pending = {
+            "deployments": sorted(pending_deployments),
+            "workerDeployments": sorted(pending_worker_deployments),
+        }
+        activity.heartbeat({"namespace": request.namespace, "pending": pending})
+        if not pending_deployments and not pending_worker_deployments:
             return WaitWorkspaceReadyResult(ready=True)
         if time.monotonic() >= deadline:
             raise errors.non_retryable_error(
-                f"workspace deployments not ready before timeout: {sorted(pending)}",
+                f"workspace workloads not ready before timeout: {pending}",
                 error_type=errors.CONFIGURATION_ERROR,
             )
         time.sleep(READINESS_POLL_SECONDS)
@@ -205,13 +273,19 @@ def crash_workspace_pods(
 def delete_workspace_namespace(
     request: DeleteWorkspaceNamespaceRequest,
 ) -> DeleteWorkspaceNamespaceResult:
-    """Delete the workspace namespace (cascades to all its resources).
+    """Delete worker-controller resources, then the workspace namespace.
 
     Idempotent — a missing namespace returns "not-found". Doubles as the saga
     compensation for a failed provisioning attempt.
     """
 
-    action = kube.delete_namespace(request.namespace)
+    # Import locally so the Workflow sandbox can import this activity module
+    # without traversing the much larger reconciliation activity module.
+    from demo_registry_operator.activities.reconcile import (
+        delete_runtime_namespace_in_dependency_order,
+    )
+
+    action = delete_runtime_namespace_in_dependency_order(request.namespace)
     return DeleteWorkspaceNamespaceResult(action=action)
 
 
@@ -232,6 +306,22 @@ def _deployment_ready(namespace: str, name: str) -> bool:
     available = status.get("availableReplicas") or 0
     updated = status.get("updatedReplicas") or 0
     return ready >= desired and available >= desired and updated >= desired
+
+
+def _worker_deployment_ready(namespace: str, name: str) -> bool:
+    try:
+        status = kube.read_worker_deployment_status(namespace, name)
+    except Exception:  # noqa: BLE001 - not-yet-created / transient -> not ready
+        return False
+    conditions = status.get("conditions")
+    if not isinstance(conditions, list):
+        return False
+    return any(
+        isinstance(condition, dict)
+        and condition.get("type") == "Ready"
+        and condition.get("status") == "True"
+        for condition in conditions
+    )
 
 
 def _crashable_enabled(demo_project: dict) -> bool:
