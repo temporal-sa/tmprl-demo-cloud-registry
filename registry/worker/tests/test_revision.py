@@ -180,6 +180,13 @@ def test_all_registry_operator_rbac_can_list_external_secrets():
         )
 
 
+def test_all_registry_operator_rbac_can_crash_workspace_pods():
+    required = {"get", "list", "delete"}
+    for rbac in REGISTRY_OPERATOR_RBACS:
+        rules = _cluster_role_rules(rbac)
+        assert required <= _verbs_for(rules, "", "pods")
+
+
 # --- Task 1.4: kube helpers + merge-patch content-type guard ---
 
 
