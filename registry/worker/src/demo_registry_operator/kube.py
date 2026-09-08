@@ -1236,6 +1236,33 @@ def list_deployment_images(namespace: str) -> dict[str, str]:
     return images
 
 
+def list_worker_deployment_images(namespace: str) -> dict[str, str]:
+    """Map each WorkerDeployment's platform build to its template image."""
+
+    images: dict[str, str] = {}
+    for item in list_worker_deployments(namespace):
+        metadata = item.get("metadata")
+        annotations = (
+            metadata.get("annotations") if isinstance(metadata, dict) else None
+        )
+        build = (
+            annotations.get("platform.temporal.io/build")
+            if isinstance(annotations, dict)
+            else None
+        )
+        spec = item.get("spec")
+        template = spec.get("template") if isinstance(spec, dict) else None
+        pod_spec = template.get("spec") if isinstance(template, dict) else None
+        containers = pod_spec.get("containers") if isinstance(pod_spec, dict) else None
+        if not isinstance(build, str) or not build or not isinstance(containers, list):
+            continue
+        primary = containers[0] if containers else None
+        image = primary.get("image") if isinstance(primary, dict) else None
+        if isinstance(image, str) and image:
+            images[build] = image
+    return images
+
+
 def list_pods(
     namespace: str,
     *,

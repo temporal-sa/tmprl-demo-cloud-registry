@@ -85,6 +85,37 @@ def test_list_temporal_resources_uses_expected_api(
     ]
 
 
+def test_list_worker_deployment_images_reads_build_and_primary_template_image(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kube,
+        "list_worker_deployments",
+        lambda namespace: [
+            {
+                "metadata": {
+                    "annotations": {"platform.temporal.io/build": "worker"}
+                },
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {"image": "example.com/worker:git-123"},
+                                {"image": "example.com/sidecar:git-123"},
+                            ]
+                        }
+                    }
+                },
+            },
+            {"metadata": {"annotations": {}}},
+        ],
+    )
+
+    assert kube.list_worker_deployment_images("runtime-ns") == {
+        "worker": "example.com/worker:git-123"
+    }
+
+
 @pytest.mark.parametrize(
     ("read_resource", "plural"),
     [

@@ -154,6 +154,7 @@ class CrashableWorkspaceWorkflow:
                 WaitWorkspaceReadyRequest(
                     namespace=self._namespace,
                     deployment_names=plan.deployment_names,
+                    worker_deployment_names=plan.worker_deployment_names,
                 ),
                 start_to_close_timeout=timedelta(minutes=6),
                 heartbeat_timeout=timedelta(seconds=30),
