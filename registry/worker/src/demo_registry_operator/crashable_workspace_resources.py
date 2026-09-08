@@ -43,6 +43,7 @@ def build_workspace_manifests(
     if not isinstance(cloned_spec, dict):
         cloned_spec = {}
         cloned["spec"] = cloned_spec
+    _pin_temporal_runtime_secret_path(cloned, cloned_spec)
     ingress = cloned_spec.get("ingress")
     ingress = dict(ingress) if isinstance(ingress, dict) else {}
     ingress["subdomain"] = derive.crashable_workspace_subdomain(workspace_id)
@@ -89,6 +90,20 @@ def build_workspace_manifests(
         if manifest.get("kind") == "Deployment"
     ]
     return ordered, task_queue, host, namespace, deployment_names
+
+
+def _pin_temporal_runtime_secret_path(
+    cloned: dict[str, Any],
+    cloned_spec: dict[str, Any],
+) -> None:
+    status = cloned.get("status")
+    runtime_secret_path = resources.temporal_runtime_secret_path_from_status(status)
+    if runtime_secret_path is None:
+        return
+    temporal = cloned_spec.get("temporal")
+    rendered_temporal = dict(temporal) if isinstance(temporal, dict) else {}
+    rendered_temporal["runtimeSecretPath"] = runtime_secret_path
+    cloned_spec["temporal"] = rendered_temporal
 
 
 def _isolate_worker_deployments(

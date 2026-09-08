@@ -116,6 +116,26 @@ def test_list_worker_deployment_images_reads_build_and_primary_template_image(
     }
 
 
+def test_list_external_secrets_uses_expected_api(install_fake_client):
+    resource = {"metadata": {"name": "temporal-credentials"}}
+    api = FakeCustomObjectsApi(list_response={"items": [resource, "invalid"]})
+    install_fake_client(api)
+
+    assert kube.list_external_secrets("runtime-ns") == [resource]
+    assert api.calls == [
+        (
+            "list",
+            (
+                kube.EXTERNAL_SECRETS_GROUP,
+                kube.EXTERNAL_SECRETS_VERSION,
+                "runtime-ns",
+                kube.EXTERNAL_SECRET_PLURAL,
+            ),
+            {},
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("read_resource", "plural"),
     [

@@ -10,6 +10,7 @@ from demo_registry_operator.crashable_workspace_resources import (
 )
 from demo_registry_operator.resources import catalog_entry
 from demo_registry_operator.workflows.crashable_workspace_messages import (
+    ApplyWorkspaceResourceRequest,
     BuildWorkspacePlanRequest,
     DeleteWorkspaceNamespaceRequest,
     ResolveSourceImagesRequest,
@@ -250,6 +251,29 @@ def test_build_workspace_manifests_does_not_mutate_source_project():
     assert "env" not in demo["spec"]["components"]["worker"]
 
 
+def test_build_workspace_manifests_uses_promoted_temporal_secret_path():
+    demo = _crashable_demo()
+    runtime_secret_path = "tmprl-dem-cld/canonical-ai-demo/temporal-2649e761a6ed"
+    demo["status"] = {"temporalRuntimeSecretPath": runtime_secret_path}
+
+    ordered, _, _, _, _ = build_workspace_manifests(
+        demo,
+        {"worker": "ecr/worker:sha", "app": "ecr/app:sha"},
+        "0123abcd89",
+    )
+
+    temporal_credentials = next(
+        manifest
+        for manifest in ordered
+        if manifest["kind"] == "ExternalSecret"
+        and manifest["metadata"]["name"] == "temporal-credentials"
+    )
+    assert {
+        item["remoteRef"]["key"] for item in temporal_credentials["spec"]["data"]
+    } == {runtime_secret_path}
+    assert "temporal" not in demo["spec"]
+
+
 def test_build_workspace_manifests_isolates_versioned_worker():
     demo = _versioned_crashable_demo()
     original_versioning = demo["spec"]["components"]["worker"]["worker"][
@@ -356,6 +380,72 @@ def test_worker_deployment_ready_requires_ready_true_condition(monkeypatch):
     assert (
         crashable_activities._worker_deployment_ready("workspace", "worker") is True
     )
+
+
+def test_apply_workspace_resource_waits_for_secrets_before_workload(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        crashable_activities,
+        "_wait_for_workspace_external_secrets",
+        lambda namespace: events.append(("wait", namespace)),
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "apply_resource",
+        lambda manifest: events.append(("apply", manifest["kind"])) or "created",
+    )
+
+    result = crashable_activities.apply_workspace_resource(
+        ApplyWorkspaceResourceRequest(
+            manifest={
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": "app", "namespace": "workspace"},
+            }
+        )
+    )
+
+    assert result.action == "created"
+    assert events == [("wait", "workspace"), ("apply", "Deployment")]
+
+
+def test_wait_for_workspace_external_secrets_polls_until_ready(monkeypatch):
+    statuses = iter(
+        [
+            {"ready": False, "message": "Secret does not exist"},
+            {"ready": True, "message": "Secret was synced"},
+        ]
+    )
+    heartbeats = []
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_external_secrets",
+        lambda namespace: [{"metadata": {"name": "temporal-credentials"}}],
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_external_secret_status",
+        lambda namespace, name: next(statuses),
+    )
+    monotonic = iter([0.0, 1.0])
+    monkeypatch.setattr(crashable_activities.time, "monotonic", lambda: next(monotonic))
+    monkeypatch.setattr(crashable_activities.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        crashable_activities.activity,
+        "heartbeat",
+        lambda value: heartbeats.append(value),
+    )
+
+    crashable_activities._wait_for_workspace_external_secrets("workspace")
+
+    assert heartbeats == [
+        {
+            "namespace": "workspace",
+            "pendingExternalSecrets": {
+                "temporal-credentials": "Secret does not exist"
+            },
+        }
+    ]
 
 
 def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch):

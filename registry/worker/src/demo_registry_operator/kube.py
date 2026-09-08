@@ -996,6 +996,19 @@ def delete_external_secret(namespace: str, name: str, *, dry_run: bool = False) 
         raise
 
 
+def list_external_secrets(namespace: str) -> list[dict[str, Any]]:
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CustomObjectsApi().list_namespaced_custom_object(
+        EXTERNAL_SECRETS_GROUP,
+        EXTERNAL_SECRETS_VERSION,
+        namespace,
+        EXTERNAL_SECRET_PLURAL,
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def list_worker_deployments(
     namespace: str,
     *,

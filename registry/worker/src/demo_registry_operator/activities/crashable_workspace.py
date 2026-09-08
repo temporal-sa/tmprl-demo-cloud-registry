@@ -71,6 +71,8 @@ WAIT_READY_RETRY_POLICY = RetryPolicy(
 
 READINESS_TIMEOUT_SECONDS = 300
 READINESS_POLL_SECONDS = 5
+SECRET_SYNC_TIMEOUT_SECONDS = 120
+SECRET_DEPENDENT_KINDS = frozenset({"Connection", "Deployment", "WorkerDeployment"})
 
 
 @activity.defn
@@ -207,13 +209,61 @@ def apply_workspace_resource(
 ) -> ApplyWorkspaceResourceResult:
     """Apply exactly one manifest (idempotent create-or-patch)."""
 
+    manifest = request.manifest
+    kind = manifest.get("kind")
+    metadata = manifest.get("metadata")
+    namespace = metadata.get("namespace") if isinstance(metadata, dict) else None
+    if kind in SECRET_DEPENDENT_KINDS and isinstance(namespace, str) and namespace:
+        _wait_for_workspace_external_secrets(namespace)
+
     try:
-        action = kube.apply_resource(request.manifest)
+        action = kube.apply_resource(manifest)
     except ValueError as error:
         raise errors.non_retryable_error(
             str(error), error_type=errors.VALIDATION_ERROR
         ) from error
     return ApplyWorkspaceResourceResult(action=action)
+
+
+def _wait_for_workspace_external_secrets(namespace: str) -> None:
+    external_secrets = kube.list_external_secrets(namespace)
+    names = sorted(
+        {
+            name
+            for item in external_secrets
+            if isinstance(item.get("metadata"), dict)
+            and isinstance((name := item["metadata"].get("name")), str)
+            and name
+        }
+    )
+    if not names:
+        return
+
+    deadline = time.monotonic() + SECRET_SYNC_TIMEOUT_SECONDS
+    while True:
+        pending: dict[str, str | None] = {}
+        for name in names:
+            try:
+                status = kube.read_external_secret_status(namespace, name)
+            except Exception as error:  # noqa: BLE001 - transient / not observed yet
+                pending[name] = str(error)
+                continue
+            if not status.get("ready"):
+                pending[name] = status.get("message")
+        if not pending:
+            return
+        activity.heartbeat(
+            {
+                "namespace": namespace,
+                "pendingExternalSecrets": pending,
+            }
+        )
+        if time.monotonic() >= deadline:
+            raise errors.non_retryable_error(
+                f"workspace ExternalSecrets not ready before timeout: {pending}",
+                error_type=errors.CONFIGURATION_ERROR,
+            )
+        time.sleep(READINESS_POLL_SECONDS)
 
 
 @activity.defn
