@@ -79,11 +79,12 @@ def resolve_source_images(
 ) -> ResolveSourceImagesResult:
     """Read the live demo's running images so the clone reuses them (no rebuild).
 
-    One side effect: list the demo namespace's Deployments and map each build to
-    its running image.
+    Read the DemoProject's promoted runtime namespace, then list its Deployments
+    and map each build to its running image.
     """
 
-    namespace = derive.kubernetes_namespace(request.demo_name)
+    demo_project = kube.read_demo_project(request.demo_name)
+    namespace = _source_runtime_namespace(demo_project, request.demo_name)
     images = kube.list_deployment_images(namespace)
     if not images:
         raise errors.non_retryable_error(
@@ -92,6 +93,27 @@ def resolve_source_images(
             error_type=errors.CONFIGURATION_ERROR,
         )
     return ResolveSourceImagesResult(images=dict(images))
+
+
+def _source_runtime_namespace(
+    demo_project: dict | None,
+    demo_name: str,
+) -> str:
+    """Return the namespace that contains the demo's promoted workloads."""
+
+    status = demo_project.get("status") if isinstance(demo_project, dict) else None
+    if isinstance(status, dict):
+        active_revision = status.get("activeRevision")
+        if isinstance(active_revision, dict):
+            namespace = active_revision.get("runtimeNamespace")
+            if isinstance(namespace, str) and namespace:
+                return namespace
+
+        namespace = status.get("activeRuntimeNamespace")
+        if isinstance(namespace, str) and namespace:
+            return namespace
+
+    return derive.kubernetes_namespace(demo_name)
 
 
 @activity.defn

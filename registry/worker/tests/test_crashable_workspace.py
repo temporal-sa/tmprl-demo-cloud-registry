@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from demo_registry_operator import derive
+from demo_registry_operator.activities import (
+    crashable_workspace as crashable_activities,
+)
 from demo_registry_operator.crashable_workspace_resources import (
     build_workspace_manifests,
 )
 from demo_registry_operator.resources import catalog_entry
+from demo_registry_operator.workflows.crashable_workspace_messages import (
+    ResolveSourceImagesRequest,
+)
 
 
 def project(name, **spec):
@@ -54,6 +60,84 @@ def test_workspace_namespace_host_and_task_queue():
     assert derive.crashable_workspace_namespace(wid) == f"tmprl-dem-cld-crash-{wid}"
     assert derive.crashable_workspace_host(wid) == f"crash-{wid}.tmprl-demo.cloud"
     assert derive.crashable_workspace_task_queue("music", wid) == f"music-{wid}"
+
+
+# --- source image resolution ---------------------------------------------
+
+
+def test_resolve_source_images_uses_active_revision_runtime_namespace(monkeypatch):
+    namespaces = []
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: {
+            "status": {
+                "activeRevision": {
+                    "runtimeNamespace": "tmprl-dem-cld-canonical-ai-demo-a1b2c",
+                },
+                "activeRuntimeNamespace": "tmprl-dem-cld-canonical-ai-demo-old12",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_deployment_images",
+        lambda namespace: namespaces.append(namespace)
+        or {"worker": "ecr/worker:sha"},
+    )
+
+    result = crashable_activities.resolve_source_images(
+        ResolveSourceImagesRequest(demo_name="canonical-ai-demo")
+    )
+
+    assert result.images == {"worker": "ecr/worker:sha"}
+    assert namespaces == ["tmprl-dem-cld-canonical-ai-demo-a1b2c"]
+
+
+def test_resolve_source_images_uses_active_runtime_namespace_fallback(monkeypatch):
+    namespaces = []
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: {
+            "status": {
+                "activeRuntimeNamespace": "tmprl-dem-cld-canonical-ai-demo-a1b2c",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_deployment_images",
+        lambda namespace: namespaces.append(namespace)
+        or {"worker": "ecr/worker:sha"},
+    )
+
+    crashable_activities.resolve_source_images(
+        ResolveSourceImagesRequest(demo_name="canonical-ai-demo")
+    )
+
+    assert namespaces == ["tmprl-dem-cld-canonical-ai-demo-a1b2c"]
+
+
+def test_resolve_source_images_falls_back_to_base_namespace(monkeypatch):
+    namespaces = []
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: {"status": {}},
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_deployment_images",
+        lambda namespace: namespaces.append(namespace)
+        or {"worker": "ecr/worker:sha"},
+    )
+
+    crashable_activities.resolve_source_images(
+        ResolveSourceImagesRequest(demo_name="canonical-ai-demo")
+    )
+
+    assert namespaces == ["tmprl-dem-cld-canonical-ai-demo"]
 
 
 # --- manifest rendering ---------------------------------------------------
