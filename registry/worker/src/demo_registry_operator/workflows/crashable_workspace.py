@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError, is_cancelled_exception
 
 from demo_registry_operator import derive
 from demo_registry_operator.activities import crashable_workspace as activities
@@ -226,14 +227,29 @@ class CrashableWorkspaceWorkflow:
                 self._crash_requested = False
                 self._status.phase = "Crashing"
                 self._status.step = "Crashing workers"
-                await workflow.execute_activity(
-                    activities.crash_workspace_pods,
-                    CrashWorkspacePodsRequest(namespace=self._namespace),
-                    start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=activities.CRASH_RETRY_POLICY,
-                )
+                self._status.last_error = None
+                try:
+                    await workflow.execute_activity(
+                        activities.crash_workspace_pods,
+                        CrashWorkspacePodsRequest(namespace=self._namespace),
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=activities.CRASH_RETRY_POLICY,
+                    )
+                except ActivityError as error:
+                    if is_cancelled_exception(error):
+                        raise
+                    self._status.last_error = f"Failed to crash workers: {error}"
+                    workflow.logger.error(
+                        "crashable workspace pod crash failed: %s", error
+                    )
+                if self._delete_requested:
+                    return
                 self._status.phase = "Active"
-                self._status.step = "Ready"
+                self._status.step = (
+                    "Crash failed; environment remains active"
+                    if self._status.last_error
+                    else "Ready"
+                )
                 # Loops back to the top, where the continue-as-new check runs.
             # Otherwise the deadline changed (extend): recompute and wait again.
 

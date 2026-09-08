@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+from temporalio.exceptions import ActivityError
+
 from demo_registry_operator import derive
 from demo_registry_operator.activities import (
     crashable_workspace as crashable_activities,
@@ -9,10 +15,18 @@ from demo_registry_operator.crashable_workspace_resources import (
     build_workspace_manifests,
 )
 from demo_registry_operator.resources import catalog_entry
+from demo_registry_operator.workflows import (
+    crashable_workspace as crashable_workflow,
+)
+from demo_registry_operator.workflows.crashable_workspace import (
+    CrashableWorkspaceWorkflow,
+)
 from demo_registry_operator.workflows.crashable_workspace_messages import (
     ApplyWorkspaceResourceRequest,
     BuildWorkspacePlanRequest,
+    CrashWorkspacePodsRequest,
     DeleteWorkspaceNamespaceRequest,
+    EnsureWorkspaceRequest,
     ResolveSourceImagesRequest,
     WaitWorkspaceReadyRequest,
 )
@@ -464,6 +478,70 @@ def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch)
 
     assert result.action == "deleting"
     assert deleted == ["tmprl-dem-cld-crash-0123abcd89"]
+
+
+def test_crash_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch):
+    now = datetime(2026, 9, 8, 20, 0, tzinfo=UTC)
+    request = EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+        carried_already_provisioned=True,
+        carried_expires_at=(now + timedelta(hours=1)).isoformat(),
+        carried_created_at=now.isoformat(),
+        carried_task_queue="music-0123abcd89",
+        carried_workspace_id="0123abcd89",
+    )
+    workspace = CrashableWorkspaceWorkflow(request)
+    activities_run = []
+    logged = []
+
+    async def request_crash(_predicate, *, timeout):
+        workspace.crash()
+
+    async def execute_activity(activity_fn, activity_request, **_kwargs):
+        activities_run.append((activity_fn, activity_request))
+        if activity_fn is crashable_activities.crash_workspace_pods:
+            workspace.delete()
+            raise ActivityError(
+                "pod deletion forbidden",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="registry-operator",
+                activity_type="crash_workspace_pods",
+                activity_id="3",
+                retry_state=None,
+            )
+        return SimpleNamespace(action="deleting")
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: False),
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "wait_condition", request_crash
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "execute_activity", execute_activity
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "logger",
+        SimpleNamespace(error=lambda *args: logged.append(args)),
+    )
+
+    asyncio.run(workspace.run(request))
+
+    assert [activity_fn for activity_fn, _ in activities_run] == [
+        crashable_activities.crash_workspace_pods,
+        crashable_activities.delete_workspace_namespace,
+    ]
+    assert isinstance(activities_run[0][1], CrashWorkspacePodsRequest)
+    assert isinstance(activities_run[1][1], DeleteWorkspaceNamespaceRequest)
+    assert workspace._status.phase == "Deleting"
+    assert "pod deletion forbidden" in (workspace._status.last_error or "")
+    assert logged
 
 
 # --- catalog flag ---------------------------------------------------------

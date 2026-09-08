@@ -873,6 +873,12 @@ function renderWorkspaceInto(demo, container) {
             class: "mt-1 text-[11px] text-muted-foreground font-mono",
             text: status.namespace,
           })
+        : null,
+      status && status.last_error
+        ? el("p", {
+            class: "mt-2 text-xs text-red-600",
+            text: status.last_error,
+          })
         : null
     );
     setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));
