@@ -117,6 +117,7 @@ rules:
       - externalsecrets
     verbs:
       - get
+      - list
       - create
       - patch
   - apiGroups:
