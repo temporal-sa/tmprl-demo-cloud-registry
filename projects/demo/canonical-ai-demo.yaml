@@ -79,6 +79,12 @@ spec:
     app:
       build: app
       temporalAccess: true
+      env:
+        # Cloud deploy: the Demo-controls drawer hides the `make` commands and
+        # shows a "Crash workers" button that proxies to the catalog's
+        # crashable-workspace controller. Unset (local) keeps the make commands.
+        - name: DEMO_HOSTING
+          value: cloud
       ports:
         - name: http
           containerPort: 8000
