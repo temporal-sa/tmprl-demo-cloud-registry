@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
+
 WEB_ROOT = Path(__file__).resolve().parents[1]
 if str(WEB_ROOT) not in sys.path:
     sys.path.insert(0, str(WEB_ROOT))
@@ -26,15 +28,57 @@ def urlopen_no_redirect(request, timeout=2):
     return build_opener(NoRedirect).open(request, timeout=timeout)
 
 
-def run_test_server(tmp_path: Path):
+def run_test_server(tmp_path: Path, temporal_gateway=None):
     handler = server.make_handler(
         tmp_path / "registry.json",
         tmp_path / "status",
+        temporal_gateway,
     )
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     return httpd
+
+
+@pytest.mark.parametrize(
+    ("path", "update"),
+    [
+        ("/api/crashable-workspace/scale-down", "scale_down"),
+        ("/api/crashable-workspace/scale-up", "scale_up"),
+    ],
+)
+def test_scale_endpoint_dispatches_workspace_update(
+    tmp_path, monkeypatch, path, update
+):
+    calls = []
+
+    class Gateway:
+        def update_workspace(self, owner_email, demo_name, update_name):
+            calls.append((owner_email, demo_name, update_name))
+            return {"phase": "Scaling", "demo": demo_name}
+
+    monkeypatch.setenv("AUTH_MODE", "bootstrap-allow")
+    httpd = run_test_server(tmp_path, Gateway())
+    try:
+        body = json.dumps({"demo": "canonical-ai-demo"}).encode("utf-8")
+        response = urlopen(
+            Request(
+                f"http://127.0.0.1:{httpd.server_port}{path}",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            timeout=2,
+        )
+        assert response.status == 200
+        assert json.loads(response.read().decode("utf-8"))["demo"] == (
+            "canonical-ai-demo"
+        )
+        assert calls == [
+            ("bootstrap@temporal.io", "canonical-ai-demo", update)
+        ]
+    finally:
+        httpd.shutdown()
 
 
 def test_auth_verify_requires_explicit_bootstrap_mode(tmp_path, monkeypatch):

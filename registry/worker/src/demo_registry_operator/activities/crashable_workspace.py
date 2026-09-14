@@ -31,6 +31,8 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     DeleteWorkspaceNamespaceResult,
     ResolveSourceImagesRequest,
     ResolveSourceImagesResult,
+    ScaleWorkspaceWorkloadsRequest,
+    ScaleWorkspaceWorkloadsResult,
     WaitWorkspaceReadyRequest,
     WaitWorkspaceReadyResult,
 )
@@ -55,6 +57,16 @@ CLEANUP_RETRY_POLICY = RetryPolicy(
 )
 # Crash is best-effort and cheap; a couple of retries cover transient API blips.
 CRASH_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    maximum_attempts=3,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
+)
+# Scaling is an explicit outage control, but Kubernetes API failures should not
+# strand the workspace lifecycle. Retry transient failures briefly, then let the
+# workflow return to its previous stable state while Delete/TTL remain available.
+SCALE_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
@@ -317,6 +329,49 @@ def crash_workspace_pods(
         kube.delete_pod(request.namespace, pod["name"], grace_period_seconds=0)
         deleted += 1
     return CrashWorkspacePodsResult(deleted=deleted)
+
+
+@activity.defn
+def scale_workspace_workloads(
+    request: ScaleWorkspaceWorkloadsRequest,
+) -> ScaleWorkspaceWorkloadsResult:
+    """Set every workload controller in the dedicated namespace to one size.
+
+    Crashable workspaces render ordinary Deployments and Temporal
+    WorkerDeployments. The namespace is isolated to one workspace, so listing
+    both controller types without a label selector also includes any
+    WorkerDeployment-owned Deployment that is already present. Reapplying the
+    same replica count is safe when an Activity retry follows a partial failure.
+    """
+
+    if request.replicas not in {0, 1}:
+        raise errors.non_retryable_error(
+            "crashable workspace replicas must be 0 or 1",
+            error_type=errors.VALIDATION_ERROR,
+        )
+
+    deployments = sorted(
+        item["name"]
+        for item in kube.list_deployments(request.namespace)
+        if isinstance(item.get("name"), str) and item["name"]
+    )
+    worker_deployments = sorted(
+        metadata["name"]
+        for item in kube.list_worker_deployments(request.namespace)
+        if isinstance((metadata := item.get("metadata")), dict)
+        and isinstance(metadata.get("name"), str)
+        and metadata["name"]
+    )
+
+    for name in deployments:
+        kube.scale_deployment(request.namespace, name, request.replicas)
+    for name in worker_deployments:
+        kube.scale_worker_deployment(request.namespace, name, request.replicas)
+
+    return ScaleWorkspaceWorkloadsResult(
+        deployments=len(deployments),
+        worker_deployments=len(worker_deployments),
+    )
 
 
 @activity.defn

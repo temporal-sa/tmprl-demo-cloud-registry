@@ -28,6 +28,7 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     DeleteWorkspaceNamespaceRequest,
     EnsureWorkspaceRequest,
     ResolveSourceImagesRequest,
+    ScaleWorkspaceWorkloadsRequest,
     WaitWorkspaceReadyRequest,
 )
 
@@ -478,6 +479,205 @@ def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch)
 
     assert result.action == "deleting"
     assert deleted == ["tmprl-dem-cld-crash-0123abcd89"]
+
+
+def test_scale_workspace_workloads_updates_all_supported_controllers(monkeypatch):
+    scaled = []
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_deployments",
+        lambda namespace: [{"name": "web"}, {"name": "worker-version"}],
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_worker_deployments",
+        lambda namespace: [{"metadata": {"name": "worker"}}],
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "scale_deployment",
+        lambda namespace, name, replicas: scaled.append(
+            ("Deployment", namespace, name, replicas)
+        ),
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "scale_worker_deployment",
+        lambda namespace, name, replicas: scaled.append(
+            ("WorkerDeployment", namespace, name, replicas)
+        ),
+    )
+
+    result = crashable_activities.scale_workspace_workloads(
+        ScaleWorkspaceWorkloadsRequest(namespace="workspace", replicas=0)
+    )
+
+    assert result.deployments == 2
+    assert result.worker_deployments == 1
+    assert scaled == [
+        ("Deployment", "workspace", "web", 0),
+        ("Deployment", "workspace", "worker-version", 0),
+        ("WorkerDeployment", "workspace", "worker", 0),
+    ]
+
+
+def test_scale_down_and_up_preserve_workspace_lifecycle(monkeypatch):
+    now = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    request = EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+        carried_already_provisioned=True,
+        carried_expires_at=(now + timedelta(hours=1)).isoformat(),
+        carried_created_at=now.isoformat(),
+        carried_task_queue="music-0123abcd89",
+        carried_workspace_id="0123abcd89",
+    )
+    workspace = CrashableWorkspaceWorkflow(request)
+    activities_run = []
+    actions = iter(("scale_down", "scale_up", "delete"))
+
+    async def request_action(_predicate, *, timeout):
+        action = next(actions)
+        status = getattr(workspace, action)()
+        assert status.phase == {
+            "scale_down": "ScalingDown",
+            "scale_up": "ScalingUp",
+            "delete": "Deleting",
+        }[action]
+
+    async def execute_activity(activity_fn, activity_request, **_kwargs):
+        activities_run.append((activity_fn, activity_request))
+        return SimpleNamespace(action="done")
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: False),
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "wait_condition", request_action
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "execute_activity", execute_activity
+    )
+
+    asyncio.run(workspace.run(request))
+
+    assert [activity_fn for activity_fn, _ in activities_run] == [
+        crashable_activities.scale_workspace_workloads,
+        crashable_activities.scale_workspace_workloads,
+        crashable_activities.delete_workspace_namespace,
+    ]
+    assert [
+        activity_request.replicas for _, activity_request in activities_run[:2]
+    ] == [0, 1]
+    assert workspace._status.phase == "Deleting"
+
+
+def test_continue_as_new_carries_scaled_down_state(monkeypatch):
+    now = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    request = EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+        carried_already_provisioned=True,
+        carried_expires_at=(now + timedelta(hours=1)).isoformat(),
+        carried_created_at=now.isoformat(),
+        carried_task_queue="music-0123abcd89",
+        carried_workspace_id="0123abcd89",
+        carried_scaled_down=True,
+    )
+    workspace = CrashableWorkspaceWorkflow(request)
+    carried = []
+
+    class ContinuedAsNew(Exception):
+        pass
+
+    def continue_as_new(next_request):
+        carried.append(next_request)
+        raise ContinuedAsNew
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: True),
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "continue_as_new", continue_as_new
+    )
+
+    try:
+        asyncio.run(workspace.run(request))
+    except ContinuedAsNew:
+        pass
+    else:
+        raise AssertionError("expected the settled workspace to continue as new")
+
+    assert workspace._status.phase == "ScaledDown"
+    assert workspace._status.step == "Workloads scaled to zero"
+    assert len(carried) == 1
+    assert carried[0].carried_scaled_down is True
+
+
+def test_scale_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch):
+    now = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    request = EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+        carried_already_provisioned=True,
+        carried_expires_at=(now + timedelta(hours=1)).isoformat(),
+        carried_created_at=now.isoformat(),
+        carried_task_queue="music-0123abcd89",
+        carried_workspace_id="0123abcd89",
+    )
+    workspace = CrashableWorkspaceWorkflow(request)
+    activities_run = []
+
+    async def request_scale_down(_predicate, *, timeout):
+        workspace.scale_down()
+
+    async def execute_activity(activity_fn, activity_request, **_kwargs):
+        activities_run.append((activity_fn, activity_request))
+        if activity_fn is crashable_activities.scale_workspace_workloads:
+            workspace.delete()
+            raise ActivityError(
+                "deployment patch forbidden",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="registry-operator",
+                activity_type="scale_workspace_workloads",
+                activity_id="3",
+                retry_state=None,
+            )
+        return SimpleNamespace(action="deleting")
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: False),
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "wait_condition", request_scale_down
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "execute_activity", execute_activity
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "logger",
+        SimpleNamespace(error=lambda *args: None),
+    )
+
+    asyncio.run(workspace.run(request))
+
+    assert [activity_fn for activity_fn, _ in activities_run] == [
+        crashable_activities.scale_workspace_workloads,
+        crashable_activities.delete_workspace_namespace,
+    ]
+    assert workspace._status.phase == "Deleting"
+    assert "deployment patch forbidden" in (workspace._status.last_error or "")
 
 
 def test_crash_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch):

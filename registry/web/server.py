@@ -405,6 +405,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.crashable_update("extend")
             elif path == "/api/crashable-workspace/crash":
                 self.crashable_update("crash")
+            elif path == "/api/crashable-workspace/scale-down":
+                self.crashable_update("scale_down")
+            elif path == "/api/crashable-workspace/scale-up":
+                self.crashable_update("scale_up")
             elif path == "/api/crashable-workspace/delete":
                 self.crashable_delete()
             else:

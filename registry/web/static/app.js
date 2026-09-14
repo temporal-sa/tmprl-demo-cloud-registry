@@ -653,7 +653,8 @@ function pollWorkspaceOnce(demo) {
     });
 }
 
-// Poll while the workflow is doing async work (Provisioning/Crashing/Deleting).
+// Poll while the workflow is doing async work (provisioning, outage actions,
+// and deletion).
 function armWorkspacePolling(demo) {
   return setInterval(() => {
     const node = workspaceContainer(demo.id);
@@ -681,8 +682,8 @@ function armWorkspacePolling(demo) {
   }, 2000);
 }
 
-// Tick the visible countdown once per second while Active; re-check status when
-// it reaches zero (the workflow auto-deletes on expiry).
+// Tick the visible countdown once per second while the workspace is settled;
+// re-check status when it reaches zero (the workflow auto-deletes on expiry).
 function armWorkspaceCountdown(demo, expiresAt) {
   return setInterval(() => {
     const node = workspaceContainer(demo.id);
@@ -747,7 +748,7 @@ function renderWorkspaceInto(demo, container) {
   } else if (phase === "None") {
     children.push(
       note(
-        "Spin up a private, time-limited copy of this demo’s Kubernetes workers that you can crash to watch Temporal recover. Auto-deletes after 1 hour."
+        "Spin up a private, time-limited copy of this demo’s Kubernetes workers that you can crash or scale down to watch Temporal recover. Auto-deletes after 1 hour."
       ),
       el(
         "div",
@@ -778,7 +779,11 @@ function renderWorkspaceInto(demo, container) {
       )
     );
     setWorkspaceTimer(demo.id, armWorkspacePolling(demo));
-  } else if (phase === "Crashing") {
+  } else if (
+    phase === "Crashing" ||
+    phase === "ScalingDown" ||
+    phase === "ScalingUp"
+  ) {
     children.push(
       el(
         "div",
@@ -787,7 +792,13 @@ function renderWorkspaceInto(demo, container) {
         el("p", {
           class: "text-sm font-medium",
           dataset: { workspaceStep: "" },
-          text: (status && status.step) || "Crashing workers…",
+          text:
+            (status && status.step) ||
+            (phase === "ScalingDown"
+              ? "Scaling workloads to zero…"
+              : phase === "ScalingUp"
+              ? "Scaling workloads to one…"
+              : "Crashing workers…"),
         })
       )
     );
@@ -846,6 +857,61 @@ function renderWorkspaceInto(demo, container) {
           : null,
         workspaceButton("Crash Workers", "bg-red-600 text-white hover:bg-red-700", () =>
           workspaceAction(demo, "/api/crashable-workspace/crash")
+        ),
+        workspaceButton(
+          "Scale Down",
+          "border border-amber-500/50 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20",
+          () => workspaceAction(demo, "/api/crashable-workspace/scale-down")
+        ),
+        workspaceButton(
+          "Extend +1h",
+          "border border-border bg-background hover:bg-muted",
+          () => workspaceAction(demo, "/api/crashable-workspace/extend")
+        ),
+        workspaceButton(
+          "Delete",
+          "border border-border bg-background text-muted-foreground hover:text-foreground",
+          () => workspaceAction(demo, "/api/crashable-workspace/delete")
+        )
+      ),
+      el(
+        "div",
+        { class: "mt-2 text-xs text-muted-foreground" },
+        "Auto-deletes in ",
+        el("span", {
+          class: "font-mono font-medium text-foreground",
+          dataset: { workspaceCountdown: "" },
+          text: expiresAt ? formatCountdown(expiresAt - Date.now()) : "—",
+        })
+      ),
+      status && status.namespace
+        ? el("p", {
+            class: "mt-1 text-[11px] text-muted-foreground font-mono",
+            text: status.namespace,
+          })
+        : null,
+      status && status.last_error
+        ? el("p", {
+            class: "mt-2 text-xs text-red-600",
+            text: status.last_error,
+          })
+        : null
+    );
+    setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));
+  } else if (phase === "ScaledDown") {
+    const expiresAt =
+      status && status.expires_at ? Date.parse(status.expires_at) : null;
+    children.push(
+      note(
+        "All workloads are scaled to zero. Temporal work remains durable while the environment is offline."
+      ),
+      el(
+        "div",
+        { class: "mt-3 flex flex-wrap items-center gap-2" },
+        workspaceButton(
+          "Scale Up",
+          "bg-foreground text-background hover:bg-foreground/90",
+          () => workspaceAction(demo, "/api/crashable-workspace/scale-up")
         ),
         workspaceButton(
           "Extend +1h",

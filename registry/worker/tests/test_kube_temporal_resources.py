@@ -21,6 +21,7 @@ class FakeCustomObjectsApi:
     list_error: Exception | None = None
     get_error: Exception | None = None
     delete_error: Exception | None = None
+    patch_error: Exception | None = None
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(
         default_factory=list
     )
@@ -41,6 +42,12 @@ class FakeCustomObjectsApi:
         self.calls.append(("delete", args, kwargs))
         if self.delete_error is not None:
             raise self.delete_error
+        return {}
+
+    def patch_namespaced_custom_object(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append(("patch", args, kwargs))
+        if self.patch_error is not None:
+            raise self.patch_error
         return {}
 
 
@@ -114,6 +121,42 @@ def test_list_worker_deployment_images_reads_build_and_primary_template_image(
     assert kube.list_worker_deployment_images("runtime-ns") == {
         "worker": "example.com/worker:git-123"
     }
+
+
+def test_scale_worker_deployment_patches_replica_count(install_fake_client):
+    api = FakeCustomObjectsApi()
+    install_fake_client(api)
+
+    kube.scale_worker_deployment("runtime-ns", "worker", 0)
+
+    assert api.calls == [
+        (
+            "patch",
+            (
+                kube.TEMPORAL_WORKER_CONTROLLER_GROUP,
+                kube.TEMPORAL_WORKER_CONTROLLER_VERSION,
+                "runtime-ns",
+                kube.TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+                "worker",
+                {"spec": {"replicas": 0}},
+            ),
+            {},
+        )
+    ]
+
+
+def test_scale_deployment_patches_replica_count(monkeypatch):
+    calls = []
+    apps_api = SimpleNamespace(
+        patch_namespaced_deployment=lambda *args: calls.append(args)
+    )
+    client = SimpleNamespace(AppsV1Api=lambda: apps_api)
+    monkeypatch.setattr(kube, "_client_module", lambda: client)
+    monkeypatch.setattr(kube, "load_kubernetes_config", lambda: None)
+
+    kube.scale_deployment("runtime-ns", "web", 1)
+
+    assert calls == [("web", "runtime-ns", {"spec": {"replicas": 1}})]
 
 
 def test_list_external_secrets_uses_expected_api(install_fake_client):
