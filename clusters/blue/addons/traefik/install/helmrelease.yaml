@@ -11,11 +11,15 @@ spec:
         kind: HelmRepository
         name: traefik
         namespace: flux-system
-      version: 41.0.2
+      version: 41.5.0
   interval: 30m
+  install:
+    crds: CreateReplace
   releaseName: traefik
   storageNamespace: traefik
   targetNamespace: traefik
+  upgrade:
+    crds: CreateReplace
   driftDetection:
     mode: enabled
   values:
