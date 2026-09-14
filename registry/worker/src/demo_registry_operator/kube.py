@@ -1027,6 +1027,21 @@ def list_worker_deployments(
     return [item for item in items if isinstance(item, dict)]
 
 
+def scale_worker_deployment(namespace: str, name: str, replicas: int) -> None:
+    if replicas < 0:
+        raise ValueError("replicas must be non-negative")
+    client = _client_module()
+    load_kubernetes_config()
+    client.CustomObjectsApi().patch_namespaced_custom_object(
+        TEMPORAL_WORKER_CONTROLLER_GROUP,
+        TEMPORAL_WORKER_CONTROLLER_VERSION,
+        namespace,
+        TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+        name,
+        {"spec": {"replicas": replicas}},
+    )
+
+
 def read_worker_deployment(namespace: str, name: str) -> dict[str, Any] | None:
     client = _client_module()
     load_kubernetes_config()
@@ -1202,6 +1217,18 @@ def list_deployments(
         object_metadata_summary(item) for item in getattr(response, "items", [])
     ]
     return [item for item in summaries if item.get("name")]
+
+
+def scale_deployment(namespace: str, name: str, replicas: int) -> None:
+    if replicas < 0:
+        raise ValueError("replicas must be non-negative")
+    client = _client_module()
+    load_kubernetes_config()
+    client.AppsV1Api().patch_namespaced_deployment(
+        name,
+        namespace,
+        {"spec": {"replicas": replicas}},
+    )
 
 
 def delete_deployment(namespace: str, name: str, *, dry_run: bool = False) -> str:

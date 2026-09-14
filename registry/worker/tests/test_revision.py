@@ -187,6 +187,17 @@ def test_all_registry_operator_rbac_can_crash_workspace_pods():
         assert required <= _verbs_for(rules, "", "pods")
 
 
+def test_all_registry_operator_rbac_can_scale_workspace_workloads():
+    for rbac in REGISTRY_OPERATOR_RBACS:
+        rules = _cluster_role_rules(rbac)
+        assert {"get", "list", "patch"} <= _verbs_for(
+            rules, "apps", "deployments"
+        )
+        assert {"get", "list", "patch"} <= _verbs_for(
+            rules, "temporal.io", "workerdeployments"
+        )
+
+
 # --- Task 1.4: kube helpers + merge-patch content-type guard ---
 
 

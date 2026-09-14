@@ -30,11 +30,15 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     DeleteWorkspaceNamespaceRequest,
     EnsureWorkspaceRequest,
     ResolveSourceImagesRequest,
+    ScaleWorkspaceWorkloadsRequest,
     WaitWorkspaceReadyRequest,
     WorkspaceStatus,
 )
 
-LIVE_PHASES = frozenset({"Active", "Crashing"})
+LIVE_PHASES = frozenset(
+    {"Active", "Crashing", "ScalingDown", "ScaledDown", "ScalingUp"}
+)
+SETTLED_PHASES = frozenset({"Active", "ScaledDown"})
 EXTEND_INTERVAL = timedelta(hours=1)
 
 
@@ -52,6 +56,7 @@ class CrashableWorkspaceWorkflow:
         self._workspace_id = workspace_id
         self._namespace = namespace
         self._crash_requested = False
+        self._scale_target_replicas: int | None = None
         self._delete_requested = False
         self._deadline_version = 0
         self._expires_at: datetime | None = None
@@ -78,8 +83,14 @@ class CrashableWorkspaceWorkflow:
             self._status.created_at = request.carried_created_at
             self._status.expires_at = request.carried_expires_at
             self._expires_at = _parse(request.carried_expires_at)
-            self._status.phase = "Active"
-            self._status.step = "Ready"
+            self._status.phase = (
+                "ScaledDown" if request.carried_scaled_down else "Active"
+            )
+            self._status.step = (
+                "Workloads scaled to zero"
+                if request.carried_scaled_down
+                else "Ready"
+            )
         else:
             await self._provision(request)
 
@@ -186,12 +197,13 @@ class CrashableWorkspaceWorkflow:
                 return
 
             # Bound history growth for a long-lived workspace (repeated extends
-            # and/or crashes — extends have no cap) by continuing-as-new when the
-            # server suggests it, carrying enough state to resume the TTL loop
-            # without re-provisioning. Only when settled (no pending crash/delete).
+            # and/or outage actions — extends have no cap) by continuing-as-new
+            # when the server suggests it, carrying enough state to resume the TTL
+            # loop without re-provisioning. Only when settled (no pending action).
             if (
-                self._status.phase == "Active"
+                self._status.phase in SETTLED_PHASES
                 and not self._crash_requested
+                and self._scale_target_replicas is None
                 and not self._delete_requested
                 and workflow.info().is_continue_as_new_suggested()
             ):
@@ -205,6 +217,7 @@ class CrashableWorkspaceWorkflow:
                         carried_created_at=self._status.created_at,
                         carried_task_queue=self._status.task_queue,
                         carried_workspace_id=self._workspace_id,
+                        carried_scaled_down=self._status.phase == "ScaledDown",
                     )
                 )
 
@@ -213,6 +226,7 @@ class CrashableWorkspaceWorkflow:
                 await workflow.wait_condition(
                     lambda: (
                         self._crash_requested
+                        or self._scale_target_replicas is not None
                         or self._delete_requested
                         or self._deadline_version != deadline_snapshot
                     ),
@@ -251,6 +265,52 @@ class CrashableWorkspaceWorkflow:
                     else "Ready"
                 )
                 # Loops back to the top, where the continue-as-new check runs.
+            elif self._scale_target_replicas is not None:
+                target_replicas = self._scale_target_replicas
+                self._scale_target_replicas = None
+                scaling_down = target_replicas == 0
+                fallback_phase = "Active" if scaling_down else "ScaledDown"
+                action = "scale down" if scaling_down else "scale up"
+                self._status.phase = "ScalingDown" if scaling_down else "ScalingUp"
+                self._status.step = (
+                    "Scaling workloads to zero"
+                    if scaling_down
+                    else "Scaling workloads to one"
+                )
+                self._status.last_error = None
+                try:
+                    await workflow.execute_activity(
+                        activities.scale_workspace_workloads,
+                        ScaleWorkspaceWorkloadsRequest(
+                            namespace=self._namespace,
+                            replicas=target_replicas,
+                        ),
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=activities.SCALE_RETRY_POLICY,
+                    )
+                except ActivityError as error:
+                    if is_cancelled_exception(error):
+                        raise
+                    self._status.last_error = (
+                        f"Failed to {action} workloads: {error}"
+                    )
+                    workflow.logger.error(
+                        "crashable workspace %s failed: %s", action, error
+                    )
+                if self._delete_requested:
+                    return
+                if self._status.last_error:
+                    self._status.phase = fallback_phase
+                    self._status.step = (
+                        "Scale down failed; workload state may be mixed"
+                        if scaling_down
+                        else "Scale up failed; workload state may be mixed"
+                    )
+                else:
+                    self._status.phase = "ScaledDown" if scaling_down else "Active"
+                    self._status.step = (
+                        "Workloads scaled to zero" if scaling_down else "Ready"
+                    )
             # Otherwise the deadline changed (extend): recompute and wait again.
 
     @workflow.update
@@ -276,6 +336,26 @@ class CrashableWorkspaceWorkflow:
             return self._snapshot()
         self._crash_requested = True
         self._status.phase = "Crashing"
+        return self._snapshot()
+
+    @workflow.update
+    def scale_down(self) -> WorkspaceStatus:
+        if self._status.phase != "Active":
+            return self._snapshot()
+        self._scale_target_replicas = 0
+        self._status.phase = "ScalingDown"
+        self._status.step = "Scaling workloads to zero"
+        self._status.last_error = None
+        return self._snapshot()
+
+    @workflow.update
+    def scale_up(self) -> WorkspaceStatus:
+        if self._status.phase != "ScaledDown":
+            return self._snapshot()
+        self._scale_target_replicas = 1
+        self._status.phase = "ScalingUp"
+        self._status.step = "Scaling workloads to one"
+        self._status.last_error = None
         return self._snapshot()
 
     @workflow.update

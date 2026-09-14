@@ -131,6 +131,7 @@ from demo_registry_operator.activities.crashable_workspace import (
     crash_workspace_pods,
     delete_workspace_namespace,
     resolve_source_images,
+    scale_workspace_workloads,
     wait_workspace_ready,
 )
 from demo_registry_operator.activities.revision import (
@@ -398,6 +399,7 @@ async def main() -> None:
                     apply_workspace_resource,
                     wait_workspace_ready,
                     crash_workspace_pods,
+                    scale_workspace_workloads,
                     delete_workspace_namespace,
                 ],
                 activity_executor=activity_executor,

@@ -31,6 +31,7 @@ class EnsureWorkspaceRequest:
     carried_created_at: str | None = None
     carried_task_queue: str | None = None
     carried_workspace_id: str | None = None
+    carried_scaled_down: bool = False
 
 
 @dataclass
@@ -106,6 +107,18 @@ class CrashWorkspacePodsRequest:
 @dataclass(frozen=True)
 class CrashWorkspacePodsResult:
     deleted: int
+
+
+@dataclass(frozen=True)
+class ScaleWorkspaceWorkloadsRequest:
+    namespace: str
+    replicas: int
+
+
+@dataclass(frozen=True)
+class ScaleWorkspaceWorkloadsResult:
+    deployments: int
+    worker_deployments: int
 
 
 @dataclass(frozen=True)
