@@ -113,6 +113,7 @@ class CrashWorkspacePodsResult:
 class ScaleWorkspaceWorkloadsRequest:
     namespace: str
     replicas: int
+    demo_name: str = ""
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ from temporalio.common import RetryPolicy
 
 from demo_registry_operator import derive, errors, kube, resources
 from demo_registry_operator.crashable_workspace_resources import (
+    CRASHABLE_WORKER_LABEL,
     build_workspace_manifests,
 )
 from demo_registry_operator.workflows.crashable_workspace_messages import (
@@ -160,6 +161,17 @@ def _versioned_worker_builds(demo_project: dict | None) -> set[str]:
             demo_project
         ).values()
         if isinstance((build := component.get("build")), str) and build
+    }
+
+
+def _worker_component_names(demo_project: dict | None) -> set[str]:
+    if not isinstance(demo_project, dict):
+        return set()
+    return {
+        name
+        for name, component in resources.kubernetes_components(demo_project).items()
+        if component.get("worker") is True
+        or isinstance(component.get("worker"), dict)
     }
 
 
@@ -335,13 +347,13 @@ def crash_workspace_pods(
 def scale_workspace_workloads(
     request: ScaleWorkspaceWorkloadsRequest,
 ) -> ScaleWorkspaceWorkloadsResult:
-    """Set every workload controller in the dedicated namespace to one size.
+    """Set every worker controller in the dedicated namespace to one size.
 
-    Crashable workspaces render ordinary Deployments and Temporal
-    WorkerDeployments. The namespace is isolated to one workspace, so listing
-    both controller types without a label selector also includes any
-    WorkerDeployment-owned Deployment that is already present. Reapplying the
-    same replica count is safe when an Activity retry follows a partial failure.
+    Worker components can render as ordinary Deployments or Temporal
+    WorkerDeployments. New workspaces carry the crashable-worker label;
+    pre-existing workspaces fall back to their component annotation and the
+    DemoProject's worker declarations. Reapplying the same replica count is safe
+    when an Activity retry follows a partial failure.
     """
 
     if request.replicas not in {0, 1}:
@@ -350,10 +362,15 @@ def scale_workspace_workloads(
             error_type=errors.VALIDATION_ERROR,
         )
 
+    demo_project = (
+        kube.read_demo_project(request.demo_name) if request.demo_name else None
+    )
+    worker_components = _worker_component_names(demo_project)
     deployments = sorted(
         item["name"]
         for item in kube.list_deployments(request.namespace)
         if isinstance(item.get("name"), str) and item["name"]
+        and _is_worker_controller(item, worker_components)
     )
     worker_deployments = sorted(
         metadata["name"]
@@ -371,6 +388,26 @@ def scale_workspace_workloads(
     return ScaleWorkspaceWorkloadsResult(
         deployments=len(deployments),
         worker_deployments=len(worker_deployments),
+    )
+
+
+def _is_worker_controller(
+    item: dict,
+    worker_components: set[str],
+) -> bool:
+    metadata = item.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else item
+    labels = metadata.get("labels")
+    if (
+        isinstance(labels, dict)
+        and labels.get(CRASHABLE_WORKER_LABEL) == "true"
+    ):
+        return True
+    annotations = metadata.get("annotations")
+    return bool(
+        isinstance(annotations, dict)
+        and annotations.get("platform.temporal.io/component")
+        in worker_components
     )
 
 
