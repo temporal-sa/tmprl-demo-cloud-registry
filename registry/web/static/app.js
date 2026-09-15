@@ -795,9 +795,9 @@ function renderWorkspaceInto(demo, container) {
           text:
             (status && status.step) ||
             (phase === "ScalingDown"
-              ? "Scaling workloads to zero…"
+              ? "Scaling workers to zero…"
               : phase === "ScalingUp"
-              ? "Scaling workloads to one…"
+              ? "Scaling workers to one…"
               : "Crashing workers…"),
         })
       )
@@ -859,7 +859,7 @@ function renderWorkspaceInto(demo, container) {
           workspaceAction(demo, "/api/crashable-workspace/crash")
         ),
         workspaceButton(
-          "Scale Down",
+          "Scale Down Workers",
           "border border-amber-500/50 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20",
           () => workspaceAction(demo, "/api/crashable-workspace/scale-down")
         ),
@@ -903,13 +903,13 @@ function renderWorkspaceInto(demo, container) {
       status && status.expires_at ? Date.parse(status.expires_at) : null;
     children.push(
       note(
-        "All workloads are scaled to zero. Temporal work remains durable while the environment is offline."
+        "Worker pods are scaled to zero. Application pods remain online while Temporal work waits durably for the workers to return."
       ),
       el(
         "div",
         { class: "mt-3 flex flex-wrap items-center gap-2" },
         workspaceButton(
-          "Scale Up",
+          "Scale Up Workers",
           "bg-foreground text-background hover:bg-foreground/90",
           () => workspaceAction(demo, "/api/crashable-workspace/scale-up")
         ),

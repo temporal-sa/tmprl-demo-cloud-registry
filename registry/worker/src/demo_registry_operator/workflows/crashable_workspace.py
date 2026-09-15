@@ -87,7 +87,7 @@ class CrashableWorkspaceWorkflow:
                 "ScaledDown" if request.carried_scaled_down else "Active"
             )
             self._status.step = (
-                "Workloads scaled to zero"
+                "Workers scaled to zero"
                 if request.carried_scaled_down
                 else "Ready"
             )
@@ -273,9 +273,9 @@ class CrashableWorkspaceWorkflow:
                 action = "scale down" if scaling_down else "scale up"
                 self._status.phase = "ScalingDown" if scaling_down else "ScalingUp"
                 self._status.step = (
-                    "Scaling workloads to zero"
+                    "Scaling workers to zero"
                     if scaling_down
-                    else "Scaling workloads to one"
+                    else "Scaling workers to one"
                 )
                 self._status.last_error = None
                 try:
@@ -284,6 +284,7 @@ class CrashableWorkspaceWorkflow:
                         ScaleWorkspaceWorkloadsRequest(
                             namespace=self._namespace,
                             replicas=target_replicas,
+                            demo_name=self._status.demo,
                         ),
                         start_to_close_timeout=timedelta(minutes=2),
                         retry_policy=activities.SCALE_RETRY_POLICY,
@@ -292,7 +293,7 @@ class CrashableWorkspaceWorkflow:
                     if is_cancelled_exception(error):
                         raise
                     self._status.last_error = (
-                        f"Failed to {action} workloads: {error}"
+                        f"Failed to {action} workers: {error}"
                     )
                     workflow.logger.error(
                         "crashable workspace %s failed: %s", action, error
@@ -302,14 +303,14 @@ class CrashableWorkspaceWorkflow:
                 if self._status.last_error:
                     self._status.phase = fallback_phase
                     self._status.step = (
-                        "Scale down failed; workload state may be mixed"
+                        "Scale down failed; worker state may be mixed"
                         if scaling_down
-                        else "Scale up failed; workload state may be mixed"
+                        else "Scale up failed; worker state may be mixed"
                     )
                 else:
                     self._status.phase = "ScaledDown" if scaling_down else "Active"
                     self._status.step = (
-                        "Workloads scaled to zero" if scaling_down else "Ready"
+                        "Workers scaled to zero" if scaling_down else "Ready"
                     )
             # Otherwise the deadline changed (extend): recompute and wait again.
 
@@ -344,7 +345,7 @@ class CrashableWorkspaceWorkflow:
             return self._snapshot()
         self._scale_target_replicas = 0
         self._status.phase = "ScalingDown"
-        self._status.step = "Scaling workloads to zero"
+        self._status.step = "Scaling workers to zero"
         self._status.last_error = None
         return self._snapshot()
 
@@ -354,7 +355,7 @@ class CrashableWorkspaceWorkflow:
             return self._snapshot()
         self._scale_target_replicas = 1
         self._status.phase = "ScalingUp"
-        self._status.step = "Scaling workloads to one"
+        self._status.step = "Scaling workers to one"
         self._status.last_error = None
         return self._snapshot()
 

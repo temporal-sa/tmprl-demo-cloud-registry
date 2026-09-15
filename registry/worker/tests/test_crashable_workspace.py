@@ -12,6 +12,7 @@ from demo_registry_operator.activities import (
 )
 from demo_registry_operator.activities import reconcile
 from demo_registry_operator.crashable_workspace_resources import (
+    CRASHABLE_WORKER_LABEL,
     build_workspace_manifests,
 )
 from demo_registry_operator.resources import catalog_entry
@@ -247,6 +248,34 @@ def test_build_workspace_manifests_isolates_namespace_host_and_task_queue():
         m["metadata"]["name"]: m for m in ordered if m["kind"] == "Deployment"
     }
     assert deployment_names and set(deployment_names) == set(deployments)
+    worker_deployment = next(
+        deployment
+        for deployment in deployments.values()
+        if deployment["metadata"]["annotations"][
+            "platform.temporal.io/component"
+        ]
+        == "worker"
+    )
+    app_deployment = next(
+        deployment
+        for deployment in deployments.values()
+        if deployment["metadata"]["annotations"][
+            "platform.temporal.io/component"
+        ]
+        == "app"
+    )
+    assert worker_deployment["metadata"]["labels"][CRASHABLE_WORKER_LABEL] == "true"
+    assert (
+        worker_deployment["spec"]["template"]["metadata"]["labels"][
+            CRASHABLE_WORKER_LABEL
+        ]
+        == "true"
+    )
+    assert CRASHABLE_WORKER_LABEL not in app_deployment["metadata"]["labels"]
+    assert (
+        CRASHABLE_WORKER_LABEL
+        not in app_deployment["spec"]["template"]["metadata"]["labels"]
+    )
     injected = 0
     for deployment in deployments.values():
         for container in deployment["spec"]["template"]["spec"]["containers"]:
@@ -307,6 +336,13 @@ def test_build_workspace_manifests_isolates_versioned_worker():
     )
     assert worker_deployment["metadata"]["name"] == f"travel-worker-{wid}"
     assert worker_deployment["metadata"]["namespace"] == namespace
+    assert worker_deployment["metadata"]["labels"][CRASHABLE_WORKER_LABEL] == "true"
+    assert (
+        worker_deployment["spec"]["template"]["metadata"]["labels"][
+            CRASHABLE_WORKER_LABEL
+        ]
+        == "true"
+    )
     assert worker_deployment["spec"]["rollout"] == {"strategy": "AllAtOnce"}
     container = worker_deployment["spec"]["template"]["spec"]["containers"][0]
     env = {item["name"]: item.get("value") for item in container["env"]}
@@ -481,17 +517,47 @@ def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch)
     assert deleted == ["tmprl-dem-cld-crash-0123abcd89"]
 
 
-def test_scale_workspace_workloads_updates_all_supported_controllers(monkeypatch):
+def test_scale_workspace_workloads_updates_only_worker_controllers(
+    monkeypatch,
+):
     scaled = []
+    listed = []
+
+    def list_deployments(namespace):
+        listed.append(("Deployment", namespace))
+        return [
+            {
+                "name": "labeled-worker",
+                "labels": {CRASHABLE_WORKER_LABEL: "true"},
+            },
+            {
+                "name": "legacy-worker",
+                "annotations": {"platform.temporal.io/component": "worker"},
+            },
+            {
+                "name": "app",
+                "annotations": {"platform.temporal.io/component": "app"},
+            },
+        ]
+
+    def list_worker_deployments(namespace):
+        listed.append(("WorkerDeployment", namespace))
+        return [{"metadata": {"name": "versioned-worker"}}]
+
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: _crashable_demo(name),
+    )
     monkeypatch.setattr(
         crashable_activities.kube,
         "list_deployments",
-        lambda namespace: [{"name": "web"}, {"name": "worker-version"}],
+        list_deployments,
     )
     monkeypatch.setattr(
         crashable_activities.kube,
         "list_worker_deployments",
-        lambda namespace: [{"metadata": {"name": "worker"}}],
+        list_worker_deployments,
     )
     monkeypatch.setattr(
         crashable_activities.kube,
@@ -509,15 +575,23 @@ def test_scale_workspace_workloads_updates_all_supported_controllers(monkeypatch
     )
 
     result = crashable_activities.scale_workspace_workloads(
-        ScaleWorkspaceWorkloadsRequest(namespace="workspace", replicas=0)
+        ScaleWorkspaceWorkloadsRequest(
+            namespace="workspace",
+            replicas=0,
+            demo_name="canonical-ai-demo",
+        )
     )
 
     assert result.deployments == 2
     assert result.worker_deployments == 1
+    assert listed == [
+        ("Deployment", "workspace"),
+        ("WorkerDeployment", "workspace"),
+    ]
     assert scaled == [
-        ("Deployment", "workspace", "web", 0),
-        ("Deployment", "workspace", "worker-version", 0),
-        ("WorkerDeployment", "workspace", "worker", 0),
+        ("Deployment", "workspace", "labeled-worker", 0),
+        ("Deployment", "workspace", "legacy-worker", 0),
+        ("WorkerDeployment", "workspace", "versioned-worker", 0),
     ]
 
 
@@ -572,6 +646,9 @@ def test_scale_down_and_up_preserve_workspace_lifecycle(monkeypatch):
     assert [
         activity_request.replicas for _, activity_request in activities_run[:2]
     ] == [0, 1]
+    assert [
+        activity_request.demo_name for _, activity_request in activities_run[:2]
+    ] == ["canonical-ai-demo", "canonical-ai-demo"]
     assert workspace._status.phase == "Deleting"
 
 
@@ -615,7 +692,7 @@ def test_continue_as_new_carries_scaled_down_state(monkeypatch):
         raise AssertionError("expected the settled workspace to continue as new")
 
     assert workspace._status.phase == "ScaledDown"
-    assert workspace._status.step == "Workloads scaled to zero"
+    assert workspace._status.step == "Workers scaled to zero"
     assert len(carried) == 1
     assert carried[0].carried_scaled_down is True
 

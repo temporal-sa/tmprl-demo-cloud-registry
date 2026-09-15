@@ -20,6 +20,8 @@ from typing import Any
 
 from demo_registry_operator import derive, resources
 
+CRASHABLE_WORKER_LABEL = "platform.temporal.io/crashable-worker"
+
 
 def build_workspace_manifests(
     demo_project: dict[str, Any],
@@ -83,6 +85,7 @@ def build_workspace_manifests(
             namespace=namespace,
         )
     )
+    _label_crashable_worker_workloads(ordered, cloned)
 
     deployment_names = [
         manifest["metadata"]["name"]
@@ -90,6 +93,53 @@ def build_workspace_manifests(
         if manifest.get("kind") == "Deployment"
     ]
     return ordered, task_queue, host, namespace, deployment_names
+
+
+def _label_crashable_worker_workloads(
+    manifests: list[dict[str, Any]],
+    demo_project: dict[str, Any],
+) -> None:
+    """Mark only worker controllers and their pod templates for outage scaling."""
+
+    worker_components = {
+        name
+        for name, component in resources.kubernetes_components(demo_project).items()
+        if component.get("worker") is True
+        or isinstance(component.get("worker"), dict)
+    }
+    for manifest in manifests:
+        if manifest.get("kind") not in {"Deployment", "WorkerDeployment"}:
+            continue
+        metadata = manifest.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        annotations = metadata.get("annotations")
+        component = (
+            annotations.get("platform.temporal.io/component")
+            if isinstance(annotations, dict)
+            else None
+        )
+        if component not in worker_components:
+            continue
+
+        labels = metadata.get("labels")
+        rendered_labels = dict(labels) if isinstance(labels, dict) else {}
+        rendered_labels[CRASHABLE_WORKER_LABEL] = "true"
+        metadata["labels"] = rendered_labels
+
+        spec = manifest.get("spec")
+        template = spec.get("template") if isinstance(spec, dict) else None
+        template_metadata = (
+            template.get("metadata") if isinstance(template, dict) else None
+        )
+        if not isinstance(template_metadata, dict):
+            continue
+        template_labels = template_metadata.get("labels")
+        rendered_template_labels = (
+            dict(template_labels) if isinstance(template_labels, dict) else {}
+        )
+        rendered_template_labels[CRASHABLE_WORKER_LABEL] = "true"
+        template_metadata["labels"] = rendered_template_labels
 
 
 def _pin_temporal_runtime_secret_path(
