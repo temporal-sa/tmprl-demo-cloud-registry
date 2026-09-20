@@ -1,0 +1,53 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: temporal-wordflow
+spec:
+  source:
+    repo: https://github.com/temporal-sa/temporal-wordflow
+  registry:
+    title: Temporal Wordflow
+    summary: A durable word game with long-lived entity Workflows and a serverless Go worker.
+    tags: [Games, Serverless, Workflows]
+    temporalSdks: [Go]
+    readiness:
+      score: 5
+      maxScore: 5
+      note: Ready for demos and events.
+  builds:
+    web:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    worker:
+      context: .
+      dockerfile: docker/worker-lambda.Dockerfile
+  components:
+    web:
+      build: web
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+      temporalAccess: true
+      env:
+        - name: TEMPORAL_WEB_UI_URL
+          value: https://cloud.temporal.io
+    worker:
+      build: worker
+      serverless:
+        provider: aws-lambda
+        packageType: image
+        architecture: x86_64
+        memoryMb: 512
+        timeoutSeconds: 120
+        workerDeployment:
+          deploymentName: temporal-word-game
+  ingress:
+    subdomain: games
+    temporalAuthRequired: false
+    component: web
+    port: http
+  smokeCheck:
+    path: /
+    expectedStatus: 200
+    timeoutSeconds: 10
