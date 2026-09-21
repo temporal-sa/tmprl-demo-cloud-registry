@@ -60,6 +60,7 @@ TEMPORAL_MTLS_INPUT_REFS = {
     "temporal.clientKey",
 }
 TEMPORAL_INPUT_REFS = TEMPORAL_API_KEY_INPUT_REFS | TEMPORAL_MTLS_INPUT_REFS
+PLATFORM_INPUT_REFS = {"platform.rolloutVersion"}
 TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH = "/var/run/secrets/tmprl-demo.cloud/temporal"
 TEMPORAL_MTLS_CERT_FILES = {
     "caCert": "ca.crt",
@@ -544,6 +545,9 @@ def validate_env_input_refs(document: ProjectDocument) -> list[ProjectError]:
         proxy_enabled = temporal_proxy_enabled(component)
         for index, input_ref in component_input_refs(component):
             path = f"components.{component_name}.env[{index}].valueFrom.inputRef"
+            if input_ref in PLATFORM_INPUT_REFS:
+                continue
+
             if input_ref in TEMPORAL_API_KEY_INPUT_REFS:
                 if proxy_enabled:
                     errors.append(
@@ -588,14 +592,24 @@ def validate_env_input_refs(document: ProjectDocument) -> list[ProjectError]:
                 )
                 continue
 
+            if input_ref.startswith("platform."):
+                supported = ", ".join(sorted(PLATFORM_INPUT_REFS))
+                errors.append(
+                    ProjectError(
+                        document.path,
+                        f"{path} {input_ref!r} must be one of: {supported}",
+                    )
+                )
+                continue
+
             user_secret_ref = parse_user_secret_input_ref(input_ref)
             if user_secret_ref is None:
                 errors.append(
                     ProjectError(
                         document.path,
                         (
-                            f"{path} {input_ref!r} must start with temporal. "
-                            "or secrets.<name>.<property>"
+                            f"{path} {input_ref!r} must start with platform., "
+                            "temporal., or secrets.<name>.<property>"
                         ),
                     )
                 )

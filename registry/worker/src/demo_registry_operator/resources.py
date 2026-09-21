@@ -225,6 +225,7 @@ TEMPORAL_WORKER_RUNTIME_INPUT_REFS = {
     "temporal.tls",
 }
 TEMPORAL_SECRET_NAME = "temporal-credentials"
+PLATFORM_ROLLOUT_VERSION_INPUT_REF = "platform.rolloutVersion"
 TEMPORAL_WORKER_RUNTIME_SECRET_NAME = "temporal-worker-runtime"
 TEMPORAL_CONNECTION_NAME = "temporal"
 TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME = "temporal-mtls-certs"
@@ -2271,7 +2272,7 @@ def container(
         rendered["envFrom"] = env_from
 
     env = env_with_overrides(
-        env_vars(component_name, component),
+        env_vars(demo_project, component_name, component, image_overrides or {}),
         platform_env_vars(demo_project, component_name, image, image_overrides or {}),
     )
     if mounts_temporal_mtls_cert_files(demo_project, component):
@@ -2705,8 +2706,10 @@ def env_from_refs(
 
 
 def env_vars(
+    demo_project: dict[str, Any],
     component_name: str,
     component: dict[str, Any],
+    image_overrides: dict[str, str],
 ) -> list[dict[str, Any]]:
     rendered: list[dict[str, Any]] = []
     for item in component_env_items(component):
@@ -2720,6 +2723,12 @@ def env_vars(
 
         input_ref = env_input_ref(item)
         if input_ref:
+            if input_ref == PLATFORM_ROLLOUT_VERSION_INPUT_REF:
+                version = candidate_version(demo_project, image_overrides)
+                if not version:
+                    raise ValueError("rollout version is unavailable")
+                rendered.append({"name": name, "value": version})
+                continue
             rendered.append(
                 {
                     "name": name,

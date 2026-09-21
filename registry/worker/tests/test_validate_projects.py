@@ -160,6 +160,19 @@ def test_env_input_ref_user_secret_counts_as_secret_usage():
     assert validate_projects.validate_project_secrets(document) == []
 
 
+def test_rollout_version_input_ref_is_allowed():
+    spec = base_spec()
+    spec["components"]["app"]["env"] = [
+        {
+            "name": "TEMPORAL_WORKER_BUILD_ID",
+            "valueFrom": {"inputRef": "platform.rolloutVersion"},
+        }
+    ]
+    document = project_document(spec)
+
+    assert validate_projects.validate_env_input_refs(document) == []
+
+
 def test_env_input_ref_requires_declared_user_secret():
     spec = base_spec()
     spec["components"]["app"]["env"] = [

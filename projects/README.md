@@ -447,6 +447,9 @@ Rules:
   wrapper materializes the same refs from Secrets Manager before process start,
   so the app can consume names like `TEMPORAL_HOST`, `TEMPORAL_TOKEN`, or
   `TEMPORAL_CLIENT_CERT_PEM` without changing code.
+- `platform.rolloutVersion` maps the generated rollout version into a
+  Kubernetes component environment variable. Use it when an ordinary pod must
+  join a Worker Deployment Version managed by another component.
 - `components.<name>.temporalProxy.enabled: true` replaces direct Temporal
   credential injection for that app container with a local plaintext proxy at
   `127.0.0.1:7233`. The sidecar receives the platform-managed Cloud credential,

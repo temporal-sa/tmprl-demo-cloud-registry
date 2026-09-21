@@ -7,7 +7,7 @@ spec:
     repo: https://github.com/temporal-sa/temporal-wordflow
   registry:
     title: Temporal Wordflow
-    summary: A durable word game with long-lived entity Workflows and a serverless Go worker.
+    summary: A durable word game with long-lived entity Workflows and hybrid Go workers.
     tags: [Games, Serverless, Workflows]
     temporalSdks: [Go]
     readiness:
@@ -21,6 +21,9 @@ spec:
     worker:
       context: .
       dockerfile: docker/worker-lambda.Dockerfile
+    steady-worker:
+      context: .
+      dockerfile: docker/worker.Dockerfile
   components:
     web:
       build: web
@@ -42,6 +45,13 @@ spec:
         timeoutSeconds: 120
         workerDeployment:
           deploymentName: temporal-word-game
+    steady:
+      build: steady-worker
+      temporalAccess: true
+      env:
+        - name: TEMPORAL_WORKER_BUILD_ID
+          valueFrom:
+            inputRef: platform.rolloutVersion
   ingress:
     subdomain: games
     temporalAuthRequired: false

@@ -158,6 +158,28 @@ def test_plain_worker_still_renders_deployment():
     }
 
 
+def test_component_can_receive_generated_rollout_version():
+    demo_project = project(worker=True)
+    worker = demo_project["spec"]["components"]["worker"]
+    worker["env"].append(
+        {
+            "name": "TEMPORAL_WORKER_BUILD_ID",
+            "valueFrom": {"inputRef": "platform.rolloutVersion"},
+        }
+    )
+
+    deployments = deployment_resources(demo_project, images())
+    deployment = next(
+        item for item in deployments if item["metadata"]["name"].startswith("worker-")
+    )
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert {
+        "name": "TEMPORAL_WORKER_BUILD_ID",
+        "value": "git-e12b0ed9d450",
+    } in container["env"]
+
+
 def test_temporal_api_key_id_participates_in_rollout_version():
     demo_project = project(worker=True)
     demo_project["metadata"]["annotations"][TEMPORAL_API_KEY_ID_ANNOTATION] = "key-old"

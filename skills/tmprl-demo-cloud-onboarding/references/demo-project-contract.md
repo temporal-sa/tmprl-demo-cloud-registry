@@ -213,12 +213,18 @@ Supported `temporal.*` refs:
   `temporal.apiKey`, `temporal.tls`
 - mTLS mode: `temporal.caCert`, `temporal.clientCert`, `temporal.clientKey`
 
+`platform.rolloutVersion` maps the generated rollout version into a Kubernetes
+component environment variable. This is useful when an ordinary pod must join
+a Worker Deployment Version managed by another component.
+
 `secrets.<secret>.<PROPERTY>` refs require `spec.secrets.<secret>` and the
 property must be env-var-shaped, e.g. `ANTHROPIC_API_KEY`.
 
-Do not author standard Worker Versioning envs such as
+Do not hard-code standard Worker Versioning envs such as
 `TEMPORAL_DEPLOYMENT_NAME` or `TEMPORAL_WORKER_BUILD_ID`; Worker Controller
-owns those.
+owns those for its workers. A plain Kubernetes component that intentionally
+joins a version managed elsewhere can map `platform.rolloutVersion` to its
+build-ID env instead.
 
 For Lambda workers, standard Temporal and Worker Deployment env vars are also
 set by the Lambda wrapper. Custom Worker Deployment env names are configured
