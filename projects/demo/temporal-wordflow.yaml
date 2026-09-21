@@ -5,6 +5,10 @@ metadata:
 spec:
   source:
     repo: https://github.com/temporal-sa/temporal-wordflow
+  secrets:
+    session-jwt:
+      requiredProperties:
+        - SESSION_JWT_SECRET
   registry:
     title: Temporal Wordflow
     summary: A durable word game with long-lived entity Workflows and hybrid Go workers.
@@ -35,6 +39,9 @@ spec:
       env:
         - name: TEMPORAL_WEB_UI_URL
           value: https://cloud.temporal.io
+        - name: SESSION_JWT_SECRET
+          valueFrom:
+            inputRef: secrets.session-jwt.SESSION_JWT_SECRET
     worker:
       build: worker
       serverless:
