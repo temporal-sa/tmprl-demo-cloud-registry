@@ -46,6 +46,7 @@ def test_registry_operator_reconcile_preserves_bootstrap_iam_role(monkeypatch, c
         if resource["kind"] == "ServiceAccount"
     )
     project = yaml.safe_load((root / "projects/operator/registry.yaml").read_text())
+    project["spec"]["components"]["registry-operator"].pop("awsIamRoleArn", None)
     service_account = next(
         resource
         for resource in resources.rbac_resources(project)
@@ -76,6 +77,30 @@ def test_registry_operator_reconcile_preserves_bootstrap_iam_role(monkeypatch, c
     assert kube.apply_resource(service_account) == "patched"
     assert existing_annotations["eks.amazonaws.com/role-arn"] == expected_role
     assert existing_annotations["platform.temporal.io/component"] == "registry-operator"
+
+
+@pytest.mark.parametrize("cluster", ["blue", "green"])
+def test_registry_operator_self_upgrade_role_matches_bootstrap(cluster):
+    root = Path(__file__).resolve().parents[3]
+    bootstrap_path = root / f"clusters/{cluster}/bootstrap/registry-operator/rbac.yaml"
+    bootstrap_service_account = next(
+        resource
+        for resource in yaml.safe_load_all(bootstrap_path.read_text())
+        if resource["kind"] == "ServiceAccount"
+    )
+    project = yaml.safe_load((root / "projects/operator/registry.yaml").read_text())
+    role_arn = project["spec"]["components"]["registry-operator"]["awsIamRoleArn"]
+    service_account = next(
+        resource
+        for resource in resources.rbac_resources(project)
+        if resource["kind"] == "ServiceAccount"
+        and resource["metadata"]["name"] == "registry-operator"
+    )
+
+    assert role_arn == bootstrap_service_account["metadata"]["annotations"][
+        "eks.amazonaws.com/role-arn"
+    ]
+    assert service_account["metadata"]["annotations"]["eks.amazonaws.com/role-arn"] == role_arn
 
 
 class ApiError(Exception):

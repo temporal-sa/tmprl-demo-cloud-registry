@@ -76,6 +76,7 @@ spec:
 
     registry-operator:
       build: worker
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-registry-operator-bg
       automountServiceAccountToken: true
       secrets:
         - temporal-cloud-bootstrap
