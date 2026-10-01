@@ -101,6 +101,11 @@ def test_registry_operator_self_upgrade_role_matches_bootstrap(cluster):
         "eks.amazonaws.com/role-arn"
     ]
     assert service_account["metadata"]["annotations"]["eks.amazonaws.com/role-arn"] == role_arn
+    legacy_patch_annotations = {
+        "eks.amazonaws.com/role-arn": None,
+        **service_account["metadata"]["annotations"],
+    }
+    assert legacy_patch_annotations["eks.amazonaws.com/role-arn"] == role_arn
 
 
 class ApiError(Exception):
