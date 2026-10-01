@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
-from demo_registry_operator import kube
+from demo_registry_operator import kube, resources
 
 
 @pytest.mark.parametrize("role_arn", [None, "arn:aws:iam::429214323166:role/monty-payloads"])
@@ -30,11 +32,50 @@ def test_service_account_patch_reconciles_iam_role_annotation(monkeypatch, role_
 
     assert kube.apply_resource(resource) == "patched"
     assert calls[0][:2] == ("web", "monty")
-    assert calls[0][2]["metadata"]["annotations"] == {
-        "platform.temporal.io/component": "web",
-        "eks.amazonaws.com/role-arn": role_arn,
-    }
+    assert calls[0][2]["metadata"]["annotations"] == annotations
     assert ("eks.amazonaws.com/role-arn" in annotations) == (role_arn is not None)
+
+
+@pytest.mark.parametrize("cluster", ["blue", "green"])
+def test_registry_operator_reconcile_preserves_bootstrap_iam_role(monkeypatch, cluster):
+    root = Path(__file__).resolve().parents[3]
+    bootstrap_path = root / f"clusters/{cluster}/bootstrap/registry-operator/rbac.yaml"
+    bootstrap_service_account = next(
+        resource
+        for resource in yaml.safe_load_all(bootstrap_path.read_text())
+        if resource["kind"] == "ServiceAccount"
+    )
+    project = yaml.safe_load((root / "projects/operator/registry.yaml").read_text())
+    service_account = next(
+        resource
+        for resource in resources.rbac_resources(project)
+        if resource["kind"] == "ServiceAccount"
+        and resource["metadata"]["name"] == "registry-operator"
+    )
+    existing_annotations = dict(bootstrap_service_account["metadata"]["annotations"])
+    expected_role = existing_annotations["eks.amazonaws.com/role-arn"]
+
+    def patch_service_account(name, namespace, body):
+        assert name == bootstrap_service_account["metadata"]["name"]
+        assert namespace == bootstrap_service_account["metadata"]["namespace"]
+        for annotation_name, value in body["metadata"]["annotations"].items():
+            if value is None:
+                existing_annotations.pop(annotation_name, None)
+            else:
+                existing_annotations[annotation_name] = value
+
+    api = SimpleNamespace(
+        read_namespaced_service_account=lambda *args: SimpleNamespace(
+            metadata=SimpleNamespace(annotations=existing_annotations)
+        ),
+        patch_namespaced_service_account=patch_service_account,
+    )
+    monkeypatch.setattr(kube, "_client_module", lambda: SimpleNamespace(CoreV1Api=lambda: api))
+    monkeypatch.setattr(kube, "load_kubernetes_config", lambda: None)
+
+    assert kube.apply_resource(service_account) == "patched"
+    assert existing_annotations["eks.amazonaws.com/role-arn"] == expected_role
+    assert existing_annotations["platform.temporal.io/component"] == "registry-operator"
 
 
 class ApiError(Exception):

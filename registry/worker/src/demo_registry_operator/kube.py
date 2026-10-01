@@ -395,23 +395,13 @@ def apply_resource(resource: dict[str, Any]) -> str:
 
     if kind == "ServiceAccount":
         core = client.CoreV1Api()
-        service_account_patch = {
-            **resource,
-            "metadata": {
-                **metadata,
-                "annotations": {
-                    "eks.amazonaws.com/role-arn": None,
-                    **metadata.get("annotations", {}),
-                },
-            },
-        }
         return _create_or_patch(
             read=lambda: core.read_namespaced_service_account(name, namespace),
             create=lambda: core.create_namespaced_service_account(namespace, resource),
             patch=lambda: core.patch_namespaced_service_account(
                 name,
                 namespace,
-                service_account_patch,
+                resource,
             ),
         )
 

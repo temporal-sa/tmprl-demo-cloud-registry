@@ -246,6 +246,9 @@ Rules:
   separately, and scope its trust to the cluster OIDC provider and component
   service account in all applicable project revision namespaces. Lambda
   components use their managed execution role and reject this field.
+  When this field is omitted, existing role annotations are preserved, including
+  those managed by platform bootstrap manifests. Removing an existing role
+  requires an explicit change by its owner; omission does not revoke access.
 - A component gets stable Kubernetes service DNS when it declares `ports`. A lone
   port needs no `name` (it becomes `http`) and `servicePort` defaults to the
   container port. Default Service name is the component name; override with
