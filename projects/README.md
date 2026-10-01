@@ -238,6 +238,14 @@ Rules:
   `automountServiceAccountToken: false` by default. Set
   `components.<name>.automountServiceAccountToken: true` only when that
   component must call the Kubernetes API.
+- Kubernetes components can set `awsIamRoleArn` to an existing IAM role ARN.
+  The operator annotates that component's ServiceAccount with
+  `eks.amazonaws.com/role-arn`, allowing the EKS identity webhook and AWS SDK
+  credential chain to use temporary workload credentials. This does not enable
+  Kubernetes API token automount. Provision the role and its resource policy
+  separately, and scope its trust to the cluster OIDC provider and component
+  service account in all applicable project revision namespaces. Lambda
+  components use their managed execution role and reject this field.
 - A component gets stable Kubernetes service DNS when it declares `ports`. A lone
   port needs no `name` (it becomes `http`) and `servicePort` defaults to the
   container port. Default Service name is the component name; override with

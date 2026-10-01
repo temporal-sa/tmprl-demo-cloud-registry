@@ -25,6 +25,7 @@ from demo_registry_operator.resources import (
     candidate_version,
     candidate_service_status,
     deployment_resources,
+    rbac_resources,
     runtime_secret_resources,
     runtime_namespace,
     runtime_workload_resources,
@@ -562,6 +563,30 @@ def test_versioned_worker_maps_auth_input_refs_to_worker_runtime_secret():
             }
         },
     } in container["env"]
+
+
+@pytest.mark.parametrize("worker", [True, versioned_worker()])
+def test_component_iam_role_is_scoped_to_its_revision_service_account(worker):
+    demo_project = project(worker=worker)
+    role_arn = "arn:aws:iam::429214323166:role/monty-payloads"
+    demo_project["spec"]["components"]["worker"]["awsIamRoleArn"] = role_arn
+    namespace = "tmprl-dem-cld-banking-money-transfer-abcde"
+
+    service_accounts = {
+        item["metadata"]["name"]: item
+        for item in rbac_resources(demo_project, namespace=namespace)
+        if item["kind"] == "ServiceAccount"
+    }
+
+    assert service_accounts["worker"]["metadata"]["namespace"] == namespace
+    assert service_accounts["worker"]["metadata"]["annotations"] == {
+        "platform.temporal.io/component": "worker",
+        "eks.amazonaws.com/role-arn": role_arn,
+    }
+    assert service_accounts["worker"]["automountServiceAccountToken"] is False
+    assert service_accounts["api"]["metadata"]["annotations"] == {
+        "platform.temporal.io/component": "api",
+    }
 
 
 def test_service_account_token_automount_is_component_opt_in():

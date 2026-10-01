@@ -186,6 +186,10 @@
           "type": "boolean",
           "default": false
         },
+        "awsIamRoleArn": {
+          "type": "string",
+          "pattern": "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+$"
+        },
         "command": {
           "$ref": "#/$defs/stringArray"
         },

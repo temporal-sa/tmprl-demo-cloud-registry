@@ -1553,6 +1553,13 @@ def rbac_resources(
     for component_name in sorted(project_components):
         component = project_components[component_name]
         service_account_name = service_account_for_component(component_name)
+        service_account_annotations = {
+            "platform.temporal.io/component": component_name,
+        }
+        if component.get("awsIamRoleArn"):
+            service_account_annotations["eks.amazonaws.com/role-arn"] = component[
+                "awsIamRoleArn"
+            ]
         resources.append(
             {
                 "apiVersion": "v1",
@@ -1561,9 +1568,7 @@ def rbac_resources(
                     "name": service_account_name,
                     "namespace": namespace,
                     "labels": component_labels(demo_project, component_name),
-                    "annotations": {
-                        "platform.temporal.io/component": component_name,
-                    },
+                    "annotations": service_account_annotations,
                 },
                 "automountServiceAccountToken": automount_service_account_token(
                     component

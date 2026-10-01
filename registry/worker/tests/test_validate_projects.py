@@ -57,6 +57,34 @@ def base_spec() -> dict:
     }
 
 
+def test_schema_accepts_component_iam_role_and_rejects_user_arn():
+    spec = base_spec()
+    spec["components"]["app"]["awsIamRoleArn"] = (
+        "arn:aws:iam::429214323166:role/monty-payloads"
+    )
+    validator = validate_projects.load_default_validators()["DemoProject"]
+    assert validate_projects.validate_schema(validator, project_document(spec)) == []
+
+    spec["components"]["app"]["awsIamRoleArn"] = (
+        "arn:aws:iam::429214323166:user/monty-payloads"
+    )
+    errors = validate_projects.validate_schema(validator, project_document(spec))
+    assert len(errors) == 1
+    assert "awsIamRoleArn" in errors[0].message
+
+
+def test_lambda_component_rejects_kubernetes_iam_role():
+    spec = base_spec()
+    spec["components"]["app"]["serverless"] = {"provider": "aws-lambda"}
+    spec["components"]["app"]["awsIamRoleArn"] = (
+        "arn:aws:iam::429214323166:role/monty-payloads"
+    )
+    errors = validate_projects.validate_serverless_components(project_document(spec))
+    assert [error.message for error in errors] == [
+        "components.app.awsIamRoleArn is not supported for serverless aws-lambda components"
+    ]
+
+
 def test_nexus_canary_demo_project_template_passes_schema_and_semantics():
     wrapper, load_errors = validate_projects.load_yaml_document(
         NEXUS_CANARY_TEMPLATE

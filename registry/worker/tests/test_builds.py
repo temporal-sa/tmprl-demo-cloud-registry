@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import yaml
 
 from demo_registry_operator.activities import builds
 from demo_registry_operator.resources import (
@@ -291,6 +294,24 @@ def test_source_config_uses_shared_pat_for_temporal_sa_https_source():
         "codebuildRepo": "https://github.com/temporal-sa/demo-banking-app-money-transfer",
         "sourceAuthSecretPath": PLATFORM_SOURCE_AUTH_SECRET_PATH,
     }
+
+
+def test_monty_project_resolves_authenticated_codebuild_plan(monkeypatch):
+    project_path = Path(__file__).resolve().parents[3] / "projects/demo/monty.yaml"
+    project = yaml.safe_load(project_path.read_text())
+    monkeypatch.setenv("DEMO_REGISTRY_CODEBUILD_PROJECT", "tmprl-dem-cld-build")
+    monkeypatch.setenv("DEMO_REGISTRY_AWS_ACCOUNT_ID", "429214323166")
+    monkeypatch.setenv("DEMO_REGISTRY_AWS_REGION", "us-west-1")
+
+    plan = builds.resolve_project_image_build_plan(
+        builds.ResolveProjectImageBuildRequest(demo_project=project)
+    ).plan
+
+    assert plan["action"] == "codebuild"
+    assert plan["sourceRepo"] == project["spec"]["source"]["repo"]
+    assert plan["sourceVersion"] == "main"
+    assert plan["sourceAuthSecretPath"] == PLATFORM_SOURCE_AUTH_SECRET_PATH
+    assert set(plan["imageTemplates"]) == {"app"}
 
 
 def test_codebuild_private_source_uses_no_source_checkout():

@@ -770,6 +770,7 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 "serviceName",
                 "replicas",
                 "automountServiceAccountToken",
+                "awsIamRoleArn",
                 "command",
                 "args",
                 "temporalProxy",

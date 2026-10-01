@@ -9,6 +9,34 @@ import pytest
 from demo_registry_operator import kube
 
 
+@pytest.mark.parametrize("role_arn", [None, "arn:aws:iam::429214323166:role/monty-payloads"])
+def test_service_account_patch_reconciles_iam_role_annotation(monkeypatch, role_arn):
+    annotations = {"platform.temporal.io/component": "web"}
+    if role_arn is not None:
+        annotations["eks.amazonaws.com/role-arn"] = role_arn
+    resource = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {"name": "web", "namespace": "monty", "annotations": annotations},
+        "automountServiceAccountToken": False,
+    }
+    calls = []
+    api = SimpleNamespace(
+        read_namespaced_service_account=lambda *args: {},
+        patch_namespaced_service_account=lambda *args: calls.append(args),
+    )
+    monkeypatch.setattr(kube, "_client_module", lambda: SimpleNamespace(CoreV1Api=lambda: api))
+    monkeypatch.setattr(kube, "load_kubernetes_config", lambda: None)
+
+    assert kube.apply_resource(resource) == "patched"
+    assert calls[0][:2] == ("web", "monty")
+    assert calls[0][2]["metadata"]["annotations"] == {
+        "platform.temporal.io/component": "web",
+        "eks.amazonaws.com/role-arn": role_arn,
+    }
+    assert ("eks.amazonaws.com/role-arn" in annotations) == (role_arn is not None)
+
+
 class ApiError(Exception):
     def __init__(self, status: int | str):
         self.status = status

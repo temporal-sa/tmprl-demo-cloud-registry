@@ -1,0 +1,75 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: monty
+spec:
+  registry:
+    title: Monty Travel Agent
+    summary: >-
+      Conversational travel agents run sandboxed Python with durable Temporal
+      activities, human approvals, subagents, and an observable trip board.
+    tags: [AI, AI - Agents, Human-in-the-Loop]
+    temporalSdks: [Python]
+    links:
+      runbook:
+        label: Monty README
+        url: https://github.com/temporal-community/temporal-agent-harness/tree/0.5.0/examples/monty
+
+  source:
+    repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
+    gitRepository:
+      url: https://github.com/temporal-sa/tmprl-demo-cloud-registry
+      sparseCheckout:
+        - deployments/monty
+
+  builds:
+    app:
+      context: deployments/monty
+      dockerfile: deployments/monty/Dockerfile
+
+  secrets:
+    llm:
+      requiredProperties: [GEMINI_API_KEY]
+
+  components:
+    web:
+      build: app
+      args: [web]
+      temporalAccess: true
+      replicas: 1
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
+      env:
+        - name: MONTY_PAYLOAD_BUCKET
+          value: tmprl-dem-cld-monty-payloads-429214323166-us-west-1
+        - name: AWS_DEFAULT_REGION
+          value: us-west-1
+      ports:
+        - name: http
+          containerPort: 8000
+          servicePort: 80
+    worker:
+      build: app
+      args: [worker]
+      worker:
+        versioning:
+          enabled: true
+          deploymentName: monty
+      replicas: 1
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
+      secrets: [llm]
+      env:
+        - name: MONTY_PAYLOAD_BUCKET
+          value: tmprl-dem-cld-monty-payloads-429214323166-us-west-1
+        - name: AWS_DEFAULT_REGION
+          value: us-west-1
+
+  ingress:
+    subdomain: monty
+    temporalAuthRequired: true
+    component: web
+    port: http
+
+  smokeCheck:
+    path: /api/agents
+    expectedStatus: 200
+    timeoutSeconds: 15
