@@ -3,8 +3,8 @@
 The project declaration lives at `projects/demo/monty.yaml` and builds this
 directory from the existing registry repository.
 
-The Dockerfile downloads temporal-community/temporal-agent-harness release
-0.5.0 at commit `4cef523a285b0c585f169678e1dbbf5e7644c98f` and installs only the
+The Dockerfile downloads temporal-community/temporal-agent-harness main
+at commit `ceb6ef3fdf3f31b32f571c8460d4fd545e117977` and installs only the
 genai, code-mode, ui, and s3 extras from the upstream lockfile. The upstream
 repository needs no changes. Its committed browser assets need no Node build.
 

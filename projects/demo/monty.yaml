@@ -13,7 +13,7 @@ spec:
     links:
       runbook:
         label: Monty README
-        url: https://github.com/temporal-community/temporal-agent-harness/tree/0.5.0/examples/monty
+        url: https://github.com/temporal-community/temporal-agent-harness/tree/ceb6ef3fdf3f31b32f571c8460d4fd545e117977/examples/monty
 
   source:
     repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
