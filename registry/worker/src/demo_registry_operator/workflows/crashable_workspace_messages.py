@@ -102,6 +102,7 @@ class WaitWorkspaceReadyResult:
 @dataclass(frozen=True)
 class CrashWorkspacePodsRequest:
     namespace: str
+    demo_name: str = ""
 
 
 @dataclass(frozen=True)

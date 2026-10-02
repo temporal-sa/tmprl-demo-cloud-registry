@@ -17,6 +17,10 @@ spec:
       - TypeScript
       - Java
       - .NET
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: dejavu-tacos
 
   source:
     repo: https://github.com/temporal-sa/demo-dejavu-tacos
@@ -53,7 +57,7 @@ spec:
         - containerPort: 8000
           servicePort: 8000
 
-    # Temporal worker; listens on the app's built-in dejavu-tacos task queue.
+    # Temporal worker; polls TEMPORAL_TASK_QUEUE (default dejavu-tacos).
     worker:
       build: worker-python
       worker: true

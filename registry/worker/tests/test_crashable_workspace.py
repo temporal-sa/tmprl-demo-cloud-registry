@@ -517,6 +517,49 @@ def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch)
     assert deleted == ["tmprl-dem-cld-crash-0123abcd89"]
 
 
+def test_crash_workspace_pods_deletes_only_worker_pods(monkeypatch):
+    deleted = []
+
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: _crashable_demo(name),
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "list_pods",
+        lambda namespace: [
+            {"name": "labeled-worker-abc", "labels": {CRASHABLE_WORKER_LABEL: "true"}},
+            {
+                "name": "legacy-worker-def",
+                "labels": {"app.kubernetes.io/component": "worker"},
+            },
+            {"name": "app-ghi", "labels": {"app.kubernetes.io/component": "app"}},
+            {"name": "unlabeled-jkl", "labels": {}},
+        ],
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "delete_pod",
+        lambda namespace, name, *, grace_period_seconds: deleted.append(
+            (namespace, name, grace_period_seconds)
+        ),
+    )
+
+    result = crashable_activities.crash_workspace_pods(
+        CrashWorkspacePodsRequest(
+            namespace="tmprl-dem-cld-crash-0123abcd89",
+            demo_name="canonical-ai-demo",
+        )
+    )
+
+    assert result.deleted == 2
+    assert deleted == [
+        ("tmprl-dem-cld-crash-0123abcd89", "labeled-worker-abc", 0),
+        ("tmprl-dem-cld-crash-0123abcd89", "legacy-worker-def", 0),
+    ]
+
+
 def test_scale_workspace_workloads_updates_only_worker_controllers(
     monkeypatch,
 ):
@@ -815,6 +858,7 @@ def test_crash_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch)
         crashable_activities.delete_workspace_namespace,
     ]
     assert isinstance(activities_run[0][1], CrashWorkspacePodsRequest)
+    assert activities_run[0][1].demo_name == "canonical-ai-demo"
     assert isinstance(activities_run[1][1], DeleteWorkspaceNamespaceRequest)
     assert workspace._status.phase == "Deleting"
     assert "pod deletion forbidden" in (workspace._status.last_error or "")

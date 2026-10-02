@@ -330,17 +330,35 @@ def wait_workspace_ready(
 def crash_workspace_pods(
     request: CrashWorkspacePodsRequest,
 ) -> CrashWorkspacePodsResult:
-    """Force-delete every pod in the workspace namespace (grace period 0).
+    """Force-delete the worker pods in the workspace namespace (grace period 0).
 
-    The namespace is dedicated to this workspace, so no label selector is needed.
-    Tolerates zero pods.
+    Like scale-down, only worker pods are targeted so the UI / API stay up while
+    Temporal holds the work. New workspaces carry the crashable-worker label on
+    pod templates; pre-existing workspaces fall back to the component label and
+    the DemoProject's worker declarations. Tolerates zero pods.
     """
 
+    demo_project = (
+        kube.read_demo_project(request.demo_name) if request.demo_name else None
+    )
+    worker_components = _worker_component_names(demo_project)
     deleted = 0
     for pod in kube.list_pods(request.namespace):
+        if not _is_worker_pod(pod, worker_components):
+            continue
         kube.delete_pod(request.namespace, pod["name"], grace_period_seconds=0)
         deleted += 1
     return CrashWorkspacePodsResult(deleted=deleted)
+
+
+def _is_worker_pod(pod: dict, worker_components: set[str]) -> bool:
+    labels = pod.get("labels")
+    if not isinstance(labels, dict):
+        return False
+    return (
+        labels.get(CRASHABLE_WORKER_LABEL) == "true"
+        or labels.get("app.kubernetes.io/component") in worker_components
+    )
 
 
 @activity.defn

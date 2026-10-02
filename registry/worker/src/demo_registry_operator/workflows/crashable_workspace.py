@@ -245,7 +245,10 @@ class CrashableWorkspaceWorkflow:
                 try:
                     await workflow.execute_activity(
                         activities.crash_workspace_pods,
-                        CrashWorkspacePodsRequest(namespace=self._namespace),
+                        CrashWorkspacePodsRequest(
+                            namespace=self._namespace,
+                            demo_name=self._status.demo,
+                        ),
                         start_to_close_timeout=timedelta(minutes=2),
                         retry_policy=activities.CRASH_RETRY_POLICY,
                     )

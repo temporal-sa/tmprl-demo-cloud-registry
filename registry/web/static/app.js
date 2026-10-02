@@ -540,7 +540,9 @@ function copyLinkButton(id) {
 // the workflow's status query and re-arms its own poll/countdown timers on each
 // render. Because renderDemosList() rebuilds every row (destroying nodes) on any
 // filter change, timers are keyed by demo id and cleared centrally there; each
-// re-rendered card looks itself up in the DOM via [data-workspace=<id>].
+// re-rendered card looks itself up in the DOM via [data-workspace=<id>]. The
+// card renders in both the demos rows and the catalog cards; hidden views keep
+// their nodes, so lookups are scoped to the visible view.
 
 const workspaceState = new Map(); // demoId -> last known status object
 const workspaceTimers = new Map(); // demoId -> [intervalId, ...]
@@ -565,7 +567,9 @@ function setWorkspaceTimer(id, timerId) {
 }
 
 function workspaceContainer(id) {
-  return document.querySelector(`[data-workspace="${id}"]`);
+  return document.querySelector(
+    `[data-view="${currentView()}"] [data-workspace="${id}"]`
+  );
 }
 
 async function postJSON(url, body) {
@@ -702,9 +706,9 @@ function armWorkspaceCountdown(demo, expiresAt) {
   }, 1000);
 }
 
-function crashableWorkspaceCard(demo) {
+function crashableWorkspaceCard(demo, { className = "mb-6" } = {}) {
   const container = el("div", {
-    class: "mb-6",
+    class: className,
     dataset: { workspace: demo.id },
   });
   renderWorkspaceInto(demo, container);
@@ -1049,6 +1053,7 @@ function renderCatalogList() {
     );
     return;
   }
+  clearAllWorkspaceTimers();
   list.replaceChildren(...visible.map(renderProjectCard));
 }
 
@@ -1083,6 +1088,9 @@ function renderProjectCard(project) {
             })
           )
         )
+      : null,
+    project.crashable && project.crashable.enabled
+      ? crashableWorkspaceCard({ id: project.name }, { className: "" })
       : null,
     el(
       "div",
