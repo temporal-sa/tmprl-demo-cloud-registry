@@ -1,8 +1,7 @@
 // Demo Registry — vanilla JS SPA.
-// Three views over the same catalog JSON:
-//   /         → canonical demos (SA-facing)
+// Two views over the same catalog JSON:
+//   /         → demos
 //   /courses  → Instruqt learning catalog
-//   /catalog  → ops project grid
 
 const LINK_SOURCES = [
   { pattern: "github.com", label: "GitHub" },
@@ -17,7 +16,6 @@ const LINK_SOURCES = [
 ];
 
 const state = {
-  projects: [],
   demos: [],
   courses: [],
   route: window.location.pathname,
@@ -25,8 +23,6 @@ const state = {
   selectedTags: new Set(),
   selectedSdks: new Set(),
   coursesSearch: "",
-  catalogSearch: "",
-  catalogPhase: "all",
 };
 
 function linkLabel(url) {
@@ -92,12 +88,14 @@ async function loadData() {
     const res = await fetch("/api/registry", { credentials: "same-origin" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const payload = await res.json();
-    state.projects = Array.isArray(payload.projects) ? payload.projects : [];
-    state.demos = state.projects.map(normalizeDemo);
+    const projects = Array.isArray(payload.projects) ? payload.projects : [];
+    state.demos = projects.map(normalizeDemo);
     state.courses = Array.isArray(payload.courses) ? payload.courses : [];
   } catch (err) {
     document
-      .querySelectorAll("[data-demos-list], [data-courses-list], [data-catalog-list]")
+      .querySelectorAll(
+        "[data-demos-list], [data-other-demos-list], [data-courses-list]"
+      )
       .forEach((list) =>
         list.replaceChildren(
           el("div", {
@@ -111,9 +109,7 @@ async function loadData() {
 }
 
 function currentView() {
-  if (state.route === "/catalog") return "catalog";
-  if (state.route === "/courses") return "courses";
-  return "demos";
+  return state.route === "/courses" ? "courses" : "demos";
 }
 
 function setRoute(target, { replace = false } = {}) {
@@ -180,10 +176,9 @@ function setupDemosFilters() {
 }
 
 function renderDemosFilters() {
-  const canonical = state.demos.filter((d) => d.canonical);
   const usedTags = new Set();
   const usedSdks = new Set();
-  for (const demo of canonical) {
+  for (const demo of state.demos) {
     demo.tags.forEach((t) => usedTags.add(t));
     demo.sdks.forEach((s) => usedSdks.add(s));
   }
@@ -223,62 +218,67 @@ function chip(value, kind) {
   );
 }
 
-function filteredDemos() {
+function demoMatchesFilters(demo) {
   const q = state.demosSearch.trim().toLowerCase();
-  return state.demos
-    .filter((d) => d.canonical)
-    .filter((demo) => {
-      const matchesTags =
-        state.selectedTags.size === 0 ||
-        [...state.selectedTags].every((t) => demo.tags.includes(t));
-      const matchesSdks =
-        state.selectedSdks.size === 0 ||
-        [...state.selectedSdks].some((s) => demo.sdks.includes(s));
-      const matchesSearch =
-        !q ||
-        demo.name.toLowerCase().includes(q) ||
-        demo.summary.toLowerCase().includes(q) ||
-        demo.tags.some((t) => t.toLowerCase().includes(q)) ||
-        demo.sdks.some((s) => s.toLowerCase().includes(q));
-      return matchesTags && matchesSdks && matchesSearch;
-    });
+  const matchesTags =
+    state.selectedTags.size === 0 ||
+    [...state.selectedTags].every((t) => demo.tags.includes(t));
+  const matchesSdks =
+    state.selectedSdks.size === 0 ||
+    [...state.selectedSdks].some((s) => demo.sdks.includes(s));
+  const matchesSearch =
+    !q ||
+    demo.name.toLowerCase().includes(q) ||
+    demo.summary.toLowerCase().includes(q) ||
+    demo.tags.some((t) => t.toLowerCase().includes(q)) ||
+    demo.sdks.some((s) => s.toLowerCase().includes(q));
+  return matchesTags && matchesSdks && matchesSearch;
 }
 
-function renderDemosList() {
-  const list = document.querySelector("[data-demos-list]");
-  const totalCanonical = state.demos.filter((d) => d.canonical).length;
-  const demos = filteredDemos();
-  document.querySelector("[data-canonical-total]").textContent = `${totalCanonical} demo${
-    totalCanonical === 1 ? "" : "s"
-  }`;
-  const count = document.querySelector("[data-demos-count]");
-  const hasFilters =
-    state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim();
-  if (hasFilters) {
-    count.hidden = false;
-    count.textContent = `Showing ${demos.length} of ${totalCanonical} demo${
-      totalCanonical === 1 ? "" : "s"
-    }`;
-  } else {
-    count.hidden = true;
-  }
+function renderDemoGroup(list, demos, emptyText) {
   if (demos.length === 0) {
     list.replaceChildren(
-      el(
-        "div",
-        { class: "text-center py-8 space-y-2" },
-        el("p", {
-          class: "text-sm text-muted-foreground",
-          text: totalCanonical === 0
-            ? "No canonical demos yet. Mark a project canonical in its YAML to list it here."
-            : "No demos match the selected filters.",
-        })
-      )
+      el("p", { class: "text-sm text-muted-foreground py-8 text-center", text: emptyText })
     );
     return;
   }
-  clearAllWorkspaceTimers();
   list.replaceChildren(...demos.map(renderDemoRow));
+}
+
+function renderDemosList() {
+  const canonical = state.demos.filter((demo) => demo.canonical);
+  const others = state.demos.filter((demo) => !demo.canonical);
+  const visibleCanonical = canonical.filter(demoMatchesFilters);
+  const visibleOthers = others.filter(demoMatchesFilters);
+  const hasFilters =
+    state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim();
+  document.querySelector("[data-canonical-total]").textContent = `${canonical.length} demo${
+    canonical.length === 1 ? "" : "s"
+  }`;
+  document.querySelector("[data-other-demos-total]").textContent = `${others.length} demo${
+    others.length === 1 ? "" : "s"
+  }`;
+  const count = document.querySelector("[data-demos-count]");
+  const visibleCount = visibleCanonical.length + visibleOthers.length;
+  count.hidden = !hasFilters;
+  count.textContent = `Showing ${visibleCount} of ${state.demos.length} demo${
+    state.demos.length === 1 ? "" : "s"
+  }`;
+  clearAllWorkspaceTimers();
+  renderDemoGroup(
+    document.querySelector("[data-demos-list]"),
+    visibleCanonical,
+    canonical.length
+      ? "No canonical demos match the selected filters."
+      : "No canonical demos yet. Mark a project canonical in its YAML to list it here."
+  );
+  renderDemoGroup(
+    document.querySelector("[data-other-demos-list]"),
+    visibleOthers,
+    others.length
+      ? "No other demos match the selected filters."
+      : "Every registered demo is currently marked canonical."
+  );
   if (window.location.hash) {
     const id = window.location.hash.slice(1);
     requestAnimationFrame(() => {
@@ -553,8 +553,8 @@ function copyLinkButton(id) {
 // render. Because renderDemosList() rebuilds every row (destroying nodes) on any
 // filter change, timers are keyed by demo id and cleared centrally there; each
 // re-rendered card looks itself up in the DOM via [data-workspace=<id>]. The
-// card renders in both the demos rows and the catalog cards; hidden views keep
-// their nodes, so lookups are scoped to the visible view.
+// card renders in the demo rows. Hidden views keep their nodes, so lookups are
+// scoped to the visible view.
 
 const workspaceState = new Map(); // demoId -> last known status object
 const workspaceTimers = new Map(); // demoId -> [intervalId, ...]
@@ -985,28 +985,101 @@ function setupCoursesSearch() {
   });
 }
 
-function filteredCourses() {
-  const q = state.coursesSearch.trim().toLowerCase();
-  if (!q) return state.courses;
-  return state.courses.filter((course) =>
-    [
-      course.name,
-      course.title,
-      course.summary,
-      ...(Array.isArray(course.tags) ? course.tags : []),
-      ...(Array.isArray(course.temporalSdks) ? course.temporalSdks : []),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(q)
+function courseVariantLabel(course) {
+  if (typeof course.variant === "string" && course.variant.trim()) return course.variant.trim();
+  if (Array.isArray(course.temporalSdks) && course.temporalSdks[0]) return course.temporalSdks[0];
+  return course.title || course.name;
+}
+
+function groupCourses(courses) {
+  const groups = new Map();
+  for (const course of courses) {
+    const key = course.parent || course.name;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(course);
+  }
+  return [...groups.values()].map((members) =>
+    members
+      .slice()
+      .sort((a, b) => courseVariantLabel(a).localeCompare(courseVariantLabel(b)))
   );
 }
 
-function renderCourseCard(course) {
-  const sdks = Array.isArray(course.temporalSdks) ? course.temporalSdks : [];
-  const tags = Array.isArray(course.tags) ? course.tags : [];
-  const resources = Array.isArray(course.resources) ? course.resources : [];
+function courseHaystack(course) {
+  return [
+    course.name,
+    course.title,
+    course.summary,
+    course.parent,
+    course.variant,
+    ...(Array.isArray(course.tags) ? course.tags : []),
+    ...(Array.isArray(course.temporalSdks) ? course.temporalSdks : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function filteredCourseGroups() {
+  const q = state.coursesSearch.trim().toLowerCase();
+  return groupCourses(state.courses).filter(
+    (members) => !q || members.some((course) => courseHaystack(course).includes(q))
+  );
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function courseResources(members) {
+  const seen = new Set();
+  const resources = [];
+  for (const course of members) {
+    for (const resource of Array.isArray(course.resources) ? course.resources : []) {
+      if (!resource || !resource.url || seen.has(resource.url)) continue;
+      seen.add(resource.url);
+      resources.push(resource);
+    }
+  }
+  return resources;
+}
+
+function courseLaunchLink(href, label, ariaLabel) {
+  return el(
+    "a",
+    {
+      href,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      class: "course-launch",
+      "aria-label": ariaLabel,
+    },
+    label
+  );
+}
+
+function renderCourseCard(members) {
+  const representative =
+    members.find((course) => course.name === course.parent) ||
+    members.slice().sort((a, b) => a.name.localeCompare(b.name))[0];
+  const grouped = members.length > 1 || Boolean(representative.parent);
+  const sdks = uniqueValues(members.flatMap((course) => course.temporalSdks || []));
+  const tags = uniqueValues(members.flatMap((course) => course.tags || []));
+  const launches = grouped
+    ? members.map((course) =>
+        course.trackUrl
+          ? courseLaunchLink(
+              course.trackUrl,
+              courseVariantLabel(course),
+              `Open ${courseVariantLabel(course)} course`
+            )
+          : null
+      )
+    : [
+        representative.trackUrl
+          ? courseLaunchLink(representative.trackUrl, "Open course", "Open course")
+          : null,
+      ];
   return el(
     "article",
     { class: "course-card" },
@@ -1018,9 +1091,9 @@ function renderCourseCard(course) {
         ? el("span", { class: "course-sdk", text: sdks.join(" · ") })
         : null
     ),
-    el("h3", { text: course.title || course.name }),
+    el("h3", { text: representative.title || representative.name }),
     el("p", {
-      text: course.summary || "A hands-on Temporal learning environment.",
+      text: representative.summary || "A hands-on Temporal learning environment.",
     }),
     tags.length
       ? el(
@@ -1032,19 +1105,8 @@ function renderCourseCard(course) {
     el(
       "div",
       { class: "course-actions" },
-      course.trackUrl
-        ? el(
-            "a",
-            {
-              href: course.trackUrl,
-              target: "_blank",
-              rel: "noopener noreferrer",
-              class: "course-launch",
-            },
-            "Open course"
-          )
-        : null,
-      ...resources.map((resource) =>
+      ...launches,
+      ...courseResources(members).map((resource) =>
         el(
           "a",
           {
@@ -1063,14 +1125,15 @@ function renderCourseCard(course) {
 
 function renderCoursesList() {
   const list = document.querySelector("[data-courses-list]");
-  const courses = filteredCourses();
+  const groups = filteredCourseGroups();
+  const total = groupCourses(state.courses).length;
   const count = document.querySelector("[data-courses-count]");
-  document.querySelector("[data-courses-total]").textContent = `${
-    state.courses.length
-  } course${state.courses.length === 1 ? "" : "s"}`;
+  document.querySelector("[data-courses-total]").textContent = `${total} course${
+    total === 1 ? "" : "s"
+  }`;
   count.hidden = !state.coursesSearch.trim();
-  count.textContent = `Showing ${courses.length} of ${state.courses.length} courses`;
-  if (!courses.length) {
+  count.textContent = `Showing ${groups.length} of ${total} courses`;
+  if (!groups.length) {
     list.replaceChildren(
       el("div", {
         class: "text-sm text-muted-foreground py-8 text-center",
@@ -1081,173 +1144,7 @@ function renderCoursesList() {
     );
     return;
   }
-  list.replaceChildren(...courses.map(renderCourseCard));
-}
-
-// ─── Catalog view ──────────────────────────────────────────────────────────
-
-function loadCatalogFiltersFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  state.catalogSearch = params.get("q") || "";
-  state.catalogPhase = params.get("phase") || "all";
-}
-
-function syncCatalogFiltersToUrl() {
-  const params = new URLSearchParams(window.location.search);
-  if (state.catalogSearch.trim()) params.set("q", state.catalogSearch.trim());
-  else params.delete("q");
-  if (state.catalogPhase && state.catalogPhase !== "all") params.set("phase", state.catalogPhase);
-  else params.delete("phase");
-  const q = params.toString();
-  const url = window.location.pathname + (q ? `?${q}` : "") + window.location.hash;
-  window.history.replaceState(null, "", url);
-}
-
-function setupCatalogFilters() {
-  const search = document.querySelector("[data-catalog-search]");
-  search.value = state.catalogSearch;
-  search.addEventListener("input", (event) => {
-    state.catalogSearch = event.target.value;
-    syncCatalogFiltersToUrl();
-    renderCatalogList();
-  });
-  document.querySelector("[data-catalog-phase]").addEventListener("change", (event) => {
-    state.catalogPhase = event.target.value;
-    syncCatalogFiltersToUrl();
-    renderCatalogList();
-  });
-}
-
-function projectPhase(project) {
-  const phase = project.status && project.status.phase;
-  return typeof phase === "string" && phase.trim() ? phase : "Catalogued";
-}
-
-function renderCatalogPhaseOptions() {
-  const select = document.querySelector("[data-catalog-phase]");
-  const phases = [...new Set(state.projects.map(projectPhase))].sort();
-  select.replaceChildren(
-    new Option("All phases", "all"),
-    ...phases.map((phase) => new Option(phase, phase))
-  );
-  select.value = state.catalogPhase;
-}
-
-function matchesCatalog(project) {
-  if (state.catalogPhase !== "all" && projectPhase(project) !== state.catalogPhase) {
-    return false;
-  }
-  const q = state.catalogSearch.trim().toLowerCase();
-  if (!q) return true;
-  const haystack = [
-    project.name,
-    project.title,
-    project.summary,
-    project.sourceRepo,
-    ...(Array.isArray(project.tags) ? project.tags : []),
-    ...(Array.isArray(project.temporalSdks) ? project.temporalSdks : []),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes(q);
-}
-
-function renderCatalogList() {
-  const list = document.querySelector("[data-catalog-list]");
-  const visible = state.projects.filter(matchesCatalog);
-  document.querySelector("[data-projects-total]").textContent = `${state.projects.length} project${
-    state.projects.length === 1 ? "" : "s"
-  }`;
-  const count = document.querySelector("[data-catalog-count]");
-  if (state.catalogSearch.trim() || state.catalogPhase !== "all") {
-    count.hidden = false;
-    count.textContent = `Showing ${visible.length} of ${state.projects.length} project${
-      state.projects.length === 1 ? "" : "s"
-    }`;
-  } else {
-    count.hidden = true;
-  }
-  if (visible.length === 0) {
-    list.replaceChildren(
-      el("div", {
-        class: "text-sm text-muted-foreground py-8 text-center col-span-full",
-        text: "No matching projects.",
-      })
-    );
-    return;
-  }
-  clearAllWorkspaceTimers();
-  list.replaceChildren(...visible.map(renderProjectCard));
-}
-
-function renderProjectCard(project) {
-  const phase = projectPhase(project);
-  const title = project.title || project.name;
-  const summary =
-    (project.status && project.status.message && project.status.message.trim()) ||
-    project.summary ||
-    "No summary provided.";
-  return el(
-    "article",
-    { class: "rounded-lg border border-border bg-card shadow-sm p-5 flex flex-col gap-3" },
-    el(
-      "div",
-      { class: "flex items-start justify-between gap-3" },
-      el("h2", { class: "text-base font-semibold", text: title }),
-      el("span", {
-        class: "inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
-        text: phase,
-      })
-    ),
-    el("p", { class: "text-sm text-muted-foreground", text: summary }),
-    Array.isArray(project.tags) && project.tags.length
-      ? el(
-          "div",
-          { class: "flex flex-wrap gap-1.5" },
-          ...project.tags.map((tag) =>
-            el("span", {
-              class: "inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs",
-              text: tag,
-            })
-          )
-        )
-      : null,
-    project.crashable && project.crashable.enabled
-      ? crashableWorkspaceCard({ id: project.name }, { className: "" })
-      : null,
-    el(
-      "div",
-      { class: "flex items-center gap-4 text-xs text-muted-foreground mt-auto pt-2" },
-      project.host
-        ? el(
-            "a",
-            {
-              href: project.appUrl || `https://${project.host}`,
-              target: "_blank",
-              rel: "noopener noreferrer",
-              class: "text-primary underline underline-offset-2 hover:text-primary/80",
-            },
-            project.host
-          )
-        : el("span", { text: "—" }),
-      project.sourceRepo
-        ? el(
-            "a",
-            {
-              href: project.sourceRepo,
-              target: "_blank",
-              rel: "noopener noreferrer",
-              class: "underline underline-offset-2 hover:text-foreground",
-            },
-            "Source"
-          )
-        : null,
-      project.authRequired
-        ? el("span", { class: "ml-auto text-[11px]", text: "Auth required" })
-        : null
-    )
-  );
+  list.replaceChildren(...groups.map(renderCourseCard));
 }
 
 // ─── Render orchestration ─────────────────────────────────────────────────
@@ -1263,14 +1160,10 @@ function render() {
       link.removeAttribute("aria-current");
     }
   });
-  if (currentView() === "demos") {
+  if (currentView() === "courses") renderCoursesList();
+  else {
     renderDemosFilters();
     renderDemosList();
-  } else if (currentView() === "courses") {
-    renderCoursesList();
-  } else {
-    renderCatalogPhaseOptions();
-    renderCatalogList();
   }
 }
 
@@ -1278,11 +1171,9 @@ function render() {
 
 async function init() {
   loadDemosFiltersFromUrl();
-  loadCatalogFiltersFromUrl();
   setupTabs();
   setupDemosFilters();
   setupCoursesSearch();
-  setupCatalogFilters();
   await loadData();
   render();
 }

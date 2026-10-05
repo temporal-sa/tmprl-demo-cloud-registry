@@ -142,7 +142,11 @@ separately run `track validate`, `track test`, or `track deploy`.
 `catalog` controls how the course appears in the registry's Courses section.
 `title` and `summary` are required when the block is present. Add searchable
 `tags` and `temporalSdks`, plus any related HTTPS resources such as facilitator
-guides, slide decks, recordings, or source repositories.
+guides, slide decks, recordings, or source repositories. Courses that are
+language versions of the same lab set the same `parent` and a distinct
+`variant`, such as `Java` or `Python`. The registry shows that parent once and
+uses each variant to open its track. Every course in a parent group must use
+the same title and summary.
 
 Testing tracks are branch-driven. `source.branch` is the production source of
 truth and defaults to `main`. `source.testingBranch` enables a separate managed

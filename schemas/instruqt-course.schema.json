@@ -208,6 +208,14 @@
           "minLength": 1,
           "maxLength": 320
         },
+        "parent": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "variant": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
         "tags": {
           "$ref": "#/$defs/catalogLabels"
         },

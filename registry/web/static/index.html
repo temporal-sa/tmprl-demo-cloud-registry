@@ -24,10 +24,6 @@
             <span class="nav-icon" aria-hidden="true">□</span>
             <span><strong>Courses</strong><small>Hands-on learning</small></span>
           </a>
-          <a href="/catalog" data-route="/catalog">
-            <span class="nav-icon" aria-hidden="true">◫</span>
-            <span><strong>Operations</strong><small>All deployments</small></span>
-          </a>
         </nav>
         <p class="sidebar-note">Internal tools for Temporal field teams.</p>
       </aside>
@@ -37,7 +33,7 @@
           <div class="hero-copy">
             <p class="hero-kicker">Temporal field enablement</p>
             <h1>Build, teach, and demo durable execution.</h1>
-            <p>Find presentation-ready demos, guided labs, and live deployment status in one place.</p>
+            <p>Find presentation-ready demos and guided labs in one place.</p>
           </div>
           <div class="workflow-art" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
@@ -45,10 +41,6 @@
         </header>
 
         <section data-view="demos" hidden>
-          <div class="section-heading">
-            <div><h2>Canonical demos</h2><p>Curated stories with everything you need to present.</p></div>
-            <span class="section-count" data-canonical-total></span>
-          </div>
           <div class="search-panel">
           <input
             type="search"
@@ -62,11 +54,26 @@
             <button type="button" data-clear-demos-filters hidden>Clear filters</button>
           </div>
           </div>
-        <p class="text-xs text-muted-foreground mb-3" data-demos-count hidden></p>
-        <div class="space-y-4" data-demos-list>
-          <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
-        </div>
-      </section>
+          <p class="text-xs text-muted-foreground mb-3" data-demos-count hidden></p>
+          <div class="demo-group">
+            <div class="section-heading">
+              <div><h2>Canonical demos</h2><p>Curated stories with everything you need to present.</p></div>
+              <span class="section-count" data-canonical-total></span>
+            </div>
+            <div class="space-y-4" data-demos-list>
+              <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+            </div>
+          </div>
+          <div class="demo-group">
+            <div class="section-heading">
+              <div><h2>All other demos</h2><p>Every registered demo that is not marked canonical.</p></div>
+              <span class="section-count" data-other-demos-total></span>
+            </div>
+            <div class="space-y-4" data-other-demos-list>
+              <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+            </div>
+          </div>
+        </section>
 
         <section data-view="courses" hidden>
           <div class="section-heading">
@@ -80,26 +87,6 @@
           <div class="course-grid" data-courses-list>
             <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
           </div>
-        </section>
-
-        <section data-view="catalog" hidden>
-          <div class="section-heading">
-            <div><h2>Deployment catalog</h2><p>Live operational view of every registered demo.</p></div>
-            <span class="section-count" data-projects-total></span>
-          </div>
-          <div class="search-panel catalog-search">
-            <input type="search" data-catalog-search placeholder="Search deployments..." aria-label="Search deployments" />
-          <select
-            data-catalog-phase
-            aria-label="Filter by phase"
-          >
-            <option value="all">All phases</option>
-          </select>
-          </div>
-        <p class="text-xs text-muted-foreground mb-3" data-catalog-count hidden></p>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" data-catalog-list>
-          <div class="text-sm text-muted-foreground py-8 text-center col-span-full">Loading…</div>
-        </div>
         </section>
       </main>
     </div>

@@ -152,6 +152,49 @@ def test_instruqt_schema_rejects_unapproved_canonical_repository():
     assert "schema error at spec.source.repo" in errors[0].message
 
 
+def test_instruqt_catalog_parent_requires_distinct_matching_variants():
+    def course(name, **catalog):
+        document = instruqt_course_document("https://github.com/temporal-sa/workshop")
+        document.data["metadata"]["name"] = name
+        document.data["spec"]["catalog"] = {
+            "title": "Durable Ad Campaign Workshop",
+            "summary": "Build a durable advertising campaign application.",
+            "parent": "durable-ad-campaign",
+            **catalog,
+        }
+        return document
+
+    missing_variant = course("java-workshop")
+    assert any(
+        "catalog.variant is required" in error.message
+        for error in validate_projects.validate_semantics([missing_variant])
+    )
+
+    duplicated = [
+        course("java-workshop", variant="Java"),
+        course("other-java-workshop", variant="Java"),
+    ]
+    assert any(
+        "duplicated" in error.message
+        for error in validate_projects.validate_semantics(duplicated)
+    )
+
+    mismatched = [
+        course("java-workshop", variant="Java", title="Java Workshop"),
+        course("python-workshop", variant="Python"),
+    ]
+    assert any(
+        "same title and summary" in error.message
+        for error in validate_projects.validate_semantics(mismatched)
+    )
+
+    valid = [
+        course("java-workshop", variant="Java"),
+        course("python-workshop", variant="Python"),
+    ]
+    assert validate_projects.validate_semantics(valid) == []
+
+
 def test_instruqt_schema_rejects_unapproved_git_repository_override():
     document = instruqt_course_document(
         "https://github.com/temporal-community/workshop",

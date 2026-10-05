@@ -24,8 +24,10 @@ spec:
     slug: durable-ad-campaign-typescript-workshop
 
   catalog:
+    parent: durable-ad-campaign
+    variant: TypeScript
     title: Durable Ad Campaign Workshop
-    summary: Build a durable advertising campaign application with Temporal and TypeScript.
+    summary: Build a durable advertising campaign application with Temporal.
     tags: [Durable execution, Workshop]
     temporalSdks: [TypeScript]
     resources:

@@ -216,6 +216,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_instruqt_course_source_path(document, "content"))
         errors.extend(validate_instruqt_course_testing(document))
         errors.extend(validate_instruqt_course_images(document))
+    errors.extend(validate_instruqt_catalog_groups(instruqt_courses))
 
     return errors
 
@@ -328,6 +329,65 @@ def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
         ]
 
     return []
+
+
+def validate_instruqt_catalog_groups(
+    documents: list[ProjectDocument],
+) -> list[ProjectError]:
+    grouped: dict[str, list[ProjectDocument]] = defaultdict(list)
+    errors: list[ProjectError] = []
+    for document in documents:
+        catalog = get_nested(document.data, ("spec", "catalog"))
+        if not isinstance(catalog, dict):
+            continue
+        parent = catalog.get("parent")
+        if not isinstance(parent, str) or not parent:
+            continue
+        variant = catalog.get("variant")
+        if not isinstance(variant, str) or not variant.strip():
+            errors.append(
+                ProjectError(
+                    document.path,
+                    "catalog.variant is required when catalog.parent is set",
+                )
+            )
+        grouped[parent].append(document)
+
+    for parent, members in sorted(grouped.items()):
+        titles = {
+            member.data["spec"]["catalog"].get("title")
+            for member in members
+            if isinstance(member.data["spec"]["catalog"].get("title"), str)
+        }
+        summaries = {
+            member.data["spec"]["catalog"].get("summary")
+            for member in members
+            if isinstance(member.data["spec"]["catalog"].get("summary"), str)
+        }
+        if len(titles) > 1 or len(summaries) > 1:
+            for member in members:
+                errors.append(
+                    ProjectError(
+                        member.path,
+                        f"courses in catalog parent {parent!r} must use the same title and summary",
+                    )
+                )
+        variants: dict[str, list[Path]] = defaultdict(list)
+        for member in members:
+            variant = member.data["spec"]["catalog"].get("variant")
+            if isinstance(variant, str) and variant.strip():
+                variants[variant].append(member.path)
+        for variant, paths in sorted(variants.items()):
+            if len(paths) < 2:
+                continue
+            for path in paths:
+                errors.append(
+                    ProjectError(
+                        path,
+                        f"catalog variant {variant!r} is duplicated in parent {parent!r}",
+                    )
+                )
+    return errors
 
 
 def validate_instruqt_course_source_path(

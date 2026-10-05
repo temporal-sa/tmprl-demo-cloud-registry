@@ -348,6 +348,8 @@ def test_instruqt_catalog_entry_exposes_track_and_resources():
             catalog={
                 "title": "Durable Lab",
                 "summary": "Learn durable execution.",
+                "parent": "durable-lab",
+                "variant": "Python",
                 "temporalSdks": ["Python"],
                 "resources": [
                     {"label": "Slides", "url": "https://example.com/slides"}
@@ -358,6 +360,8 @@ def test_instruqt_catalog_entry_exposes_track_and_resources():
     assert entry["trackUrl"] == (
         "https://play.instruqt.com/temporal/tracks/durable-lab"
     )
+    assert entry["parent"] == "durable-lab"
+    assert entry["variant"] == "Python"
     assert entry["temporalSdks"] == ["Python"]
     assert entry["resources"][0]["label"] == "Slides"
 

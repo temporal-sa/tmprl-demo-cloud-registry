@@ -3969,6 +3969,8 @@ def instruqt_catalog_entry(instruqt_course: dict[str, Any]) -> dict[str, Any]:
         "trackUrl": track_url,
         "organization": organization,
         "slug": slug,
+        "parent": catalog.get("parent", ""),
+        "variant": catalog.get("variant", ""),
         "tags": catalog.get("tags", []),
         "temporalSdks": catalog.get("temporalSdks", []),
         "resources": catalog.get("resources", []),
