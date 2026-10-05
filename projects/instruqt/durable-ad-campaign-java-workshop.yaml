@@ -22,3 +22,13 @@ spec:
   track:
     organization: temporal
     slug: durable-ad-campaign-java-workshop
+
+  catalog:
+    title: Durable Ad Campaign Workshop
+    summary: Build a durable advertising campaign application with Temporal and Java.
+    tags: [Durable execution, Workshop]
+    temporalSdks: [Java]
+    resources:
+      - label: Workshop source
+        url: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101
+        kind: repository

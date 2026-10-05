@@ -3,92 +3,106 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Temporal Demo Registry</title>
+    <meta name="theme-color" content="#17171c" />
+    <title>Temporal Field Kit</title>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body class="min-h-screen bg-background text-foreground antialiased">
-    <main class="mx-auto max-w-5xl px-4 py-10">
-      <header class="mb-8">
-        <p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-          Temporal demo platform
-        </p>
-        <h1 class="text-3xl font-bold tracking-tight mb-2">Demo Registry</h1>
-        <p class="text-sm text-muted-foreground max-w-2xl">
-          Canonical demos and platform catalog, served from the same source of truth.
-          Engineers contribute project configs; the registry operator publishes ops state.
-        </p>
-      </header>
-
-      <nav class="flex gap-1 border-b border-border mb-6" data-tabs>
-        <a
-          href="/"
-          data-route="/"
-          class="tab-link px-4 py-2 text-sm font-medium border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors aria-[current=page]:border-primary aria-[current=page]:text-foreground"
-        >
-          Canonical Demos
+    <div class="app-shell">
+      <aside class="site-sidebar">
+        <a href="/" data-route="/" class="brand" aria-label="Temporal Field Kit home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>Temporal</span>
+          <small>Field Kit</small>
         </a>
-        <a
-          href="/catalog"
-          data-route="/catalog"
-          class="tab-link px-4 py-2 text-sm font-medium border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors aria-[current=page]:border-primary aria-[current=page]:text-foreground"
-        >
-          Catalog
-        </a>
-      </nav>
+        <nav class="site-nav" aria-label="Primary navigation" data-tabs>
+          <a href="/" data-route="/">
+            <span class="nav-icon" aria-hidden="true">⌁</span>
+            <span><strong>Demos</strong><small>Ready to present</small></span>
+          </a>
+          <a href="/courses" data-route="/courses">
+            <span class="nav-icon" aria-hidden="true">□</span>
+            <span><strong>Courses</strong><small>Hands-on learning</small></span>
+          </a>
+          <a href="/catalog" data-route="/catalog">
+            <span class="nav-icon" aria-hidden="true">◫</span>
+            <span><strong>Operations</strong><small>All deployments</small></span>
+          </a>
+        </nav>
+        <p class="sidebar-note">Internal tools for Temporal field teams.</p>
+      </aside>
 
-      <section data-view="demos" hidden>
-        <div class="mb-4">
+      <main class="site-main">
+        <header class="page-hero">
+          <div class="hero-copy">
+            <p class="hero-kicker">Temporal field enablement</p>
+            <h1>Build, teach, and demo durable execution.</h1>
+            <p>Find presentation-ready demos, guided labs, and live deployment status in one place.</p>
+          </div>
+          <div class="workflow-art" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+        </header>
+
+        <section data-view="demos" hidden>
+          <div class="section-heading">
+            <div><h2>Canonical demos</h2><p>Curated stories with everything you need to present.</p></div>
+            <span class="section-count" data-canonical-total></span>
+          </div>
+          <div class="search-panel">
           <input
             type="search"
             data-demos-search
             placeholder="Search demos by name, description, tag, or SDK..."
-            class="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            aria-label="Search demos"
           />
-        </div>
-        <div class="mb-6 space-y-3" data-demos-filters>
-          <div class="flex flex-wrap items-center gap-1.5" data-tags-row>
-            <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mr-2">Tags</span>
+          <div class="filter-stack" data-demos-filters>
+            <div data-tags-row><span>Topics</span></div>
+            <div data-sdks-row><span>SDK</span></div>
+            <button type="button" data-clear-demos-filters hidden>Clear filters</button>
           </div>
-          <div class="flex flex-wrap items-center gap-1.5" data-sdks-row>
-            <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mr-2">SDKs</span>
           </div>
-          <button
-            type="button"
-            data-clear-demos-filters
-            class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground cursor-pointer"
-            hidden
-          >
-            Clear filters
-          </button>
-        </div>
         <p class="text-xs text-muted-foreground mb-3" data-demos-count hidden></p>
         <div class="space-y-4" data-demos-list>
           <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
         </div>
       </section>
 
-      <section data-view="catalog" hidden>
-        <div class="mb-4 flex flex-col sm:flex-row gap-3">
-          <input
-            type="search"
-            data-catalog-search
-            placeholder="Search projects"
-            class="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-          />
+        <section data-view="courses" hidden>
+          <div class="section-heading">
+            <div><h2>Instruqt courses</h2><p>Browser-based labs for workshops, webinars, and self-guided learning.</p></div>
+            <span class="section-count" data-courses-total></span>
+          </div>
+          <div class="search-panel course-search">
+            <input type="search" data-courses-search placeholder="Search courses, topics, or SDKs..." aria-label="Search courses" />
+          </div>
+          <p class="text-xs text-muted-foreground mb-3" data-courses-count hidden></p>
+          <div class="course-grid" data-courses-list>
+            <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+          </div>
+        </section>
+
+        <section data-view="catalog" hidden>
+          <div class="section-heading">
+            <div><h2>Deployment catalog</h2><p>Live operational view of every registered demo.</p></div>
+            <span class="section-count" data-projects-total></span>
+          </div>
+          <div class="search-panel catalog-search">
+            <input type="search" data-catalog-search placeholder="Search deployments..." aria-label="Search deployments" />
           <select
             data-catalog-phase
             aria-label="Filter by phase"
-            class="rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
             <option value="all">All phases</option>
           </select>
-        </div>
+          </div>
         <p class="text-xs text-muted-foreground mb-3" data-catalog-count hidden></p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4" data-catalog-list>
           <div class="text-sm text-muted-foreground py-8 text-center col-span-full">Loading…</div>
         </div>
-      </section>
-    </main>
+        </section>
+      </main>
+    </div>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

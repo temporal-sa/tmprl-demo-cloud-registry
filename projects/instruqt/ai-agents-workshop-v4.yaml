@@ -22,3 +22,13 @@ spec:
   track:
     organization: temporal
     slug: temporal-ai-agents-python-v4
+
+  catalog:
+    title: AI Agents Workshop
+    summary: Learn how Temporal makes Python AI agents reliable, recoverable, and observable.
+    tags: [AI, Agents, Workshop]
+    temporalSdks: [Python]
+    resources:
+      - label: Workshop source
+        url: https://github.com/temporal-community/ai-agents-workshop-v4
+        kind: repository

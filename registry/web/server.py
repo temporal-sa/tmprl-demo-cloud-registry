@@ -380,7 +380,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.logout(parsed.query)
             elif path in {"/api/auth/config", "/api/auth/google/configured"}:
                 self.send_auth_config()
-            elif path in {"/", "/index.html", "/catalog"}:
+            elif path in {"/", "/index.html", "/courses", "/catalog"}:
                 self.send_static("index.html")
             elif path.startswith("/static/"):
                 self.send_static(path.removeprefix("/static/"))

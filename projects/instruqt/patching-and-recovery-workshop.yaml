@@ -20,3 +20,12 @@ spec:
   track:
     organization: temporal
     slug: patching-and-recovery-workshop
+
+  catalog:
+    title: Patching and Recovery Workshop
+    summary: Practice safe Workflow evolution, patching, and recovery in a hands-on environment.
+    tags: [Patching, Recovery, Workshop]
+    resources:
+      - label: Workshop source
+        url: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery
+        kind: repository

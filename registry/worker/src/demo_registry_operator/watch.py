@@ -199,7 +199,12 @@ async def run_demo_project_watch(
         # Republish the catalog the registry web app mounts. Done in the poller
         # (outside Temporal) so it costs no billable workflow actions.
         try:
-            await asyncio.to_thread(publish_catalog, demo_projects, config)
+            await asyncio.to_thread(
+                publish_catalog,
+                demo_projects,
+                instruqt_courses,
+                config,
+            )
         except Exception:
             logger.exception("Catalog publish failed")
 
@@ -438,10 +443,12 @@ def worker_deployment_ready(status: dict[str, Any]) -> bool:
 
 def publish_catalog(
     demo_projects: list[dict[str, Any]],
+    instruqt_courses: list[dict[str, Any]],
     config: WorkerConfig,
 ) -> None:
     configmap = catalog_configmap(
         demo_projects,
+        instruqt_courses=instruqt_courses,
         namespace=config.catalog_status_mirror_namespace,
     )
     apply_resources([configmap], dry_run=False)

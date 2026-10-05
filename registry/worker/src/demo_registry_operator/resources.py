@@ -3947,12 +3947,47 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def catalog_payload(demo_projects: list[dict[str, Any]]) -> dict[str, Any]:
+def instruqt_catalog_entry(instruqt_course: dict[str, Any]) -> dict[str, Any]:
+    """One learning-catalog card built from an InstruqtCourse CR."""
+    spec = spec_of(instruqt_course)
+    catalog = spec.get("catalog") if isinstance(spec.get("catalog"), dict) else {}
+    source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+    track = spec.get("track") if isinstance(spec.get("track"), dict) else {}
+    name = project_name(instruqt_course)
+    organization = track.get("organization", "")
+    slug = track.get("slug", "")
+    track_url = (
+        f"https://play.instruqt.com/{organization}/tracks/{slug}"
+        if organization and slug
+        else ""
+    )
+    return {
+        "name": name,
+        "title": catalog.get("title") or humanized_title(name),
+        "summary": catalog.get("summary", ""),
+        "sourceRepo": source.get("repo", ""),
+        "trackUrl": track_url,
+        "organization": organization,
+        "slug": slug,
+        "tags": catalog.get("tags", []),
+        "temporalSdks": catalog.get("temporalSdks", []),
+        "resources": catalog.get("resources", []),
+    }
+
+
+def catalog_payload(
+    demo_projects: list[dict[str, Any]],
+    instruqt_courses: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "baseDomain": derive.BASE_DOMAIN,
         "projects": [
             catalog_entry(demo_project)
             for demo_project in sorted(demo_projects, key=project_name)
+        ],
+        "courses": [
+            instruqt_catalog_entry(instruqt_course)
+            for instruqt_course in sorted(instruqt_courses or [], key=project_name)
         ],
     }
 
@@ -3960,6 +3995,7 @@ def catalog_payload(demo_projects: list[dict[str, Any]]) -> dict[str, Any]:
 def catalog_configmap(
     demo_projects: list[dict[str, Any]],
     *,
+    instruqt_courses: list[dict[str, Any]] | None = None,
     namespace: str,
     name: str = CATALOG_CONFIGMAP,
 ) -> dict[str, Any]:
@@ -3982,7 +4018,9 @@ def catalog_configmap(
         },
         "data": {
             "registry.json": json.dumps(
-                catalog_payload(demo_projects), indent=2, sort_keys=True
+                catalog_payload(demo_projects, instruqt_courses),
+                indent=2,
+                sort_keys=True,
             ),
         },
     }

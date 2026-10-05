@@ -9,6 +9,7 @@ from demo_registry_operator.resources import (
     container,
     external_resource_status,
     ingress_routes,
+    instruqt_catalog_entry,
     project_metadata,
     project_temporal_namespace,
     resolve_temporal_cloud_region,
@@ -329,9 +330,36 @@ def test_catalog_entry_uses_registry_block_when_present():
 
 
 def test_catalog_payload_sorts_projects_and_sets_base_domain():
-    payload = catalog_payload([project("b"), project("a")])
+    payload = catalog_payload(
+        [project("b"), project("a")],
+        [project("course-b"), project("course-a")],
+    )
     assert payload["baseDomain"] == "tmprl-demo.cloud"
     assert [p["name"] for p in payload["projects"]] == ["a", "b"]
+    assert [c["name"] for c in payload["courses"]] == ["course-a", "course-b"]
+
+
+def test_instruqt_catalog_entry_exposes_track_and_resources():
+    entry = instruqt_catalog_entry(
+        project(
+            "durable-lab",
+            source={"repo": "https://github.com/temporal-sa/durable-lab"},
+            track={"organization": "temporal", "slug": "durable-lab"},
+            catalog={
+                "title": "Durable Lab",
+                "summary": "Learn durable execution.",
+                "temporalSdks": ["Python"],
+                "resources": [
+                    {"label": "Slides", "url": "https://example.com/slides"}
+                ],
+            },
+        )
+    )
+    assert entry["trackUrl"] == (
+        "https://play.instruqt.com/temporal/tracks/durable-lab"
+    )
+    assert entry["temporalSdks"] == ["Python"]
+    assert entry["resources"][0]["label"] == "Slides"
 
 
 def test_temporal_region_reads_spec_and_defaults_none():

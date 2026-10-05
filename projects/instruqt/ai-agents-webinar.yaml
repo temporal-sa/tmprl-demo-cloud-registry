@@ -22,3 +22,13 @@ spec:
   track:
     organization: temporal
     slug: ai-agents-webinar
+
+  catalog:
+    title: AI Agents Webinar
+    summary: Build durable AI agents with Temporal through a guided, browser-based lab.
+    tags: [AI, Agents, Workshop]
+    temporalSdks: [Python]
+    resources:
+      - label: Workshop source
+        url: https://github.com/temporal-sa/ai-agents-webinar
+        kind: repository

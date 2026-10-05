@@ -1,6 +1,7 @@
 // Demo Registry — vanilla JS SPA.
-// Two views over the same catalog JSON:
+// Three views over the same catalog JSON:
 //   /         → canonical demos (SA-facing)
+//   /courses  → Instruqt learning catalog
 //   /catalog  → ops project grid
 
 const LINK_SOURCES = [
@@ -18,10 +19,12 @@ const LINK_SOURCES = [
 const state = {
   projects: [],
   demos: [],
+  courses: [],
   route: window.location.pathname,
   demosSearch: "",
   selectedTags: new Set(),
   selectedSdks: new Set(),
+  coursesSearch: "",
   catalogSearch: "",
   catalogPhase: "all",
 };
@@ -85,32 +88,38 @@ function normalizeDemo(project) {
 }
 
 async function loadData() {
-  const list = document.querySelector("[data-demos-list]");
   try {
     const res = await fetch("/api/registry", { credentials: "same-origin" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const payload = await res.json();
     state.projects = Array.isArray(payload.projects) ? payload.projects : [];
     state.demos = state.projects.map(normalizeDemo);
+    state.courses = Array.isArray(payload.courses) ? payload.courses : [];
   } catch (err) {
-    list.replaceChildren(
-      el("div", {
-        class: "text-sm text-red-600 py-8 text-center",
-        text: `Failed to load catalog: ${err.message}`,
-      })
-    );
+    document
+      .querySelectorAll("[data-demos-list], [data-courses-list], [data-catalog-list]")
+      .forEach((list) =>
+        list.replaceChildren(
+          el("div", {
+            class: "text-sm text-red-600 py-8 text-center",
+            text: `Failed to load catalog: ${err.message}`,
+          })
+        )
+      );
     throw err;
   }
 }
 
 function currentView() {
-  return state.route === "/catalog" ? "catalog" : "demos";
+  if (state.route === "/catalog") return "catalog";
+  if (state.route === "/courses") return "courses";
+  return "demos";
 }
 
 function setRoute(target, { replace = false } = {}) {
   if (target === state.route) return;
   state.route = target;
-  const url = target + window.location.search + window.location.hash;
+  const url = target + window.location.hash;
   if (replace) window.history.replaceState(null, "", url);
   else window.history.pushState(null, "", url);
   render();
@@ -239,6 +248,9 @@ function renderDemosList() {
   const list = document.querySelector("[data-demos-list]");
   const totalCanonical = state.demos.filter((d) => d.canonical).length;
   const demos = filteredDemos();
+  document.querySelector("[data-canonical-total]").textContent = `${totalCanonical} demo${
+    totalCanonical === 1 ? "" : "s"
+  }`;
   const count = document.querySelector("[data-demos-count]");
   const hasFilters =
     state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim();
@@ -963,6 +975,115 @@ function renderWorkspaceInto(demo, container) {
   container.replaceChildren(...children.filter(Boolean));
 }
 
+// ─── Courses view ──────────────────────────────────────────────────────────
+
+function setupCoursesSearch() {
+  const search = document.querySelector("[data-courses-search]");
+  search.addEventListener("input", (event) => {
+    state.coursesSearch = event.target.value;
+    renderCoursesList();
+  });
+}
+
+function filteredCourses() {
+  const q = state.coursesSearch.trim().toLowerCase();
+  if (!q) return state.courses;
+  return state.courses.filter((course) =>
+    [
+      course.name,
+      course.title,
+      course.summary,
+      ...(Array.isArray(course.tags) ? course.tags : []),
+      ...(Array.isArray(course.temporalSdks) ? course.temporalSdks : []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(q)
+  );
+}
+
+function renderCourseCard(course) {
+  const sdks = Array.isArray(course.temporalSdks) ? course.temporalSdks : [];
+  const tags = Array.isArray(course.tags) ? course.tags : [];
+  const resources = Array.isArray(course.resources) ? course.resources : [];
+  return el(
+    "article",
+    { class: "course-card" },
+    el(
+      "div",
+      { class: "course-card-top" },
+      el("span", { class: "course-type", text: "Instruqt lab" }),
+      sdks.length
+        ? el("span", { class: "course-sdk", text: sdks.join(" · ") })
+        : null
+    ),
+    el("h3", { text: course.title || course.name }),
+    el("p", {
+      text: course.summary || "A hands-on Temporal learning environment.",
+    }),
+    tags.length
+      ? el(
+          "div",
+          { class: "course-tags" },
+          ...tags.map((tag) => el("span", { text: tag }))
+        )
+      : null,
+    el(
+      "div",
+      { class: "course-actions" },
+      course.trackUrl
+        ? el(
+            "a",
+            {
+              href: course.trackUrl,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              class: "course-launch",
+            },
+            "Open course"
+          )
+        : null,
+      ...resources.map((resource) =>
+        el(
+          "a",
+          {
+            href: resource.url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            class: "course-resource",
+            title: resource.kind || resource.label,
+          },
+          resource.label
+        )
+      )
+    )
+  );
+}
+
+function renderCoursesList() {
+  const list = document.querySelector("[data-courses-list]");
+  const courses = filteredCourses();
+  const count = document.querySelector("[data-courses-count]");
+  document.querySelector("[data-courses-total]").textContent = `${
+    state.courses.length
+  } course${state.courses.length === 1 ? "" : "s"}`;
+  count.hidden = !state.coursesSearch.trim();
+  count.textContent = `Showing ${courses.length} of ${state.courses.length} courses`;
+  if (!courses.length) {
+    list.replaceChildren(
+      el("div", {
+        class: "text-sm text-muted-foreground py-8 text-center",
+        text: state.courses.length
+          ? "No courses match that search."
+          : "No Instruqt courses have been added yet.",
+      })
+    );
+    return;
+  }
+  list.replaceChildren(...courses.map(renderCourseCard));
+}
+
 // ─── Catalog view ──────────────────────────────────────────────────────────
 
 function loadCatalogFiltersFromUrl() {
@@ -1035,6 +1156,9 @@ function matchesCatalog(project) {
 function renderCatalogList() {
   const list = document.querySelector("[data-catalog-list]");
   const visible = state.projects.filter(matchesCatalog);
+  document.querySelector("[data-projects-total]").textContent = `${state.projects.length} project${
+    state.projects.length === 1 ? "" : "s"
+  }`;
   const count = document.querySelector("[data-catalog-count]");
   if (state.catalogSearch.trim() || state.catalogPhase !== "all") {
     count.hidden = false;
@@ -1142,6 +1266,8 @@ function render() {
   if (currentView() === "demos") {
     renderDemosFilters();
     renderDemosList();
+  } else if (currentView() === "courses") {
+    renderCoursesList();
   } else {
     renderCatalogPhaseOptions();
     renderCatalogList();
@@ -1155,6 +1281,7 @@ async function init() {
   loadCatalogFiltersFromUrl();
   setupTabs();
   setupDemosFilters();
+  setupCoursesSearch();
   setupCatalogFilters();
   await loadData();
   render();

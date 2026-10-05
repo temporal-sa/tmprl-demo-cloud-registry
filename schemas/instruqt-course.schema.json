@@ -74,6 +74,9 @@
               "minLength": 1
             }
           }
+        },
+        "catalog": {
+          "$ref": "#/$defs/catalog"
         }
       }
     }
@@ -187,6 +190,66 @@
         "ignore": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "tags": {
+          "$ref": "#/$defs/catalogLabels"
+        },
+        "temporalSdks": {
+          "$ref": "#/$defs/catalogLabels"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/catalogResource"
+          }
+        }
+      }
+    },
+    "catalogLabels": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      }
+    },
+    "catalogResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
         }
       }
     }

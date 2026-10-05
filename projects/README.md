@@ -117,6 +117,15 @@ spec:
   testingTrack:
     slug: testing-durable-ad-campaign-python-workshop
     titlePrefix: "[testing] "
+  catalog:
+    title: Durable Ad Campaign Workshop
+    summary: Build a durable advertising campaign application with Temporal and Python.
+    tags: [Durable execution, Workshop]
+    temporalSdks: [Python]
+    resources:
+      - label: Facilitator guide
+        url: https://docs.google.com/document/d/example
+        kind: guide
 ```
 
 `source` is the Instruqt track config repo and path. `content` is optional and
@@ -129,6 +138,11 @@ VMs or lifecycle scripts without managed containers are left alone. The workflow
 reconciles ECR repositories, builds managed images with AWS CodeBuild, renders a
 local track artifact, then runs only `instruqt track push --force`. It does not
 separately run `track validate`, `track test`, or `track deploy`.
+
+`catalog` controls how the course appears in the registry's Courses section.
+`title` and `summary` are required when the block is present. Add searchable
+`tags` and `temporalSdks`, plus any related HTTPS resources such as facilitator
+guides, slide decks, recordings, or source repositories.
 
 Testing tracks are branch-driven. `source.branch` is the production source of
 truth and defaults to `main`. `source.testingBranch` enables a separate managed

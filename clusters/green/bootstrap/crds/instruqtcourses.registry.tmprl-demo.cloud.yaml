@@ -204,6 +204,51 @@ spec:
                     titlePrefix:
                       type: string
                       minLength: 1
+                catalog:
+                  type: object
+                  required:
+                    - title
+                    - summary
+                  properties:
+                    title:
+                      type: string
+                      minLength: 1
+                      maxLength: 80
+                    summary:
+                      type: string
+                      minLength: 1
+                      maxLength: 320
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 80
+                    temporalSdks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 80
+                    resources:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - label
+                          - url
+                        properties:
+                          label:
+                            type: string
+                            minLength: 1
+                            maxLength: 80
+                          url:
+                            type: string
+                            pattern: "^https://"
+                          kind:
+                            type: string
+                            minLength: 1
+                            maxLength: 40
             status:
               type: object
               properties:
