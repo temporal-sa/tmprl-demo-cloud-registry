@@ -26,7 +26,7 @@ spec:
   catalog:
     parent: durable-ad-campaign
     variant: TypeScript
-    title: Durable Ad Campaign Workshop
+    title: Hands on Temporal Introduction
     summary: Build a durable advertising campaign application with Temporal.
     tags: [Durable execution, Workshop]
     temporalSdks: [TypeScript]
