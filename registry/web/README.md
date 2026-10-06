@@ -10,6 +10,7 @@ The image serves the catalog from `REGISTRY_DATA_PATH`
 - `/api/registry`
 - `/api/catalog`
 - `/_auth/verify`
+- `POST /api/namespace-access`
 - `/auth/login`
 - `/oauth/google/start`
 - `/oauth/google/callback`
@@ -31,6 +32,13 @@ Canonical demos are featured with generated artwork. To show a screenshot of the
 demo instead, add `static/screenshots/<demo name>.jpg` (the `DemoProject` name,
 e.g. `canonical-ai-demo.jpg`; ~1600px wide works well). The UI picks it up on
 the next image build and falls back to the artwork when the file is missing.
+
+`POST /api/namespace-access` backs the header's "Grant Namespace Access" button.
+It requires a signed-in session and runs the operator's
+`GrantNamespaceReadAccessWorkflow` for the session's email (never an address
+from the request body), which adds that Temporal Cloud user to the group that
+can read every demo namespace. It returns the workflow's result, e.g.
+`{"status": "added" | "already-member" | "user-not-found", ...}`.
 
 `/_auth/verify` is the Traefik forward-auth endpoint used by protected demo
 routes. With `AUTH_MODE=google`, missing or invalid sessions redirect to

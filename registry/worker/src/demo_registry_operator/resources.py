@@ -785,6 +785,11 @@ def _temporal_cloud_tag_value(value: str) -> str:
     return coerced[:63]
 
 
+def namespace_owner_tag() -> tuple[str, str]:
+    """The (key, value) tag every operator-managed namespace carries."""
+    return "owner", _temporal_cloud_tag_value(derive.BASE_DOMAIN)
+
+
 def namespace_tags(demo_project: dict[str, Any]) -> dict[str, str]:
     """Owner/repo tags to stamp on the demo's Temporal Cloud namespace.
 
@@ -792,7 +797,8 @@ def namespace_tags(demo_project: dict[str, Any]) -> dict[str, str]:
     repo so a namespace is traceable back to the demo that created it. Values are
     coerced to Temporal Cloud's tag charset (see _temporal_cloud_tag_value).
     """
-    tags = {"owner": _temporal_cloud_tag_value(derive.BASE_DOMAIN)}
+    owner_key, owner_value = namespace_owner_tag()
+    tags = {owner_key: owner_value}
     slug = source_repo_slug(demo_project)
     if slug:
         tags["repo"] = _temporal_cloud_tag_value(slug)

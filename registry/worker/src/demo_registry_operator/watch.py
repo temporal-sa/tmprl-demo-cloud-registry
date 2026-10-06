@@ -9,6 +9,7 @@ from typing import Any
 from urllib.request import urlopen
 
 from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator.config import (
@@ -43,6 +44,7 @@ from demo_registry_operator import reconcile_payloads as _reconcile_payloads
 from demo_registry_operator.derive import (
     demo_project_workflow_id,
     instruqt_course_workflow_id,
+    namespace_readers_sync_workflow_id,
 )
 from demo_registry_operator.reconcile_payloads import (
     active_version_status,
@@ -62,6 +64,12 @@ from demo_registry_operator.workflows.messages import (
     InstruqtCourseFinalizeSignal,
     InstruqtCourseReconcileSignal,
     InstruqtCourseRunRequest,
+)
+from demo_registry_operator.workflows.namespace_readers import (
+    SyncNamespaceReadersWorkflow,
+)
+from demo_registry_operator.workflows.namespace_readers_messages import (
+    SyncNamespaceReadersRequest,
 )
 
 
@@ -136,6 +144,7 @@ async def run_demo_project_watch(
 ) -> None:
     seen: dict[str, str] = {}
     last_activation_key: str | None = None
+    readers_sync_started = False
     logger.info(
         "Starting DemoProject watch interval_seconds=%s mode=%s",
         config.watch_interval_seconds,
@@ -158,6 +167,11 @@ async def run_demo_project_watch(
         if not activation["active"]:
             await asyncio.sleep(config.watch_interval_seconds)
             continue
+
+        if not readers_sync_started:
+            readers_sync_started = await start_namespace_readers_sync(
+                temporal_client, config
+            )
 
         try:
             demo_projects = await asyncio.to_thread(list_demo_projects)
@@ -209,6 +223,37 @@ async def run_demo_project_watch(
             logger.exception("Catalog publish failed")
 
         await asyncio.sleep(config.watch_interval_seconds)
+
+
+async def start_namespace_readers_sync(
+    temporal_client: Client,
+    config: WorkerConfig,
+) -> bool:
+    """Start the account-wide namespace readers sync once this watch is active.
+
+    The watch only activates on the current worker version, so the sync always
+    lands on a build that has the workflow. The fixed id makes concurrent starts
+    (blue and green, restarts) share one run. Returns True when nothing is left
+    to do: started, already running, or the feature is off.
+    """
+    if not config.namespace_readers_group or config.temporal_cloud_mode != "cloud-api":
+        return True
+    try:
+        await temporal_client.start_workflow(
+            SyncNamespaceReadersWorkflow.run,
+            SyncNamespaceReadersRequest(reason="watch-activated"),
+            id=namespace_readers_sync_workflow_id(),
+            task_queue=config.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            execution_timeout=timedelta(minutes=30),
+        )
+    except Exception:  # noqa: BLE001 - retried on the next watch pass
+        logger.exception("Could not start the namespace readers sync")
+        return False
+    logger.info(
+        "Started namespace readers sync for group=%s", config.namespace_readers_group
+    )
+    return True
 
 
 def watch_activation_status(config: WorkerConfig) -> dict[str, Any]:

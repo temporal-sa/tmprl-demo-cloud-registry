@@ -196,6 +196,53 @@ def ensure_temporal_cloud_namespace_tags(
 
 
 @activity.defn
+def ensure_temporal_cloud_namespace_readers_access(
+    request: models.EnsureTemporalCloudNamespaceReadersAccessRequest,
+) -> models.TemporalCloudStatusResult:
+    if not request.project.namespace_required:
+        return status_result(
+            temporal_cloud.temporal_cloud_not_required_status(request.checked_at)
+        )
+    if platform_manual_setup_required(request.project):
+        return status_result(
+            manual_setup_required_status(request.project, request.checked_at)
+        )
+
+    config = WorkerConfig.from_env()
+    if not config.namespace_readers_group:
+        return status_result(
+            {
+                "phase": "NotRequired",
+                "provider": "temporal-cloud",
+                "mode": "cloud-api",
+                "checkedAt": request.checked_at,
+                "message": "No namespace readers group is configured.",
+            }
+        )
+    bootstrap = temporal_bootstrap_secret(config, request.checked_at)
+    if not bootstrap.get("TEMPORAL_CLOUD_API_KEY"):
+        return status_result(bootstrap)
+
+    async def run() -> dict[str, Any]:
+        reconciler = await cloud_reconciler(config, bootstrap)
+        return await temporal_cloud.ensure_temporal_cloud_namespace_readers_access(
+            request.project.as_demo_project(),
+            namespace_status_value=request.namespace.status,
+            group_name=config.namespace_readers_group,
+            reconciler=reconciler,
+            checked_at=request.checked_at,
+        )
+
+    try:
+        return status_result(asyncio.run(run()))
+    except Exception as error:  # noqa: BLE001
+        raise temporal_cloud_application_error(
+            error,
+            operation="Ensure Temporal Cloud namespace readers access",
+        ) from error
+
+
+@activity.defn
 def create_or_verify_temporal_cloud_search_attribute(
     request: models.CreateOrVerifyTemporalCloudSearchAttributeRequest,
 ) -> models.TemporalCloudSearchAttributeResult:
@@ -923,6 +970,7 @@ async def cloud_reconciler(
         client.cloud_service,
         account_id=bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID"),
         heartbeat=activity_heartbeat,
+        readers_group=config.namespace_readers_group,
     )
 
 

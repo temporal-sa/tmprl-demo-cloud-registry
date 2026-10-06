@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from html import escape
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -58,6 +59,13 @@ CRASHABLE_WORKFLOW_TYPE = "CrashableWorkspaceWorkflow"
 DEFAULT_CRASHABLE_TASK_QUEUE = "registry-management"
 # Bound how long a sync request thread will block on a Temporal RPC.
 CRASHABLE_RPC_TIMEOUT_SECONDS = 30
+
+# Self-service "grant yourself access": the operator adds the signed-in user to
+# the Temporal Cloud user group that can read every demo namespace.
+NAMESPACE_ACCESS_WORKFLOW_TYPE = "GrantNamespaceReadAccessWorkflow"
+# Usually a few seconds; the very first grant may also create the group and
+# backfill its namespace grants.
+NAMESPACE_ACCESS_RPC_TIMEOUT_SECONDS = 90
 
 
 class AuthError(Exception):
@@ -171,6 +179,11 @@ def crashable_workflow_id(owner_email: str, demo_name: str) -> str:
     return f"crashable-workspace/{owner_email}/{demo_name}"
 
 
+def namespace_access_workflow_id(email: str) -> str:
+    # Must match derive.namespace_read_access_workflow_id in the operator.
+    return f"namespace-readers/grant/{email.strip().lower()}"
+
+
 class TemporalUnavailable(Exception):
     """The Temporal client could not be reached for a crashable-workspace call."""
 
@@ -221,18 +234,20 @@ class TemporalGateway:
                     self._loop = loop
         return self._loop
 
-    def _run(self, coro: Any) -> Any:
+    def _run(self, coro: Any, *, timeout: float = CRASHABLE_RPC_TIMEOUT_SECONDS) -> Any:
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         try:
-            return future.result(timeout=CRASHABLE_RPC_TIMEOUT_SECONDS)
+            return future.result(timeout=timeout)
         except WorkspaceNotFound:
             # A clean "no workspace" signal, mapped to 404/None by the handlers.
             raise
         except Exception as error:  # noqa: BLE001 - surface as a clean 503
             # Everything else (RPC failures, timeouts, connection issues) becomes
-            # a temporal-unavailable 503 rather than an unhandled 500.
-            raise TemporalUnavailable(str(error)) from error
+            # a temporal-unavailable 503 rather than an unhandled 500. Timeouts
+            # carry no message of their own, so name them.
+            message = str(error) or f"{type(error).__name__} waiting on Temporal"
+            raise TemporalUnavailable(message) from error
 
     async def _get_client(self) -> Any:
         # Runs on the loop thread; the None-checks are safe because there is no
@@ -298,6 +313,26 @@ class TemporalGateway:
 
     def workspace_status(self, owner_email: str, demo_name: str) -> dict[str, Any]:
         return self._run(self._workspace_status(owner_email, demo_name))
+
+    def grant_namespace_access(self, email: str) -> dict[str, Any]:
+        return self._run(
+            self._grant_namespace_access(email),
+            timeout=NAMESPACE_ACCESS_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _grant_namespace_access(self, email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        # One short workflow per click. USE_EXISTING makes a double-click wait on
+        # the run already in flight instead of starting a second one.
+        result = await client.execute_workflow(
+            NAMESPACE_ACCESS_WORKFLOW_TYPE,
+            {"email": email},
+            id=namespace_access_workflow_id(email),
+            task_queue=self.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            execution_timeout=timedelta(minutes=3),
+        )
+        return result if isinstance(result, dict) else {"status": "unknown"}
 
     async def _workspace_status(
         self, owner_email: str, demo_name: str
@@ -413,6 +448,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.crashable_update("scale_up")
             elif path == "/api/crashable-workspace/delete":
                 self.crashable_delete()
+            elif path == "/api/namespace-access":
+                self.namespace_access_grant()
             else:
                 self.send_json(
                     {"error": "not_found", "path": path},
@@ -545,6 +582,33 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self.send_json(status)
+
+    def namespace_access_grant(self) -> None:
+        # The email always comes from the signed session, never the request body,
+        # so a user can only ever add themselves.
+        try:
+            email = self.authenticated_email()
+        except AuthError as error:
+            self.send_json(
+                {"error": "unauthorized", "message": str(error)},
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        if self.temporal_gateway is None:
+            self.send_json(
+                {"error": "temporal-unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        try:
+            result = self.temporal_gateway.grant_namespace_access(email)
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(result)
 
     def crashable_status(self, params: dict[str, str]) -> None:
         try:

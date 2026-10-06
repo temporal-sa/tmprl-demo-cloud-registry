@@ -118,7 +118,7 @@ spec:
     slug: testing-durable-ad-campaign-python-workshop
     titlePrefix: "[testing] "
   catalog:
-    title: Durable Ad Campaign Workshop
+    title: Hands on Temporal Introduction
     summary: Build a durable advertising campaign application with Temporal and Python.
     tags: [Durable execution, Workshop]
     temporalSdks: [Python]

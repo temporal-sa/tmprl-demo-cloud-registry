@@ -1298,6 +1298,7 @@ class DemoProjectWorkflow:
                     return namespace.status
 
                 await self._ensure_temporal_cloud_namespace_tags(external_plan, state)
+                await self._ensure_namespace_readers_access(external_plan, state)
 
                 if is_primary:
                     # The delete delta is computed against one flat status blob, so
@@ -1542,6 +1543,37 @@ class DemoProjectWorkflow:
         except Exception as error:  # noqa: BLE001
             workflow.logger.warning(
                 "Namespace tag convergence failed for %s (non-fatal): %s",
+                namespace.namespace,
+                error,
+            )
+
+    async def _ensure_namespace_readers_access(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
+        namespace = state.namespace
+        assert namespace is not None
+        # BEST-EFFORT, for the same reason as tags: this runs inside the
+        # reconcile's compensating try, so a failure here must never tear down
+        # the namespace. It keeps the namespace readers user group able to read
+        # every demo namespace; a miss is repaired on the next reconcile or by the
+        # readers sync. Short retries so a Cloud hiccup does not stall the demo.
+        try:
+            await workflow.execute_activity(
+                external_resources.ensure_temporal_cloud_namespace_readers_access,
+                external_resources.EnsureTemporalCloudNamespaceReadersAccessRequest(
+                    checked_at=external_plan.checked_at,
+                    project=external_plan.temporal_project,
+                    namespace=namespace,
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+        except Exception as error:  # noqa: BLE001
+            workflow.logger.warning(
+                "Namespace readers access failed for %s (non-fatal): %s",
                 namespace.namespace,
                 error,
             )

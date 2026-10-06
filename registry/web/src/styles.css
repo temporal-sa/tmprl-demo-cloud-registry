@@ -202,10 +202,13 @@
     font-size: .75rem;
   }
 
-  .header-cta {
-    align-self: center;
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
     justify-self: end;
   }
+
 
   /* Buttons (temporal.io: mono, square, 2px border, gradient fills) */
   .btn {
@@ -262,6 +265,7 @@
   .btn-quiet { padding-inline: .25rem; color: var(--gray-300); }
   .btn-quiet:hover { color: var(--off-white); }
   .btn[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+  .btn[aria-busy="true"] { color: var(--gray-300); cursor: progress; }
 
   .icon-btn {
     display: grid;
@@ -1281,6 +1285,51 @@
     animation: spin .7s linear infinite;
   }
 
+  /* Result of a header action, pinned under the nav */
+  .notice {
+    --tone: var(--indigo-300);
+    position: fixed;
+    top: 4.75rem;
+    right: 1.5rem;
+    z-index: 45;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: .4rem 1rem;
+    width: min(27rem, calc(100vw - 2rem));
+    padding: 1rem 1rem 1.15rem 1.25rem;
+    background: var(--slab);
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--tone);
+    box-shadow: 0 30px 60px -20px rgb(0 0 0 / .75);
+    animation: notice-in .2s ease-out;
+  }
+
+  .notice strong { align-self: center; font-weight: 500; }
+  .notice .icon-btn { width: 1.75rem; height: 1.75rem; }
+
+  .notice p {
+    grid-column: 1 / -1;
+    color: var(--indigo-100);
+    font-size: .875rem;
+    font-weight: 300;
+    line-height: 1.55;
+  }
+
+  .notice a {
+    grid-column: 1 / -1;
+    width: max-content;
+    color: var(--mint);
+    font-family: var(--mono);
+    font-size: .75rem;
+    text-transform: uppercase;
+  }
+
+  .notice a:hover { color: var(--off-white); }
+  .notice.is-success { --tone: var(--mint); }
+  .notice.is-warn { --tone: var(--mustard); }
+  .notice.is-error { --tone: var(--coral); }
+
   .toast {
     position: fixed;
     bottom: 1.5rem;
@@ -1344,6 +1393,7 @@
 @keyframes pulse { 50% { opacity: .35; } }
 @keyframes slide-in { from { opacity: .4; transform: translateX(2.5rem); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, .5rem); } }
+@keyframes notice-in { from { opacity: 0; transform: translateY(-.5rem); } }
 
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 
@@ -1357,7 +1407,7 @@
 @media (max-width: 720px) {
   .wrap { padding-inline: 1rem; }
   .header-inner { grid-template-columns: auto 1fr; height: 4rem; gap: 1.25rem; }
-  .header-cta { display: none; }
+  .header-actions { display: none; }
   .brand img { height: 1.6rem; }
   .tabs { justify-content: flex-end; gap: 1.25rem; }
   .page-head-inner { grid-template-columns: 1fr; gap: 1rem; padding-block: 1.25rem; }
