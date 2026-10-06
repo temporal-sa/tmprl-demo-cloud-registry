@@ -70,6 +70,12 @@ def activity_results(runtime_secret_path: str) -> dict[str, Any]:
         "ensure_temporal_cloud_namespace_tags": models.TemporalCloudStatusResult(
             status={"phase": "Ready", "action": "updated"},
         ),
+        "ensure_temporal_cloud_namespace_readers_access": models.TemporalCloudStatusResult(
+            status={
+                "phase": "Ready",
+                "readersGroup": {"name": "tmprl-demo-cld-read", "action": "granted"},
+            },
+        ),
         "reconcile_temporal_cloud_search_attributes": models.TemporalCloudSearchAttributesResult(
             statuses=[
                 {
@@ -192,6 +198,7 @@ def run_saga(
 STEADY_STATE_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
     "ensure_temporal_cloud_namespace_tags",
+    "ensure_temporal_cloud_namespace_readers_access",
     "create_or_verify_temporal_cloud_service_account",
     "check_temporal_runtime_secret",
     "create_temporal_api_key_candidate_secret",
@@ -205,6 +212,7 @@ STEADY_STATE_SEQUENCE = [
 FIRST_PROVISION_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
     "ensure_temporal_cloud_namespace_tags",
+    "ensure_temporal_cloud_namespace_readers_access",
     "create_or_verify_temporal_cloud_service_account",
     "check_temporal_runtime_secret",
     "check_temporal_runtime_secret",
@@ -215,10 +223,12 @@ FIRST_PROVISION_SEQUENCE = [
     "mirror_temporal_runtime_secret",
 ]
 
-# Declaring search attributes inserts exactly one activity, after tags.
+# Declaring search attributes inserts exactly one activity, after the
+# namespace metadata steps (tags, readers access).
 SEARCH_ATTRIBUTE_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
     "ensure_temporal_cloud_namespace_tags",
+    "ensure_temporal_cloud_namespace_readers_access",
     "reconcile_temporal_cloud_search_attributes",
     "create_or_verify_temporal_cloud_service_account",
     "check_temporal_runtime_secret",
@@ -611,6 +621,7 @@ def test_namespace_pipelines_run_independent_steps_concurrently(monkeypatch):
     barrier_names = {
         "create_or_verify_temporal_cloud_namespace",
         "ensure_temporal_cloud_namespace_tags",
+        "ensure_temporal_cloud_namespace_readers_access",
         "create_or_verify_temporal_cloud_service_account",
         "check_temporal_runtime_secret",
         "create_temporal_api_key_candidate_secret",

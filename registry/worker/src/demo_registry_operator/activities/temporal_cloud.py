@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+import logging
+import random
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -59,6 +61,16 @@ TEMPORAL_RUNTIME_CANDIDATE_SECRET_SUFFIX = "candidate"
 TEMPORAL_MTLS_CA_CANDIDATE_SECRET_SUFFIX = "ca-candidate"
 
 ApiKeyResult = temporal_auth.ApiKeyResult
+
+logger = logging.getLogger(__name__)
+
+# The readers group holds exactly this on every managed namespace: never more,
+# so membership can't leak write or admin access into demo namespaces.
+READERS_GROUP_PERMISSION = "read"
+# Every demo reconcile updates the same group (one namespace each), so group
+# updates race on its resource_version. Re-read and retry with jitter.
+USER_GROUP_UPDATE_ATTEMPTS = 8
+USER_GROUP_RETRY_DELAY_SECONDS = 0.25
 
 
 @dataclass
@@ -100,6 +112,36 @@ class NexusEndpointInfo:
             and self.target_task_queue == target_task_queue
             and set(self.allowed_caller_namespace_ids) == set(allowed_caller_namespace_ids)
         )
+
+
+@dataclass
+class UserGroupInfo:
+    group_id: str
+    display_name: str
+    resource_version: str
+    # Qualified namespace name -> "read" | "write" | "admin".
+    namespace_permissions: dict[str, str] = field(default_factory=dict)
+
+
+class NamespaceReadersReconciler(Protocol):
+    """The Cloud Ops calls behind the namespace readers group."""
+
+    async def find_user_group(self, display_name: str) -> UserGroupInfo | None: ...
+
+    async def set_user_group_namespace_access(
+        self,
+        group: UserGroupInfo,
+        qualified_namespace: str,
+        permission: str | None,
+    ) -> None: ...
+
+    async def find_user_by_email(self, email: str) -> str | None: ...
+
+    async def user_group_has_member(self, group_id: str, user_id: str) -> bool: ...
+
+    async def add_user_group_member(self, group_id: str, user_id: str) -> str: ...
+
+    async def list_tagged_namespaces(self, key: str, value: str) -> list[str]: ...
 
 
 class TemporalCloudReconciler(Protocol):
@@ -1063,6 +1105,170 @@ async def ensure_temporal_cloud_namespace_tags(
             "desired": desired,
         },
     }
+
+
+async def ensure_temporal_cloud_namespace_readers_access(
+    demo_project: dict[str, Any],
+    *,
+    namespace_status_value: dict[str, Any],
+    group_name: str,
+    reconciler: NamespaceReadersReconciler,
+    checked_at: str,
+) -> dict[str, Any]:
+    """Reconcile step: make sure the readers group can read this namespace."""
+    if not resources.temporal_namespace_required(demo_project):
+        return temporal_cloud_not_required_status(checked_at)
+
+    namespace = namespace_info_from_status(namespace_status_value)
+    action = await grant_namespace_readers_access(
+        reconciler,
+        group_name=group_name,
+        qualified_namespace=namespace.qualified_name,
+    )
+    return {
+        "phase": "Ready",
+        "provider": "temporal-cloud",
+        "mode": "cloud-api",
+        "checkedAt": checked_at,
+        "namespace": {"name": namespace.qualified_name},
+        "readersGroup": {"name": group_name, "action": action},
+    }
+
+
+async def grant_namespace_readers_access(
+    reconciler: NamespaceReadersReconciler,
+    *,
+    group_name: str,
+    qualified_namespace: str,
+    retry_delay_seconds: float = USER_GROUP_RETRY_DELAY_SECONDS,
+) -> str:
+    """Make the readers group's access to one namespace exactly Read.
+
+    Returns "granted" (it had none), "restricted" (it had more than Read, e.g.
+    set by hand, which membership would otherwise leak), "verified", or
+    "group-missing" (an account admin has not created the group yet).
+    """
+    for attempt in range(USER_GROUP_UPDATE_ATTEMPTS):
+        group = await reconciler.find_user_group(group_name)
+        if group is None:
+            return "group-missing"
+        current = group.namespace_permissions.get(qualified_namespace)
+        if current == READERS_GROUP_PERMISSION:
+            return "verified"
+        try:
+            await reconciler.set_user_group_namespace_access(
+                group, qualified_namespace, READERS_GROUP_PERMISSION
+            )
+        except Exception as error:  # noqa: BLE001 - retry stale group versions
+            if not _is_stale_resource_version(error) or attempt == USER_GROUP_UPDATE_ATTEMPTS - 1:
+                raise
+            await _group_retry_sleep(attempt, retry_delay_seconds)
+            continue
+        return "granted" if current is None else "restricted"
+    raise RuntimeError(f"Granting {group_name!r} read on {qualified_namespace} exhausted retries.")
+
+
+async def revoke_namespace_readers_access(
+    reconciler: NamespaceReadersReconciler,
+    *,
+    group_name: str,
+    qualified_namespace: str,
+    retry_delay_seconds: float = USER_GROUP_RETRY_DELAY_SECONDS,
+) -> str:
+    """Drop the readers group's access to a namespace that is being deleted."""
+    for attempt in range(USER_GROUP_UPDATE_ATTEMPTS):
+        group = await reconciler.find_user_group(group_name)
+        if group is None:
+            return "group-missing"
+        if qualified_namespace not in group.namespace_permissions:
+            return "not-granted"
+        try:
+            await reconciler.set_user_group_namespace_access(
+                group, qualified_namespace, None
+            )
+        except Exception as error:  # noqa: BLE001 - retry stale group versions
+            if _is_not_found(error):
+                return "not-granted"
+            if not _is_stale_resource_version(error) or attempt == USER_GROUP_UPDATE_ATTEMPTS - 1:
+                raise
+            await _group_retry_sleep(attempt, retry_delay_seconds)
+            continue
+        return "revoked"
+    raise RuntimeError(f"Removing {group_name!r} from {qualified_namespace} exhausted retries.")
+
+
+async def sync_namespace_readers_group(
+    reconciler: NamespaceReadersReconciler,
+    *,
+    group_name: str,
+    owner_tag: tuple[str, str],
+    retry_delay_seconds: float = USER_GROUP_RETRY_DELAY_SECONDS,
+) -> dict[str, Any]:
+    """Grant the readers group exactly Read on every managed namespace.
+
+    Managed namespaces are the ones carrying the operator's owner tag. Demo
+    reconciles keep new namespaces covered afterwards; this backfills the ones
+    that existed before the group did. The group itself is created once by an
+    account admin; until then there is nothing to grant to.
+    """
+    group = await reconciler.find_user_group(group_name)
+    if group is None:
+        return {"group": {"name": group_name, "action": "missing"}, "namespaces": {}}
+    namespaces = await reconciler.list_tagged_namespaces(*owner_tag)
+    results: dict[str, str] = {}
+    for qualified_namespace in sorted(namespaces):
+        results[qualified_namespace] = await grant_namespace_readers_access(
+            reconciler,
+            group_name=group_name,
+            qualified_namespace=qualified_namespace,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+    return {
+        "group": {"name": group_name, "id": group.group_id, "action": "verified"},
+        "namespaces": results,
+    }
+
+
+async def grant_user_namespace_read_access(
+    reconciler: NamespaceReadersReconciler,
+    *,
+    email: str,
+    group_name: str,
+    owner_tag: tuple[str, str],
+) -> dict[str, Any]:
+    """Self-service: add the Temporal Cloud user with this email to the readers group.
+
+    Membership is the only thing this changes: no account role and no
+    namespace permission of the user is touched. Returns a status of "added",
+    "already-member", "user-not-found", or "group-missing".
+    """
+    user_id = await reconciler.find_user_by_email(email)
+    if user_id is None:
+        return {"status": "user-not-found", "email": email, "group": group_name}
+    group = await reconciler.find_user_group(group_name)
+    if group is None:
+        return {
+            "status": "group-missing",
+            "email": email,
+            "group": group_name,
+            "message": (
+                f"The {group_name} group doesn't exist yet. A Temporal Cloud "
+                "account admin needs to create it once."
+            ),
+        }
+    if await reconciler.user_group_has_member(group.group_id, user_id):
+        return {"status": "already-member", "email": email, "group": group_name}
+    action = await reconciler.add_user_group_member(group.group_id, user_id)
+    status = "already-member" if action == "already-member" else "added"
+    return {"status": status, "email": email, "group": group_name}
+
+
+async def _group_retry_sleep(attempt: int, base_seconds: float) -> None:
+    if base_seconds <= 0:
+        await asyncio.sleep(0)
+        return
+    delay = min(base_seconds * (2**attempt), 4.0)
+    await asyncio.sleep(delay + random.uniform(0, base_seconds))
 
 
 async def ensure_temporal_cloud_search_attribute(
@@ -2359,12 +2565,16 @@ class CloudApiReconciler:
         heartbeat: Any = None,
         poll_seconds: float = ASYNC_OPERATION_POLL_SECONDS,
         timeout_seconds: float = ASYNC_OPERATION_TIMEOUT_SECONDS,
+        readers_group: str | None = None,
     ) -> None:
         self._cs = cloud_service
         self._account_id = account_id
         self._heartbeat = heartbeat
         self._poll_seconds = poll_seconds
         self._timeout_seconds = timeout_seconds
+        # Display name of the namespace readers group; when set, deleting a
+        # namespace first removes that group's access to it.
+        self._readers_group = readers_group or None
 
     async def list_regions(self) -> list[str]:
         from temporalio.api.cloud.cloudservice.v1 import GetRegionsRequest
@@ -2803,6 +3013,7 @@ class CloudApiReconciler:
             raise
 
         namespace = got.namespace
+        await self._revoke_readers_access_before_delete(qualified_name)
 
         try:
             response = await self._cs.delete_namespace(
@@ -2830,6 +3041,166 @@ class CloudApiReconciler:
             response.async_operation, label=f"delete-namespace:{qualified_name}"
         )
         return "deleted"
+
+    async def _revoke_readers_access_before_delete(self, qualified_name: str) -> None:
+        # BEST-EFFORT: a stale grant on a deleted namespace is harmless, but a
+        # failed delete is not, so this never blocks the delete itself.
+        if not self._readers_group:
+            return
+        try:
+            await revoke_namespace_readers_access(
+                self,
+                group_name=self._readers_group,
+                qualified_namespace=qualified_name,
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "Could not remove user group %r from namespace %s before deleting it: %s",
+                self._readers_group,
+                qualified_name,
+                error,
+            )
+
+    async def find_user_group(self, display_name: str) -> UserGroupInfo | None:
+        from temporalio.api.cloud.cloudservice.v1 import GetUserGroupsRequest
+
+        matches = []
+        page_token = ""
+        while True:
+            response = await self._cs.get_user_groups(
+                GetUserGroupsRequest(
+                    page_size=100,
+                    page_token=page_token,
+                    display_name=display_name,
+                )
+            )
+            for group in response.groups:
+                if group.spec.display_name != display_name:
+                    continue
+                if _resource_state_name(group.state) in GONE_RESOURCE_STATES:
+                    continue
+                matches.append(group)
+            page_token = response.next_page_token
+            if not page_token:
+                break
+        if not matches:
+            return None
+        # Oldest first, so callers converge on one group even if a duplicate exists.
+        oldest = min(
+            matches,
+            key=lambda group: (
+                group.created_time.seconds,
+                group.created_time.nanos,
+                group.id,
+            ),
+        )
+        return _user_group_info(oldest)
+
+    async def set_user_group_namespace_access(
+        self,
+        group: UserGroupInfo,
+        qualified_namespace: str,
+        permission: str | None,
+    ) -> None:
+        from temporalio.api.cloud.cloudservice.v1 import (
+            SetUserGroupNamespaceAccessRequest,
+        )
+        from temporalio.api.cloud.identity.v1 import NamespaceAccess
+
+        request = SetUserGroupNamespaceAccessRequest(
+            namespace=qualified_namespace,
+            group_id=group.group_id,
+            resource_version=group.resource_version,
+        )
+        # Leaving access unset removes the group from the namespace.
+        if permission is not None:
+            request.access.CopyFrom(
+                NamespaceAccess(permission=_namespace_permission_value(permission))
+            )
+        response = await self._cs.set_user_group_namespace_access(request)
+        await self._await_operation(
+            response.async_operation,
+            label=f"set-user-group-namespace-access:{group.display_name}:{qualified_namespace}",
+        )
+
+    async def find_user_by_email(self, email: str) -> str | None:
+        from temporalio.api.cloud.cloudservice.v1 import GetUsersRequest
+
+        wanted = email.strip().lower()
+        if not wanted:
+            return None
+        # Ask the API to filter first; fall back to a case-insensitive scan in case
+        # the stored address differs from the sign-in address only by case.
+        for filter_email in (email.strip(), None):
+            page_token = ""
+            while True:
+                request = GetUsersRequest(page_size=100, page_token=page_token)
+                if filter_email:
+                    request.email = filter_email
+                response = await self._cs.get_users(request)
+                for user in response.users:
+                    if _resource_state_name(user.state) in GONE_RESOURCE_STATES:
+                        continue
+                    if user.spec.email.strip().lower() == wanted:
+                        return user.id
+                page_token = response.next_page_token
+                if not page_token:
+                    break
+        return None
+
+    async def user_group_has_member(self, group_id: str, user_id: str) -> bool:
+        from temporalio.api.cloud.cloudservice.v1 import GetUserGroupMembersRequest
+
+        page_token = ""
+        while True:
+            response = await self._cs.get_user_group_members(
+                GetUserGroupMembersRequest(
+                    page_size=100, page_token=page_token, group_id=group_id
+                )
+            )
+            if any(member.member_id.user_id == user_id for member in response.members):
+                return True
+            page_token = response.next_page_token
+            if not page_token:
+                return False
+
+    async def add_user_group_member(self, group_id: str, user_id: str) -> str:
+        from temporalio.api.cloud.cloudservice.v1 import AddUserGroupMemberRequest
+        from temporalio.api.cloud.identity.v1 import UserGroupMemberId
+
+        try:
+            response = await self._cs.add_user_group_member(
+                AddUserGroupMemberRequest(
+                    group_id=group_id,
+                    member_id=UserGroupMemberId(user_id=user_id),
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - joined in the meantime
+            if _is_already_exists(error):
+                return "already-member"
+            raise
+        await self._await_operation(
+            response.async_operation, label=f"add-user-group-member:{group_id}"
+        )
+        return "added"
+
+    async def list_tagged_namespaces(self, key: str, value: str) -> list[str]:
+        from temporalio.api.cloud.cloudservice.v1 import GetNamespacesRequest
+
+        names: list[str] = []
+        page_token = ""
+        while True:
+            response = await self._cs.get_namespaces(
+                GetNamespacesRequest(page_size=100, page_token=page_token)
+            )
+            for namespace in response.namespaces:
+                if _resource_state_name(namespace.state) in GONE_RESOURCE_STATES:
+                    continue
+                if dict(namespace.tags).get(key) == value:
+                    names.append(namespace.namespace)
+            page_token = response.next_page_token
+            if not page_token:
+                return names
 
     async def delete_api_key(self, key_id: str) -> str:
         from temporalio.api.cloud.cloudservice.v1 import (
@@ -3386,6 +3757,61 @@ async def run_cloud_api_finalization_step(
         secret_store=secret_store,
         checked_at=checked_at,
     )
+
+
+# Resources in these states are on their way out and are ignored when looking
+# things up (a deleting group or user must not be reused).
+GONE_RESOURCE_STATES = {"RESOURCE_STATE_DELETED", "RESOURCE_STATE_DELETING"}
+
+
+def _resource_state_name(state: int) -> str | None:
+    from temporalio.api.cloud.resource.v1 import ResourceState
+
+    try:
+        return ResourceState.Name(state) if state else None
+    except ValueError:
+        return None
+
+
+_NAMESPACE_PERMISSION_NAMES = {
+    "PERMISSION_READ": "read",
+    "PERMISSION_WRITE": "write",
+    "PERMISSION_ADMIN": "admin",
+}
+
+
+def _namespace_permission_value(permission: str) -> int:
+    from temporalio.api.cloud.identity.v1 import NamespaceAccess
+
+    return NamespaceAccess.Permission.Value(f"PERMISSION_{permission.upper()}")
+
+
+def _user_group_info(group: Any) -> UserGroupInfo:
+    from temporalio.api.cloud.identity.v1 import NamespaceAccess
+
+    permissions: dict[str, str] = {}
+    for namespace, access in group.spec.access.namespace_accesses.items():
+        name = _NAMESPACE_PERMISSION_NAMES.get(
+            NamespaceAccess.Permission.Name(access.permission)
+        )
+        if name:
+            permissions[namespace] = name
+    return UserGroupInfo(
+        group_id=group.id,
+        display_name=group.spec.display_name,
+        resource_version=group.resource_version,
+        namespace_permissions=permissions,
+    )
+
+
+def _is_already_exists(error: Exception) -> bool:
+    if "already exists" in str(error).lower():
+        return True
+    try:
+        from temporalio.service import RPCError, RPCStatusCode
+    except ImportError:
+        return False
+    return isinstance(error, RPCError) and error.status == RPCStatusCode.ALREADY_EXISTS
 
 
 def _is_not_found(error: Exception) -> bool:

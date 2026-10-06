@@ -28,6 +28,11 @@ DEFAULT_SOURCE_WATCH_NAMESPACE = "tmprl-dem-cld-registry-operator"
 DEFAULT_SOURCE_WATCH_INTERVAL = "1m"
 DEFAULT_WATCH_HANDOFF_DEPLOYMENT_NAME = "registry-operator"
 DEFAULT_PUBLIC_ECR_REGION = "us-east-1"
+# Temporal Cloud user group that is granted Read (and only Read) on every
+# operator-managed demo namespace. An account admin creates it once; the operator
+# never creates groups or changes account roles.
+DEFAULT_NAMESPACE_READERS_GROUP = "tmprl-demo-cld-read"
+DISABLED_VALUES = {"none", "off", "disabled", "false"}
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,8 @@ class WorkerConfig:
     source_watch_namespace: str
     source_watch_interval: str
     rollout_diagnostics_bucket: str | None = None
+    # Empty string disables the readers group (no grants, no self-service joins).
+    namespace_readers_group: str = DEFAULT_NAMESPACE_READERS_GROUP
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -195,6 +202,10 @@ class WorkerConfig:
             rollout_diagnostics_bucket=env_optional(
                 "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET"
             ),
+            namespace_readers_group=env_disableable(
+                "DEMO_REGISTRY_NAMESPACE_READERS_GROUP",
+                default=DEFAULT_NAMESPACE_READERS_GROUP,
+            ),
         )
 
 
@@ -255,6 +266,15 @@ def env_first(*names: str, default: str) -> str:
         if value and value.strip():
             return value.strip()
     return default
+
+
+def env_disableable(name: str, *, default: str) -> str:
+    """Like env_first, but "none"/"off"/"disabled"/"false" turn the setting off ("")."""
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    parsed = value.strip()
+    return "" if parsed.lower() in DISABLED_VALUES else parsed
 
 
 def env_optional(name: str) -> str | None:

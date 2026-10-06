@@ -15,6 +15,7 @@ from demo_registry_operator.activities.external_resources.iam import (
 )
 from demo_registry_operator.activities.external_resources.models import (
     CreateOrVerifyTemporalCloudNamespaceRequest,
+    EnsureTemporalCloudNamespaceReadersAccessRequest,
     EnsureTemporalCloudNamespaceTagsRequest,
     CreateOrVerifyTemporalCloudServiceAccountRequest,
     CreateOrVerifyTemporalCloudSearchAttributeRequest,
@@ -103,6 +104,7 @@ from demo_registry_operator.activities.external_resources.temporal import (
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_search_attribute,
     reconcile_temporal_cloud_search_attributes,
+    ensure_temporal_cloud_namespace_readers_access,
     ensure_temporal_cloud_namespace_tags,
     reconcile_nexus_endpoints,
     delete_nexus_endpoints,
@@ -134,6 +136,7 @@ from demo_registry_operator.activities.external_resources.temporal import (
 
 __all__ = [
     "CreateOrVerifyTemporalCloudNamespaceRequest",
+    "EnsureTemporalCloudNamespaceReadersAccessRequest",
     "EnsureTemporalCloudNamespaceTagsRequest",
     "CreateOrVerifyTemporalCloudServiceAccountRequest",
     "CreateOrVerifyTemporalCloudSearchAttributeRequest",
@@ -204,6 +207,7 @@ __all__ = [
     "create_or_verify_temporal_cloud_namespace",
     "create_or_verify_temporal_cloud_search_attribute",
     "reconcile_temporal_cloud_search_attributes",
+    "ensure_temporal_cloud_namespace_readers_access",
     "ensure_temporal_cloud_namespace_tags",
     "reconcile_nexus_endpoints",
     "delete_nexus_endpoints",

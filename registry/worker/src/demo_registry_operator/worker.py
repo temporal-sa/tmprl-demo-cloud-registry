@@ -48,6 +48,7 @@ from demo_registry_operator.activities.external_resources import (
     create_or_verify_temporal_cloud_namespace,
     create_or_verify_temporal_cloud_search_attribute,
     reconcile_temporal_cloud_search_attributes,
+    ensure_temporal_cloud_namespace_readers_access,
     ensure_temporal_cloud_namespace_tags,
     reconcile_nexus_endpoints,
     delete_nexus_endpoints,
@@ -106,6 +107,10 @@ from demo_registry_operator.activities.instruqt import (
     start_instruqt_course_image_build,
     test_instruqt_course_track,
     wait_for_instruqt_course_image_build,
+)
+from demo_registry_operator.activities.namespace_readers import (
+    grant_user_namespace_read_access,
+    sync_namespace_readers_group,
 )
 from demo_registry_operator.activities.reconcile import (
     apply_demo_project_resources,
@@ -171,6 +176,10 @@ from demo_registry_operator.workflows.crashable_workspace import (
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
 from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
+from demo_registry_operator.workflows.namespace_readers import (
+    GrantNamespaceReadAccessWorkflow,
+    SyncNamespaceReadersWorkflow,
+)
 from demo_registry_operator.workflows.operator_auth_canary import (
     RegistryOperatorAuthCanaryWorkflow,
 )
@@ -193,6 +202,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.external_resources.serverless_names",
     "demo_registry_operator.activities.force_reconcile",
     "demo_registry_operator.activities.instruqt",
+    "demo_registry_operator.activities.namespace_readers",
     "demo_registry_operator.activities.reconcile",
     "demo_registry_operator.activities.rollout_diagnostics",
     "demo_registry_operator.derive",
@@ -203,6 +213,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.workflows.demo_project_kubernetes_runtime",
     "demo_registry_operator.workflows.demo_project_serverless_lambda",
     "demo_registry_operator.workflows.messages",
+    "demo_registry_operator.workflows.namespace_readers_messages",
     "demo_registry_operator.workflows.operator_auth_canary",
 )
 
@@ -294,6 +305,8 @@ async def main() -> None:
                     RegistryOperatorCanaryWorkflow,
                     RegistryOperatorAuthCanaryWorkflow,
                     CrashableWorkspaceWorkflow,
+                    GrantNamespaceReadAccessWorkflow,
+                    SyncNamespaceReadersWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -334,6 +347,7 @@ async def main() -> None:
                     create_or_verify_temporal_cloud_search_attribute,
                     reconcile_temporal_cloud_search_attributes,
                     ensure_temporal_cloud_namespace_tags,
+                    ensure_temporal_cloud_namespace_readers_access,
                     reconcile_nexus_endpoints,
                     delete_nexus_endpoints,
                     delete_temporal_cloud_search_attribute,
@@ -401,6 +415,8 @@ async def main() -> None:
                     crash_workspace_pods,
                     scale_workspace_workloads,
                     delete_workspace_namespace,
+                    grant_user_namespace_read_access,
+                    sync_namespace_readers_group,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,

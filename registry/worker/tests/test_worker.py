@@ -66,6 +66,8 @@ def test_workflow_runner_prepares_registered_workflows_in_sandbox():
             worker.RegistryOperatorCanaryWorkflow,
             worker.RegistryOperatorAuthCanaryWorkflow,
             worker.CrashableWorkspaceWorkflow,
+            worker.GrantNamespaceReadAccessWorkflow,
+            worker.SyncNamespaceReadersWorkflow,
         ):
             workflow_runner.prepare_workflow(
                 workflow._Definition.must_from_class(workflow_type)

@@ -144,6 +144,9 @@ Environment variables:
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_API_VERSION`, default `v0.17.0` (sent as the
   `temporal-cloud-api-version` header to the Cloud Operations API)
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_OPS_HOST`, default `saas-api.tmprl.cloud:443`
+- `DEMO_REGISTRY_NAMESPACE_READERS_GROUP`, default `tmprl-demo-cld-read`;
+  the Temporal Cloud user group granted exactly Read on every managed demo
+  namespace (see "Namespace readers group" below). `none`/`off` disables it.
 - `DEMO_REGISTRY_CATALOG_STATUS_NAMESPACE`, default `tmprl-dem-cld-registry-operator`
 - `DEMO_REGISTRY_CATALOG_STATUS_CONFIGMAP`, default
   `registry-catalog-status`
@@ -168,6 +171,35 @@ repository path shape: `tmprl-dem-cld/<course>/<image>`. The registry operator
 role only needs `codebuild:StartBuild` and `codebuild:BatchGetBuilds` for that
 project plus read/create/verify permissions for the ECR repositories it passes
 to the build.
+
+### Namespace readers group
+
+One Temporal Cloud user group (`DEMO_REGISTRY_NAMESPACE_READERS_GROUP`, default
+`tmprl-demo-cld-read`) holds exactly Read on every demo namespace the operator
+manages, so anyone in it can read them all. The group has no account role, and
+the operator never changes anyone's account role or personal namespace
+permissions; it only keeps the group's grants in sync and adds members.
+
+- An account admin creates the group once (a Cloud group, no account role, no
+  namespace access). The operator never creates groups.
+- `SyncNamespaceReadersWorkflow` (fixed id `namespace-readers/sync`, shared by
+  blue and green) runs once whenever an operator's watch activates and grants
+  the group exactly Read on every namespace tagged `owner=tmprl-demo.cloud`.
+- Each `DemoProjectWorkflow` reconcile does the same for its own namespace right
+  after tagging it (best-effort; it never fails or rolls back the demo). A
+  higher permission found on a managed namespace is set back to Read.
+- Deleting a namespace first removes the group's access to it (best-effort).
+- `GrantNamespaceReadAccessWorkflow` backs the catalog's "Grant Namespace
+  Access" button: the web server starts it with the signed-in user's email, and
+  it adds that Temporal Cloud user to the group. A missing Cloud user is
+  reported back ("user-not-found"), never invited.
+
+Granting the group access on a namespace needs Namespace Admin on it (a
+Developer has that on every namespace it creates). Adding group members, and
+setting or editing namespace tags (even at creation), are account-level changes
+that Temporal Cloud only allows Account Owner and Global Admin identities to
+make, so the operator's control-plane key stays Global Admin for now. A custom
+role limited to managing this group's membership would let it drop that.
 
 On the active blue cluster, non-secret runtime settings for the bootstrap
 handoff live in

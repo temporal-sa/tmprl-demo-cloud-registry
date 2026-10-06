@@ -505,6 +505,13 @@ class EnsureTemporalCloudNamespaceTagsRequest:
 
 
 @dataclass(frozen=True)
+class EnsureTemporalCloudNamespaceReadersAccessRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+
+
+@dataclass(frozen=True)
 class TemporalCloudNamespaceTagsResult:
     status: dict[str, Any]
 

@@ -101,6 +101,18 @@ def instruqt_course_workflow_id(course_name: str, cluster: str | None = None) ->
     return f"instruqt-course/{course_name}"
 
 
+def namespace_readers_sync_workflow_id() -> str:
+    """Singleton id for the namespace readers sync. Deliberately not cluster-scoped:
+    the readers group is account-wide, so blue and green share one run."""
+    return "namespace-readers/sync"
+
+
+def namespace_read_access_workflow_id(email: str) -> str:
+    """Per-user id for the catalog's self-service grant. The catalog web server
+    (registry/web/server.py) builds the same id; keep them identical."""
+    return f"namespace-readers/grant/{email.strip().lower()}"
+
+
 def registry_task_queue(cluster: str | None = None) -> str:
     """The operator's task queue, colored per cluster. Single source shared by the
     worker config (config.py) and the self-rendered operator/web env (resources.
