@@ -919,14 +919,22 @@
 
   .card-foot {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 1rem;
+    flex-direction: column;
+    gap: 1.1rem;
     margin-top: auto;
     padding-top: 1.75rem;
   }
 
-  .card-foot .btn { position: relative; z-index: 1; margin: 0 0 -.4rem auto; }
+  .card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem 1.75rem;
+    margin-bottom: -.4rem;
+    padding-top: .75rem;
+    border-top: 1px solid rgb(255 255 255 / .08);
+  }
+
+  .card-actions .btn { position: relative; z-index: 1; padding-inline: 0; }
 
   /* Workshop cards (Resources "New to Temporal?" style) */
   .workshop-grid {

@@ -569,6 +569,21 @@ function openAppButton(demo, cls = "btn btn-ghost btn-sm", label = "Open app") {
   );
 }
 
+function namespaceButton(demo, cls = "btn btn-ghost btn-sm") {
+  const url = namespaceUrl(demo);
+  if (!url) return null;
+  return externalLink(
+    url,
+    {
+      class: cls,
+      title: `Open ${demo.cloud.namespace} in Temporal Cloud`,
+      onclick: (event) => event.stopPropagation(),
+    },
+    "Namespace",
+    icon("external")
+  );
+}
+
 // Deterministic artwork for featured demos in the temporal.io style (color
 // glows over a grid, stepped pixel blocks, a sparkle), seeded by the demo id
 // so each demo keeps its own composition across reloads.
@@ -681,9 +696,7 @@ function renderFeatureCard(demo) {
         nt.speakerNotes
           ? externalLink(nt.speakerNotes, { class: "btn btn-secondary" }, "Speaker notes")
           : null,
-        namespaceUrl(demo)
-          ? externalLink(namespaceUrl(demo), { class: "btn btn-ghost" }, "Namespace", icon("external"))
-          : null,
+        namespaceButton(demo, "btn btn-ghost"),
         el(
           "button",
           { type: "button", class: "btn btn-quiet", onclick: () => openDrawer(demo.id) },
@@ -720,8 +733,13 @@ function renderDemoCard(demo) {
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
-    el("div", { class: "card-foot" }, sdkList(demo.sdks), openAppButton(demo))
+    el("div", { class: "card-foot" }, sdkList(demo.sdks), cardActions(demo))
   );
+}
+
+function cardActions(demo) {
+  const actions = [openAppButton(demo), namespaceButton(demo)].filter(Boolean);
+  return actions.length ? el("div", { class: "card-actions" }, ...actions) : null;
 }
 
 // ─── Demo drawer ───────────────────────────────────────────────────────────
