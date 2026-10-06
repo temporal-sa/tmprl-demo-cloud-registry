@@ -1006,7 +1006,7 @@
     border-top: 1px solid var(--line);
   }
 
-  .track-list a, .resource-link {
+  .track-list a {
     display: flex;
     align-items: center;
     gap: .75rem;
@@ -1023,7 +1023,7 @@
 
   .track-list a:hover, .track-list a.is-match { color: var(--mint); }
 
-  .track-list svg, .resource-link svg {
+  .track-list svg {
     width: 1rem;
     height: 1rem;
     margin-left: auto;
@@ -1033,10 +1033,8 @@
     transition: transform .15s;
   }
 
-  .track-list a:hover svg, .resource-link:hover svg { transform: translateX(3px); }
+  .track-list a:hover svg { transform: translateX(3px); }
 
-  .resource-link { color: var(--mint); font-size: .9375rem; }
-  .resource-link:hover { color: var(--off-white); }
 
   .workshop-resources {
     display: flex;

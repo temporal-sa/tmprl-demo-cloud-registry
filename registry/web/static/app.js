@@ -1319,6 +1319,12 @@ function renderWorkshopsFilters() {
   document.querySelector("[data-clear-workshops]").hidden = !workshopsHaveFilters();
 }
 
+// A track's row label: its catalog variant, else its SDK; null when it has neither.
+function trackLabel(course) {
+  if (typeof course.variant === "string" && course.variant.trim()) return course.variant.trim();
+  return courseSdks(course)[0] || null;
+}
+
 function courseVariantLabel(course) {
   if (typeof course.variant === "string" && course.variant.trim()) return course.variant.trim();
   if (courseSdks(course)[0]) return courseSdks(course)[0];
@@ -1393,46 +1399,41 @@ function renderWorkshopCard(members) {
   const representative =
     members.find((course) => course.name === course.parent) ||
     members.slice().sort((a, b) => a.name.localeCompare(b.name))[0];
-  const grouped = members.length > 1 || Boolean(representative.parent);
   const sdks = uniqueValues(members.flatMap(courseSdks));
   const tags = uniqueValues(members.flatMap((course) => course.tags || [])).filter(
     (tag) => tag.toLowerCase() !== "workshop"
   );
   const launchable = members.filter((course) => course.trackUrl);
 
-  let launch;
-  if (!launchable.length) {
-    launch = el("span", { class: "launch-label", text: "No track published yet" });
-  } else if (grouped) {
-    launch = el(
-      "div",
-      {},
-      el("span", { class: "launch-label", text: "Choose a track" }),
-      el(
+  // Every workshop lists its tracks the same way, even when there is only one,
+  // so a newly added language variant simply shows up as another row.
+  const launch = launchable.length
+    ? el(
         "div",
-        { class: "track-list" },
-        ...launchable.map((course) =>
-          externalLink(
-            course.trackUrl,
-            {
-              class: courseMatchesSdk(course) ? "is-match" : null,
-              "aria-label": `Launch ${courseVariantLabel(course)} workshop on Instruqt`,
-            },
-            courseSdks(course)[0] ? sdkMark(courseSdks(course)[0]) : null,
-            courseVariantLabel(course),
-            icon("arrow")
-          )
+        {},
+        el("span", { class: "launch-label", text: "Choose a track" }),
+        el(
+          "div",
+          { class: "track-list" },
+          ...launchable.map((course) => {
+            const label = trackLabel(course);
+            const sdk = courseSdks(course)[0];
+            return externalLink(
+              course.trackUrl,
+              {
+                class: courseMatchesSdk(course) ? "is-match" : null,
+                "aria-label": label
+                  ? `Launch the ${label} track on Instruqt`
+                  : `Launch ${representative.title || course.name} on Instruqt`,
+              },
+              sdk ? sdkMark(sdk) : null,
+              label || "Launch track",
+              icon("arrow")
+            );
+          })
         )
       )
-    );
-  } else {
-    launch = externalLink(
-      representative.trackUrl,
-      { class: "resource-link", "aria-label": "Launch workshop on Instruqt" },
-      "Launch workshop",
-      icon("arrow")
-    );
-  }
+    : el("span", { class: "launch-label", text: "No track published yet" });
 
   const workshopIcon = icon("terminal");
   workshopIcon.setAttribute("class", "workshop-icon");
@@ -1443,7 +1444,7 @@ function renderWorkshopCard(members) {
     workshopIcon,
     el("p", {
       class: "eyebrow",
-      text: grouped
+      text: launchable.length
         ? `Instruqt workshop · ${plural(launchable.length, "track")}`
         : "Instruqt workshop",
     }),
