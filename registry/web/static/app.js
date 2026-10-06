@@ -1493,6 +1493,121 @@ function renderWorkshopsList() {
   list.replaceChildren(...groups.map(renderWorkshopCard));
 }
 
+// ─── Namespace access (self-service) ──────────────────────────────────────
+// Adds the signed-in user to the Temporal Cloud user group that can read every
+// demo namespace. The server takes the email from the session, so this only
+// ever grants the person clicking.
+
+function setupNamespaceAccess() {
+  const button = document.querySelector("[data-grant-access]");
+  if (button) button.addEventListener("click", () => grantNamespaceAccess(button));
+}
+
+async function grantNamespaceAccess(button) {
+  if (button.getAttribute("aria-busy") === "true") return;
+  const label = button.querySelector("span") || button;
+  const idleText = label.textContent;
+  button.setAttribute("aria-busy", "true");
+  label.textContent = "Granting Namespace Access…";
+  try {
+    const res = await fetch("/api/namespace-access", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (res.status === 401) {
+      // Not signed in yet: sign in with Google, then land back here.
+      window.location.assign(
+        `/auth/login?return_to=${encodeURIComponent(window.location.href)}`
+      );
+      return;
+    }
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = {};
+    }
+    if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    showNotice(namespaceAccessNotice(data));
+  } catch (err) {
+    showNotice({
+      tone: "error",
+      title: "Couldn't grant access",
+      body: `The operator couldn't be reached: ${err.message}`,
+    });
+  } finally {
+    button.removeAttribute("aria-busy");
+    label.textContent = idleText;
+  }
+}
+
+function namespaceAccessNotice(result) {
+  const email = result.email || "your account";
+  const group = result.group || "the namespace readers group";
+  switch (result.status) {
+    case "added":
+      return {
+        tone: "success",
+        title: "You're in",
+        body: `Added ${email} to ${group}, which can read every demo namespace. Temporal Cloud can take a minute to apply it.`,
+        showNamespaces: true,
+      };
+    case "already-member":
+      return {
+        tone: "success",
+        title: "You already have access",
+        body: `${email} is already in ${group}, which can read every demo namespace.`,
+        showNamespaces: true,
+      };
+    case "group-missing":
+      return {
+        tone: "warn",
+        title: "Access isn't set up yet",
+        body: result.message || `The ${group} group doesn't exist yet. A Temporal Cloud account admin needs to create it once.`,
+      };
+    case "user-not-found":
+      return {
+        tone: "warn",
+        title: "No Temporal Cloud user for you yet",
+        body: `We couldn't find a Temporal Cloud user with the email ${email}. Ask a Temporal Cloud admin to invite you to the account, then try again.`,
+      };
+    default:
+      return {
+        tone: "error",
+        title: "Couldn't grant access",
+        body: result.message || "The operator couldn't update the group. Try again in a minute.",
+      };
+  }
+}
+
+function showNotice({ tone, title, body, showNamespaces = false }) {
+  document.querySelectorAll(".notice").forEach((node) => node.remove());
+  const namespacesLink = document.querySelector("[data-namespaces-link]");
+  const notice = el(
+    "div",
+    { class: `notice is-${tone}`, role: tone === "success" ? "status" : "alert" },
+    el("strong", { text: title }),
+    el(
+      "button",
+      {
+        type: "button",
+        class: "icon-btn",
+        "aria-label": "Dismiss",
+        onclick: () => notice.remove(),
+      },
+      icon("close")
+    ),
+    el("p", { text: body }),
+    showNamespaces && namespacesLink
+      ? externalLink(namespacesLink.href, {}, "See all namespaces ↗")
+      : null
+  );
+  document.body.appendChild(notice);
+  if (tone === "success") setTimeout(() => notice.remove(), 15000);
+}
+
 // ─── Render orchestration ─────────────────────────────────────────────────
 
 function renderStats(selector, entries) {
@@ -1556,6 +1671,7 @@ async function init() {
   setupDrawer();
   setupDemosFilters();
   setupWorkshopsFilters();
+  setupNamespaceAccess();
   await loadData();
   render();
   syncDrawerToHash();

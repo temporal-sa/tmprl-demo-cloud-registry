@@ -263,3 +263,105 @@ def test_google_callback_sets_shared_domain_cookie(tmp_path, monkeypatch):
             raise AssertionError("expected Google callback to redirect")
     finally:
         httpd.shutdown()
+
+
+class RecordingAccessGateway:
+    def __init__(self, result=None, error=None):
+        self.emails = []
+        self.result = result or {
+            "status": "added",
+            "email": "mjones@temporal.io",
+            "group": "tmprl-demo-cld-read",
+        }
+        self.error = error
+
+    def grant_namespace_access(self, email):
+        self.emails.append(email)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def post_namespace_access(httpd, *, cookie=None, body=b"{}"):
+    headers = {"Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
+    return urlopen(
+        Request(
+            f"http://127.0.0.1:{httpd.server_port}/api/namespace-access",
+            data=body,
+            headers=headers,
+            method="POST",
+        ),
+        timeout=2,
+    )
+
+
+def signed_session_cookie(email="mjones@temporal.io"):
+    token = server.create_session_token(
+        server.GoogleIdentity(
+            subject="google-subject",
+            email=email,
+            name="M Jones",
+            hosted_domain="temporal.io",
+        )
+    )
+    return f"{server.AUTH_SESSION_COOKIE}={token}"
+
+
+def test_namespace_access_requires_a_signed_in_user(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = RecordingAccessGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            post_namespace_access(httpd)
+        assert raised.value.code == 401
+        assert gateway.emails == []
+    finally:
+        httpd.shutdown()
+
+
+def test_namespace_access_grants_the_session_user_not_the_request_body(
+    tmp_path, monkeypatch
+):
+    configure_google_auth(monkeypatch)
+    gateway = RecordingAccessGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = post_namespace_access(
+            httpd,
+            cookie=signed_session_cookie(),
+            body=json.dumps({"email": "someone-else@temporal.io"}).encode("utf-8"),
+        )
+        assert response.status == 200
+        assert json.loads(response.read().decode("utf-8"))["status"] == "added"
+        assert gateway.emails == ["mjones@temporal.io"]
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    "gateway",
+    [None, RecordingAccessGateway(error=server.TemporalUnavailable("down"))],
+    ids=["no-temporal", "temporal-error"],
+)
+def test_namespace_access_is_unavailable_without_temporal(tmp_path, monkeypatch, gateway):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            post_namespace_access(httpd, cookie=signed_session_cookie())
+        assert raised.value.code == 503
+        payload = json.loads(raised.value.read().decode("utf-8"))
+        assert payload["error"] == "temporal-unavailable"
+    finally:
+        httpd.shutdown()
+
+
+def test_namespace_access_workflow_id_matches_the_operator():
+    # demo_registry_operator.derive.namespace_read_access_workflow_id
+    assert (
+        server.namespace_access_workflow_id(" MJones@temporal.io ")
+        == "namespace-readers/grant/mjones@temporal.io"
+    )
