@@ -3,93 +3,97 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#17171c" />
+    <meta name="theme-color" content="#121218" />
     <title>Temporal Field Kit</title>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
-  <body class="min-h-screen bg-background text-foreground antialiased">
-    <div class="app-shell">
-      <aside class="site-sidebar">
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
         <a href="/" data-route="/" class="brand" aria-label="Temporal Field Kit home">
           <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span>Temporal</span>
-          <small>Field Kit</small>
+          <span class="brand-name">Temporal <em>Field Kit</em></span>
         </a>
-        <nav class="site-nav" aria-label="Primary navigation" data-tabs>
-          <a href="/" data-route="/">
-            <span class="nav-icon" aria-hidden="true">⌁</span>
-            <span><strong>Demos</strong><small>Ready to present</small></span>
-          </a>
-          <a href="/courses" data-route="/courses">
-            <span class="nav-icon" aria-hidden="true">□</span>
-            <span><strong>Courses</strong><small>Hands-on learning</small></span>
-          </a>
+        <nav class="tabs" aria-label="Catalog sections">
+          <a href="/" data-route="/">Demos <span class="tab-count" data-tab-count="demos"></span></a>
+          <a href="/courses" data-route="/courses">Workshops <span class="tab-count" data-tab-count="workshops"></span></a>
         </nav>
-        <p class="sidebar-note">Internal tools for Temporal field teams.</p>
-      </aside>
+      </div>
+    </header>
 
-      <main class="site-main">
-        <header class="page-hero">
-          <div class="hero-copy">
-            <p class="hero-kicker">Temporal field enablement</p>
-            <h1>Build, teach, and demo durable execution.</h1>
-            <p>Find presentation-ready demos and guided labs in one place.</p>
-          </div>
-          <div class="workflow-art" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-          </div>
-        </header>
+    <main class="page">
+      <section data-view="demos" hidden>
+        <div class="view-head">
+          <h1>Demos</h1>
+          <p>Live, presentation-ready Temporal demos. Open one to launch it, find its assets, or spin up a crashable copy.</p>
+        </div>
 
-        <section data-view="demos" hidden>
-          <div class="search-panel">
-          <input
-            type="search"
-            data-demos-search
-            placeholder="Search demos by name, description, tag, or SDK..."
-            aria-label="Search demos"
-          />
-          <div class="filter-stack" data-demos-filters>
-            <div data-tags-row><span>Topics</span></div>
-            <div data-sdks-row><span>SDK</span></div>
-            <button type="button" data-clear-demos-filters hidden>Clear filters</button>
-          </div>
-          </div>
-          <p class="text-xs text-muted-foreground mb-3" data-demos-count hidden></p>
-          <div class="demo-group">
-            <div class="section-heading">
-              <div><h2>Canonical demos</h2><p>Curated stories with everything you need to present.</p></div>
-              <span class="section-count" data-canonical-total></span>
-            </div>
-            <div class="space-y-4" data-demos-list>
-              <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
-            </div>
-          </div>
-          <div class="demo-group">
-            <div class="section-heading">
-              <div><h2>All other demos</h2><p>Every registered demo that is not marked canonical.</p></div>
-              <span class="section-count" data-other-demos-total></span>
-            </div>
-            <div class="space-y-4" data-other-demos-list>
-              <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
-            </div>
+        <div class="toolbar">
+          <label class="search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+            <input type="search" data-demos-search placeholder="Search demos" aria-label="Search demos" />
+            <kbd>/</kbd>
+          </label>
+          <div class="chip-row" data-demos-sdks role="group" aria-label="Filter by SDK"></div>
+          <details class="menu" data-topics-menu>
+            <summary>Topics <span class="menu-count" data-topics-count hidden></span></summary>
+            <div class="menu-panel" data-topics-panel></div>
+          </details>
+          <button type="button" class="link-btn" data-clear-demos hidden>Clear</button>
+          <span class="result-count" data-demos-count hidden></span>
+        </div>
+
+        <section class="group" aria-labelledby="canonical-heading">
+          <header class="group-head">
+            <h2 id="canonical-heading">Canonical demos</h2>
+            <span class="group-count" data-canonical-total></span>
+            <p>Curated stories with speaker notes, decks and recordings: the default choice for customer conversations.</p>
+          </header>
+          <div class="canonical-list" data-canonical-list>
+            <p class="empty">Loading…</p>
           </div>
         </section>
 
-        <section data-view="courses" hidden>
-          <div class="section-heading">
-            <div><h2>Instruqt courses</h2><p>Browser-based labs for workshops, webinars, and self-guided learning.</p></div>
-            <span class="section-count" data-courses-total></span>
-          </div>
-          <div class="search-panel course-search">
-            <input type="search" data-courses-search placeholder="Search courses, topics, or SDKs..." aria-label="Search courses" />
-          </div>
-          <p class="text-xs text-muted-foreground mb-3" data-courses-count hidden></p>
-          <div class="course-grid" data-courses-list>
-            <div class="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+        <section class="group" aria-labelledby="other-heading">
+          <header class="group-head">
+            <h2 id="other-heading">More demos</h2>
+            <span class="group-count" data-other-total></span>
+            <p>Every other registered demo: specialist, experimental and community stories.</p>
+          </header>
+          <div class="demo-grid" data-other-list>
+            <p class="empty">Loading…</p>
           </div>
         </section>
-      </main>
+      </section>
+
+      <section data-view="workshops" hidden>
+        <div class="view-head">
+          <h1>Workshops</h1>
+          <p>Browser-based Instruqt workshops for live sessions, webinars and self-guided learning.</p>
+        </div>
+
+        <div class="toolbar">
+          <label class="search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+            <input type="search" data-workshops-search placeholder="Search workshops" aria-label="Search workshops" />
+            <kbd>/</kbd>
+          </label>
+          <div class="chip-row" data-workshops-sdks role="group" aria-label="Filter by SDK"></div>
+          <button type="button" class="link-btn" data-clear-workshops hidden>Clear</button>
+          <span class="result-count" data-workshops-count hidden></span>
+        </div>
+
+        <div class="workshop-grid" data-workshops-list>
+          <p class="empty">Loading…</p>
+        </div>
+      </section>
+    </main>
+
+    <div class="drawer" data-drawer hidden>
+      <div class="drawer-backdrop" data-drawer-close></div>
+      <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" data-drawer-panel></aside>
     </div>
+
     <script src="/static/app.js" defer></script>
   </body>
 </html>
