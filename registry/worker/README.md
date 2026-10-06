@@ -189,7 +189,7 @@ permissions; it only keeps the group's grants in sync and adds members.
   after tagging it (best-effort; it never fails or rolls back the demo). A
   higher permission found on a managed namespace is set back to Read.
 - Deleting a namespace first removes the group's access to it (best-effort).
-- `GrantNamespaceReadAccessWorkflow` backs the catalog's "Grant Namespace
+- `GrantNamespaceReadAccessWorkflow` backs the catalog's "Request Namespace
   Access" button: the web server starts it with the signed-in user's email, and
   it adds that Temporal Cloud user to the group. A missing Cloud user is
   reported back ("user-not-found"), never invited.

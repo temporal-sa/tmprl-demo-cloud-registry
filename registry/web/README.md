@@ -33,7 +33,7 @@ demo instead, add `static/screenshots/<demo name>.jpg` (the `DemoProject` name,
 e.g. `canonical-ai-demo.jpg`; ~1600px wide works well). The UI picks it up on
 the next image build and falls back to the artwork when the file is missing.
 
-`POST /api/namespace-access` backs the header's "Grant Namespace Access" button.
+`POST /api/namespace-access` backs the header's "Request Namespace Access" button.
 It requires a signed-in session and runs the operator's
 `GrantNamespaceReadAccessWorkflow` for the session's email (never an address
 from the request body), which adds that Temporal Cloud user to the group that
