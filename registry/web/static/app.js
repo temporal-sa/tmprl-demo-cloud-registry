@@ -38,7 +38,12 @@ const ICONS = {
   link: '<path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L10 5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1-1"/>',
   close: '<path d="m5 5 10 10M15 5 5 15"/>',
   arrow: '<path d="M4 10h12M11 5l5 5-5 5"/>',
+  sparkle: '<path d="M10 1c.8 5.2 3.8 8.2 9 9-5.2.8-8.2 3.8-9 9-.8-5.2-3.8-8.2-9-9 5.2-.8 8.2-3.8 9-9Z"/>',
+  terminal: '<rect x="2.5" y="3.5" width="15" height="13"/><path d="m6 8 2.5 2L6 12m4.5 0H14"/>',
 };
+
+const SPARKLE_PATH =
+  "M20 0c1.6 11 9 18.4 20 20-11 1.6-18.4 9-20 20C18.4 29 11 21.6 0 20 11 18.4 18.4 11 20 0Z";
 
 function icon(name) {
   const span = document.createElement("span");
@@ -56,6 +61,74 @@ function linkLabel(url) {
 
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+// Per-SDK accent colors, matching the language colors on temporal.io's Code
+// Exchange cards (`ink` is the readable text color on top of `color`).
+const SDK_META = {
+  python: { abbr: "PY", color: "#fecb2f", ink: "#141414" },
+  typescript: { abbr: "TS", color: "#00f986", ink: "#141414" },
+  go: { abbr: "GO", color: "#444ce7", ink: "#f8fafc" },
+  java: { abbr: "JV", color: "#ff6bff", ink: "#141414" },
+  ".net": { abbr: ".N", color: "#9747ff", ink: "#f8fafc" },
+  rust: { abbr: "RS", color: "#d34516", ink: "#f8fafc" },
+  php: { abbr: "PH", color: "#7f86f1", ink: "#141414" },
+  ruby: { abbr: "RB", color: "#ff5555", ink: "#f8fafc" },
+};
+const SDK_ALIASES = { dotnet: ".net", "c#": ".net", ts: "typescript", golang: "go" };
+
+function sdkMeta(sdk) {
+  const key = String(sdk).trim().toLowerCase();
+  return (
+    SDK_META[SDK_ALIASES[key] || key] || {
+      abbr: key.replace(/[^a-z0-9.]/g, "").slice(0, 2).toUpperCase(),
+      color: "#667ca1",
+      ink: "#f8fafc",
+    }
+  );
+}
+
+function sdkStyle(sdk) {
+  const meta = sdkMeta(sdk);
+  return `--sdk:${meta.color};--sdk-ink:${meta.ink}`;
+}
+
+function sdkMark(sdk) {
+  return el("span", {
+    class: "sdk-mark",
+    style: sdkStyle(sdk),
+    "aria-hidden": "true",
+    text: sdkMeta(sdk).abbr,
+  });
+}
+
+function sdkList(sdks) {
+  if (!sdks.length) return null;
+  return el(
+    "div",
+    { class: "sdk-list" },
+    ...sdks.map((sdk) => el("span", { class: "sdk" }, sdkMark(sdk), sdk))
+  );
+}
+
+// The colored base stripe on a demo card: one equal, hard-edged segment per SDK.
+function sdkBar(sdks) {
+  const colors = sdks.map((sdk) => sdkMeta(sdk).color);
+  if (!colors.length) return "var(--gray-500)";
+  if (colors.length === 1) return colors[0];
+  const step = 100 / colors.length;
+  const stops = colors.map(
+    (color, i) => `${color} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`
+  );
+  return `linear-gradient(90deg, ${stops.join(", ")})`;
+}
+
+function sparkle(style) {
+  const wrap = document.createElement("span");
+  wrap.innerHTML = `<svg class="sparkle" viewBox="0 0 40 40" aria-hidden="true"><path d="${SPARKLE_PATH}"/></svg>`;
+  const svg = wrap.firstChild;
+  if (style) svg.setAttribute("style", style);
+  return svg;
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -127,6 +200,24 @@ function normalizeDemo(project) {
   };
 }
 
+// The operator stamps every managed Temporal Cloud namespace with
+// owner=<baseDomain> (resources.namespace_tags), coerced to Cloud's tag charset.
+function ownerTagValue(baseDomain) {
+  return baseDomain.trim().toLowerCase().replace(/[^a-z0-9._@-]/g, "_").slice(0, 63);
+}
+
+// Points the header's "See All Namespaces" button at the Cloud namespace list
+// filtered to our owner tag (the list page reads `?tags=key:value,...`).
+function renderNamespacesLink(baseDomain) {
+  const link = document.querySelector("[data-namespaces-link]");
+  if (!link || !baseDomain) return;
+  const tag = `owner:${ownerTagValue(baseDomain)}`;
+  const url = new URL("https://cloud.temporal.io/namespaces");
+  url.searchParams.set("tags", tag);
+  link.href = url.toString();
+  link.title = `Temporal Cloud namespaces tagged ${tag}`;
+}
+
 function namespaceUrl(demo) {
   return demo.cloud.namespace
     ? `https://cloud.temporal.io/namespaces/${demo.cloud.namespace}/workflows`
@@ -143,6 +234,7 @@ async function loadData() {
       .map(normalizeDemo)
       .sort((a, b) => a.name.localeCompare(b.name));
     state.courses = Array.isArray(payload.courses) ? payload.courses : [];
+    renderNamespacesLink(payload.baseDomain);
   } catch (err) {
     document
       .querySelectorAll("[data-canonical-list], [data-other-list], [data-workshops-list]")
@@ -268,7 +360,8 @@ function sdkChip(value, selected, onToggle) {
     "button",
     {
       type: "button",
-      class: "chip",
+      class: "sdk-toggle",
+      style: sdkStyle(value),
       "aria-pressed": selected.has(value) ? "true" : "false",
       onclick: () => {
         if (selected.has(value)) selected.delete(value);
@@ -276,6 +369,7 @@ function sdkChip(value, selected, onToggle) {
         onToggle();
       },
     },
+    sdkMark(value),
     value
   );
 }
@@ -419,17 +513,13 @@ function renderDemosList() {
   }
 }
 
-function sdkBadges(sdks) {
-  return sdks.map((sdk) => el("span", { class: "badge badge-sdk", text: sdk }));
-}
-
-function flagBadges(demo) {
+function flagTags(demo) {
   return [
     demo.authRequired
       ? el(
           "span",
           {
-            class: "badge badge-auth",
+            class: "tag tag-solid",
             title: "Requires signing in with a @temporal.io email",
           },
           icon("lock"),
@@ -440,7 +530,7 @@ function flagBadges(demo) {
       ? el(
           "span",
           {
-            class: "badge badge-crash",
+            class: "tag tag-hot",
             title: "Supports a private crashable environment",
           },
           icon("bolt"),
@@ -450,23 +540,115 @@ function flagBadges(demo) {
   ];
 }
 
-function topicList(tags) {
-  if (!tags.length) return null;
-  return el("p", { class: "topic-list", text: tags.join(" · ") });
+function topicTags(tags, limit = Infinity) {
+  const shown = tags.slice(0, limit).map((tag) => el("span", { class: "tag", text: tag }));
+  if (tags.length > limit) {
+    shown.push(
+      el("span", {
+        class: "tag tag-more",
+        title: tags.slice(limit).join(", "),
+        text: `+${tags.length - limit}`,
+      })
+    );
+  }
+  return shown;
 }
 
-function canonicalBadge() {
-  return el("span", { class: "badge badge-canonical" }, icon("star"), "Canonical");
+function tagRow(tags) {
+  const present = tags.filter(Boolean);
+  return present.length ? el("div", { class: "tags" }, ...present) : null;
 }
 
-function openAppButton(demo, cls = "btn btn-sm") {
+function openAppButton(demo, cls = "btn btn-ghost btn-sm", label = "Open app") {
   if (!demo.technicalAssets.appUrl) return null;
   return externalLink(
     demo.technicalAssets.appUrl,
     { class: cls, onclick: (event) => event.stopPropagation() },
-    "Open app",
+    label,
     icon("external")
   );
+}
+
+// Deterministic artwork for featured demos in the temporal.io style (color
+// glows over a grid, stepped pixel blocks, a sparkle), seeded by the demo id
+// so each demo keeps its own composition across reloads.
+function seededRandom(seed) {
+  let h = 2166136261;
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return () => {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    return (h >>> 0) / 4294967296;
+  };
+}
+
+function demoArt(demo) {
+  const rand = seededRandom(demo.id || "demo");
+  const pick = (list) => list[Math.floor(rand() * list.length)];
+  const pct = (min, max) => `${Math.round(min + rand() * (max - min))}%`;
+  const glows = [
+    "rgb(255 0 223 / .55)",
+    "rgb(68 76 231 / .85)",
+    "rgb(89 253 160 / .4)",
+    "rgb(182 100 255 / .65)",
+  ];
+  const blocks = ["#f8fafc", "#fecb2f", "#59fda0", "#ff6bff", "#f55", "var(--grad-uv)", "var(--grad-pink)"];
+  const glow1 = pick(glows);
+  const glow2 = pick(glows.filter((glow) => glow !== glow1));
+  const cluster = (x, y) =>
+    el(
+      "span",
+      { class: "art-cluster", style: `--x:${x};--y:${y}` },
+      el("i", { style: `--w:${32 * (1 + Math.floor(rand() * 2))}px;--c:${pick(blocks)}` }),
+      el("i", {
+        style: `--w:${48 * (1 + Math.floor(rand() * 3))}px;--c:${pick(blocks)};--dy:1.25rem`,
+      })
+    );
+  const art = el(
+    "div",
+    {
+      class: "art",
+      "aria-hidden": "true",
+      style: `--g1x:${pct(10, 40)};--g1y:${pct(10, 40)};--g1c:${glow1};--g2x:${pct(60, 95)};--g2y:${pct(55, 95)};--g2c:${glow2}`,
+    },
+    cluster(pct(6, 28), pct(8, 20)),
+    cluster(pct(38, 58), pct(56, 66)),
+    sparkle(`--x:${pct(58, 80)};--y:${pct(14, 32)};--size:${(2.5 + rand() * 1.5).toFixed(2)}rem`),
+    el("div", { class: "art-label" }, ...demo.sdks.map(sdkMark), el("span", { text: demo.id }))
+  );
+  art.appendChild(screenshotFrame(demo, art));
+  return art;
+}
+
+// A screenshot dropped at static/screenshots/<demo id>.jpg is shown in a
+// browser-window frame over the art. Until it loads (or if there is none) the
+// frame stays invisible and the generated art stands on its own.
+function screenshotFrame(demo, art) {
+  const appUrl = demo.technicalAssets.appUrl;
+  let host = demo.id;
+  try {
+    if (appUrl) host = new URL(appUrl).host;
+  } catch (err) {
+    // keep the demo id as the label
+  }
+  const img = el("img", {
+    src: `/static/screenshots/${encodeURIComponent(demo.id)}.jpg`,
+    alt: "",
+    loading: "lazy",
+    decoding: "async",
+  });
+  const frame = el(
+    appUrl ? "a" : "div",
+    appUrl
+      ? { class: "art-shot", href: appUrl, target: "_blank", rel: "noopener noreferrer", tabindex: "-1" }
+      : { class: "art-shot" },
+    el("div", { class: "art-shot-bar" }, el("i"), el("i"), el("i"), el("span", { text: host })),
+    img
+  );
+  img.addEventListener("load", () => art.classList.add("has-shot"));
+  img.addEventListener("error", () => frame.remove());
+  return frame;
 }
 
 function renderFeatureCard(demo) {
@@ -482,40 +664,41 @@ function renderFeatureCard(demo) {
   return el(
     "article",
     { class: "feature", id: `demo-${demo.id}` },
+    demoArt(demo),
     el(
       "div",
-      {},
-      el("div", { class: "badges" }, canonicalBadge(), ...flagBadges(demo)),
+      { class: "feature-body" },
+      el("p", { class: "eyebrow", text: "Canonical demo" }),
       el("h3", { text: demo.name }),
       el("p", { class: "feature-summary", text: demo.summary }),
-      el("div", { class: "badges" }, ...sdkBadges(demo.sdks)),
-      topicList(demo.tags)
-    ),
-    el(
-      "div",
-      { class: "feature-side" },
-      openAppButton(demo, "btn btn-primary") ||
-        el("span", { class: "btn btn-primary", "aria-disabled": "true", text: "No app URL" }),
-      nt.speakerNotes
-        ? externalLink(nt.speakerNotes, { class: "btn" }, "Speaker notes")
-        : null,
-      namespaceUrl(demo)
-        ? externalLink(namespaceUrl(demo), { class: "btn" }, "Temporal Cloud namespace")
-        : null,
+      sdkList(demo.sdks),
+      tagRow([...flagTags(demo), ...topicTags(demo.tags)]),
       el(
-        "button",
-        { type: "button", class: "btn btn-ghost", onclick: () => openDrawer(demo.id) },
-        "All details",
-        icon("arrow")
-      )
-    ),
-    el(
-      "div",
-      { class: "feature-assets" },
-      ...assetChecklist.map(([label, url]) =>
-        url
-          ? externalLink(url, { class: "asset-link" }, label)
-          : el("span", { class: "asset-missing", title: "Not provided yet", text: label })
+        "div",
+        { class: "feature-actions" },
+        openAppButton(demo, "btn btn-primary", "Open demo") ||
+          el("span", { class: "btn btn-primary", "aria-disabled": "true", text: "No app URL" }),
+        nt.speakerNotes
+          ? externalLink(nt.speakerNotes, { class: "btn btn-secondary" }, "Speaker notes")
+          : null,
+        namespaceUrl(demo)
+          ? externalLink(namespaceUrl(demo), { class: "btn btn-ghost" }, "Namespace", icon("external"))
+          : null,
+        el(
+          "button",
+          { type: "button", class: "btn btn-quiet", onclick: () => openDrawer(demo.id) },
+          "All details",
+          icon("arrow")
+        )
+      ),
+      el(
+        "div",
+        { class: "checklist", role: "list", "aria-label": "Presenter assets" },
+        ...assetChecklist.map(([label, url]) =>
+          url
+            ? externalLink(url, { role: "listitem" }, label)
+            : el("span", { role: "listitem", title: "Not provided yet", text: label })
+        )
       )
     )
   );
@@ -524,7 +707,7 @@ function renderFeatureCard(demo) {
 function renderDemoCard(demo) {
   return el(
     "article",
-    { class: "card", id: `demo-${demo.id}` },
+    { class: "card", id: `demo-${demo.id}`, style: `--sdk-bar:${sdkBar(demo.sdks)}` },
     el(
       "h3",
       {},
@@ -535,14 +718,9 @@ function renderDemoCard(demo) {
         onclick: () => openDrawer(demo.id),
       })
     ),
-    el("p", { class: "card-summary", text: demo.summary }),
-    el("div", { class: "badges" }, ...sdkBadges(demo.sdks), ...flagBadges(demo)),
-    el(
-      "div",
-      { class: "card-foot" },
-      el("span", { class: "card-more", text: "Details →" }),
-      openAppButton(demo)
-    )
+    demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
+    tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
+    el("div", { class: "card-foot" }, sdkList(demo.sdks), openAppButton(demo))
   );
 }
 
@@ -646,17 +824,16 @@ function renderDrawerContent(demo) {
   const head = el(
     "div",
     { class: "drawer-head" },
-    el(
-      "div",
-      { class: "badges" },
-      demo.canonical ? canonicalBadge() : el("span", { class: "badge badge-quiet", text: "Demo" })
-    ),
+    el("p", {
+      class: demo.canonical ? "eyebrow" : "eyebrow is-quiet",
+      text: demo.canonical ? "Canonical demo" : "Demo",
+    }),
     el(
       "div",
       { class: "drawer-head-actions" },
       el(
         "button",
-        { type: "button", class: "btn btn-sm btn-ghost", onclick: () => copyLink(demo.id) },
+        { type: "button", class: "btn btn-sm btn-quiet", onclick: () => copyLink(demo.id) },
         icon("link"),
         "Copy link"
       ),
@@ -664,7 +841,7 @@ function renderDrawerContent(demo) {
         "button",
         {
           type: "button",
-          class: "btn btn-sm btn-ghost",
+          class: "icon-btn",
           "aria-label": "Close",
           onclick: () => closeDrawer(),
         },
@@ -678,7 +855,8 @@ function renderDrawerContent(demo) {
     { class: "drawer-title" },
     el("h2", { id: "drawer-title", text: demo.name }),
     el("p", { text: demo.summary }),
-    el("div", { class: "badges" }, ...sdkBadges(demo.sdks), ...flagBadges(demo))
+    sdkList(demo.sdks),
+    tagRow(flagTags(demo))
   );
 
   const launch = el(
@@ -723,13 +901,7 @@ function renderDrawerContent(demo) {
     "div",
     { class: "panel" },
     el("h3", { class: "panel-title", text: "Topics" }),
-    demo.tags.length
-      ? el(
-          "div",
-          { class: "meta-row" },
-          ...demo.tags.map((tag) => el("span", { class: "badge", text: tag }))
-        )
-      : el("p", { class: "ws-note", text: "No topics tagged." }),
+    tagRow(topicTags(demo.tags)) || el("p", { class: "ws-note", text: "No topics tagged." }),
     demo.cloud.namespace
       ? el(
           "p",
@@ -981,11 +1153,11 @@ function renderWorkspaceInto(demo, container) {
     status && status.last_error ? el("p", { class: "ws-error", text: status.last_error }) : null,
   ];
   const extend = () =>
-    workspaceButton("Extend +1h", "", () =>
+    workspaceButton("Extend +1h", "btn-secondary", () =>
       workspaceAction(demo, "/api/crashable-workspace/extend")
     );
   const remove = () =>
-    workspaceButton("Delete", "btn-ghost", () =>
+    workspaceButton("Delete", "btn-quiet", () =>
       workspaceAction(demo, "/api/crashable-workspace/delete")
     );
 
@@ -999,7 +1171,7 @@ function renderWorkspaceInto(demo, container) {
       el(
         "div",
         { class: "ws-actions" },
-        workspaceButton("Create crashable environment", "btn-ink", () =>
+        workspaceButton("Create crashable environment", "btn-primary", () =>
           workspaceAction(demo, "/api/crashable-workspace")
         )
       )
@@ -1033,10 +1205,10 @@ function renderWorkspaceInto(demo, container) {
       el(
         "div",
         { class: "ws-actions" },
-        workspaceButton("Try again", "btn-ink", () =>
+        workspaceButton("Try again", "btn-primary", () =>
           workspaceAction(demo, "/api/crashable-workspace")
         ),
-        workspaceButton("Dismiss", "btn-ghost", () =>
+        workspaceButton("Dismiss", "btn-quiet", () =>
           workspaceAction(demo, "/api/crashable-workspace/delete")
         )
       )
@@ -1049,10 +1221,10 @@ function renderWorkspaceInto(demo, container) {
         "div",
         { class: "ws-actions", style: "margin-top:0" },
         appUrl ? externalLink(appUrl, { class: "btn btn-sm btn-primary" }, "Open environment", icon("external")) : null,
-        workspaceButton("Crash workers", "btn-danger", () =>
+        workspaceButton("Crash workers", "btn-pink", () =>
           workspaceAction(demo, "/api/crashable-workspace/crash")
         ),
-        workspaceButton("Scale down workers", "btn-warn", () =>
+        workspaceButton("Scale down workers", "btn-secondary", () =>
           workspaceAction(demo, "/api/crashable-workspace/scale-down")
         ),
         extend(),
@@ -1070,7 +1242,7 @@ function renderWorkspaceInto(demo, container) {
       el(
         "div",
         { class: "ws-actions" },
-        workspaceButton("Scale up workers", "btn-ink", () =>
+        workspaceButton("Scale up workers", "btn-green", () =>
           workspaceAction(demo, "/api/crashable-workspace/scale-up")
         ),
         extend(),
@@ -1212,7 +1384,7 @@ function renderWorkshopCard(members) {
 
   let launch;
   if (!launchable.length) {
-    launch = el("span", { class: "btn btn-sm", "aria-disabled": "true", text: "No track URL" });
+    launch = el("span", { class: "launch-label", text: "No track published yet" });
   } else if (grouped) {
     launch = el(
       "div",
@@ -1220,16 +1392,17 @@ function renderWorkshopCard(members) {
       el("span", { class: "launch-label", text: "Choose a track" }),
       el(
         "div",
-        { class: "variant-row" },
+        { class: "track-list" },
         ...launchable.map((course) =>
           externalLink(
             course.trackUrl,
             {
-              class: `btn btn-sm${courseMatchesSdk(course) ? " is-match" : ""}`,
+              class: courseMatchesSdk(course) ? "is-match" : null,
               "aria-label": `Launch ${courseVariantLabel(course)} workshop on Instruqt`,
             },
+            courseSdks(course)[0] ? sdkMark(courseSdks(course)[0]) : null,
             courseVariantLabel(course),
-            icon("external")
+            icon("arrow")
           )
         )
       )
@@ -1237,21 +1410,32 @@ function renderWorkshopCard(members) {
   } else {
     launch = externalLink(
       representative.trackUrl,
-      { class: "btn btn-ink", "aria-label": "Launch workshop on Instruqt" },
+      { class: "resource-link", "aria-label": "Launch workshop on Instruqt" },
       "Launch workshop",
-      icon("external")
+      icon("arrow")
     );
   }
 
+  const workshopIcon = icon("terminal");
+  workshopIcon.setAttribute("class", "workshop-icon");
   const resources = courseResources(members);
   return el(
     "article",
     { class: "workshop" },
-    el("span", { class: "eyebrow", text: "Instruqt workshop" }),
+    workshopIcon,
+    el("p", {
+      class: "eyebrow",
+      text: grouped
+        ? `Instruqt workshop · ${plural(launchable.length, "track")}`
+        : "Instruqt workshop",
+    }),
     el("h3", { text: representative.title || representative.name }),
-    el("p", { text: representative.summary || "A hands-on Temporal workshop." }),
-    el("div", { class: "badges", style: "margin-top:.9rem" }, ...sdkBadges(sdks)),
-    topicList(tags),
+    el("p", {
+      class: "workshop-summary",
+      text: representative.summary || "A hands-on Temporal workshop.",
+    }),
+    sdkList(sdks),
+    tagRow(topicTags(tags)),
     el("div", { class: "workshop-launch" }, launch),
     resources.length
       ? el(
@@ -1292,11 +1476,32 @@ function renderWorkshopsList() {
 
 // ─── Render orchestration ─────────────────────────────────────────────────
 
-function renderTabCounts() {
+function renderStats(selector, entries) {
+  document
+    .querySelector(selector)
+    .replaceChildren(
+      ...entries.map(([value, label]) =>
+        el("div", {}, el("dt", { text: label }), el("dd", { text: String(value) }))
+      )
+    );
+}
+
+// Tab badges plus the page-header stat rows on both views.
+function renderCounts() {
+  const workshops = groupCourses(state.courses).length;
   document.querySelector('[data-tab-count="demos"]').textContent = String(state.demos.length);
-  document.querySelector('[data-tab-count="workshops"]').textContent = String(
-    groupCourses(state.courses).length
-  );
+  document.querySelector('[data-tab-count="workshops"]').textContent = String(workshops);
+  renderStats("[data-demo-stats]", [
+    [state.demos.length, "Demos"],
+    [state.demos.filter((demo) => demo.canonical).length, "Canonical"],
+    [state.demos.filter((demo) => demo.crashable).length, "Crashable"],
+    [new Set(state.demos.flatMap((demo) => demo.sdks)).size, "SDKs"],
+  ]);
+  renderStats("[data-workshop-stats]", [
+    [workshops, "Workshops"],
+    [state.courses.length, "Tracks"],
+    [new Set(state.courses.flatMap(courseSdks)).size, "SDKs"],
+  ]);
 }
 
 function render() {
@@ -1313,7 +1518,7 @@ function render() {
   });
   document.title =
     view === "workshops" ? "Workshops · Temporal Field Kit" : "Demos · Temporal Field Kit";
-  renderTabCounts();
+  renderCounts();
   if (view === "workshops") {
     renderWorkshopsFilters();
     renderWorkshopsList();

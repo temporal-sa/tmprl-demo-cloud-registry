@@ -27,6 +27,11 @@ missing file by serving an empty catalog).
 operator mounts the mirrored status ConfigMap at `/app/status`, matching the
 image default.
 
+Canonical demos are featured with generated artwork. To show a screenshot of the
+demo instead, add `static/screenshots/<demo name>.jpg` (the `DemoProject` name,
+e.g. `canonical-ai-demo.jpg`; ~1600px wide works well). The UI picks it up on
+the next image build and falls back to the artwork when the file is missing.
+
 `/_auth/verify` is the Traefik forward-auth endpoint used by protected demo
 routes. With `AUTH_MODE=google`, missing or invalid sessions redirect to
 `/auth/login`, which starts Google OAuth and sets the shared

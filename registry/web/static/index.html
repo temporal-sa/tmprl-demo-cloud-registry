@@ -3,91 +3,141 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#121218" />
+    <meta name="theme-color" content="#141414" />
+    <meta name="color-scheme" content="dark" />
     <title>Temporal Field Kit</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://temporal.io" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Mono:wght@400;500&display=swap" />
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="topbar-inner">
+    <header class="site-header">
+      <div class="wrap header-inner">
         <a href="/" data-route="/" class="brand" aria-label="Temporal Field Kit home">
-          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="brand-name">Temporal <em>Field Kit</em></span>
+          <img src="/static/temporal-logo.svg" alt="Temporal" width="129" height="33" />
+          <span class="brand-product">Field Kit</span>
         </a>
         <nav class="tabs" aria-label="Catalog sections">
           <a href="/" data-route="/">Demos <span class="tab-count" data-tab-count="demos"></span></a>
           <a href="/courses" data-route="/courses">Workshops <span class="tab-count" data-tab-count="workshops"></span></a>
         </nav>
+        <a class="btn btn-secondary btn-sm header-cta" data-namespaces-link href="https://cloud.temporal.io/namespaces?tags=owner%3Atmprl-demo.cloud" target="_blank" rel="noopener noreferrer" title="Temporal Cloud namespaces tagged owner:tmprl-demo.cloud">See All Namespaces<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4h9v9"/><path d="M16 4 5 15"/></svg></a>
       </div>
     </header>
 
-    <main class="page">
+    <main>
       <section data-view="demos" hidden>
-        <div class="view-head">
-          <h1>Demos</h1>
-          <p>Live, presentation-ready Temporal demos. Open one to launch it, find its assets, or spin up a crashable copy.</p>
+        <div class="page-head">
+          <div class="wrap page-head-inner">
+            <div>
+              <h1>Demos</h1>
+              <p>Live, presentation-ready Temporal demos. Launch one, grab its talk track, or spin up a private copy to crash.</p>
+            </div>
+            <dl class="stats" data-demo-stats></dl>
+          </div>
         </div>
 
-        <div class="toolbar">
-          <label class="search">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
-            <input type="search" data-demos-search placeholder="Search demos" aria-label="Search demos" />
-            <kbd>/</kbd>
-          </label>
-          <div class="chip-row" data-demos-sdks role="group" aria-label="Filter by SDK"></div>
-          <details class="menu" data-topics-menu>
-            <summary>Topics <span class="menu-count" data-topics-count hidden></span></summary>
-            <div class="menu-panel" data-topics-panel></div>
-          </details>
-          <button type="button" class="link-btn" data-clear-demos hidden>Clear</button>
-          <span class="result-count" data-demos-count hidden></span>
+        <div class="catalog">
+          <div class="wrap">
+            <div class="toolbar">
+              <label class="search">
+                <input type="search" data-demos-search placeholder="Search demos…" aria-label="Search demos" />
+                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4.5 4.5"/></svg>
+              </label>
+              <div class="filter-slab">
+                <span class="filter-label">Filter</span>
+                <div class="sdk-filter" data-demos-sdks role="group" aria-label="Filter by SDK"></div>
+                <details class="menu" data-topics-menu>
+                  <summary>Topics <span class="menu-count" data-topics-count hidden></span></summary>
+                  <div class="menu-panel" data-topics-panel></div>
+                </details>
+              </div>
+            </div>
+            <div class="toolbar-status">
+              <span class="result-count" data-demos-count hidden></span>
+              <button type="button" class="link-btn" data-clear-demos hidden>Clear filters ×</button>
+            </div>
+
+            <section class="group" aria-labelledby="canonical-heading">
+              <header class="group-head">
+                <p class="eyebrow">01 / Canonical</p>
+                <h2 id="canonical-heading">Canonical demos</h2>
+                <p>Curated stories with speaker notes, decks and recordings: the default choice for customer conversations.</p>
+                <span class="group-count" data-canonical-total></span>
+              </header>
+              <div class="canonical-list" data-canonical-list>
+                <p class="empty">Loading…</p>
+              </div>
+            </section>
+
+            <section class="group" aria-labelledby="other-heading">
+              <header class="group-head">
+                <p class="eyebrow">02 / Catalog</p>
+                <h2 id="other-heading">More demos</h2>
+                <p>Every other registered demo: specialist, experimental and community stories.</p>
+                <span class="group-count" data-other-total></span>
+              </header>
+              <div class="demo-grid" data-other-list>
+                <p class="empty">Loading…</p>
+              </div>
+            </section>
+          </div>
         </div>
-
-        <section class="group" aria-labelledby="canonical-heading">
-          <header class="group-head">
-            <h2 id="canonical-heading">Canonical demos</h2>
-            <span class="group-count" data-canonical-total></span>
-            <p>Curated stories with speaker notes, decks and recordings: the default choice for customer conversations.</p>
-          </header>
-          <div class="canonical-list" data-canonical-list>
-            <p class="empty">Loading…</p>
-          </div>
-        </section>
-
-        <section class="group" aria-labelledby="other-heading">
-          <header class="group-head">
-            <h2 id="other-heading">More demos</h2>
-            <span class="group-count" data-other-total></span>
-            <p>Every other registered demo: specialist, experimental and community stories.</p>
-          </header>
-          <div class="demo-grid" data-other-list>
-            <p class="empty">Loading…</p>
-          </div>
-        </section>
       </section>
 
       <section data-view="workshops" hidden>
-        <div class="view-head">
-          <h1>Workshops</h1>
-          <p>Browser-based Instruqt workshops for live sessions, webinars and self-guided learning.</p>
+        <div class="page-head">
+          <div class="wrap page-head-inner">
+            <div>
+              <h1>Workshops</h1>
+              <p>Browser-based Instruqt workshops for live sessions, webinars and self-guided learning.</p>
+            </div>
+            <dl class="stats" data-workshop-stats></dl>
+          </div>
         </div>
 
-        <div class="toolbar">
-          <label class="search">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
-            <input type="search" data-workshops-search placeholder="Search workshops" aria-label="Search workshops" />
-            <kbd>/</kbd>
-          </label>
-          <div class="chip-row" data-workshops-sdks role="group" aria-label="Filter by SDK"></div>
-          <button type="button" class="link-btn" data-clear-workshops hidden>Clear</button>
-          <span class="result-count" data-workshops-count hidden></span>
-        </div>
+        <div class="catalog catalog-grid">
+          <div class="wrap">
+            <div class="toolbar">
+              <label class="search">
+                <input type="search" data-workshops-search placeholder="Search workshops…" aria-label="Search workshops" />
+                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4.5 4.5"/></svg>
+              </label>
+              <div class="filter-slab">
+                <span class="filter-label">Filter</span>
+                <div class="sdk-filter" data-workshops-sdks role="group" aria-label="Filter by SDK"></div>
+              </div>
+            </div>
+            <div class="toolbar-status">
+              <span class="result-count" data-workshops-count hidden></span>
+              <button type="button" class="link-btn" data-clear-workshops hidden>Clear filters ×</button>
+            </div>
 
-        <div class="workshop-grid" data-workshops-list>
-          <p class="empty">Loading…</p>
+            <div class="workshop-grid" data-workshops-list>
+              <p class="empty">Loading…</p>
+            </div>
+          </div>
         </div>
       </section>
     </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <a href="/" data-route="/" class="footer-brand" aria-label="Temporal Field Kit home">
+          <img src="/static/temporal-logo.svg" alt="Temporal" width="110" height="28" />
+          <span>Field Kit</span>
+        </a>
+        <p>Internal demos and workshops for Temporal field teams.</p>
+        <nav aria-label="More from Temporal">
+          <a href="https://temporal.io/code-exchange" target="_blank" rel="noopener noreferrer">Code Exchange</a>
+          <a href="https://docs.temporal.io" target="_blank" rel="noopener noreferrer">Docs</a>
+          <a href="https://cloud.temporal.io" target="_blank" rel="noopener noreferrer">Cloud</a>
+        </nav>
+      </div>
+    </footer>
 
     <div class="drawer" data-drawer hidden>
       <div class="drawer-backdrop" data-drawer-close></div>
