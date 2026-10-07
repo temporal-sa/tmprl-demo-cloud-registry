@@ -1,0 +1,60 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: event-leads
+spec:
+  source:
+    repo: https://github.com/temporal-sa/temporal-lead-follow-up-event-tracker
+    branch: main
+  registry:
+    title: Event Lead Tracker
+    summary: Mobile event follow-up forms with employee controls, QR codes, CSV exports, and automatically sharded Temporal entity workflows.
+    tags: [Entity Workflows, Forms, Workflow Sharding]
+    temporalSdks: [Go]
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile
+  temporal:
+    auth:
+      mode: apiKey
+  components:
+    web:
+      build: app
+      args: [serve]
+      temporalAccess: true
+      env:
+        - name: PUBLIC_URL
+          value: https://event-leads.tmprl-demo.cloud
+        - name: AUTH_VERIFY_URL
+          value: http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify
+        - name: TEMPORAL_TASK_QUEUE
+          value: event-leads
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+    worker:
+      build: app
+      args: [worker]
+      temporalAccess: true
+      env:
+        - name: TEMPORAL_TASK_QUEUE
+          value: event-leads
+      worker:
+        versioning:
+          enabled: true
+          deploymentName: event-leads
+          rollout:
+            strategy: AllAtOnce
+          sunset:
+            scaledownDelay: 5m
+            deleteDelay: 24h
+  ingress:
+    subdomain: event-leads
+    temporalAuthRequired: false
+    component: web
+    port: http
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
