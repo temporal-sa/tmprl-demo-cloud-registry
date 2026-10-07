@@ -699,9 +699,16 @@
     --btn-bg: var(--space-black);
     display: grid;
     grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
-    background: linear-gradient(var(--space-black), var(--space-black)) padding-box, var(--grad-uv-edge) border-box;
+    --feature-bg: var(--space-black);
+    background: linear-gradient(var(--feature-bg), var(--feature-bg)) padding-box, var(--grad-uv-edge) border-box;
     border: 2px solid transparent;
+    cursor: pointer;
   }
+
+  .feature:hover { --feature-bg: var(--deep-blue-hover); --btn-bg: var(--deep-blue-hover); }
+  .feature .card-open { cursor: pointer; }
+  .feature .card-open::after { content: none; }
+  .feature:has(.card-open:focus-visible) { outline: 2px solid var(--indigo-300); outline-offset: 2px; }
 
   .feature-body {
     display: flex;

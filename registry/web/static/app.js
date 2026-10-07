@@ -678,13 +678,32 @@ function renderFeatureCard(demo) {
   ];
   return el(
     "article",
-    { class: "feature", id: `demo-${demo.id}` },
+    {
+      class: "feature",
+      id: `demo-${demo.id}`,
+      // The whole tile opens the drawer, like the catalog cards. Links and
+      // buttons inside it (actions, checklist, screenshot) keep their own target.
+      onclick: (event) => {
+        if (event.target.closest("a, button")) return;
+        if (window.getSelection()?.toString()) return;
+        openDrawer(demo.id);
+      },
+    },
     demoArt(demo),
     el(
       "div",
       { class: "feature-body" },
       el("p", { class: "eyebrow", text: "Canonical demo" }),
-      el("h3", { text: demo.name }),
+      el(
+        "h3",
+        {},
+        el("button", {
+          type: "button",
+          class: "card-open",
+          text: demo.name,
+          onclick: () => openDrawer(demo.id),
+        })
+      ),
       el("p", { class: "feature-summary", text: demo.summary }),
       sdkList(demo.sdks),
       tagRow([...flagTags(demo), ...topicTags(demo.tags)]),
@@ -696,13 +715,7 @@ function renderFeatureCard(demo) {
         nt.speakerNotes
           ? externalLink(nt.speakerNotes, { class: "btn btn-secondary" }, "Speaker notes")
           : null,
-        namespaceButton(demo, "btn btn-ghost"),
-        el(
-          "button",
-          { type: "button", class: "btn btn-quiet", onclick: () => openDrawer(demo.id) },
-          "All details",
-          icon("arrow")
-        )
+        namespaceButton(demo, "btn btn-ghost")
       ),
       el(
         "div",
