@@ -75,9 +75,8 @@ def host(subdomain: str | None, project_name: str) -> str:
 
 
 # The Tofu-managed swing record (live.tmprl-demo.cloud A ALIAS -> active color's
-# Traefik ELB). Managed demos get an explicit <demo> CNAME -> live via external-dns
-# so they follow the active color atomically; the value is color-independent (the
-# same on blue and green) which is exactly what makes the swing multi-cluster-safe.
+# Traefik ELB). The *.tmprl-demo.cloud wildcard CNAMEs to it, so every demo host
+# follows the active color atomically without a per-demo DNS record.
 LIVE_SWING_HOST = f"live.{BASE_DOMAIN}"
 
 

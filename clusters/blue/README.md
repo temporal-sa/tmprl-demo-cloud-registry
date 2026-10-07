@@ -25,8 +25,9 @@ Cluster-specific values include:
   everything below self-manages.
 - `addons/` — cluster-local platform layer: node-local-dns, metrics-server,
   cluster-autoscaler, external-secrets (+ ClusterSecretStore), cert-manager
-  (+ ClusterIssuers), temporal-worker-controller, traefik, external-dns, and
-  wildcard TLS. The Instruqt LiteLLM app lives at the repo-level
+  (+ ClusterIssuers), temporal-worker-controller, traefik, and wildcard TLS.
+  There is no external-dns: `*.tmprl-demo.cloud` (Tofu, `infra/dns.tf`) CNAMEs
+  to `live`, and Traefik routes every host by name. The Instruqt LiteLLM app lives at the repo-level
   `apps/instruqt-litellm/deploy` path and is referenced by the root sync.
 - `bootstrap/` — registry CRDs and the scaled-to-zero bootstrap watch handoff.
   The active operator worker is self-rendered through the registry project.

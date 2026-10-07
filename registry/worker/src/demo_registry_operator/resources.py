@@ -81,7 +81,6 @@ TEMPORAL_WORKER_CONTROLLER_API_VERSION = "temporal.io/v1alpha1"
 # uncolored output retains the legacy v2 behavior for compatibility.
 TRAEFIK_API_VERSION_V2 = "traefik.containo.us/v1alpha1"
 TRAEFIK_API_VERSION_V3 = "traefik.io/v1alpha1"
-EXTERNAL_DNS_TARGET_ANNOTATION = "external-dns.alpha.kubernetes.io/target"
 DEMO_PROJECT_API_VERSION = "registry.tmprl-demo.cloud/v1alpha1"
 DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
@@ -2874,15 +2873,6 @@ def ingress_resources(
     }
     if version:
         annotations["platform.temporal.io/rollout-version"] = version
-    if operator_cluster():
-        # external-dns (per color cluster) turns this into <demo> CNAME -> live so
-        # the demo follows the active color's swing record. The traefik source emits
-        # NO endpoint without a per-IngressRoute target, so this annotation is the
-        # mechanism, not a hint. Gated on color: the pet has no external-dns and its
-        # generated IngressRoutes must stay byte-identical. Both the base (websecure)
-        # and the derived http variant share this dict, so one insertion covers both;
-        # external-dns dedups the identical endpoints to a single record.
-        annotations[EXTERNAL_DNS_TARGET_ANNOTATION] = derive.LIVE_SWING_HOST
     base = {
         "apiVersion": traefik_api_version(),
         "kind": "IngressRoute",

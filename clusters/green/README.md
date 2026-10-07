@@ -8,8 +8,6 @@ overlay: every manifest reads exactly as deployed, with no base to peel back.
 Per-color/per-cluster deltas versus blue are only:
 
 - **cluster-autoscaler** `autoDiscovery.clusterName: tmprl-dem-cld-green`.
-- **external-dns** `txtOwnerId: green` (keeps green's ownership TXTs distinct
-  from blue's; the per-demo records themselves are identical — always `→ live`).
 - **registry operator** `DEMO_REGISTRY_CLUSTER=green` (derives task queue
   `registry-management-green` and workflow ids `demo-project/green/<name>`).
 - **Flux paths** are `./clusters/green/...`.
@@ -30,11 +28,11 @@ cluster-autoscaler chart 9.58.0 / image v1.36.0, temporal-worker-controller
   `GitRepository` + root `Kustomization`; everything below self-manages.
 - `addons/` — platform layer: node-local-dns, metrics-server, cluster-autoscaler,
   external-secrets (+ ClusterSecretStore), cert-manager (+ DNS-01 ClusterIssuers),
-  temporal-worker-controller, traefik, external-dns, wildcard-cert.
+  temporal-worker-controller, traefik, wildcard-cert. (No external-dns: the
+  `*.tmprl-demo.cloud` wildcard CNAMEs to `live`; there are no per-demo records.)
 - `bootstrap/` — registry CRDs + the operator (one worker+watch Deployment on
   `registry-management-green`). The operator reconciles DemoProject CRs applied to
-  green onto green, and stamps `external-dns.alpha.kubernetes.io/target:
-  live.tmprl-demo.cloud` on every IngressRoute it generates.
+  green onto green.
 
 ## Not wired (by design)
 

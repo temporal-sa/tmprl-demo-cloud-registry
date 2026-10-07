@@ -1,9 +1,8 @@
 """P5 cluster/color dimension.
 
 DEMO_REGISTRY_CLUSTER scopes the task queue, entity workflow ids, the
-worker-update batch-signal query, the generated Traefik CRD group, and the
-external-dns target annotation so blue/green can share one Temporal namespace and
-one Route53 zone without cross-routing. The load-bearing invariant is that every
+worker-update batch-signal query, and the generated Traefik CRD group so
+blue/green can share one Temporal namespace without cross-routing. The load-bearing invariant is that every
 one of those is a BYTE-IDENTICAL no-op when the var is unset, preserving the
 legacy single-cluster behavior.
 """
@@ -179,7 +178,7 @@ def test_worker_update_query_colored_scopes_to_this_color():
     assert query.startswith(worker.running_entity_workflows_query())
 
 
-# --- resources: Traefik CRD group + external-dns target ---------------------
+# --- resources: Traefik CRD group ----------------------------------------------
 
 def test_operator_cluster_reads_env(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
@@ -209,17 +208,16 @@ def test_ingress_uncolored_is_byte_identical(monkeypatch):
         )
 
 
-def test_ingress_colored_emits_v3_and_external_dns_target(monkeypatch):
+def test_ingress_colored_emits_v3_without_dns_annotations(monkeypatch):
+    # No per-demo DNS records: the *.tmprl-demo.cloud wildcard CNAMEs to live.
     monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
     routes = resources.ingress_resources(banking_project())
-    assert routes
-    # Both the websecure base and the web/http-redirect variant carry the target.
     assert len(routes) == 2
     for route in routes:
         assert route["apiVersion"] == "traefik.io/v1alpha1"
-        assert route["metadata"]["annotations"][
-            "external-dns.alpha.kubernetes.io/target"
-        ] == "live.tmprl-demo.cloud"
+        assert not any(
+            key.startswith("external-dns.") for key in route["metadata"]["annotations"]
+        )
 
 
 def _websecure_route(routes):

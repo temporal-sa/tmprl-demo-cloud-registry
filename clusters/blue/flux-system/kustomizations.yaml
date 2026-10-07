@@ -191,29 +191,6 @@ spec:
       name: traefik
       namespace: traefik
 ---
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: external-dns
-  namespace: flux-system
-spec:
-  # Reads Traefik IngressRoutes, so it follows traefik.
-  dependsOn:
-    - name: traefik
-  interval: 5m
-  path: ./clusters/blue/addons/external-dns/install
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: cluster-gitops-config
-  timeout: 5m
-  wait: true
-  healthChecks:
-    - apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: external-dns
-      namespace: external-dns
----
 # Wildcard TLS (P5). One *.tmprl-demo.cloud cert + a Traefik default TLSStore so
 # managed demos are served a shared wildcard cert and never mint per-host Let's
 # Encrypt certs (rate-limit avoidance). Needs the letsencrypt issuer + traefik.
@@ -355,8 +332,7 @@ spec:
 ---
 # instruqt-litellm app layer (P7). LiteLLM gateway + credential-authenticated
 # token broker, with Traefik v3,
-# tmprl-dem-cld-instruqt-litellm-broker IRSA role, external-dns target annotation,
-# and the shared wildcard cert. Backed by the shared LiteLLM RDS in the Tofu VPC
+# tmprl-dem-cld-instruqt-litellm-broker IRSA role, and the shared wildcard cert. Backed by the shared LiteLLM RDS in the Tofu VPC
 # (infra/litellm_rds.tf), reached via DATABASE_URL in the shared SM secret
 # tmprl-dem-cld/platform/instruqt-litellm/runtime (LITELLM_MASTER_KEY/SALT there
 # are unchanged, so the snapshot-migrated virtual keys stay valid).
