@@ -1,0 +1,77 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: payout-orchestration
+spec:
+  registry:
+    title: Payout Orchestration
+    summary: >-
+      Interactive payout saga with retries, compensation, human approval, and
+      an AI brief that investigates synthetic customer facts with Temporal activities.
+    tags: [AI, Agents, Banking, Workflows, Saga, Human-in-the-Loop]
+    temporalSdks: [Java]
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/temporal-demo-payments#readme
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-demo-payments
+    branch: codex/cloud-registry-adapter
+
+  builds:
+    app:
+      context: .
+      dockerfile: docker/cloud.Dockerfile
+
+  temporal:
+    searchAttributes:
+      payoutId: {type: keyword}
+      customerId: {type: keyword}
+      rail: {type: keyword}
+      region: {type: keyword}
+      amountMinor: {type: int}
+      amountBand: {type: keyword}
+      currency: {type: keyword}
+      businessStatus: {type: keyword}
+      requiresApproval: {type: bool}
+      failureCategory: {type: keyword}
+      scenarioName: {type: keyword}
+
+  secrets:
+    openai-credentials:
+      requiredProperties: [OPENAI_API_KEY]
+
+  components:
+    app:
+      build: app
+      replicas: 1
+      worker: true
+      temporalProxy:
+        enabled: true
+      ports:
+        - name: http
+          containerPort: 8081
+          servicePort: 80
+      env:
+        - name: DEMO_HOSTING
+          value: cloud
+        - name: DEMO_TEMPORAL_UI_URL
+          value: https://cloud.temporal.io/namespaces/tmprl-dem-cld-payout-orchestration.a2dd6
+        - name: DEMO_AI_PROVIDER
+          value: openai
+        - name: DEMO_AI_MODEL
+          value: gpt-4.1-mini
+        - name: OPENAI_API_KEY
+          valueFrom:
+            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+
+  ingress:
+    subdomain: payout-orchestration
+    component: app
+    port: http
+    temporalAuthRequired: true
+
+  smokeCheck:
+    path: /demo-api/health
+    expectedStatus: 200
