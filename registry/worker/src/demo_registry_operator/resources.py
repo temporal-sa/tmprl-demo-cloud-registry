@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -3821,7 +3822,7 @@ def external_resource_status(demo_project: dict[str, Any]) -> dict[str, Any]:
                 {
                     "path": user_secret_remote_path(demo_project, name),
                     "required": True,
-                    "managedBy": "project-owner",
+                    "managedBy": user_secret_managed_by(demo_project, name),
                     "requiredProperties": user_secret_required_properties(
                         demo_project,
                         name,
@@ -5135,7 +5136,24 @@ def temporal_mtls_ca_secret_remote_path(demo_project: dict[str, Any]) -> str:
 
 
 def user_secret_remote_path(demo_project: dict[str, Any], secret_name: str) -> str:
+    definition = project_secret_definitions(demo_project).get(secret_name, {})
+    if "shared" in definition:
+        shared = definition["shared"]
+        if (
+            not isinstance(shared, str)
+            or not re.fullmatch(r"[A-Za-z0-9_+=.@-]+(/[A-Za-z0-9_+=.@-]+)*", shared)
+            or any(segment in {".", ".."} for segment in shared.split("/"))
+        ):
+            raise ValueError(
+                f"secrets.{secret_name}.shared must be a relative path under platform/shared"
+            )
+        return f"tmprl-dem-cld/platform/shared/{shared}"
     return f"{project_secret_prefix(demo_project)}/{secret_name}"
+
+
+def user_secret_managed_by(demo_project: dict[str, Any], secret_name: str) -> str:
+    definition = project_secret_definitions(demo_project).get(secret_name, {})
+    return "platform" if "shared" in definition else "project-owner"
 
 
 def user_secret_kubernetes_name(secret_name: str) -> str:

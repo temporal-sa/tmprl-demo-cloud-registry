@@ -220,6 +220,13 @@ a Worker Deployment Version managed by another component.
 `secrets.<secret>.<PROPERTY>` refs require `spec.secrets.<secret>` and the
 property must be env-var-shaped, e.g. `ANTHROPIC_API_KEY`.
 
+`spec.secrets.<name>.shared` optionally selects a platform-managed secret by
+relative path beneath `tmprl-dem-cld/platform/shared/`. For example,
+`shared: openai` selects the shared OpenAI credential while preserving existing
+`secrets.<name>.<PROPERTY>` input refs. Any shared secret can be requested by any
+demo, including nested paths; absolute paths, wildcards, and dot segments are
+rejected. Omit `shared` for a project-owned secret. Values remain outside git.
+
 Do not hard-code standard Worker Versioning envs such as
 `TEMPORAL_DEPLOYMENT_NAME` or `TEMPORAL_WORKER_BUILD_ID`; Worker Controller
 owns those for its workers. A plain Kubernetes component that intentionally

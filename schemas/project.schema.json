@@ -913,6 +913,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "shared": {
+          "type": "string",
+          "description": "Secret path relative to tmprl-dem-cld/platform/shared/; omitted uses the project-owned secret path.",
+          "pattern": "^[A-Za-z0-9_+=.@-]+(/[A-Za-z0-9_+=.@-]+)*$",
+          "not": {
+            "pattern": "(^|/)[.]{1,2}(/|$)"
+          }
+        },
         "requiredProperties": {
           "type": "array",
           "minItems": 1,

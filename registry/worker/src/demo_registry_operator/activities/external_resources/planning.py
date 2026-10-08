@@ -154,7 +154,7 @@ def secrets_manager_request(
             models.SecretRequirement(
                 path=resources.user_secret_remote_path(demo_project, secret_name),
                 required=True,
-                managed_by="project-owner",
+                managed_by=resources.user_secret_managed_by(demo_project, secret_name),
                 required_properties=tuple(
                     resources.user_secret_required_properties(demo_project, secret_name)
                 ),

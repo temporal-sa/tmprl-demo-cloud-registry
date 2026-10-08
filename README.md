@@ -83,8 +83,12 @@ Supported additions use the shared temporal-sa read-only GitHub PAT at
 and CodeBuild checkouts. Per-project source auth through
 `source.gitRepository.*` remains available for explicit overrides such as SSH
 deploy keys. Component secrets are also supported as project-scoped AWS Secrets
-Manager JSON values; the values are created manually, and the operator verifies
-declared `requiredProperties` when present.
+Manager JSON values or platform-managed shared secrets. Set
+`spec.secrets.<name>.shared: openai` to request
+`tmprl-dem-cld/platform/shared/openai`; any relative secret path under
+`platform/shared/` is available to demos that explicitly request it. The values
+are provisioned outside git, and the operator verifies declared
+`requiredProperties` when present. See [secret configuration](projects/README.md).
 
 The registry also has an initial `InstruqtCourse` resource type for
 operator-owned courses. `spec.source` is the track config source, optional

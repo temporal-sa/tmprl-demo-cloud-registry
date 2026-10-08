@@ -510,6 +510,38 @@ Rules:
 - `spec.secrets.<name>.requiredProperties` is optional validation metadata. Use
   it only when the project should fail early if specific JSON keys are missing
   from the AWS secret.
+- `spec.secrets.<name>.shared` selects a platform-managed secret under
+  `tmprl-dem-cld/platform/shared/` instead of the project-owned path. Any secret
+  under that prefix can be requested by any demo. Use a relative name such as
+  `openai` or a nested path such as `team/service`; absolute paths, wildcards,
+  and `.` or `..` segments are rejected. Components opt in using the same
+  `secrets` list or `secrets.<name>.<property>` input refs. Kubernetes and
+  serverless Lambda workers both support shared secrets. Shared AWS secrets
+  remain platform-owned when a demo is deleted.
+
+Example shared credential:
+
+```yaml
+spec:
+  secrets:
+    openai-credentials:
+      shared: openai
+      requiredProperties: [OPENAI_API_KEY]
+  components:
+    worker:
+      build: app
+      worker: true
+      env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+```
+
+This reads `tmprl-dem-cld/platform/shared/openai`. Shared `anthropic` provides
+`ANTHROPIC_API_KEY`, and shared `gemini` provides both `GEMINI_API_KEY` and
+`GOOGLE_API_KEY`. Platform operators provision the JSON values in Secrets
+Manager outside git and OpenTofu state. Missing shared values block deployment
+and report `managedBy: platform` in secret status.
 
 Example targeted env remapping:
 

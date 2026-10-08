@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -229,6 +231,30 @@ def test_env_input_ref_user_secret_counts_as_secret_usage():
 
     assert validate_projects.validate_env_input_refs(document) == []
     assert validate_projects.validate_project_secrets(document) == []
+
+
+@pytest.mark.parametrize("shared", ["openai", "team/service", "service.name+version=1"])
+def test_schema_accepts_platform_shared_secret_references(shared):
+    spec = base_spec()
+    spec["secrets"] = {"model": {"shared": shared}}
+    spec["components"]["app"]["secrets"] = ["model"]
+    document = project_document(spec)
+
+    assert validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(), document
+    ) == []
+    assert validate_projects.validate_project_secrets(document) == []
+
+
+@pytest.mark.parametrize("shared", ["", "/openai", "../openai", "team/../../openai", "team/./key", "team//key", "openai/*", "openai?", True])
+def test_schema_rejects_shared_paths_outside_the_shared_prefix(shared):
+    spec = base_spec()
+    spec["secrets"] = {"model": {"shared": shared}}
+    spec["components"]["app"]["secrets"] = ["model"]
+
+    assert validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(), project_document(spec)
+    )
 
 
 def test_rollout_version_input_ref_is_allowed():

@@ -17,6 +17,13 @@ tmprl-dem-cld/<project>/<secret-name>
 - Secrets should be JSON objects. Keys should usually be env-var-shaped, e.g.
   `ANTHROPIC_API_KEY`.
 - Keep each secret narrow and attach it only to components that need it.
+- Prefer platform-managed shared provider credentials for hosted demos:
+  `spec.secrets.<name>.shared: anthropic`, `openai`, or `gemini` resolves to
+  `tmprl-dem-cld/platform/shared/<value>`. Any relative path under `shared/`
+  can be requested, including nested names. Absolute paths, wildcards, and dot
+  segments are rejected. Shared Gemini has both `GEMINI_API_KEY` and
+  `GOOGLE_API_KEY`. Keep `requiredProperties` and component references as usual;
+  omitting `shared` continues to select the project-owned path.
 - The operator creates the platform-managed Temporal runtime secret at
   `tmprl-dem-cld/<project>/temporal`; do not create it manually for normal
   projects.
@@ -25,12 +32,13 @@ tmprl-dem-cld/<project>/<secret-name>
 
 ## Declare User Secrets
 
-Declare each user-managed secret under `spec.secrets`.
+Declare each project-owned or shared secret under `spec.secrets`.
 
 ```yaml
 spec:
   secrets:
     llm:
+      shared: anthropic
       requiredProperties:
         - ANTHROPIC_API_KEY
     analytics: {}
