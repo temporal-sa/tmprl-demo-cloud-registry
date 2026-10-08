@@ -50,7 +50,8 @@ spec:
         type: int
 
   secrets:
-    anthropic-credentials:
+    anthropic:
+      shared: anthropic
       requiredProperties:
         - ANTHROPIC_API_KEY
     # HMAC secret for signing customer-HITL approve/deny email links. Shared by
@@ -86,7 +87,7 @@ spec:
       temporalProxy:
         enabled: true
       secrets:
-        - anthropic-credentials
+        - anthropic
         - hitl-token
       env:
         - name: API_BASE_URL
@@ -109,7 +110,7 @@ spec:
       temporalProxy:
         enabled: true
       secrets:
-        - anthropic-credentials
+        - anthropic
         - hitl-token
       env:
         # Namespace-base URL — the app appends /workflows/<id> for deep links.

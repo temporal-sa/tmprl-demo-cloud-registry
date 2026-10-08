@@ -71,24 +71,23 @@ spec:
         targetTaskQueue: security-tq
         allowedCallerNamespaces: [primary]
 
-  # Every secret declared here must exist in AWS Secrets Manager before the
-  # first reconcile, at tmprl-dem-cld/agent-gateway/<name>. The operator verifies
-  # them; it does not create them. Each JSON key becomes an environment variable
-  # in the components that list the secret.
+  # Provider credentials come from platform-managed shared secrets. Each JSON
+  # key becomes an environment variable in the components that list the secret.
   #
   # Deliberately NOT here: the demo's bearer tokens and persona maps. They are
   # printed verbatim in this demo's own README and WALKTHROUGH -- they are cast
   # names, not credentials -- so they are plain env below where a reader of the
   # CR can see who is on which team.
   secrets:
-    # Claude Code's credential, for the hosted IDE. Same secret name as
-    # canonical-ai-demo and flourish-and-blotts, so it is the familiar ask.
-    anthropic-credentials:
+    # Claude Code's credential, for the hosted IDE.
+    anthropic:
+      shared: anthropic
       requiredProperties:
         - ANTHROPIC_API_KEY
     # The Gemini credential for CASE-3. Attached to the worker only -- see the
     # worker component below for why the browser-facing adk-web does not get it.
-    google-credentials:
+    gemini:
+      shared: gemini
       requiredProperties:
         - GOOGLE_API_KEY
 
@@ -152,7 +151,7 @@ spec:
       # is structural rather than a hardening choice -- putting the key on
       # adk-web would be a real regression, not a convenience.
       secrets:
-        - google-credentials
+        - gemini
       env:
         - name: TASK_QUEUE
           value: agentic-gateway
@@ -317,7 +316,7 @@ spec:
       # code-server itself runs with --auth none: the platform SSO gate
       # (temporalAuthRequired, below) is the access control for this component.
       secrets:
-        - anthropic-credentials
+        - anthropic
       ports:
         - name: http
           containerPort: 8080

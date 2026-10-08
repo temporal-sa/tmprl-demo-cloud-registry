@@ -85,7 +85,7 @@ spec:
         - name: OPENAI_MODEL
           value: gpt-5.6-sol
       secrets:
-        - llm-credentials
+        - openai
 
     # Standalone LangGraph keeps conversation state in memory, so it must stay
     # at one replica unless a durable checkpointer/store is added later.
@@ -106,7 +106,7 @@ spec:
         - name: OPENAI_MODEL
           value: gpt-5.6-sol
       secrets:
-        - llm-credentials
+        - openai
 
     # Temporal's LangGraph integration also separates API and worker so a
     # worker restart demonstrates recovery without interrupting HTTP service.
@@ -142,7 +142,7 @@ spec:
         - name: OPENAI_MODEL
           value: gpt-5.6-sol
       secrets:
-        - llm-credentials
+        - openai
 
     # Nginx serves the selector and strips each API prefix before forwarding to
     # the corresponding internal service. It is the only ingress target.
@@ -174,7 +174,8 @@ spec:
           value: http://temporal-langgraph-api:8002
 
   secrets:
-    llm-credentials:
+    openai:
+      shared: openai
       requiredProperties:
         - OPENAI_API_KEY
     database:

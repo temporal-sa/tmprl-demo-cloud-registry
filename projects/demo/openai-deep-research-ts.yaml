@@ -25,7 +25,8 @@ spec:
       dockerfile: Dockerfile
 
   secrets:
-    openai-credentials:
+    openai:
+      shared: openai
       requiredProperties:
         - OPENAI_API_KEY
 
@@ -41,7 +42,7 @@ spec:
       env:
         - name: OPENAI_API_KEY
           valueFrom:
-            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+            inputRef: secrets.openai.OPENAI_API_KEY
         - name: NODE_ENV
           value: production
         - name: PORT

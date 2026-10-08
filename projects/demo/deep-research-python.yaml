@@ -1,8 +1,7 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  # Preserve the internal ID so the existing Temporal namespace and project
-  # owner-managed OpenAI secret remain in place.
+  # Preserve the internal ID for the existing Temporal namespace.
   name: deep-research-python
 spec:
   registry:
@@ -27,7 +26,8 @@ spec:
       dockerfile: Dockerfile
 
   secrets:
-    openai-credentials:
+    openai:
+      shared: openai
       requiredProperties:
         - OPENAI_API_KEY
 
@@ -43,7 +43,7 @@ spec:
       env:
         - name: OPENAI_API_KEY
           valueFrom:
-            inputRef: secrets.openai-credentials.OPENAI_API_KEY
+            inputRef: secrets.openai.OPENAI_API_KEY
         - name: TEMPORAL_TASK_QUEUE
           value: deep-research
         - name: PORT

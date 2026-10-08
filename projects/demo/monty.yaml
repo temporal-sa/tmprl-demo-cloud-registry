@@ -28,7 +28,8 @@ spec:
       dockerfile: deployments/monty/Dockerfile
 
   secrets:
-    llm:
+    gemini:
+      shared: gemini
       requiredProperties: [GEMINI_API_KEY]
 
   components:
@@ -56,7 +57,7 @@ spec:
           deploymentName: monty
       replicas: 1
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
-      secrets: [llm]
+      secrets: [gemini]
       env:
         - name: MONTY_PAYLOAD_BUCKET
           value: tmprl-dem-cld-monty-payloads-429214323166-us-west-1

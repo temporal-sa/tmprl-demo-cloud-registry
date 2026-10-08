@@ -54,7 +54,7 @@ spec:
       build: worker
       worker: true
       secrets:
-        - google-credentials
+        - gemini
       env:
         - name: ADK_MODEL
           value: gemini-3.6-flash
@@ -85,7 +85,8 @@ spec:
           value: gemini-3.6-flash
 
   secrets:
-    google-credentials:
+    gemini:
+      shared: gemini
       requiredProperties:
         - GOOGLE_API_KEY
     db-creds:

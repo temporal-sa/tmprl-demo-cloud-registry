@@ -59,7 +59,7 @@ spec:
       build: worker
       worker: true
       secrets:
-        - anthropic-credentials
+        - anthropic
       env:
         - name: LLM_PROVIDER
           value: anthropic
@@ -91,7 +91,8 @@ spec:
           servicePort: 80
 
   secrets:
-    anthropic-credentials:
+    anthropic:
+      shared: anthropic
       requiredProperties:
         - ANTHROPIC_API_KEY
     db-creds:

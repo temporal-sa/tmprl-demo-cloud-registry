@@ -28,7 +28,7 @@ spec:
       env:
         - name: ANTHROPIC_API_KEY
           valueFrom:
-            inputRef: secrets.anthropic-secret.ANTHROPIC_API_KEY
+            inputRef: secrets.anthropic.ANTHROPIC_API_KEY
         # BANK_DB_PATH defaults to /data/banking.db in the image (writable,
         # ephemeral; re-seeds on boot) — no override needed.
         - name: ALLOWED_ORIGINS
@@ -38,7 +38,8 @@ spec:
         - name: VITE_TEMPORAL_NAMESPACE
           value: tmprl-dem-cld-durable-banking-skills.a2dd6
   secrets:
-    anthropic-secret:
+    anthropic:
+      shared: anthropic
       requiredProperties:
         - ANTHROPIC_API_KEY
   ingress:
