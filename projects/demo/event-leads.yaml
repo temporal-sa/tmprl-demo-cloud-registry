@@ -29,7 +29,7 @@ spec:
         - name: AUTH_VERIFY_URL
           value: http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify
         - name: TEMPORAL_TASK_QUEUE
-          value: event-leads
+          value: event-leads-unversioned
       ports:
         - name: http
           containerPort: 8080
@@ -37,19 +37,10 @@ spec:
     worker:
       build: app
       args: [worker]
-      temporalAccess: true
+      worker: true
       env:
         - name: TEMPORAL_TASK_QUEUE
-          value: event-leads
-      worker:
-        versioning:
-          enabled: true
-          deploymentName: event-leads
-          rollout:
-            strategy: AllAtOnce
-          sunset:
-            scaledownDelay: 5m
-            deleteDelay: 24h
+          value: event-leads-unversioned
   ingress:
     subdomain: event-leads
     temporalAuthRequired: false
