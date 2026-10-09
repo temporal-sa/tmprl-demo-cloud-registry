@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 
-import yaml
 from temporalio.exceptions import ActivityError
 
 from demo_registry_operator import derive
@@ -217,37 +215,6 @@ def test_resolve_source_images_includes_versioned_worker(monkeypatch):
 
 
 # --- manifest rendering ---------------------------------------------------
-
-
-def test_monty_workspace_isolates_versioning_queues_and_worker_controls():
-    root = Path(__file__).resolve().parents[3]
-    demo = yaml.safe_load((root / "projects/demo/monty.yaml").read_text())
-    ordered, task_queue, _, namespace, _ = build_workspace_manifests(
-        demo, {"app": "ecr/monty:sha"}, "0123abcd89"
-    )
-    assert catalog_entry(demo)["crashable"] == {"enabled": True}
-    assert task_queue == "monty-dynamic-agent-0123abcd89"
-    worker = next(m for m in ordered if m["kind"] == "WorkerDeployment")
-    web = next(m for m in ordered if m["kind"] == "Deployment")
-    assert worker["metadata"]["name"] == "monty-0123abcd89"
-    assert worker["spec"]["rollout"] == {"strategy": "AllAtOnce"}
-    for workload in (worker, web):
-        assert workload["metadata"]["namespace"] == namespace
-        container = workload["spec"]["template"]["spec"]["containers"][0]
-        env = {entry["name"]: entry.get("value") for entry in container["env"]}
-        assert env["MONTY_AGENT_TASK_QUEUE"] == task_queue
-    assert worker["metadata"]["labels"][CRASHABLE_WORKER_LABEL] == "true"
-    assert CRASHABLE_WORKER_LABEL not in web["metadata"]["labels"]
-    accounts = [m for m in ordered if m["kind"] == "ServiceAccount"]
-    assert {m["metadata"]["name"] for m in accounts} == {"web", "worker"}
-    assert all(
-        m["metadata"]["annotations"]["eks.amazonaws.com/role-arn"]
-        == demo["spec"]["components"]["worker"]["awsIamRoleArn"]
-        for m in accounts
-    )
-    assert demo["spec"]["components"]["worker"]["worker"]["versioning"][
-        "deploymentName"
-    ] == "monty"
 
 
 def test_build_workspace_manifests_isolates_namespace_host_and_task_queue():

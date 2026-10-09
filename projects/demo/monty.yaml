@@ -10,10 +10,6 @@ spec:
       activities, human approvals, subagents, and an observable trip board.
     tags: [AI, AI - Agents, Human-in-the-Loop]
     temporalSdks: [Python]
-    crashable:
-      enabled: true
-      taskQueueEnv: MONTY_AGENT_TASK_QUEUE
-      baseTaskQueue: monty-dynamic-agent
     links:
       runbook:
         label: Monty README
