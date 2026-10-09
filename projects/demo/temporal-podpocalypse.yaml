@@ -1,0 +1,50 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: temporal-podpocalypse
+spec:
+  source:
+    repo: https://github.com/temporal-sa/temporal-podpocalypse
+    branch: main
+  registry:
+    title: Podpocalypse
+    summary: A booth game where crashing the ship deletes the worker for that flight. Checked-in events start from a flight code instead of asking for the same details again.
+    tags: [Entity Workflows, Nexus, Games]
+    temporalSdks: [Go]
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile
+  temporal:
+    auth:
+      mode: apiKey
+  components:
+    booth:
+      build: app
+      worker: true
+      temporalAccess: true
+      env:
+        - name: RUNTIME
+          value: process
+        - name: PUBLIC_URL
+          value: https://podpocalypse.tmprl-demo.cloud
+        - name: AUTH_VERIFY_URL
+          value: http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify
+        - name: EVENT_LEADS_URL
+          value: https://event-leads.tmprl-demo.cloud
+        - name: EVENT_LEADS_ENDPOINT
+          value: event-leads-participants
+        - name: CONTROL_TASK_QUEUE
+          value: podpocalypse-control
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+  ingress:
+    subdomain: podpocalypse
+    temporalAuthRequired: false
+    component: booth
+    port: http
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
