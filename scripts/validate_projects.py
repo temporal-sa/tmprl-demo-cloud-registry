@@ -186,6 +186,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
     )
     errors.extend(validate_unique_derived_namespaces(demo_projects))
     errors.extend(validate_unique_nexus_endpoint_names(demo_projects))
+    errors.extend(validate_nexus_caller_projects(demo_projects))
     errors.extend(
         validate_unique_field(
             demo_projects,
@@ -1084,44 +1085,163 @@ def validate_nexus_endpoints(document: ProjectDocument) -> list[ProjectError]:
                 )
             )
 
-        callers = endpoint.get("allowedCallerNamespaces")
-        if not isinstance(callers, list) or not callers:
-            # Temporal admits no callers by default, even from the target's own
-            # namespace, so an empty allowlist makes the endpoint unreachable.
+        errors.extend(
+            _validate_nexus_callers(document, endpoint_name, endpoint, allowed)
+        )
+
+    return errors
+
+
+def _project_name(document: ProjectDocument) -> str:
+    metadata = document.data.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    name = metadata.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _validate_nexus_callers(
+    document: ProjectDocument,
+    endpoint_name: str,
+    endpoint: dict[str, Any],
+    allowed: set[str],
+) -> list[ProjectError]:
+    """Same-demo namespace labels and other DemoProject names.
+
+    Temporal admits no callers by default, so at least one of the two lists
+    has to name a caller. A resolved namespace string is rejected here; the
+    operator derives the other demo's primary namespace from the project name.
+    """
+    errors: list[ProjectError] = []
+    namespace_callers = endpoint.get("allowedCallerNamespaces")
+    project_callers = endpoint.get("allowedCallerProjects")
+    namespace_items = namespace_callers if isinstance(namespace_callers, list) else []
+    project_items = project_callers if isinstance(project_callers, list) else []
+
+    if namespace_callers is not None and not isinstance(namespace_callers, list):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"temporal.nexusEndpoints.{endpoint_name}.allowedCallerNamespaces "
+                "must be a list",
+            )
+        )
+    if project_callers is not None and not isinstance(project_callers, list):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"temporal.nexusEndpoints.{endpoint_name}.allowedCallerProjects "
+                "must be a list",
+            )
+        )
+    if not namespace_items and not project_items:
+        errors.append(
+            ProjectError(
+                document.path,
+                f"temporal.nexusEndpoints.{endpoint_name} must allow at least one "
+                "caller namespace or caller project",
+            )
+        )
+
+    seen: dict[str, int] = {}
+    for index, caller in enumerate(namespace_items):
+        if not isinstance(caller, str) or caller not in allowed:
             errors.append(
                 ProjectError(
                     document.path,
-                    f"temporal.nexusEndpoints.{endpoint_name}.allowedCallerNamespaces "
-                    "must list at least one namespace",
+                    f"temporal.nexusEndpoints.{endpoint_name}"
+                    f".allowedCallerNamespaces[{index}] {caller!r} must be "
+                    f"{NEXUS_PRIMARY_NAMESPACE_REF!r} or a declared "
+                    "temporal.namespaces entry",
                 )
             )
             continue
-
-        seen: dict[str, int] = {}
-        for index, caller in enumerate(callers):
-            if not isinstance(caller, str) or caller not in allowed:
-                errors.append(
-                    ProjectError(
-                        document.path,
-                        f"temporal.nexusEndpoints.{endpoint_name}"
-                        f".allowedCallerNamespaces[{index}] {caller!r} must be "
-                        f"{NEXUS_PRIMARY_NAMESPACE_REF!r} or a declared "
-                        "temporal.namespaces entry",
-                    )
+        if caller in seen:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"temporal.nexusEndpoints.{endpoint_name}"
+                    f".allowedCallerNamespaces[{index}] {caller!r} duplicates "
+                    f"allowedCallerNamespaces[{seen[caller]}]",
                 )
+            )
+        else:
+            seen[caller] = index
+
+    own = _project_name(document)
+    seen_projects: dict[str, int] = {}
+    for index, caller in enumerate(project_items):
+        prefix = (
+            f"temporal.nexusEndpoints.{endpoint_name}.allowedCallerProjects[{index}]"
+        )
+        if (
+            not isinstance(caller, str)
+            or not DNS_LABEL_PATTERN.match(caller)
+            or caller.startswith(TEMPORAL_NAMESPACE_PREFIX)
+            or "." in caller
+        ):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"{prefix} {caller!r} must be a DemoProject name, not a "
+                    "resolved namespace",
+                )
+            )
+            continue
+        if caller == own:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"{prefix} {caller!r} is this project; allow its namespaces "
+                    "with allowedCallerNamespaces",
+                )
+            )
+            continue
+        if caller in seen_projects:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"{prefix} {caller!r} duplicates "
+                    f"allowedCallerProjects[{seen_projects[caller]}]",
+                )
+            )
+        else:
+            seen_projects[caller] = index
+
+    return errors
+
+
+def validate_nexus_caller_projects(
+    documents: list[ProjectDocument],
+) -> list[ProjectError]:
+    """Caller project names must be other DemoProjects in this registry."""
+    names = {
+        name
+        for document in documents
+        if (name := _project_name(document))
+    }
+    errors: list[ProjectError] = []
+    for document in documents:
+        own = _project_name(document)
+        for endpoint_name, endpoint in nexus_endpoints(document).items():
+            callers = endpoint.get("allowedCallerProjects")
+            if not isinstance(callers, list):
                 continue
-            if caller in seen:
+            for index, caller in enumerate(callers):
+                if not isinstance(caller, str) or not DNS_LABEL_PATTERN.match(caller):
+                    continue
+                if caller.startswith(TEMPORAL_NAMESPACE_PREFIX) or caller == own:
+                    continue
+                if caller in names:
+                    continue
                 errors.append(
                     ProjectError(
                         document.path,
                         f"temporal.nexusEndpoints.{endpoint_name}"
-                        f".allowedCallerNamespaces[{index}] {caller!r} duplicates "
-                        f"allowedCallerNamespaces[{seen[caller]}]",
+                        f".allowedCallerProjects[{index}] {caller!r} must name "
+                        "another DemoProject in the registry",
                     )
                 )
-            else:
-                seen[caller] = index
-
     return errors
 
 

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
+    CallerNamespaceNotReady,
     CloudApiReconciler,
     NamespaceInfo,
     NexusEndpointInfo,
@@ -66,6 +67,7 @@ class FakeReconciler:
         nexus_endpoints=None,
     ):
         self.existing_namespace = existing_namespace
+        self.namespaces = None
         self.existing_sa = existing_sa
         self.regions = regions or ["aws-us-west-2", "aws-ca-central-1", "gcp-us-central1"]
         self.search_attributes = dict(search_attributes or {})
@@ -78,6 +80,8 @@ class FakeReconciler:
 
     async def find_namespace(self, name):
         self.calls.append(("find_namespace", name))
+        if self.namespaces is not None:
+            return self.namespaces.get(name)
         return self.existing_namespace
 
     async def create_namespace(
@@ -1719,12 +1723,19 @@ def test_ensure_namespace_unknown_region_never_signals_drift():
 # --- Nexus Endpoints --------------------------------------------------------
 
 
-def nexus_endpoint(name="orders", target="primary", queue="orders-tq", callers=("alpha",)):
+def nexus_endpoint(
+    name="orders",
+    target="primary",
+    queue="orders-tq",
+    callers=("alpha",),
+    projects=(),
+):
     return SimpleNamespace(
         name=name,
         target_namespace=target,
         target_task_queue=queue,
         allowed_caller_namespaces=tuple(callers),
+        allowed_caller_projects=tuple(projects),
     )
 
 
@@ -1857,6 +1868,106 @@ def test_caller_allowlist_order_does_not_cause_an_update():
     )
     assert status["endpoints"][0]["action"] == "verified"
     assert reconciler.called("update_nexus_endpoint") == []
+
+
+def test_caller_project_namespace_is_added_when_active():
+    reconciler = FakeReconciler()
+    reconciler.namespaces = {
+        "tmprl-dem-cld-temporal-podpocalypse": NamespaceInfo(
+            qualified_name="tmprl-dem-cld-temporal-podpocalypse.acct1",
+            grpc_address="tmprl-dem-cld-temporal-podpocalypse.acct1.tmprl.cloud:7233",
+            state="RESOURCE_STATE_ACTIVE",
+        )
+    }
+    status = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(projects=("temporal-podpocalypse",)),),
+            reconciler=reconciler,
+            checked_at="2026-06-20T00:00:00+00:00",
+            account_id="acct1",
+            live_project_names={"demo", "temporal-podpocalypse"},
+        )
+    )
+    assert status["endpoints"][0]["action"] == "created"
+    assert set(status["endpoints"][0]["allowedCallerNamespaces"]) == {
+        "tmprl-dem-cld-demo-alpha.acct1",
+        "tmprl-dem-cld-temporal-podpocalypse.acct1",
+    }
+    assert "omittedCallerProjects" not in status["endpoints"][0]
+
+
+def test_caller_project_namespace_retries_until_active():
+    reconciler = FakeReconciler()
+    reconciler.namespaces = {}
+    try:
+        asyncio.run(
+            reconcile_nexus_endpoints(
+                NEXUS_PROJECT,
+                endpoints=(nexus_endpoint(projects=("temporal-podpocalypse",)),),
+                reconciler=reconciler,
+                checked_at="2026-06-20T00:00:00+00:00",
+                account_id="acct1",
+                live_project_names={"temporal-podpocalypse"},
+            )
+        )
+    except CallerNamespaceNotReady as error:
+        assert "namespace is not ready" in str(error)
+    else:
+        raise AssertionError("expected the caller namespace to be retried")
+    assert reconciler.called("create_nexus_endpoint") == []
+
+
+def test_caller_project_is_dropped_once_its_project_is_gone():
+    reconciler = FakeReconciler()
+    common = dict(
+        reconciler=reconciler,
+        checked_at="2026-06-20T00:00:00+00:00",
+        account_id="acct1",
+    )
+    asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(projects=("temporal-podpocalypse",)),),
+            live_project_names={"demo"},
+            **common,
+        )
+    )
+    assert reconciler.called("create_nexus_endpoint")[0][4] == (
+        "tmprl-dem-cld-demo-alpha.acct1",
+    )
+    reconciler.namespaces = {
+        "tmprl-dem-cld-temporal-podpocalypse": NamespaceInfo(
+            qualified_name="tmprl-dem-cld-temporal-podpocalypse.acct1",
+            grpc_address="tmprl-dem-cld-temporal-podpocalypse.acct1.tmprl.cloud:7233",
+            state="RESOURCE_STATE_ACTIVE",
+        )
+    }
+    appeared = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(projects=("temporal-podpocalypse",)),),
+            live_project_names={"demo", "temporal-podpocalypse"},
+            **common,
+        )
+    )
+    assert appeared["endpoints"][0]["action"] == "updated"
+    assert "tmprl-dem-cld-temporal-podpocalypse.acct1" in set(
+        appeared["endpoints"][0]["allowedCallerNamespaces"]
+    )
+    gone = asyncio.run(
+        reconcile_nexus_endpoints(
+            NEXUS_PROJECT,
+            endpoints=(nexus_endpoint(projects=("temporal-podpocalypse",)),),
+            live_project_names={"demo"},
+            **common,
+        )
+    )
+    assert gone["endpoints"][0]["action"] == "updated"
+    assert gone["endpoints"][0]["omittedCallerProjects"] == ["temporal-podpocalypse"]
+    assert "tmprl-dem-cld-temporal-podpocalypse.acct1" not in set(
+        gone["endpoints"][0]["allowedCallerNamespaces"]
+    )
 
 
 def test_deletes_nexus_endpoints_and_tolerates_missing_ones():

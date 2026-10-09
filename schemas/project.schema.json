@@ -804,7 +804,7 @@
     "nexusEndpoint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["targetTaskQueue", "allowedCallerNamespaces"],
+      "required": ["targetTaskQueue"],
       "properties": {
         "targetNamespace": {
           "$ref": "#/$defs/nexusEndpointNamespaceRef",
@@ -817,11 +817,20 @@
         },
         "allowedCallerNamespaces": {
           "type": "array",
-          "$comment": "Temporal allows no callers by default, even in the target's own namespace, so this must be explicit and non-empty.",
+          "$comment": "Callers inside this demo. Temporal allows no callers by default. Omit this when allowedCallerProjects is the only allowlist. An explicit list must be non-empty.",
           "minItems": 1,
           "uniqueItems": true,
           "items": {
             "$ref": "#/$defs/nexusEndpointNamespaceRef"
+          }
+        },
+        "allowedCallerProjects": {
+          "type": "array",
+          "$comment": "Other DemoProject names. The operator derives each project's primary Temporal namespace. Do not write a resolved namespace here.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/dnsLabel"
           }
         }
       }

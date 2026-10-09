@@ -191,9 +191,12 @@ spec:
                           # rejected instead.
                     nexusEndpoints:
                       type: object
-                      # Nexus Endpoints between this project's own namespaces. Endpoint
-                      # names are account-wide unique in Temporal Cloud, so uniqueness is
-                      # enforced across the whole registry by scripts/validate_projects.py.
+                      # Nexus Endpoints served by this project. allowedCallerNamespaces
+                      # names this project's own namespaces. allowedCallerProjects names
+                      # other DemoProjects; the operator derives each caller's primary
+                      # Temporal namespace. Endpoint names are account-wide unique in
+                      # Temporal Cloud, so uniqueness is enforced across the whole
+                      # registry by scripts/validate_projects.py.
                       #
                       # targetTaskQueue is deliberately not cross-validated: the platform
                       # has never tracked a component's task queue, and this feature does
@@ -203,7 +206,9 @@ spec:
                         type: object
                         required:
                           - targetTaskQueue
-                          - allowedCallerNamespaces
+                        x-kubernetes-validations:
+                          - rule: "(has(self.allowedCallerNamespaces) && size(self.allowedCallerNamespaces) > 0) || (has(self.allowedCallerProjects) && size(self.allowedCallerProjects) > 0)"
+                            message: "a Nexus endpoint must allow at least one caller namespace or caller project"
                         properties:
                           targetNamespace:
                             type: string
@@ -219,6 +224,15 @@ spec:
                             items:
                               type: string
                               minLength: 1
+                          allowedCallerProjects:
+                            type: array
+                            minItems: 1
+                            x-kubernetes-list-type: set
+                            items:
+                              type: string
+                              minLength: 1
+                              maxLength: 63
+                              pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 ingress:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true

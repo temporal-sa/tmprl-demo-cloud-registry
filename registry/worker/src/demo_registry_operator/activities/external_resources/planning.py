@@ -98,6 +98,7 @@ def nexus_endpoint_spec(
     endpoint: dict[str, Any],
 ) -> models.NexusEndpointSpec:
     callers = endpoint.get("allowedCallerNamespaces")
+    projects = endpoint.get("allowedCallerProjects")
     return models.NexusEndpointSpec(
         name=name,
         target_namespace=str(endpoint.get("targetNamespace") or "primary"),
@@ -106,6 +107,11 @@ def nexus_endpoint_spec(
             caller
             for caller in (callers if isinstance(callers, list) else ())
             if isinstance(caller, str) and caller
+        ),
+        allowed_caller_projects=tuple(
+            project
+            for project in (projects if isinstance(projects, list) else ())
+            if isinstance(project, str) and project
         ),
     )
 

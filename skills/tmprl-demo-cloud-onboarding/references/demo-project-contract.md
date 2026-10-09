@@ -348,8 +348,14 @@ Constraints worth knowing before you author one:
 
 ## Nexus Endpoints
 
-`spec.temporal.nexusEndpoints` declares an endpoint between this project's own
-namespaces. Endpoints cannot reference another project.
+`spec.temporal.nexusEndpoints` declares an endpoint this project serves.
+`allowedCallerNamespaces` names this project's own namespaces.
+`allowedCallerProjects` names other demos by `DemoProject` name. The operator
+derives each caller's primary Temporal namespace, so the spec never contains a
+resolved namespace. At least one of the two lists is required, because Temporal
+admits no callers by default. A caller whose project CR is gone is dropped on
+the next reconcile. A caller whose namespace is not active yet is retried, and
+that retry does not wait on the other demo's endpoints.
 
 ```yaml
 spec:
@@ -358,8 +364,10 @@ spec:
       my-project-orders:
         targetNamespace: alpha        # "primary" or a declared label
         targetTaskQueue: orders-tq
-        allowedCallerNamespaces:      # required; no caller is allowed by default
+        allowedCallerNamespaces:      # this demo's own namespaces
           - primary
+        allowedCallerProjects:        # other DemoProject names
+          - other-demo
 ```
 
 Endpoint names are unique across the whole Temporal Cloud account, not just your

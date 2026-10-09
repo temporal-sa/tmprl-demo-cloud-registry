@@ -462,6 +462,29 @@ async def reconcile_temporal_cloud(
 NEXUS_PRIMARY_NAMESPACE_REF = "primary"
 
 
+class CallerNamespaceNotReady(Exception):
+    """The other demo's primary namespace is not active yet.
+
+    The message contains the transient marker the activity wrapper already
+    retries, so the target demo waits without failing the rollout.
+    """
+
+    def __init__(self, project: str, namespace: str) -> None:
+        super().__init__(
+            f"caller project {project} namespace is not ready ({namespace})"
+        )
+
+
+def caller_namespace_ready(info: NamespaceInfo | None) -> bool:
+    if info is None or not info.state:
+        return False
+    return info.state.strip() in {"RESOURCE_STATE_ACTIVE", "active"}
+
+
+def qualified_temporal_namespace(name: str, account_id: str | None) -> str:
+    return f"{name}.{account_id}" if account_id else name
+
+
 def nexus_namespace_id(
     demo_project: dict[str, Any],
     reference: str,
@@ -479,6 +502,31 @@ def nexus_namespace_id(
     return f"{namespace}.{account_id}" if account_id else namespace
 
 
+async def _allow_caller_projects(
+    endpoint: Any,
+    *,
+    reconciler: TemporalCloudReconciler,
+    account_id: str | None,
+    live_project_names: set[str] | None,
+    allowed_ids: list[str],
+) -> list[str]:
+    """Append each other demo's primary namespace id to ``allowed_ids``.
+
+    Returns the project names dropped because their DemoProject CR is gone.
+    """
+    omitted: list[str] = []
+    for project_name in getattr(endpoint, "allowed_caller_projects", ()):
+        if live_project_names is not None and project_name not in live_project_names:
+            omitted.append(project_name)
+            continue
+        namespace = derive.temporal_namespace(project_name)
+        info = await reconciler.find_namespace(namespace)
+        if not caller_namespace_ready(info):
+            raise CallerNamespaceNotReady(project_name, namespace)
+        allowed_ids.append(qualified_temporal_namespace(namespace, account_id))
+    return omitted
+
+
 async def reconcile_nexus_endpoints(
     demo_project: dict[str, Any],
     *,
@@ -486,12 +534,19 @@ async def reconcile_nexus_endpoints(
     reconciler: TemporalCloudReconciler,
     checked_at: str,
     account_id: str | None,
+    live_project_names: set[str] | None = None,
 ) -> dict[str, Any]:
     """Create-or-verify every declared endpoint, correcting drift in place.
 
     Endpoints are looked up by name first and only created when absent. An
     existing endpoint whose target or caller allowlist has drifted is updated
     rather than recreated, because the endpoint id is what callers resolve.
+
+    ``live_project_names`` is the set of DemoProject names currently in the
+    cluster. A caller whose CR is gone is dropped from the allowlist. A caller
+    whose CR exists while its primary namespace is not active yet raises
+    CallerNamespaceNotReady so the activity retries. None means every declared
+    caller project is treated as present, which is the unit-test default.
     """
     statuses: list[dict[str, Any]] = []
     endpoint_ids: dict[str, str] = {}
@@ -501,10 +556,18 @@ async def reconcile_nexus_endpoints(
             demo_project, endpoint.target_namespace, account_id
         )
         target_task_queue = endpoint.target_task_queue
-        allowed_ids = tuple(
+        allowed_ids = [
             nexus_namespace_id(demo_project, reference, account_id)
             for reference in endpoint.allowed_caller_namespaces
+        ]
+        omitted = await _allow_caller_projects(
+            endpoint,
+            reconciler=reconciler,
+            account_id=account_id,
+            live_project_names=live_project_names,
+            allowed_ids=allowed_ids,
         )
+        allowed_id_tuple = tuple(allowed_ids)
 
         existing = await reconciler.find_nexus_endpoint(endpoint.name)
         if existing is None:
@@ -512,13 +575,13 @@ async def reconcile_nexus_endpoints(
                 endpoint.name,
                 target_namespace_id,
                 target_task_queue,
-                allowed_ids,
+                allowed_id_tuple,
             )
             action = "created"
         elif existing.matches(
             target_namespace_id=target_namespace_id,
             target_task_queue=target_task_queue,
-            allowed_caller_namespace_ids=allowed_ids,
+            allowed_caller_namespace_ids=allowed_id_tuple,
         ):
             info = existing
             action = "verified"
@@ -528,21 +591,22 @@ async def reconcile_nexus_endpoints(
                 endpoint.name,
                 target_namespace_id,
                 target_task_queue,
-                allowed_ids,
+                allowed_id_tuple,
             )
             action = "updated"
 
         endpoint_ids[endpoint.name] = info.endpoint_id
-        statuses.append(
-            {
-                "name": endpoint.name,
-                "action": action,
-                "endpointId": info.endpoint_id,
-                "targetNamespace": target_namespace_id,
-                "targetTaskQueue": target_task_queue,
-                "allowedCallerNamespaces": list(allowed_ids),
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": endpoint.name,
+            "action": action,
+            "endpointId": info.endpoint_id,
+            "targetNamespace": target_namespace_id,
+            "targetTaskQueue": target_task_queue,
+            "allowedCallerNamespaces": list(allowed_id_tuple),
+        }
+        if omitted:
+            entry["omittedCallerProjects"] = omitted
+        statuses.append(entry)
 
     return {
         "phase": "Ready",

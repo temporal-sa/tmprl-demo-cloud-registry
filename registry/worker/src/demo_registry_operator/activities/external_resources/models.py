@@ -41,16 +41,18 @@ class NexusEndpointSpec:
     """One entry from spec.temporal.nexusEndpoints.
 
     Namespaces are held as the labels the project author wrote, with "primary"
-    meaning the project's original namespace. Resolving a label to a derived
-    namespace name -- and then to the qualified ``<name>.<account-id>`` id the
-    Cloud API keys off -- happens in the activity, which is where every other
-    namespace name is resolved too.
+    meaning the project's original namespace. ``allowed_caller_projects`` holds
+    other DemoProject names. Resolving either form to a derived namespace name
+    -- and then to the qualified ``<name>.<account-id>`` id the Cloud API keys
+    off -- happens in the activity, which is where every other namespace name
+    is resolved too.
     """
 
     name: str
     target_namespace: str
     target_task_queue: str
     allowed_caller_namespaces: tuple[str, ...] = ()
+    allowed_caller_projects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

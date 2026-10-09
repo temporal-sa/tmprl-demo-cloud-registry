@@ -3,7 +3,7 @@ from typing import Any
 
 from temporalio import activity
 
-from demo_registry_operator import errors, resources
+from demo_registry_operator import errors, kube, resources
 from demo_registry_operator.activities import temporal_cloud
 from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
@@ -111,6 +111,7 @@ def reconcile_nexus_endpoints(
             account_id=(
                 request.account_id or bootstrap.get("TEMPORAL_CLOUD_ACCOUNT_ID")
             ),
+            live_project_names=_live_demo_project_names(),
         )
 
     try:
@@ -1118,6 +1119,18 @@ def promotion_result(status: dict[str, Any]) -> models.TemporalCloudPromotionRes
 
 def status_result(status: dict[str, Any]) -> models.TemporalCloudStatusResult:
     return models.TemporalCloudStatusResult(status=status)
+
+
+def _live_demo_project_names() -> set[str]:
+    names: set[str] = set()
+    for item in kube.list_demo_projects():
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        name = metadata.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
 
 
 def nexus_endpoint_result(status: dict[str, Any]) -> models.NexusEndpointResult:

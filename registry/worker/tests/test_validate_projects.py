@@ -1034,7 +1034,7 @@ def test_nexus_endpoint_requires_a_non_empty_caller_allowlist():
         project_document(endpoint_spec(allowedCallerNamespaces=[]))
     )
     assert any(
-        "allowedCallerNamespaces must list at least one namespace" in message
+        "must allow at least one caller namespace or caller project" in message
         for message in messages(errors)
     )
 
@@ -1062,6 +1062,53 @@ def test_nexus_endpoint_name_must_start_with_a_letter():
     }
     errors = validate_projects.validate_nexus_endpoints(project_document(spec))
     assert any("must start with a letter" in message for message in messages(errors))
+
+
+def test_nexus_endpoint_accepts_another_demo_by_project_name():
+    spec = endpoint_spec()
+    del spec["temporal"]["nexusEndpoints"]["orders"]["allowedCallerNamespaces"]
+    spec["temporal"]["nexusEndpoints"]["orders"]["allowedCallerProjects"] = [
+        "temporal-podpocalypse"
+    ]
+    caller = validate_projects.ProjectDocument(
+        path=ROOT / "projects/caller.yaml",
+        data={
+            "kind": "DemoProject",
+            "metadata": {"name": "temporal-podpocalypse"},
+            "spec": {"components": {}},
+        },
+    )
+    document = project_document(spec)
+    assert validate_projects.validate_nexus_endpoints(document) == []
+    assert validate_projects.validate_nexus_caller_projects([document, caller]) == []
+
+
+def test_nexus_endpoint_rejects_a_resolved_namespace_and_itself():
+    rendered = messages(
+        validate_projects.validate_nexus_endpoints(
+            project_document(
+                endpoint_spec(
+                    allowedCallerProjects=[
+                        "tmprl-dem-cld-other",
+                        "env-inputs",
+                    ]
+                )
+            )
+        )
+    )
+    assert any("not a resolved namespace" in message for message in rendered)
+    assert any("is this project" in message for message in rendered)
+
+
+def test_nexus_endpoint_rejects_an_unknown_caller_project():
+    document = project_document(
+        endpoint_spec(allowedCallerProjects=["missing-demo"])
+    )
+    errors = validate_projects.validate_nexus_caller_projects([document])
+    assert any(
+        "must name another DemoProject in the registry" in message
+        for message in messages(errors)
+    )
 
 
 def test_nexus_endpoint_names_are_unique_across_the_registry():

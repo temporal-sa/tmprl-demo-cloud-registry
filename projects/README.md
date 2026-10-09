@@ -380,8 +380,14 @@ Rules:
   be registered in one namespace while its pod authenticated to another. A
   project may still have versioned workers *and* additional namespaces — what is
   refused is one component being both versioned and bound.
-- Projects can declare **Nexus Endpoints** between their own namespaces with
-  `spec.temporal.nexusEndpoints`. Endpoints cannot reference another project.
+- Projects can declare **Nexus Endpoints** with `spec.temporal.nexusEndpoints`.
+  `allowedCallerNamespaces` names namespaces inside this demo. `allowedCallerProjects`
+  names other demos by `DemoProject` name. The operator derives each caller's
+  primary Temporal namespace. Write the project name, not the resolved namespace.
+  At least one of the two lists is required, because Temporal admits no callers
+  by default. A caller whose project CR is gone is dropped on the next reconcile.
+  A caller whose namespace is not active yet is retried, and that retry does not
+  wait on the other demo's endpoints.
 
   ```yaml
   temporal:
@@ -389,9 +395,11 @@ Rules:
       my-project-orders:
         targetNamespace: beta            # "primary" or a declared label
         targetTaskQueue: orders-tq
-        allowedCallerNamespaces:         # required; no caller is allowed by default
+        allowedCallerNamespaces:         # this demo's own namespaces
           - primary
           - alpha
+        allowedCallerProjects:           # other DemoProject names
+          - other-demo
   ```
 
   Endpoint names are unique across the whole Temporal Cloud account, not just

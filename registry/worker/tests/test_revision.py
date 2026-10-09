@@ -1282,7 +1282,12 @@ def test_demoproject_temporal_declares_additional_namespaces():
 
 def test_demoproject_temporal_declares_nexus_endpoints():
     entry = _temporal_schema()["nexusEndpoints"]["additionalProperties"]
-    assert set(entry["required"]) == {"targetTaskQueue", "allowedCallerNamespaces"}
+    assert set(entry["required"]) == {"targetTaskQueue"}
     assert entry["properties"]["targetNamespace"]["default"] == "primary"
-    # Temporal allows no callers by default, so the allowlist must be explicit.
+    # Temporal allows no callers by default, so an explicit same-demo list is
+    # non-empty, and the endpoint must name a namespace or another project.
     assert entry["properties"]["allowedCallerNamespaces"]["minItems"] == 1
+    assert entry["properties"]["allowedCallerProjects"]["minItems"] == 1
+    rule = entry["x-kubernetes-validations"][0]["rule"]
+    assert "allowedCallerProjects" in rule
+    assert "allowedCallerNamespaces" in rule
