@@ -18,6 +18,11 @@ spec:
   temporal:
     auth:
       mode: apiKey
+    nexusEndpoints:
+      event-leads-participants:
+        targetTaskQueue: event-leads-unversioned
+        allowedCallerProjects:
+          - temporal-podpocalypse
   components:
     web:
       build: app
