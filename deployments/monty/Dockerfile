@@ -5,6 +5,8 @@ COPY --from=uv /uv /usr/local/bin/uv
 ADD https://github.com/temporal-community/temporal-agent-harness/archive/ceb6ef3fdf3f31b32f571c8460d4fd545e117977.tar.gz /tmp/harness.tar.gz
 RUN mkdir /app && tar -xzf /tmp/harness.tar.gz -C /app --strip-components=1 && rm /tmp/harness.tar.gz
 WORKDIR /app
+COPY patch_workspace_routing.py /opt/monty/patch_workspace_routing.py
+RUN python /opt/monty/patch_workspace_routing.py
 ENV UV_LINK_MODE=copy PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN uv sync --frozen --no-default-groups --extra genai --extra code-mode --extra ui --extra s3
 COPY launcher.py /opt/monty/launcher.py

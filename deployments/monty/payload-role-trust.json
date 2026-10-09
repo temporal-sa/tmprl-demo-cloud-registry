@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::429214323166:oidc-provider/oidc.eks.us-west-1.amazonaws.com/id/69916084F4D99A6F859FED98F848601D"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.us-west-1.amazonaws.com/id/69916084F4D99A6F859FED98F848601D:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "oidc.eks.us-west-1.amazonaws.com/id/69916084F4D99A6F859FED98F848601D:sub": [
+            "system:serviceaccount:tmprl-dem-cld-monty:web",
+            "system:serviceaccount:tmprl-dem-cld-monty:worker",
+            "system:serviceaccount:tmprl-dem-cld-monty-*:web",
+            "system:serviceaccount:tmprl-dem-cld-monty-*:worker",
+            "system:serviceaccount:tmprl-dem-cld-crash-*:web",
+            "system:serviceaccount:tmprl-dem-cld-crash-*:worker"
+          ]
+        }
+      }
+    }
+  ]
+}
