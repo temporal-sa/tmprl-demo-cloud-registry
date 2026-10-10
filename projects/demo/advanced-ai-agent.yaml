@@ -1,0 +1,110 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: advanced-ai-agent
+spec:
+  registry:
+    title: Advanced AI Agent
+    summary: >-
+      Durable research agents with streaming, recursive subagents, human tool
+      approvals, sandboxed shell execution, attachments, and HTML reports.
+    tags: [AI, AI - Agents, Human-in-the-Loop]
+    temporalSdks: [Python]
+    crashable:
+      enabled: true
+      taskQueueEnv: SIMPLE_CHAT_TASK_QUEUE
+      baseTaskQueue: advanced-ai-agent
+    links:
+      runbook:
+        label: Advanced AI Agent runbook
+        url: https://github.com/temporal-sa/temporal-agent-harness-example/blob/catalog/advanced-ai-agent/docs/catalog.md
+  source:
+    repo: https://github.com/temporal-sa/temporal-agent-harness-example
+    branch: catalog/advanced-ai-agent
+  builds:
+    app:
+      context: .
+      dockerfile: simple_chat_agent/Dockerfile
+    redis:
+      context: .
+      dockerfile: simple_chat_agent/redis.Dockerfile
+  temporal:
+    searchAttributes:
+      UserEmail: {}
+  secrets:
+    anthropic:
+      shared: anthropic
+      requiredProperties: [ANTHROPIC_API_KEY]
+    gemini:
+      shared: gemini
+      requiredProperties: [GOOGLE_API_KEY]
+    runtime:
+      requiredProperties: [SIMPLE_CHAT_STREAM_TOKEN, WORKSPACE_EXECUTOR_TOKEN]
+  components:
+    advanced-ai-agent-api:
+      build: app
+      command: [python, -m, simple_chat_agent.api.main]
+      temporalAccess: true
+      replicas: 1
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-advanced-ai-agent-data
+      secrets: [anthropic, gemini]
+      ports: [{name: http, containerPort: 8000, servicePort: 80}]
+      env: &app-env
+        - {name: SIMPLE_CHAT_AUTH_MODE, value: catalog}
+        - {name: SIMPLE_CHAT_TASK_QUEUE, value: advanced-ai-agent}
+        - {name: SIMPLE_CHAT_USER_EMAIL_SEARCH_ATTR, value: UserEmail}
+        - {name: SIMPLE_CHAT_REQUIRE_SHARED_STORAGE, value: "true"}
+        - {name: SIMPLE_CHAT_S3_BUCKET, value: tmprl-dem-cld-advanced-ai-agent-data-429214323166-us-west-1}
+        - {name: SIMPLE_CHAT_DYNAMODB_TABLE, value: tmprl-dem-cld-advanced-ai-agent-oauth}
+        - {name: SIMPLE_CHAT_ARTIFACTS_TABLE, value: tmprl-dem-cld-advanced-ai-agent-artifacts}
+        - {name: AWS_DEFAULT_REGION, value: us-west-1}
+        - name: SIMPLE_CHAT_STREAM_TOKEN
+          valueFrom: {inputRef: secrets.runtime.SIMPLE_CHAT_STREAM_TOKEN}
+        - {name: SIMPLE_CHAT_REDIS_URL, value: "redis://:$(SIMPLE_CHAT_STREAM_TOKEN)@redis:6379/0"}
+        - {name: SIMPLE_CHAT_WORKSPACE_SHELL_ENABLED, value: "true"}
+        - {name: WORKSPACE_EXECUTOR_URL, value: "http://executor:8082"}
+        - name: WORKSPACE_EXECUTOR_TOKEN
+          valueFrom: {inputRef: secrets.runtime.WORKSPACE_EXECUTOR_TOKEN}
+        - name: GOOGLE_SEARCH_GROUNDING_API_KEY
+          valueFrom: {inputRef: secrets.gemini.GOOGLE_API_KEY}
+        - {name: SIMPLE_CHAT_GITHUB_TOOLS_ENABLED, value: "false"}
+    advanced-ai-agent-worker:
+      build: app
+      command: [python, -m, simple_chat_agent.worker.main]
+      worker:
+        versioning:
+          enabled: true
+          deploymentName: advanced-ai-agent
+      replicas: 1
+      terminationGracePeriodSeconds: 1260
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-advanced-ai-agent-data
+      secrets: [anthropic, gemini]
+      ports: [{name: codec, containerPort: 8001}]
+      env: *app-env
+    redis:
+      build: redis
+      command: [sh, -c]
+      args: ['exec redis-server --save "" --appendonly no --requirepass "$SIMPLE_CHAT_STREAM_TOKEN"']
+      ports: [{containerPort: 6379}]
+      env:
+        - name: SIMPLE_CHAT_STREAM_TOKEN
+          valueFrom: {inputRef: secrets.runtime.SIMPLE_CHAT_STREAM_TOKEN}
+    executor:
+      build: app
+      command: [/usr/bin/tini, -g, --, python, -m, simple_chat_agent.worker.sandbox.executor]
+      isolatedExecutor: true
+      ports: [{containerPort: 8082}]
+      env:
+        - name: WORKSPACE_EXECUTOR_TOKEN
+          valueFrom: {inputRef: secrets.runtime.WORKSPACE_EXECUTOR_TOKEN}
+        - {name: WORKSPACE_EXECUTOR_ROOT, value: /workspaces}
+        - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+  ingress:
+    subdomain: advanced-ai-agent
+    temporalAuthRequired: true
+    component: advanced-ai-agent-api
+    port: http
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
+    timeoutSeconds: 15
