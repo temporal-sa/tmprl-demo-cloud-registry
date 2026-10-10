@@ -51,6 +51,9 @@ spec:
       ports: [{name: http, containerPort: 8000, servicePort: 80}]
       env: &app-env
         - {name: SIMPLE_CHAT_AUTH_MODE, value: catalog}
+        - {name: SIMPLE_CHAT_API_HOST, value: 0.0.0.0}
+        - {name: SIMPLE_CHAT_CODEC_SERVER_HOST, value: 0.0.0.0}
+        - {name: SIMPLE_CHAT_CODEC_AUTH_ENABLED, value: "true"}
         - {name: SIMPLE_CHAT_TASK_QUEUE, value: advanced-ai-agent}
         - {name: SIMPLE_CHAT_USER_EMAIL_SEARCH_ATTR, value: UserEmail}
         - {name: SIMPLE_CHAT_REQUIRE_SHARED_STORAGE, value: "true"}
