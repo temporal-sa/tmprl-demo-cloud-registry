@@ -763,6 +763,12 @@ COMPUTE_PROVIDER_DENIED_MESSAGE = (
     "User: arn:aws:sts::819232936619:assumed-role/wci-lambda-invoke/wci-intermediary "
     "is not authorized to perform: sts:AssumeRole"
 )
+COMPUTE_RESOURCE_DENIED_MESSAGE = (
+    "default: cannot access the compute resource: operation error Lambda: "
+    "GetFunction, https response error StatusCode: 403, api error AccessDeniedException: "
+    "not authorized to perform: lambda:GetFunction because no identity-based "
+    "policy allows the lambda:GetFunction action"
+)
 
 
 def _propagation_upsert_request():
@@ -795,9 +801,10 @@ async def _fake_connect(_path):
     return object(), "money-transfer.acct1"
 
 
-def test_compute_provider_unreachable_matches_assume_role_failure():
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+def test_compute_provider_unreachable_matches_permission_propagation(message):
     denied = RPCError(
-        COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+        message, RPCStatusCode.FAILED_PRECONDITION, b""
     )
     unrelated = RPCError("compute config invalid", RPCStatusCode.INVALID_ARGUMENT, b"")
 
@@ -805,14 +812,15 @@ def test_compute_provider_unreachable_matches_assume_role_failure():
     assert compute_provider_unreachable(unrelated) is False
 
 
-def test_upsert_retries_when_compute_provider_unreachable(monkeypatch):
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+def test_upsert_retries_when_compute_provider_unreachable(monkeypatch, message):
     # A freshly-created invoke role whose trust policy has not yet propagated
     # surfaces as AssumeRole AccessDenied. It must be retryable (transient), not
     # a permanent ProviderConfigurationError, even though the RPC status would
     # otherwise map to non-retryable.
     async def fake_create_or_update(client, **kwargs):
         raise RPCError(
-            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+            message, RPCStatusCode.FAILED_PRECONDITION, b""
         )
 
     monkeypatch.setattr(
@@ -859,10 +867,11 @@ def test_upsert_stays_nonretryable_on_real_config_error(monkeypatch):
     assert excinfo.value.type == errors.PROVIDER_CONFIGURATION_ERROR
 
 
-def test_validate_retries_when_compute_provider_unreachable(monkeypatch):
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+def test_validate_retries_when_compute_provider_unreachable(monkeypatch, message):
     async def fake_validate(client, **kwargs):
         raise RPCError(
-            COMPUTE_PROVIDER_DENIED_MESSAGE, RPCStatusCode.FAILED_PRECONDITION, b""
+            message, RPCStatusCode.FAILED_PRECONDITION, b""
         )
 
     monkeypatch.setattr(

@@ -36,7 +36,11 @@ def authentication_error_message(message: str) -> bool:
         marker in lowered
         for marker in (
             "access denied",
-            "auth",
+            "authentication failed",
+            "authentication error",
+            "invalid api key",
+            "invalid token",
+            "expired token",
             "forbidden",
             "permission denied",
             "unauthenticated",

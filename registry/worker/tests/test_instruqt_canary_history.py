@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import pytest
 from demo_registry_operator import errors, resources
@@ -435,8 +436,11 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
     asyncio.run(verify())
 
 
-def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monkeypatch):
-    scenario = {"legacy": False, "generation": 1}
+@pytest.mark.parametrize("transient", [False, True])
+def test_instruqt_remains_running_after_failure_and_replays_legacy_results(
+    monkeypatch, transient
+):
+    scenario = {"legacy": False, "generation": 1, "attempts": 0}
     monkeypatch.setattr(
         instruqt,
         "run_instruqt_track_operation",
@@ -449,7 +453,9 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monke
                 "command": {
                     "phase": "Failed",
                     "message": "instruqt exited with 1",
-                    "output": "publish denied",
+                    "output": (
+                        "HTTP 503 Service Unavailable" if transient else "publish denied"
+                    ),
                     "exitCode": 1,
                 },
             }
@@ -484,11 +490,20 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monke
     def push(
         request: instruqt.InstruqtCourseArtifactRequest,
     ) -> instruqt.InstruqtActivityResult:
+        scenario["attempts"] += 1
         try:
             return instruqt.push_instruqt_course_track(request)
         except ApplicationError as error:
             if scenario["legacy"]:
                 return instruqt.InstruqtActivityResult(error.details[0]["status"])
+            if not error.non_retryable:
+                # Keep the real workflow retry policy, but shorten test delays.
+                raise ApplicationError(
+                    error.message,
+                    *error.details,
+                    type=error.type,
+                    next_retry_delay=timedelta(milliseconds=10),
+                ) from error
             raise
 
     @activity.defn(name="record_instruqt_course_status")
@@ -511,7 +526,7 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monke
                     activity_executor=executor,
                 ):
                     for legacy in (True, False):
-                        scenario.update(legacy=legacy, generation=1)
+                        scenario.update(legacy=legacy, generation=1, attempts=0)
                         handle = await env.client.start_workflow(
                             instruqt_course.InstruqtCourseWorkflow.run,
                             messages.InstruqtCourseRunRequest("course"),
@@ -523,6 +538,7 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monke
                             (2, "Ready"),
                         ]:
                             scenario["generation"] = generation
+                            scenario["attempts"] = 0
                             course = {
                                 "metadata": {
                                     "name": "course",
@@ -561,9 +577,12 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(monke
                             assert (
                                 await handle.describe()
                             ).status == WorkflowExecutionStatus.RUNNING
+                            assert scenario["attempts"] == (
+                                8 if generation == 1 and transient and not legacy else 1
+                            )
                             if generation == 1 and not legacy:
                                 assert (
-                                    "publish denied"
+                                    ("HTTP 503" if transient else "publish denied")
                                     in status["rolloutFailure"]["message"]
                                 )
                                 assert (

@@ -2,6 +2,8 @@ import asyncio
 from typing import Any
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError
 
 from demo_registry_operator import errors, kube, resources
 from demo_registry_operator.activities import temporal_cloud
@@ -1150,20 +1152,33 @@ def temporal_cloud_application_error(
     *,
     operation: str,
 ) -> Exception:
+    from botocore.exceptions import BotoCoreError
+
+    if isinstance(error, ApplicationError):
+        return error
+    if isinstance(error, RPCError):
+        return errors.temporal_service_application_error(error, operation=operation)
+    if errors.aws_error_code(error) or isinstance(error, BotoCoreError):
+        return errors.aws_application_error(error, operation=operation)
     message = f"{operation} failed: {error}"
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return errors.retryable_provider_error(message)
+    if temporal_cloud_transient_error_message(str(error)):
+        return errors.retryable_provider_error(message)
     if common.authentication_error_message(str(error)):
         return errors.non_retryable_error(
             message,
             error_type=errors.PROVIDER_AUTHENTICATION_ERROR,
         )
-    if isinstance(error, TimeoutError):
-        return errors.retryable_provider_error(message)
-    if temporal_cloud_transient_error_message(str(error)):
-        return errors.retryable_provider_error(message)
-    return errors.non_retryable_error(
-        message,
-        error_type=errors.PROVIDER_CONFIGURATION_ERROR,
-    )
+    if isinstance(error, ValueError) or any(
+        marker in str(error).lower()
+        for marker in ("invalid ", "is required", "must be", "not supported")
+    ):
+        return errors.non_retryable_error(
+            message, error_type=errors.PROVIDER_CONFIGURATION_ERROR
+        )
+    # Unrecognized provider failures still get the activity's bounded retries.
+    return errors.retryable_provider_error(message)
 
 
 def temporal_cloud_transient_error_message(message: str) -> bool:

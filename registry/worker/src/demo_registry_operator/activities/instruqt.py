@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 import json
 import shutil
@@ -148,10 +149,47 @@ def _instruqt_activity_result(status: dict[str, Any]) -> InstruqtActivityResult:
                     if value
                 )
             }
-        raise operator_errors.terminal_activity_error(
+        error = operator_errors.terminal_activity_error(
             failure, error_type=f"Instruqt{phase}"
         )
+        if status.get("retryable") or command.get("retryable") or (
+            instruqt_transient_error_message(error.message)
+        ):
+            raise operator_errors.retryable_provider_error(
+                error.message, details={"status": failure}
+            )
+        raise error
     return InstruqtActivityResult(status)
+
+
+def instruqt_transient_error_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "connection reset",
+            "connection refused",
+            "could not resolve host",
+            "temporary failure in name resolution",
+            "i/o timeout",
+            "tls handshake timeout",
+            "context deadline exceeded",
+            "rate limit",
+            "rate exceeded",
+            "too many requests",
+            "temporarily unavailable",
+            "service unavailable",
+            "internal server error",
+            "bad gateway",
+            "gateway timeout",
+        )
+    ) or bool(
+        re.search(
+            r"\b(?:http(?: error| status)?|status(?:code| code)?|returned error)"
+            r"[=: ]+(?:429|5\d\d)\b",
+            lowered,
+        )
+    )
 
 
 def _instruqt_image_build_plan(plan: dict[str, Any]) -> InstruqtImageBuildPlan:
@@ -1772,6 +1810,7 @@ def instruqt_cli_status() -> dict[str, Any]:
             "message": f"instruqt version failed: {error}",
             "executable": path,
             "ready": False,
+            "retryable": isinstance(error, (ConnectionError, subprocess.TimeoutExpired)),
         }
 
     output = bounded_text(result.stdout or result.stderr)
@@ -1783,6 +1822,7 @@ def instruqt_cli_status() -> dict[str, Any]:
             "executable": path,
             **({"versionOutput": output} if output else {}),
             "ready": False,
+            "retryable": instruqt_transient_error_message(output),
         }
     return {
         "phase": "Ready",
@@ -1998,6 +2038,8 @@ def run_instruqt_track_validate(track_dir: Path) -> dict[str, Any]:
             "phase": "Blocked",
             "reason": cli.get("reason") or "InstruqtCLIUnavailable",
             "message": cli.get("message") or "Instruqt CLI is not ready.",
+            "retryable": cli.get("retryable", False),
+            **({"output": cli["versionOutput"]} if cli.get("versionOutput") else {}),
         }
     executable = str(cli.get("executable") or "instruqt")
     try:
@@ -2016,6 +2058,7 @@ def run_instruqt_track_validate(track_dir: Path) -> dict[str, Any]:
             "phase": "Blocked",
             "reason": "InstruqtValidateFailed",
             "message": f"instruqt track validate could not run: {error}",
+            "retryable": isinstance(error, (ConnectionError, subprocess.TimeoutExpired)),
         }
 
     output = bounded_text(result.stdout or result.stderr, limit=1000)
@@ -2050,6 +2093,8 @@ def run_instruqt_command(
             "reason": cli.get("reason") or "InstruqtCLIUnavailable",
             "message": cli.get("message") or "Instruqt CLI is not ready.",
             "command": ["instruqt", *args],
+            "retryable": cli.get("retryable", False),
+            **({"output": cli["versionOutput"]} if cli.get("versionOutput") else {}),
         }
     executable = str(cli.get("executable") or "instruqt")
     home = home_dir or (track_dir.parent / ".instruqt-home")
@@ -2072,6 +2117,7 @@ def run_instruqt_command(
             "reason": "InstruqtCommandFailed",
             "message": f"instruqt {' '.join(args)} could not run: {error}",
             "command": ["instruqt", *args],
+            "retryable": isinstance(error, (ConnectionError, subprocess.TimeoutExpired)),
         }
 
     output = bounded_text("\n".join([result.stdout or "", result.stderr or ""]), limit=2000)

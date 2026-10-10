@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import timedelta
 from typing import Any, Mapping
@@ -524,13 +523,12 @@ def task_queue_type(value: int) -> str:
 
 
 def compute_provider_unreachable(error: RPCError) -> bool:
-    # A freshly-created cross-account invoke role is not immediately assumable
-    # while its IAM trust policy propagates, so Temporal's compute provider can
-    # fail the AssumeRole (e.g. STS AccessDenied) on the first attempt. Temporal
-    # surfaces this as a "cannot connect to the compute provider" error. Treat it
-    # as transient so the activity retries until propagation completes, rather
-    # than failing the reconcile as a permanent configuration error.
-    return "cannot connect to the compute provider" in str(error)
+    # New invoke roles need both trust and Lambda permissions to propagate.
+    message = str(error).lower()
+    return "cannot connect to the compute provider" in message or (
+        "cannot access the compute resource" in message
+        and "accessdenied" in message
+    )
 
 
 def temporal_service_application_error(
@@ -538,37 +536,4 @@ def temporal_service_application_error(
     *,
     operation: str,
 ) -> Exception:
-    message = f"{operation} failed: {error}"
-    if error.status in {
-        RPCStatusCode.UNAUTHENTICATED,
-        RPCStatusCode.PERMISSION_DENIED,
-    }:
-        return errors.non_retryable_error(
-            message,
-            error_type=errors.PROVIDER_AUTHENTICATION_ERROR,
-        )
-    if error.status in {
-        RPCStatusCode.INVALID_ARGUMENT,
-        RPCStatusCode.FAILED_PRECONDITION,
-        RPCStatusCode.NOT_FOUND,
-        RPCStatusCode.UNIMPLEMENTED,
-    }:
-        return errors.non_retryable_error(
-            message,
-            error_type=errors.PROVIDER_CONFIGURATION_ERROR,
-        )
-    if error.status in {
-        RPCStatusCode.CANCELLED,
-        RPCStatusCode.DEADLINE_EXCEEDED,
-        RPCStatusCode.RESOURCE_EXHAUSTED,
-        RPCStatusCode.ABORTED,
-        RPCStatusCode.UNKNOWN,
-        RPCStatusCode.INTERNAL,
-        RPCStatusCode.UNAVAILABLE,
-    }:
-        return errors.retryable_provider_error(message)
-    return errors.non_retryable_error(
-        message,
-        error_type=errors.PROVIDER_CONFIGURATION_ERROR,
-        details=json.dumps({"status": str(error.status)}),
-    )
+    return errors.temporal_service_application_error(error, operation=operation)

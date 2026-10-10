@@ -42,6 +42,7 @@ def ensure_lambda_function(
         temporal_secret = describe_secret_reference(
             secretsmanager,
             request.temporal_secret_path,
+            retry_if_missing=True,
         )
         secret_env = describe_secret_environment(secretsmanager, request.secret_env)
         environment = lambda_environment(request, temporal_secret, secret_env)
@@ -361,9 +362,8 @@ def read_json_secret(secretsmanager: Any, secret_id: str) -> dict[str, Any]:
         response = secretsmanager.get_secret_value(SecretId=secret_id)
     except Exception as error:
         if common.error_code(error) == "ResourceNotFoundException":
-            raise errors.non_retryable_error(
-                f"Temporal runtime secret {secret_id!r} does not exist",
-                error_type=errors.CONFIGURATION_ERROR,
+            raise errors.retryable_provider_error(
+                f"Temporal runtime secret {secret_id!r} is not visible yet"
             ) from error
         raise
     secret_string = response.get("SecretString")
@@ -387,11 +387,17 @@ def read_json_secret(secretsmanager: Any, secret_id: str) -> dict[str, Any]:
     return decoded
 
 
-def describe_secret_reference(secretsmanager: Any, secret_id: str) -> dict[str, str]:
+def describe_secret_reference(
+    secretsmanager: Any, secret_id: str, *, retry_if_missing: bool = False
+) -> dict[str, str]:
     try:
         response = secretsmanager.describe_secret(SecretId=secret_id)
     except Exception as error:
         if common.error_code(error) == "ResourceNotFoundException":
+            if retry_if_missing:
+                raise errors.retryable_provider_error(
+                    f"Managed Secrets Manager secret {secret_id!r} is not visible yet"
+                ) from error
             raise errors.non_retryable_error(
                 f"Secrets Manager secret {secret_id!r} does not exist",
                 error_type=errors.CONFIGURATION_ERROR,

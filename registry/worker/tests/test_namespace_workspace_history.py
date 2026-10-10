@@ -22,6 +22,7 @@ from demo_registry_operator.workflows.namespace_readers_messages import (
 from temporalio import activity, workflow
 from temporalio.client import WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
@@ -130,7 +131,9 @@ def test_grant_native_failures_bounded_retries_and_legacy_replay(monkeypatch):
 
     async def reconciler(*_):
         scenario["attempts"] += 1
-        if scenario["mode"] in {"transient", "legacy-failed"}:
+        if scenario["mode"] == "transient":
+            raise RPCError("internal server error", RPCStatusCode.INTERNAL, b"")
+        if scenario["mode"] == "legacy-failed":
             raise TimeoutError("Cloud Ops timed out")
         raise RuntimeError("permission denied")
 

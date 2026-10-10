@@ -43,6 +43,17 @@ image repositories are retained for retry because publishing updates them in
 place. Failed finalization retains the finalizer and accepts another finalize
 signal; the `status` query remains available even if writing status fails.
 
+Provider activities use bounded Temporal retries for transport failures,
+throttling, and transient gRPC statuses. Cloud API classification uses typed
+gRPC/AWS errors before message-based fallbacks; unknown provider failures retry.
+Explicit validation, authentication, and configuration errors remain terminal.
+New Lambda invoke roles retry while trust and function permissions propagate,
+and reads of newly created managed runtime secrets retry until visible. Missing
+user-supplied Lambda secrets remain configuration errors. Instruqt retries
+temporary Git/CLI transport and provider failures, retaining command output and
+status details when retries are exhausted. Track validation and completed image
+build failures remain terminal.
+
 Operator canaries register cleanup before applying their project. Cleanup runs
 in reverse order through project deletion, workflow finalization, and resource
 verification, with `Compensate operator canary` activity summaries after failure.

@@ -8,6 +8,7 @@ from temporalio.exceptions import (
     ChildWorkflowError,
     is_cancelled_exception,
 )
+from temporalio.service import RPCError, RPCStatusCode
 
 VALIDATION_ERROR = "ValidationError"
 CONFIGURATION_ERROR = "ConfigurationError"
@@ -56,8 +57,35 @@ def non_retryable_error(
     return ApplicationError(message, details, type=error_type, non_retryable=True)
 
 
-def retryable_provider_error(message: str) -> ApplicationError:
-    return ApplicationError(message, type=PROVIDER_TRANSIENT_ERROR)
+def retryable_provider_error(
+    message: str, *, details: Any | None = None
+) -> ApplicationError:
+    if details is None:
+        return ApplicationError(message, type=PROVIDER_TRANSIENT_ERROR)
+    return ApplicationError(message, details, type=PROVIDER_TRANSIENT_ERROR)
+
+
+def temporal_service_application_error(
+    error: RPCError, *, operation: str
+) -> ApplicationError:
+    message = f"{operation} failed: {error}"
+    if error.status in {
+        RPCStatusCode.UNAUTHENTICATED,
+        RPCStatusCode.PERMISSION_DENIED,
+    }:
+        return non_retryable_error(
+            message, error_type=PROVIDER_AUTHENTICATION_ERROR
+        )
+    if error.status in {
+        RPCStatusCode.INVALID_ARGUMENT,
+        RPCStatusCode.FAILED_PRECONDITION,
+        RPCStatusCode.NOT_FOUND,
+        RPCStatusCode.UNIMPLEMENTED,
+    }:
+        return non_retryable_error(
+            message, error_type=PROVIDER_CONFIGURATION_ERROR
+        )
+    return retryable_provider_error(message)
 
 
 def terminal_activity_error(
