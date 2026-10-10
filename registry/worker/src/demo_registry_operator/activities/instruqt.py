@@ -118,6 +118,51 @@ class InstruqtImageBuildPlan:
     plan: dict[str, Any]
 
 
+def _instruqt_activity_result(status: dict[str, Any]) -> InstruqtActivityResult:
+    phase = status.get("phase")
+    if phase in {
+        "Error",
+        "ValidationFailed",
+        "ValidationBlocked",
+        "PushFailed",
+        "TestFailed",
+        "DeployFailed",
+        "DeleteFailed",
+    }:
+        failure = dict(status)
+        command = next(
+            (
+                status[key]
+                for key in ("delete", "deploy", "test", "push", "validation")
+                if isinstance(status.get(key), dict)
+                and status[key].get("phase")
+                in {"Failed", "Blocked", "ValidationFailed"}
+            ),
+            {},
+        )
+        if command:
+            failure["lastError"] = {
+                "message": " ".join(
+                    str(value)
+                    for value in (command.get("message"), command.get("output"))
+                    if value
+                )
+            }
+        raise operator_errors.terminal_activity_error(
+            failure, error_type=f"Instruqt{phase}"
+        )
+    return InstruqtActivityResult(status)
+
+
+def _instruqt_image_build_plan(plan: dict[str, Any]) -> InstruqtImageBuildPlan:
+    status = completed_instruqt_image_status(plan)
+    if status is not None and status.get("phase") == "Error":
+        raise operator_errors.terminal_activity_error(
+            status, error_type=operator_errors.IMAGE_BUILD_FAILED
+        )
+    return InstruqtImageBuildPlan(plan)
+
+
 def reconcile_instruqt_course(
     instruqt_course: dict[str, Any],
     *,
@@ -282,20 +327,24 @@ def prepare_instruqt_course_artifact(
         if isinstance(name, str) and isinstance(image, str) and image
     }
     if image_bindings(instruqt_course) and not images:
-        return InstruqtActivityResult({
-            "phase": "WaitingForImages",
-            "message": "Managed image bindings are configured but no resolved images were provided.",
-            "missingImages": sorted(image_bindings(instruqt_course)),
-        })
+        return _instruqt_activity_result(
+            {
+                "phase": "WaitingForImages",
+                "message": "Managed image bindings are configured but no resolved images were provided.",
+                "missingImages": sorted(image_bindings(instruqt_course)),
+            }
+        )
 
     with tempfile.TemporaryDirectory(prefix="instruqt-course-") as workspace:
-        return InstruqtActivityResult(prepare_managed_instruqt_artifact(
-            instruqt_course,
-            Path(workspace),
-            images,
-            validate=True,
-            channel=channel,
-        ))
+        return _instruqt_activity_result(
+            prepare_managed_instruqt_artifact(
+                instruqt_course,
+                Path(workspace),
+                images,
+                validate=True,
+                channel=channel,
+            )
+        )
 
 
 @activity.defn
@@ -365,18 +414,20 @@ def delete_instruqt_course_ecr_repositories(
     checked_at = string_value(plan.get("checkedAt"), datetime.now(UTC).isoformat())
     bindings = image_bindings(instruqt_course)
     if not bindings:
-        return InstruqtActivityResult({
-            "phase": "NotRequired",
-            "checkedAt": checked_at,
-            "repositories": [],
-            "message": "No managed Instruqt image repositories to delete.",
-        })
+        return _instruqt_activity_result(
+            {
+                "phase": "NotRequired",
+                "checkedAt": checked_at,
+                "repositories": [],
+                "message": "No managed Instruqt image repositories to delete.",
+            }
+        )
 
     try:
         import boto3
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return InstruqtActivityResult(
+        return _instruqt_activity_result(
             {"phase": "Error", "message": f"boto3 is required: {error}"}
         )
 
@@ -408,8 +459,18 @@ def delete_instruqt_course_ecr_repositories(
         if any(repository.get("action") == "error" for repository in repositories)
         else "Deleted"
     )
-    return InstruqtActivityResult(
-        {"phase": phase, "checkedAt": checked_at, "repositories": repositories}
+    return _instruqt_activity_result(
+        {
+            "phase": phase,
+            "checkedAt": checked_at,
+            "repositories": repositories,
+            "message": "; ".join(
+                str(repository["message"])
+                for repository in repositories
+                if repository.get("action") == "error"
+            )
+            or "Instruqt image repositories were deleted.",
+        }
     )
 
 
@@ -474,18 +535,20 @@ def resolve_instruqt_course_image_build_plan(
     started_at = datetime.now(UTC).isoformat()
     bindings = image_bindings(instruqt_course)
     if not bindings:
-        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
-            instruqt_image_build_status(
-                instruqt_course,
-                channel=channel,
-                phase="NotRequired",
-                mode=config.build_mode,
-                started_at=started_at,
-                images={},
-                message="No managed Instruqt images are configured.",
-                build_entries=[],
+        return _instruqt_image_build_plan(
+            completed_instruqt_image_plan(
+                instruqt_image_build_status(
+                    instruqt_course,
+                    channel=channel,
+                    phase="NotRequired",
+                    mode=config.build_mode,
+                    started_at=started_at,
+                    images={},
+                    message="No managed Instruqt images are configured.",
+                    build_entries=[],
+                )
             )
-        ))
+        )
 
     reusable = reusable_instruqt_image_build_status(
         instruqt_course,
@@ -495,25 +558,27 @@ def resolve_instruqt_course_image_build_plan(
         started_at=started_at,
     )
     if reusable is not None:
-        return InstruqtImageBuildPlan(completed_instruqt_image_plan(reusable))
+        return _instruqt_image_build_plan(completed_instruqt_image_plan(reusable))
 
     if not config.codebuild_project:
-        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
-            instruqt_image_build_status(
-                instruqt_course,
-                channel=channel,
-                phase="Error",
-                mode=config.build_mode,
-                started_at=started_at,
-                images={},
-                message="AWS CodeBuild project is not configured.",
-                build_entries=[],
-                error=(
-                    "Set DEMO_REGISTRY_CODEBUILD_PROJECT to build managed "
-                    "Instruqt images."
-                ),
+        return _instruqt_image_build_plan(
+            completed_instruqt_image_plan(
+                instruqt_image_build_status(
+                    instruqt_course,
+                    channel=channel,
+                    phase="Error",
+                    mode=config.build_mode,
+                    started_at=started_at,
+                    images={},
+                    message="AWS CodeBuild project is not configured.",
+                    build_entries=[],
+                    error=(
+                        "Set DEMO_REGISTRY_CODEBUILD_PROJECT to build managed "
+                        "Instruqt images."
+                    ),
+                )
             )
-        ))
+        )
 
     try:
         source_plan = instruqt_codebuild_source_plan(instruqt_course, channel)
@@ -523,31 +588,35 @@ def resolve_instruqt_course_image_build_plan(
             config,
         )
     except ValueError as error:
-        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
-            instruqt_image_build_status(
-                instruqt_course,
-                channel=channel,
-                phase="Error",
-                mode=config.build_mode,
-                started_at=started_at,
-                images={},
-                message="AWS CodeBuild image build cannot start.",
-                build_entries=[],
-                error=str(error),
+        return _instruqt_image_build_plan(
+            completed_instruqt_image_plan(
+                instruqt_image_build_status(
+                    instruqt_course,
+                    channel=channel,
+                    phase="Error",
+                    mode=config.build_mode,
+                    started_at=started_at,
+                    images={},
+                    message="AWS CodeBuild image build cannot start.",
+                    build_entries=[],
+                    error=str(error),
+                )
             )
-        ))
+        )
 
-    return InstruqtImageBuildPlan({
-        "action": "codebuild",
-        "instruqtCourse": instruqt_course,
-        "externalResources": external_resources,
-        "channel": channel,
-        "startedAt": started_at,
-        "mode": config.build_mode,
-        "codebuildProject": config.codebuild_project,
-        "imageTemplates": image_templates,
-        "sources": source_plan,
-    })
+    return _instruqt_image_build_plan(
+        {
+            "action": "codebuild",
+            "instruqtCourse": instruqt_course,
+            "externalResources": external_resources,
+            "channel": channel,
+            "startedAt": started_at,
+            "mode": config.build_mode,
+            "codebuildProject": config.codebuild_project,
+            "imageTemplates": image_templates,
+            "sources": source_plan,
+        }
+    )
 
 
 @activity.defn
@@ -568,19 +637,21 @@ def start_instruqt_course_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return InstruqtImageBuildPlan(completed_instruqt_image_plan(
-            instruqt_image_build_status(
-                instruqt_course,
-                channel=channel,
-                phase="Error",
-                mode=config.build_mode,
-                started_at=started_at,
-                images={},
-                message="AWS CodeBuild image build failed.",
-                build_entries=[],
-                error=f"boto3 is required for aws-codebuild mode: {error}",
+        return _instruqt_image_build_plan(
+            completed_instruqt_image_plan(
+                instruqt_image_build_status(
+                    instruqt_course,
+                    channel=channel,
+                    phase="Error",
+                    mode=config.build_mode,
+                    started_at=started_at,
+                    images={},
+                    message="AWS CodeBuild image build failed.",
+                    build_entries=[],
+                    error=f"boto3 is required for aws-codebuild mode: {error}",
+                )
             )
-        ))
+        )
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -601,7 +672,7 @@ def start_instruqt_course_image_build(
                 "phase": "Reattaching",
             }
         )
-        return InstruqtImageBuildPlan({**plan, "codebuildBuildId": build_id})
+        return _instruqt_image_build_plan({**plan, "codebuildBuildId": build_id})
 
     start_args = instruqt_codebuild_start_build_args(
         instruqt_course,
@@ -623,23 +694,25 @@ def start_instruqt_course_image_build(
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
         if operator_errors.aws_error_code(error) in operator_errors.NON_RETRYABLE_AWS_ERROR_CODES:
-            return InstruqtImageBuildPlan(completed_instruqt_image_plan(
-                instruqt_image_build_status(
-                    instruqt_course,
-                    channel=channel,
-                    phase="Error",
-                    mode=config.build_mode,
-                    started_at=started_at,
-                    images={},
-                    message="AWS CodeBuild image build failed.",
-                    build_entries=[],
-                    error=str(error),
-                    codebuild_status=build_execution.codebuild_status_summary(
-                        codebuild_build,
-                        project_name=config.codebuild_project,
-                    ),
+            return _instruqt_image_build_plan(
+                completed_instruqt_image_plan(
+                    instruqt_image_build_status(
+                        instruqt_course,
+                        channel=channel,
+                        phase="Error",
+                        mode=config.build_mode,
+                        started_at=started_at,
+                        images={},
+                        message="AWS CodeBuild image build failed.",
+                        build_entries=[],
+                        error=str(error),
+                        codebuild_status=build_execution.codebuild_status_summary(
+                            codebuild_build,
+                            project_name=config.codebuild_project,
+                        ),
+                    )
                 )
-            ))
+            )
         raise operator_errors.aws_application_error(error, operation="Start CodeBuild build") from error
 
     build = response.get("build", {})
@@ -659,14 +732,16 @@ def start_instruqt_course_image_build(
             "phase": "Started",
         }
     )
-    return InstruqtImageBuildPlan({
-        **plan,
-        "codebuildBuildId": build_id,
-        "codebuild": build_execution.codebuild_status_summary(
-            codebuild_build,
-            project_name=config.codebuild_project,
-        ),
-    })
+    return _instruqt_image_build_plan(
+        {
+            **plan,
+            "codebuildBuildId": build_id,
+            "codebuild": build_execution.codebuild_status_summary(
+                codebuild_build,
+                project_name=config.codebuild_project,
+            ),
+        }
+    )
 
 
 @activity.defn
@@ -688,17 +763,19 @@ def wait_for_instruqt_course_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return InstruqtActivityResult(instruqt_image_build_status(
-            instruqt_course,
-            channel=channel,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            message="AWS CodeBuild image build failed.",
-            build_entries=[],
-            error=f"boto3 is required for aws-codebuild mode: {error}",
-        ))
+        return _instruqt_activity_result(
+            instruqt_image_build_status(
+                instruqt_course,
+                channel=channel,
+                phase="Error",
+                mode=config.build_mode,
+                started_at=started_at,
+                images={},
+                message="AWS CodeBuild image build failed.",
+                build_entries=[],
+                error=f"boto3 is required for aws-codebuild mode: {error}",
+            )
+        )
 
     codebuild = boto3.session.Session(region_name=config.aws_region).client(
         "codebuild",
@@ -720,17 +797,19 @@ def wait_for_instruqt_course_image_build(
         raise operator_errors.non_retryable_error(str(error), error_type=operator_errors.IMAGE_BUILD_TIMEOUT) from error
     except (BotoCoreError, ClientError) as error:
         if operator_errors.aws_error_code(error) in operator_errors.NON_RETRYABLE_AWS_ERROR_CODES:
-            return InstruqtActivityResult(instruqt_image_build_status(
-                instruqt_course,
-                channel=channel,
-                phase="Error",
-                mode=config.build_mode,
-                started_at=started_at,
-                images={},
-                message="AWS CodeBuild image build failed.",
-                build_entries=[],
-                error=str(error),
-            ))
+            return _instruqt_activity_result(
+                instruqt_image_build_status(
+                    instruqt_course,
+                    channel=channel,
+                    phase="Error",
+                    mode=config.build_mode,
+                    started_at=started_at,
+                    images={},
+                    message="AWS CodeBuild image build failed.",
+                    build_entries=[],
+                    error=str(error),
+                )
+            )
         raise operator_errors.aws_application_error(error, operation="Poll CodeBuild build") from error
 
     codebuild_status = build_execution.codebuild_status_summary(
@@ -738,67 +817,73 @@ def wait_for_instruqt_course_image_build(
         project_name=config.codebuild_project,
     )
     if codebuild_build.get("buildStatus") != "SUCCEEDED":
-        return InstruqtActivityResult(instruqt_image_build_status(
-            instruqt_course,
-            channel=channel,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            message="AWS CodeBuild image build failed.",
-            build_entries=instruqt_image_build_entries(
+        return _instruqt_activity_result(
+            instruqt_image_build_status(
                 instruqt_course,
-                image_templates,
+                channel=channel,
+                phase="Error",
+                mode=config.build_mode,
+                started_at=started_at,
                 images={},
-                external_resources=external_resources,
-                phase="Failed",
-                source="aws-codebuild",
-            ),
-            error=build_execution.codebuild_error_message(codebuild_build),
-            codebuild_status=codebuild_status,
-        ))
+                message="AWS CodeBuild image build failed.",
+                build_entries=instruqt_image_build_entries(
+                    instruqt_course,
+                    image_templates,
+                    images={},
+                    external_resources=external_resources,
+                    phase="Failed",
+                    source="aws-codebuild",
+                ),
+                error=build_execution.codebuild_error_message(codebuild_build),
+                codebuild_status=codebuild_status,
+            )
+        )
 
     source_commit = instruqt_channel_source_commit_sha(instruqt_course, channel)
     if not source_commit or not build_definitions.looks_like_commit_sha(source_commit):
-        return InstruqtActivityResult(instruqt_image_build_status(
-            instruqt_course,
-            channel=channel,
-            phase="Error",
-            mode=config.build_mode,
-            started_at=started_at,
-            images={},
-            message="AWS CodeBuild image build did not have an immutable source commit.",
-            build_entries=[],
-            error=(
-                "CodeBuild completed but the Instruqt source annotation did not "
-                "contain a git commit SHA."
-            ),
-            codebuild_status=codebuild_status,
-        ))
+        return _instruqt_activity_result(
+            instruqt_image_build_status(
+                instruqt_course,
+                channel=channel,
+                phase="Error",
+                mode=config.build_mode,
+                started_at=started_at,
+                images={},
+                message="AWS CodeBuild image build did not have an immutable source commit.",
+                build_entries=[],
+                error=(
+                    "CodeBuild completed but the Instruqt source annotation did not "
+                    "contain a git commit SHA."
+                ),
+                codebuild_status=codebuild_status,
+            )
+        )
 
     images = render_instruqt_image_templates(
         instruqt_course,
         image_templates,
         source_commit,
     )
-    return InstruqtActivityResult(instruqt_image_build_status(
-        instruqt_course,
-        channel=channel,
-        phase="Pushed",
-        mode=config.build_mode,
-        started_at=started_at,
-        images=images,
-        message="AWS CodeBuild built and pushed immutable images for every managed Instruqt image.",
-        build_entries=instruqt_image_build_entries(
+    return _instruqt_activity_result(
+        instruqt_image_build_status(
             instruqt_course,
-            image_templates,
-            images=images,
-            external_resources=external_resources,
+            channel=channel,
             phase="Pushed",
-            source="aws-codebuild",
-        ),
-        codebuild_status=codebuild_status,
-    ))
+            mode=config.build_mode,
+            started_at=started_at,
+            images=images,
+            message="AWS CodeBuild built and pushed immutable images for every managed Instruqt image.",
+            build_entries=instruqt_image_build_entries(
+                instruqt_course,
+                image_templates,
+                images=images,
+                external_resources=external_resources,
+                phase="Pushed",
+                source="aws-codebuild",
+            ),
+            codebuild_status=codebuild_status,
+        )
+    )
 
 
 @activity.defn
@@ -812,10 +897,10 @@ def push_instruqt_course_track(
         timeout_seconds=300,
     )
     if operation.get("phase") != "Ran":
-        return InstruqtActivityResult(operation)
+        return _instruqt_activity_result(operation)
     command = operation["command"]
     if command.get("phase") != "Succeeded":
-        return InstruqtActivityResult(
+        return _instruqt_activity_result(
             instruqt_command_failure_status(
                 "PushFailed",
                 channel=operation["channel"],
@@ -825,7 +910,7 @@ def push_instruqt_course_track(
                 command_status=command,
             )
         )
-    return InstruqtActivityResult(
+    return _instruqt_activity_result(
         {
             "phase": "Pushed",
             "channel": operation["channel"],
@@ -848,10 +933,10 @@ def test_instruqt_course_track(
         timeout_seconds=INSTRUQT_TEST_TIMEOUT_SECONDS,
     )
     if operation.get("phase") != "Ran":
-        return InstruqtActivityResult(operation)
+        return _instruqt_activity_result(operation)
     command = operation["command"]
     if command.get("phase") != "Succeeded":
-        return InstruqtActivityResult(
+        return _instruqt_activity_result(
             instruqt_command_failure_status(
                 "TestFailed",
                 channel=operation["channel"],
@@ -861,7 +946,7 @@ def test_instruqt_course_track(
                 command_status=command,
             )
         )
-    return InstruqtActivityResult(
+    return _instruqt_activity_result(
         {
             "phase": "Tested",
             "channel": operation["channel"],
@@ -889,12 +974,12 @@ def deploy_instruqt_course_track(
         timeout_seconds=300,
     )
     if operation.get("phase") != "Ran":
-        return InstruqtActivityResult(operation)
+        return _instruqt_activity_result(operation)
     command = operation["command"]
     push_status = request.push_status or {}
     test_status = request.test_status or {}
     if command.get("phase") != "Succeeded":
-        return InstruqtActivityResult(
+        return _instruqt_activity_result(
             instruqt_command_failure_status(
                 "DeployFailed",
                 channel=operation["channel"],
@@ -917,7 +1002,7 @@ def deploy_instruqt_course_track(
     }
     if test_status:
         status["test"] = test_status.get("test", test_status)
-    return InstruqtActivityResult(status)
+    return _instruqt_activity_result(status)
 
 
 def run_instruqt_track_operation(
@@ -1008,29 +1093,35 @@ def delete_instruqt_course_track(
             home_dir=Path(workspace) / "home",
     )
     if command.get("phase") == "Succeeded":
-        return InstruqtActivityResult({
-            "phase": "Deleted",
-            "channel": channel,
-            "target": target,
-            "message": "Instruqt track was deleted.",
-            "delete": command,
-        })
+        return _instruqt_activity_result(
+            {
+                "phase": "Deleted",
+                "channel": channel,
+                "target": target,
+                "message": "Instruqt track was deleted.",
+                "delete": command,
+            }
+        )
     output = str(command.get("output") or "").lower()
     if any(marker in output for marker in ("not found", "could not find", "404")):
-        return InstruqtActivityResult({
-            "phase": "NotFound",
+        return _instruqt_activity_result(
+            {
+                "phase": "NotFound",
+                "channel": channel,
+                "target": target,
+                "message": "Instruqt track was already absent.",
+                "delete": command,
+            }
+        )
+    return _instruqt_activity_result(
+        {
+            "phase": "DeleteFailed",
             "channel": channel,
             "target": target,
-            "message": "Instruqt track was already absent.",
+            "message": "instruqt track delete failed.",
             "delete": command,
-        })
-    return InstruqtActivityResult({
-        "phase": "DeleteFailed",
-        "channel": channel,
-        "target": target,
-        "message": "instruqt track delete failed.",
-        "delete": command,
-    })
+        }
+    )
 
 
 @activity.defn

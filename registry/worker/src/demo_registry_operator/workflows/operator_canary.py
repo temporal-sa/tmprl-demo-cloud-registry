@@ -10,7 +10,9 @@ from temporalio.exceptions import ApplicationError
 from demo_registry_operator import errors
 from demo_registry_operator.activities import canary as canary_activities
 from demo_registry_operator.workflows import messages
-from demo_registry_operator.workflows import operator_auth_canary as auth_canary_workflow
+from demo_registry_operator.workflows import (
+    operator_auth_canary as auth_canary_workflow,
+)
 
 LOAD_CANARY_TEMPLATES_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
@@ -49,6 +51,7 @@ class RegistryOperatorCanaryWorkflow:
             )
             for template in templates
         ]
+        wait_for_all = workflow.patched("operator-canary-wait-for-all-branches")
         canary_results = await asyncio.gather(
             *(
                 workflow.execute_child_workflow(
@@ -56,12 +59,28 @@ class RegistryOperatorCanaryWorkflow:
                     branch_request,
                     id=branch_request.workflowID,
                     task_queue=workflow_info.task_queue,
-                    parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
+                    parent_close_policy=(
+                        workflow.ParentClosePolicy.REQUEST_CANCEL
+                        if wait_for_all
+                        else workflow.ParentClosePolicy.TERMINATE
+                    ),
                     versioning_intent=workflow.VersioningIntent.COMPATIBLE,
                 )
                 for branch_request in branch_requests
-            )
+            ),
+            return_exceptions=wait_for_all,
         )
+        if wait_for_all:
+            canary_results = [
+                messages.RegistryOperatorAuthCanaryResult(
+                    authMode=branch.authMode,
+                    phase="Failed",
+                    failure=errors.failure_details(result),
+                )
+                if isinstance(result, BaseException)
+                else result
+                for branch, result in zip(branch_requests, canary_results, strict=True)
+            ]
         canaries = canary_results_by_template_name(templates, canary_results)
         ok = all(result.phase == "Succeeded" for result in canary_results)
         result = messages.RegistryOperatorCanaryResult(

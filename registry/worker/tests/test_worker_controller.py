@@ -1579,9 +1579,12 @@ def test_canary_promotion_wait_fails_fast_when_project_errors(monkeypatch):
         },
     )
 
-    result = canary.wait_for_registry_operator_canary_promotion(
-        promotion_wait_request(cleanup_plan())
-    ).status
+    with pytest.raises(ApplicationError) as raised:
+        canary.wait_for_registry_operator_canary_promotion(
+            promotion_wait_request(cleanup_plan())
+        )
+    assert raised.value.non_retryable
+    result = raised.value.details[0]["status"]
 
     assert result["phase"] == "Failed"
     assert result["ok"] is False
@@ -1608,9 +1611,11 @@ def test_canary_promotion_wait_fails_fast_when_workflow_errors(monkeypatch):
         },
     )
 
-    result = canary.wait_for_registry_operator_canary_promotion(
-        promotion_wait_request(cleanup_plan())
-    ).status
+    with pytest.raises(ApplicationError) as raised:
+        canary.wait_for_registry_operator_canary_promotion(
+            promotion_wait_request(cleanup_plan())
+        )
+    result = raised.value.details[0]["status"]
 
     assert result["phase"] == "Failed"
     assert result["ok"] is False
@@ -1801,9 +1806,11 @@ def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
         },
     )
 
-    result = canary.wait_registry_operator_canary_cleanup(
-        cleanup_wait_request(cleanup_plan())
-    ).status
+    with pytest.raises(ApplicationError) as raised:
+        canary.wait_registry_operator_canary_cleanup(
+            cleanup_wait_request(cleanup_plan())
+        )
+    result = raised.value.details[0]["status"]
 
     assert result["phase"] == "CleanupFailed"
     assert result["ok"] is False

@@ -169,6 +169,8 @@ class RegistryOperatorAuthCanaryResult:
     rotation: dict[str, Any] = field(default_factory=dict)
     finalizeSignal: dict[str, Any] = field(default_factory=dict)
     cleanup: dict[str, Any] = field(default_factory=dict)
+    failure: dict[str, Any] = field(default_factory=dict)
+    compensationFailures: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

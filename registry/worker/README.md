@@ -36,6 +36,23 @@ New executions remain available for another reconcile after a failed first
 provision; a Temporal patch preserves the prior behavior when replaying old
 failure histories.
 
+Instruqt build and CLI failures also produce failed activity events. The course
+workflow retains command output, build diagnostics, and the failed activity's
+event ID in its status, and stays available for the next reconcile. Tracks and
+image repositories are retained for retry because publishing updates them in
+place. Failed finalization retains the finalizer and accepts another finalize
+signal; the `status` query remains available even if writing status fails.
+
+Operator canaries register cleanup before applying their project. Cleanup runs
+in reverse order through project deletion, workflow finalization, and resource
+verification, with `Compensate operator canary` activity summaries after failure.
+Normal successful checks use `Clean up operator canary` summaries. Cancellation
+waits for cleanup, and a cleanup failure does not prevent later steps or replace
+the original failure. Results retain `failure` and `compensationFailures`.
+The parent gate waits for every branch before reporting failure, and requests
+child cancellation on close so children can clean up. Temporal patches preserve
+the previous command sequence when replaying existing histories.
+
 External resource reconciliation runs before Kubernetes reconciliation. The
 operator creates or verifies ECR repositories, verifies required Secrets Manager
 paths and JSON property names, and manages Temporal Cloud namespace/service

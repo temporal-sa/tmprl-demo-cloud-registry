@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, CancelledError, is_cancelled_exception
 
 from demo_registry_operator import errors
 from demo_registry_operator.activities import canary as canary_activities
 from demo_registry_operator.workflows import messages
-
 
 COMMON_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -50,6 +52,9 @@ class RegistryOperatorAuthCanaryState:
     rotation_result: dict[str, Any] = field(default_factory=not_started_status)
     promotion_ok: bool = False
     rotation_ok: bool = False
+    failure: dict[str, Any] = field(default_factory=dict)
+    compensation_failures: list[dict[str, Any]] = field(default_factory=list)
+    cleanup_summary_prefix: str | None = None
 
 
 @workflow.defn
@@ -70,6 +75,8 @@ async def _run_registry_operator_auth_canary(
     auth_mode: str,
 ) -> messages.RegistryOperatorAuthCanaryResult:
     plan = await _prepare_registry_operator_canary_plan(branch_request)
+    if workflow.patched("operator-auth-canary-compensation"):
+        return await _run_registry_operator_auth_canary_saga(plan, auth_mode)
     apply_result = await _apply_registry_operator_canary_project(plan)
     signal_result = await _signal_registry_operator_canary_reconcile(plan)
     state = RegistryOperatorAuthCanaryState(
@@ -88,6 +95,95 @@ async def _run_registry_operator_auth_canary(
         await _cleanup_registry_operator_canary(state)
 
     return _registry_operator_auth_canary_result(state)
+
+
+async def _run_registry_operator_auth_canary_saga(
+    plan: dict[str, Any],
+    auth_mode: str,
+) -> messages.RegistryOperatorAuthCanaryResult:
+    state = RegistryOperatorAuthCanaryState(
+        plan=plan,
+        auth_mode=auth_mode,
+        apply_result=not_started_status(),
+        signal_result=not_started_status(),
+        workflow_id="",
+        run_id="",
+    )
+    # Register before apply: a failed response can still leave a created project.
+    # Unwind in delete, finalize, wait order, including after cancellation.
+    compensations: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+        ("cleanup_result", lambda: _wait_registry_operator_canary_cleanup(state)),
+        (
+            "finalize_signal_result",
+            lambda: _signal_registry_operator_canary_finalize(state),
+        ),
+        ("cleanup_result", lambda: _delete_registry_operator_canary_project(state)),
+    ]
+    stage = "apply_result"
+    failure: BaseException | None = None
+    try:
+        state.apply_result = await _apply_registry_operator_canary_project(plan)
+        stage = "signal_result"
+        state.signal_result = await _signal_registry_operator_canary_reconcile(plan)
+        state.workflow_id = str(state.signal_result.get("workflowID") or "")
+        state.run_id = str(state.signal_result.get("runID") or "")
+        stage = "promotion_result"
+        await _wait_for_registry_operator_canary_promotion(state)
+        if state.promotion_ok:
+            stage = "rotation_result"
+            await _run_registry_operator_canary_rotation(state)
+    except (ActivityError, CancelledError, asyncio.CancelledError) as error:
+        failure = error
+        state.failure = errors.failure_details(error)
+        if isinstance(error, ActivityError) and not is_cancelled_exception(error):
+            if error.activity_type == "rotate_registry_operator_canary_credentials":
+                stage = "rotation_signal_result"
+            setattr(
+                state,
+                stage,
+                errors.activity_failure_status(error, fallback_phase="Failed"),
+            )
+    finally:
+        state.cleanup_summary_prefix = (
+            "Compensate operator canary"
+            if state.failure or not (state.promotion_ok and state.rotation_ok)
+            else "Clean up operator canary"
+        )
+        cleanup = asyncio.create_task(
+            _run_registry_operator_canary_compensations(state, compensations)
+        )
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await asyncio.shield(cleanup)
+            raise
+    if failure is not None and (
+        isinstance(failure, asyncio.CancelledError) or is_cancelled_exception(failure)
+    ):
+        raise failure
+    return _registry_operator_auth_canary_result(state)
+
+
+async def _run_registry_operator_canary_compensations(
+    state: RegistryOperatorAuthCanaryState,
+    compensations: list[tuple[str, Callable[[], Awaitable[None]]]],
+) -> None:
+    for result_field, compensate in reversed(compensations):
+        try:
+            await compensate()
+            if state.cleanup_result.get("phase") == "Skipped":
+                break
+        except ActivityError as error:
+            failure = errors.failure_details(error)
+            state.compensation_failures.append(failure)
+            setattr(
+                state,
+                result_field,
+                errors.activity_failure_status(error, fallback_phase="CleanupFailed"),
+            )
+            workflow.logger.error(
+                "Operator canary compensation failed: %s", failure["message"]
+            )
 
 
 async def _prepare_registry_operator_canary_plan(
@@ -215,6 +311,16 @@ async def _run_registry_operator_canary_rotation(
 async def _cleanup_registry_operator_canary(
     state: RegistryOperatorAuthCanaryState,
 ) -> None:
+    await _delete_registry_operator_canary_project(state)
+    if state.cleanup_result.get("phase") == "Skipped":
+        return
+    await _signal_registry_operator_canary_finalize(state)
+    await _wait_registry_operator_canary_cleanup(state)
+
+
+async def _delete_registry_operator_canary_project(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
     plan = state.plan
     delete_activity = await workflow.execute_activity(
         canary_activities.delete_registry_operator_canary_project,
@@ -225,12 +331,18 @@ async def _cleanup_registry_operator_canary(
         start_to_close_timeout=timedelta(minutes=2),
         heartbeat_timeout=timedelta(minutes=2),
         retry_policy=CHECK_RETRY_POLICY,
+        summary=f"{state.cleanup_summary_prefix}: delete project"
+        if state.cleanup_summary_prefix
+        else None,
     )
     delete_result = delete_activity.status
     state.cleanup_result = delete_result
-    if delete_result.get("phase") == "Skipped":
-        return
 
+
+async def _signal_registry_operator_canary_finalize(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
+    plan = state.plan
     finalize_signal_activity = await workflow.execute_activity(
         canary_activities.signal_registry_operator_canary_finalize,
         canary_activities.SignalRegistryOperatorCanaryFinalizeRequest(
@@ -240,8 +352,17 @@ async def _cleanup_registry_operator_canary(
         start_to_close_timeout=timedelta(minutes=2),
         heartbeat_timeout=timedelta(minutes=2),
         retry_policy=CHECK_RETRY_POLICY,
+        summary=f"{state.cleanup_summary_prefix}: finalize project workflow"
+        if state.cleanup_summary_prefix
+        else None,
     )
     state.finalize_signal_result = finalize_signal_activity.status
+
+
+async def _wait_registry_operator_canary_cleanup(
+    state: RegistryOperatorAuthCanaryState,
+) -> None:
+    plan = state.plan
     cleanup_timeout_seconds = max(
         1,
         int(plan.get("cleanupTimeoutSeconds", 600)),
@@ -254,18 +375,19 @@ async def _cleanup_registry_operator_canary(
             git_repository=plan["gitRepository"],
             source_watch_namespace=plan["sourceWatchNamespace"],
             catalog_status_namespace=plan["catalogStatusNamespace"],
-            catalog_status_mirror_namespace=plan[
-                "catalogStatusMirrorNamespace"
-            ],
+            catalog_status_mirror_namespace=plan["catalogStatusMirrorNamespace"],
             catalog_status_config_map=plan["catalogStatusConfigMap"],
             cleanup_policy=str(plan.get("cleanupPolicy", "Always")),
             cleanup_timeout_seconds=cleanup_timeout_seconds,
             poll_seconds=int(plan.get("pollSeconds", 10)),
-            delete_action=delete_result.get("deleteAction"),
+            delete_action=state.cleanup_result.get("deleteAction"),
         ),
         start_to_close_timeout=timedelta(seconds=cleanup_timeout_seconds + 60),
         heartbeat_timeout=timedelta(minutes=2),
         retry_policy=CHECK_RETRY_POLICY,
+        summary=f"{state.cleanup_summary_prefix}: wait for resource cleanup"
+        if state.cleanup_summary_prefix
+        else None,
     )
     state.cleanup_result = cleanup_activity.status
 
@@ -277,6 +399,8 @@ def _registry_operator_auth_canary_result(
         state.promotion_ok
         and state.rotation_ok
         and bool(state.cleanup_result.get("ok"))
+        and not state.failure
+        and not state.compensation_failures
     )
     return messages.RegistryOperatorAuthCanaryResult(
         project=state.plan.get("project"),
@@ -290,4 +414,6 @@ def _registry_operator_auth_canary_result(
         rotation=state.rotation_result,
         finalizeSignal=state.finalize_signal_result,
         cleanup=state.cleanup_result,
+        failure=state.failure,
+        compensationFailures=state.compensation_failures,
     )

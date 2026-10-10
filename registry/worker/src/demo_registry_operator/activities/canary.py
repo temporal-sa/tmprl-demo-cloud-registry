@@ -204,6 +204,14 @@ class RegistryOperatorCanaryActivityResult:
     status: dict[str, Any]
 
 
+def _canary_check_result(
+    error_type: str, status: dict[str, Any]
+) -> RegistryOperatorCanaryActivityResult:
+    if status.get("ok") is False:
+        raise errors.terminal_activity_error(status, error_type=error_type)
+    return RegistryOperatorCanaryActivityResult(status)
+
+
 @activity.defn
 def prepare_registry_operator_canary_plan(
     request: RegistryOperatorCanaryPlanRequest,
@@ -544,69 +552,87 @@ def wait_for_registry_operator_canary_promotion(
             namespace_name = promoted_workload_namespace(plan, last_status)
             namespace_status = kube.read_namespace(namespace_name)
             if namespace_status is None:
-                return RegistryOperatorCanaryActivityResult({
-                    "project": string_field(plan, "project"),
-                    "phase": "Failed",
-                    "ok": False,
-                    "message": "Canary promoted but namespace was not found.",
-                    "namespace": namespace_name,
-                    "status": last_status,
-                    "checkedAt": datetime.now(UTC).isoformat(),
-                })
+                return _canary_check_result(
+                    "RegistryOperatorCanaryPromotionFailed",
+                    {
+                        "project": string_field(plan, "project"),
+                        "phase": "Failed",
+                        "ok": False,
+                        "message": "Canary promoted but namespace was not found.",
+                        "namespace": namespace_name,
+                        "status": last_status,
+                        "checkedAt": datetime.now(UTC).isoformat(),
+                    },
+                )
             workload_status = verify_promoted_workload_resources(plan, last_status)
             if not workload_status["ok"]:
-                return RegistryOperatorCanaryActivityResult({
+                return _canary_check_result(
+                    "RegistryOperatorCanaryPromotionFailed",
+                    {
+                        "project": string_field(plan, "project"),
+                        "phase": "Failed",
+                        "ok": False,
+                        "message": workload_status["message"],
+                        "namespace": namespace_status,
+                        "workloads": workload_status,
+                        "status": last_status,
+                        "checkedAt": datetime.now(UTC).isoformat(),
+                    },
+                )
+            return _canary_check_result(
+                "RegistryOperatorCanaryPromotionFailed",
+                {
                     "project": string_field(plan, "project"),
-                    "phase": "Failed",
-                    "ok": False,
-                    "message": workload_status["message"],
+                    "phase": "Promoted",
+                    "ok": True,
+                    "message": "Canary project promoted successfully.",
                     "namespace": namespace_status,
                     "workloads": workload_status,
                     "status": last_status,
                     "checkedAt": datetime.now(UTC).isoformat(),
-                })
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Promoted",
-                "ok": True,
-                "message": "Canary project promoted successfully.",
-                "namespace": namespace_status,
-                "workloads": workload_status,
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+                },
+            )
 
         if isinstance(last_status, dict) and canary_failed(last_status):
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Failed",
-                "ok": False,
-                "message": canary_failure_message(last_status),
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryPromotionFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "Failed",
+                    "ok": False,
+                    "message": canary_failure_message(last_status),
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         workflow_failure = canary_workflow_terminal_failure(plan)
         if workflow_failure is not None:
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Failed",
-                "ok": False,
-                "message": workflow_failure["message"],
-                "workflow": workflow_failure,
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryPromotionFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "Failed",
+                    "ok": False,
+                    "message": workflow_failure["message"],
+                    "workflow": workflow_failure,
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         if time.monotonic() >= deadline:
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "TimedOut",
-                "ok": False,
-                "message": "Timed out waiting for canary project promotion.",
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryPromotionFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "TimedOut",
+                    "ok": False,
+                    "message": "Timed out waiting for canary project promotion.",
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         activity.heartbeat(
             {
@@ -657,51 +683,63 @@ def wait_for_registry_operator_canary_rotation(
             token,
             last_status,
         ):
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Rotated",
-                "ok": True,
-                "token": token,
-                "authMode": string_field(plan, "authMode"),
-                "message": "Canary credential rotation completed after worker canary.",
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryRotationFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "Rotated",
+                    "ok": True,
+                    "token": token,
+                    "authMode": string_field(plan, "authMode"),
+                    "message": "Canary credential rotation completed after worker canary.",
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         if isinstance(last_status, dict) and canary_failed(last_status):
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Failed",
-                "ok": False,
-                "token": token,
-                "message": canary_failure_message(last_status),
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryRotationFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "Failed",
+                    "ok": False,
+                    "token": token,
+                    "message": canary_failure_message(last_status),
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         workflow_failure = canary_workflow_terminal_failure(plan)
         if workflow_failure is not None:
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "Failed",
-                "ok": False,
-                "token": token,
-                "message": workflow_failure["message"],
-                "workflow": workflow_failure,
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryRotationFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "Failed",
+                    "ok": False,
+                    "token": token,
+                    "message": workflow_failure["message"],
+                    "workflow": workflow_failure,
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         if time.monotonic() >= deadline:
-            return RegistryOperatorCanaryActivityResult({
-                "project": string_field(plan, "project"),
-                "phase": "TimedOut",
-                "ok": False,
-                "token": token,
-                "message": "Timed out waiting for canary credential rotation.",
-                "status": last_status,
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryRotationFailed",
+                {
+                    "project": string_field(plan, "project"),
+                    "phase": "TimedOut",
+                    "ok": False,
+                    "token": token,
+                    "message": "Timed out waiting for canary credential rotation.",
+                    "status": last_status,
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         activity.heartbeat(
             {
@@ -970,13 +1008,16 @@ def wait_registry_operator_canary_cleanup(
 ) -> RegistryOperatorCanaryActivityResult:
     plan = request.as_plan()
     if plan.get("cleanupPolicy") == "Never":
-        return RegistryOperatorCanaryActivityResult({
-            "project": string_field(plan, "project"),
-            "phase": "Skipped",
-            "ok": True,
-            "message": "Canary cleanup skipped by cleanupPolicy=Never.",
-            "checkedAt": datetime.now(UTC).isoformat(),
-        })
+        return _canary_check_result(
+            "RegistryOperatorCanaryCleanupFailed",
+            {
+                "project": string_field(plan, "project"),
+                "phase": "Skipped",
+                "ok": True,
+                "message": "Canary cleanup skipped by cleanupPolicy=Never.",
+                "checkedAt": datetime.now(UTC).isoformat(),
+            },
+        )
 
     deadline = time.monotonic() + int(plan.get("cleanupTimeoutSeconds", 600))
     poll_seconds = max(1, int(plan.get("pollSeconds", 10)))
@@ -990,16 +1031,21 @@ def wait_registry_operator_canary_cleanup(
                 "deleteAction": delete_action,
             }
         if last_status["ok"]:
-            return RegistryOperatorCanaryActivityResult(last_status)
+            return _canary_check_result(
+                "RegistryOperatorCanaryCleanupFailed", last_status
+            )
 
         if time.monotonic() >= deadline:
-            return RegistryOperatorCanaryActivityResult({
-                **last_status,
-                "phase": "CleanupFailed",
-                "ok": False,
-                "message": "Timed out waiting for canary cleanup to complete.",
-                "checkedAt": datetime.now(UTC).isoformat(),
-            })
+            return _canary_check_result(
+                "RegistryOperatorCanaryCleanupFailed",
+                {
+                    **last_status,
+                    "phase": "CleanupFailed",
+                    "ok": False,
+                    "message": "Timed out waiting for canary cleanup to complete.",
+                    "checkedAt": datetime.now(UTC).isoformat(),
+                },
+            )
 
         activity.heartbeat(last_status)
         time.sleep(poll_seconds)

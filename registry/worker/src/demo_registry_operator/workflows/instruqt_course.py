@@ -6,12 +6,14 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, is_cancelled_exception
 
 from demo_registry_operator import errors, resources
-from demo_registry_operator.activities import force_reconcile as force_reconcile_activities
+from demo_registry_operator.activities import (
+    force_reconcile as force_reconcile_activities,
+)
 from demo_registry_operator.activities import instruqt as instruqt_activities
 from demo_registry_operator.workflows import messages
-
 
 MAX_RECONCILES_PER_WORKFLOW_RUN = 50
 
@@ -230,20 +232,49 @@ class InstruqtCourseWorkflow:
                 break
 
             if self._finalize:
-                await self._run_finalize(course_name)
-                return
+                try:
+                    await self._run_finalize(course_name)
+                    return
+                except ActivityError as error:
+                    if is_cancelled_exception(error) or not workflow.patched(
+                        "instruqt-course-recover-terminal-failures"
+                    ):
+                        raise
+                    self._finalize = False
+                    self._status = self._failure_status(error, phase="DeleteFailed")
+                    # Keep the finalizer and allow a later finalize signal to retry.
+                    try:
+                        await self._record_status(
+                            self._finalize_spec or {"metadata": {"name": course_name}},
+                            self._status,
+                        )
+                    except ActivityError as record_error:
+                        if is_cancelled_exception(record_error):
+                            raise
+                        self._status["statusRecordFailure"] = errors.failure_details(
+                            record_error
+                        )
+                continue
 
             if self._continue_as_new_for_worker_version:
                 self._continue_as_new_if_needed(course_name)
                 continue
 
-            reconcile_input = await self._select_instruqt_course_for_reconcile(
-                course_name
-            )
-            reconciled = await self._run_instruqt_course_reconcile(
-                course_name,
-                reconcile_input,
-            )
+            try:
+                reconcile_input = await self._select_instruqt_course_for_reconcile(
+                    course_name
+                )
+                reconciled = await self._run_instruqt_course_reconcile(
+                    course_name,
+                    reconcile_input,
+                )
+            except ActivityError as error:
+                if is_cancelled_exception(error) or not workflow.patched(
+                    "instruqt-course-recover-terminal-failures"
+                ):
+                    raise
+                self._status = self._failure_status(error)
+                reconciled = True
             if reconciled:
                 self._complete_current_reconcile()
             self._continue_as_new_if_needed(course_name)
@@ -382,28 +413,64 @@ class InstruqtCourseWorkflow:
             "phase": "Reconciling",
         }
 
-        self._status = instruqt_activities.reconcile_instruqt_course(
-            instruqt_course,
-            checked_at=workflow.now().isoformat(),
-        )
-        if self._status.get("phase") != "Error":
-            ecr_status = await self._reconcile_instruqt_ecr(instruqt_course)
-            await self._reconcile_production_channel(
+        try:
+            self._status = instruqt_activities.reconcile_instruqt_course(
                 instruqt_course,
-                ecr_status,
+                checked_at=workflow.now().isoformat(),
             )
-            if production_track_published(self._status):
-                await self._reconcile_testing_channel(
+            if self._status.get("phase") != "Error":
+                ecr_status = await self._reconcile_instruqt_ecr(instruqt_course)
+                await self._reconcile_production_channel(
                     instruqt_course,
                     ecr_status,
-                    force_reconcile=bool(
-                        resources.force_reconcile_token(instruqt_course)
-                    ),
                 )
-            self._status = finalized_instruqt_status(self._status)
+                if production_track_published(self._status):
+                    await self._reconcile_testing_channel(
+                        instruqt_course,
+                        ecr_status,
+                        force_reconcile=bool(
+                            resources.force_reconcile_token(instruqt_course)
+                        ),
+                    )
+                self._status = finalized_instruqt_status(self._status)
 
-        await self._record_status(instruqt_course, self._status)
+        except ActivityError as error:
+            if is_cancelled_exception(error) or not workflow.patched(
+                "instruqt-course-recover-terminal-failures"
+            ):
+                raise
+            self._status = self._failure_status(error)
+
+        try:
+            await self._record_status(instruqt_course, self._status)
+        except ActivityError as error:
+            if is_cancelled_exception(error) or not workflow.patched(
+                "instruqt-course-recover-terminal-failures"
+            ):
+                raise
+            if self._status.get("rolloutFailure"):
+                self._status["statusRecordFailure"] = errors.failure_details(error)
+            else:
+                self._status = self._failure_status(error)
         return True
+
+    def _failure_status(
+        self, error: ActivityError, *, phase: str = "Error"
+    ) -> dict[str, Any]:
+        failure = errors.failure_details(error)
+        return reconciled_condition(
+            {
+                **self._status,
+                "phase": phase,
+                "message": failure["message"],
+                "rolloutFailure": failure,
+                "compensationStatus": {
+                    "phase": "NotRequired",
+                    "message": "Course tracks and image repositories are retained for the next reconcile.",
+                },
+            },
+            ready=False,
+        )
 
     async def _reconcile_instruqt_ecr(
         self,
@@ -497,6 +564,10 @@ class InstruqtCourseWorkflow:
     def shutdown(self, _signal: messages.ShutdownSignal = messages.ShutdownSignal()) -> None:
         self._shutdown = True
 
+    @workflow.query
+    def status(self) -> dict[str, Any]:
+        return self._status
+
     async def _reconcile_testing_channel(
         self,
         instruqt_course: dict[str, Any],
@@ -573,17 +644,51 @@ class InstruqtCourseWorkflow:
             images=images,
             channel=channel,
         )
-        push_activity = await workflow.execute_activity(
-            instruqt_activities.push_instruqt_course_track,
-            request,
-            start_to_close_timeout=timedelta(minutes=10),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=COMMON_RETRY_POLICY,
-        )
+        try:
+            push_activity = await workflow.execute_activity(
+                instruqt_activities.push_instruqt_course_track,
+                request,
+                start_to_close_timeout=timedelta(minutes=10),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
+        except ActivityError as error:
+            if is_cancelled_exception(error) or not workflow.patched(
+                "instruqt-course-recover-terminal-failures"
+            ):
+                raise
+            status = errors.activity_failure_status(error, fallback_phase="PushFailed")
+            self._status = self._failure_status(
+                error, phase=str(status.get("phase") or "PushFailed")
+            )
+            return status
         push_status = push_activity.status
         return push_status
 
     async def _resolve_images(
+        self,
+        instruqt_course: dict[str, Any],
+        ecr_status: dict[str, Any],
+        *,
+        channel: str,
+        previous_build_status: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        try:
+            return await self._resolve_images_for_channel(
+                instruqt_course,
+                ecr_status,
+                channel=channel,
+                previous_build_status=previous_build_status,
+            )
+        except ActivityError as error:
+            if is_cancelled_exception(error) or not workflow.patched(
+                "instruqt-course-recover-terminal-failures"
+            ):
+                raise
+            self._status = self._failure_status(error, phase="BuildFailed")
+            return errors.activity_failure_status(error, fallback_phase="Error")
+
+    async def _resolve_images_for_channel(
         self,
         instruqt_course: dict[str, Any],
         ecr_status: dict[str, Any],
