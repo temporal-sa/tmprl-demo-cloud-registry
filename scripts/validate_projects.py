@@ -832,6 +832,8 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 "replicas",
                 "automountServiceAccountToken",
                 "awsIamRoleArn",
+                "isolatedExecutor",
+                "terminationGracePeriodSeconds",
                 "command",
                 "args",
                 "temporalProxy",

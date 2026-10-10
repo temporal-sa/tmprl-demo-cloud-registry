@@ -172,6 +172,8 @@
       "additionalProperties": false,
       "required": ["build"],
       "properties": {
+        "isolatedExecutor": {"type": "boolean", "default": false, "description": "Credential-free Bubblewrap executor on port 8082; image must contain bash, iptables, bubblewrap, and a healthz endpoint."},
+        "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
         "build": {
           "$ref": "#/$defs/dnsLabel"
         },
@@ -232,7 +234,8 @@
         "worker": {
           "$ref": "#/$defs/worker"
         }
-      }
+      },
+      "allOf": [{"if": {"properties": {"isolatedExecutor": {"const": true}}, "required": ["isolatedExecutor"]}, "then": {"properties": {"worker": false, "temporalAccess": {"const": false}, "automountServiceAccountToken": {"const": false}, "awsIamRoleArn": false, "temporalProxy": false, "temporalMtls": false, "serverless": false, "secrets": {"maxItems": 0}}}}]
     },
     "componentPort": {
       "type": "object",

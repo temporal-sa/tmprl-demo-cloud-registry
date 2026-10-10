@@ -1873,6 +1873,11 @@ def workload_pod_spec(
         volumes.extend([catalog_status_volume(), catalog_volume()])
     if volumes:
         pod_spec["volumes"] = volumes
+    if "terminationGracePeriodSeconds" in component:
+        pod_spec["terminationGracePeriodSeconds"] = component["terminationGracePeriodSeconds"]
+    from demo_registry_operator.isolated_executor import apply_isolated_executor_profile
+
+    apply_isolated_executor_profile(pod_spec, component, image)
     return pod_spec
 
 

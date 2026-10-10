@@ -642,3 +642,25 @@ Run validation before opening a PR:
 python3 -m pip install -r requirements-dev.txt
 python3 scripts/validate_projects.py
 ```
+
+## Isolated shell executor components
+
+`components.<name>.isolatedExecutor: true` selects the credential-free
+Bubblewrap profile: UID/GID 65532, read-only root filesystem, no capabilities
+or service-account token, writable `/workspaces` and `/tmp`, and a root init
+container that installs a pod-local firewall before starting the executor.
+Only public HTTP/HTTPS and DNS are allowed outbound; private, link-local,
+metadata, and IPv6 destinations are blocked. Bubblewrap needs an Unconfined
+seccomp profile for its unprivileged namespaces. The application must clear
+the command environment and mask `/proc` and other workspaces.
+
+The image must include bash, iptables/ip6tables, and Bubblewrap, and serve
+`/healthz` on port 8082. Use a targeted secret input ref for the executor
+bearer token. The profile rejects worker/Temporal access, AWS IAM roles,
+provider API keys, and bulk secret injection. The operator renders the
+profile for normal runtimes and crashable clones. Shell files live for the
+lifetime of the executor pod; crash controls target workers only.
+
+`components.<name>.terminationGracePeriodSeconds` overrides Kubernetes'
+shutdown grace period for long-running Activities. It must exceed the
+worker's SDK graceful shutdown timeout.
