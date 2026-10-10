@@ -70,6 +70,7 @@ spec:
           valueFrom: {inputRef: secrets.runtime.WORKSPACE_EXECUTOR_TOKEN}
         - name: GOOGLE_SEARCH_GROUNDING_API_KEY
           valueFrom: {inputRef: secrets.gemini.GOOGLE_API_KEY}
+        - {name: GOOGLE_SEARCH_GROUNDING_MODEL, value: gemini-3.8-flash}
         - {name: SIMPLE_CHAT_GITHUB_TOOLS_ENABLED, value: "false"}
     advanced-ai-agent-worker:
       build: app
