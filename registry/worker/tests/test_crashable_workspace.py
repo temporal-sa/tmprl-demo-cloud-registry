@@ -356,6 +356,33 @@ def test_build_workspace_manifests_isolates_versioned_worker():
     }
 
 
+def test_versioned_workspace_reuses_resolved_cloud_connection():
+    demo = _versioned_crashable_demo()
+    cloud_namespace = "tmprl-dem-cld-canonical-ai-demo.a2dd6"
+    cloud_address = "us-west1.gcp.api.temporal.io:7233"
+    demo["status"] = {
+        "externalResources": {
+            "temporalCloud": {
+                "namespace": {
+                    "name": cloud_namespace,
+                    "grpcAddress": cloud_address,
+                }
+            }
+        }
+    }
+
+    ordered, _, _, _, _ = build_workspace_manifests(
+        demo,
+        {"worker": "ecr/worker:sha", "app": "ecr/app:sha"},
+        "0123abcd89",
+    )
+
+    connection = next(item for item in ordered if item["kind"] == "Connection")
+    worker = next(item for item in ordered if item["kind"] == "WorkerDeployment")
+    assert connection["spec"]["hostPort"] == cloud_address
+    assert worker["spec"]["workerOptions"]["temporalNamespace"] == cloud_namespace
+
+
 def test_build_workspace_plan_returns_versioned_worker_names(monkeypatch):
     monkeypatch.setattr(
         crashable_activities.kube,

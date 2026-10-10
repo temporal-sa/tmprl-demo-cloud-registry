@@ -76,12 +76,15 @@ def build_workspace_manifests(
     ]
     ordered.extend(resources.rbac_resources(cloned, namespace=namespace))
     ordered.extend(resources.runtime_secret_resources(cloned, namespace=namespace))
+    external_resources = _dict(cloned.get("status")).get("externalResources")
     ordered.extend(
         resources.runtime_workload_resources(
             cloned,
             images,
             include_routes=True,
-            external_resources=None,
+            external_resources=(
+                external_resources if isinstance(external_resources, dict) else None
+            ),
             namespace=namespace,
         )
     )
