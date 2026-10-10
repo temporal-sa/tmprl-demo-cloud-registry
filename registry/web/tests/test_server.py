@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import sys
 import threading
 import time
@@ -8,6 +9,9 @@ from urllib.parse import parse_qs, urlparse
 from http.server import ThreadingHTTPServer
 from urllib.request import HTTPRedirectHandler, build_opener
 from pathlib import Path
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -17,6 +21,58 @@ WEB_ROOT = Path(__file__).resolve().parents[1]
 if str(WEB_ROOT) not in sys.path:
     sys.path.insert(0, str(WEB_ROOT))
 import server
+
+
+@pytest.mark.parametrize("query_phase", ["Failed", "Deleting"])
+def test_failed_workspace_returns_retained_failure_and_compensation(query_phase):
+    status = {
+        "phase": query_phase,
+        "last_error": "pods did not become ready",
+        "failure": {"activityType": "wait_workspace_ready", "scheduledEventId": 20},
+        "compensation_status": {
+            "phase": "Error",
+            "failures": [{"message": "delete denied"}],
+        },
+    }
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=server.WorkflowExecutionStatus.FAILED)
+        ),
+        query=AsyncMock(return_value=status),
+    )
+    gateway = SimpleNamespace(
+        _get_client=AsyncMock(
+            return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)
+        )
+    )
+    result = asyncio.run(
+        server.TemporalGateway._workspace_status(gateway, "user@temporal.io", "demo")
+    )
+    assert result == {**status, "phase": "Failed"}
+    handle.query.assert_awaited_once_with("status", rpc_timeout=timedelta(seconds=5))
+
+
+def test_failed_workspace_has_fallback_if_closed_execution_cannot_be_queried():
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=server.WorkflowExecutionStatus.FAILED)
+        ),
+        query=AsyncMock(
+            side_effect=server.RPCError(
+                "no worker", server.RPCStatusCode.DEADLINE_EXCEEDED, b""
+            )
+        ),
+    )
+    gateway = SimpleNamespace(
+        _get_client=AsyncMock(
+            return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)
+        )
+    )
+    result = asyncio.run(
+        server.TemporalGateway._workspace_status(gateway, "user@temporal.io", "demo")
+    )
+    assert result["phase"] == "Failed"
+    assert result["last_error"] == "Environment provisioning failed. Try again."
 
 
 class NoRedirect(HTTPRedirectHandler):

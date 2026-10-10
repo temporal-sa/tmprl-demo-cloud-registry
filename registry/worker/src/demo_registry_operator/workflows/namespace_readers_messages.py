@@ -23,6 +23,7 @@ class GrantNamespaceReadAccessResult:
     email: str
     group: str | None = None
     message: str | None = None
+    activity_failure: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

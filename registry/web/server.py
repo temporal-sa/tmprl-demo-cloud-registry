@@ -350,6 +350,12 @@ class TemporalGateway:
         if description.status == WorkflowExecutionStatus.RUNNING:
             return await handle.query("status")
         if description.status == WorkflowExecutionStatus.FAILED:
+            try:
+                status = await handle.query("status", rpc_timeout=timedelta(seconds=5))
+                return {**status, "phase": "Failed"}
+            except RPCError:
+                # Closed executions may no longer have a worker available to query.
+                pass
             return {
                 "phase": "Failed",
                 "demo": demo_name,

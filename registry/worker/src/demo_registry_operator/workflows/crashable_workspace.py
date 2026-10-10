@@ -21,7 +21,7 @@ from typing import Any
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, is_cancelled_exception
 
-from demo_registry_operator import derive
+from demo_registry_operator import derive, errors
 from demo_registry_operator.activities import crashable_workspace as activities
 from demo_registry_operator.workflows.crashable_workspace_messages import (
     ApplyWorkspaceResourceRequest,
@@ -100,12 +100,21 @@ class CrashableWorkspaceWorkflow:
         # cascades to everything in it.
         self._status.phase = "Deleting"
         self._status.step = "Deleting environment"
-        await workflow.execute_activity(
-            activities.delete_workspace_namespace,
-            DeleteWorkspaceNamespaceRequest(namespace=self._namespace),
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=activities.CLEANUP_RETRY_POLICY,
-        )
+        try:
+            await workflow.execute_activity(
+                activities.delete_workspace_namespace,
+                DeleteWorkspaceNamespaceRequest(namespace=self._namespace),
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=activities.CLEANUP_RETRY_POLICY,
+            )
+        except ActivityError as error:
+            if is_cancelled_exception(error):
+                raise
+            self._status.phase = "Failed"
+            self._status.step = "Environment cleanup failed"
+            self._status.failure = errors.failure_details(error)
+            self._status.last_error = self._status.failure["message"]
+            raise
 
     async def _provision(self, request: EnsureWorkspaceRequest) -> None:
         compensations: list[Callable[[], Awaitable[Any]]] = []
@@ -146,6 +155,7 @@ class CrashableWorkspaceWorkflow:
                     DeleteWorkspaceNamespaceRequest(namespace=self._namespace),
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=activities.CLEANUP_RETRY_POLICY,
+                    summary="Compensate failed workspace provision: delete namespace",
                 )
             )
 
@@ -175,18 +185,46 @@ class CrashableWorkspaceWorkflow:
 
             self._status.phase = "Active"
             self._status.step = "Ready"
-        except asyncio.CancelledError:
-            self._status.phase = "Deleting"
-            # Shield so compensation survives workflow cancellation.
-            await asyncio.shield(
-                asyncio.ensure_future(_run_compensations(compensations))
-            )
+        except (Exception, asyncio.CancelledError) as error:
+            cancelled = isinstance(
+                error, asyncio.CancelledError
+            ) or is_cancelled_exception(error)
+            self._status.phase = "Deleting" if cancelled else "Failed"
+            self._status.failure = errors.failure_details(error)
+            self._status.last_error = self._status.failure["message"]
+            if not workflow.patched(
+                "crashable-workspace-shield-provision-compensation"
+            ):
+                # Keep cancellation commands compatible with older histories.
+                if isinstance(error, asyncio.CancelledError):
+                    await asyncio.shield(
+                        asyncio.ensure_future(self._compensate_provision(compensations))
+                    )
+                else:
+                    await self._compensate_provision(compensations)
+                raise
+            cleanup = asyncio.create_task(self._compensate_provision(compensations))
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # Cancellation arriving during cleanup must also wait for it.
+                await asyncio.shield(cleanup)
+                raise
             raise
-        except Exception as error:  # noqa: BLE001 - saga compensation boundary
-            self._status.phase = "Failed"
-            self._status.last_error = str(error)
-            await _run_compensations(compensations)
-            raise
+
+    async def _compensate_provision(
+        self,
+        compensations: list[Callable[[], Awaitable[Any]]],
+    ) -> None:
+        if not compensations:
+            self._status.compensation_status = {"phase": "NotRequired"}
+            return
+        self._status.compensation_status = {"phase": "Running"}
+        failures = await _run_compensations(compensations)
+        self._status.compensation_status = {
+            "phase": "Error" if failures else "Completed",
+            "failures": failures,
+        }
 
     async def _run_ttl_loop(self, request: EnsureWorkspaceRequest) -> None:
         while self._status.phase in LIVE_PHASES:
@@ -242,6 +280,7 @@ class CrashableWorkspaceWorkflow:
                 self._status.phase = "Crashing"
                 self._status.step = "Crashing workers"
                 self._status.last_error = None
+                self._status.failure = {}
                 try:
                     await workflow.execute_activity(
                         activities.crash_workspace_pods,
@@ -255,7 +294,10 @@ class CrashableWorkspaceWorkflow:
                 except ActivityError as error:
                     if is_cancelled_exception(error):
                         raise
-                    self._status.last_error = f"Failed to crash workers: {error}"
+                    self._status.failure = errors.failure_details(error)
+                    self._status.last_error = (
+                        f"Failed to crash workers: {self._status.failure['message']}"
+                    )
                     workflow.logger.error(
                         "crashable workspace pod crash failed: %s", error
                     )
@@ -281,6 +323,7 @@ class CrashableWorkspaceWorkflow:
                     else "Scaling workers to one"
                 )
                 self._status.last_error = None
+                self._status.failure = {}
                 try:
                     await workflow.execute_activity(
                         activities.scale_workspace_workloads,
@@ -295,8 +338,9 @@ class CrashableWorkspaceWorkflow:
                 except ActivityError as error:
                     if is_cancelled_exception(error):
                         raise
+                    self._status.failure = errors.failure_details(error)
                     self._status.last_error = (
-                        f"Failed to {action} workers: {error}"
+                        f"Failed to {action} workers: {self._status.failure['message']}"
                     )
                     workflow.logger.error(
                         "crashable workspace %s failed: %s", action, error
@@ -387,11 +431,15 @@ def _parse(value: str | None) -> datetime | None:
 
 async def _run_compensations(
     compensations: list[Callable[[], Awaitable[Any]]],
-) -> None:
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
     for compensate in reversed(compensations):
         try:
             await compensate()
         except Exception as error:  # noqa: BLE001 - best-effort compensation
+            failure = errors.failure_details(error)
+            failures.append(failure)
             workflow.logger.error(
-                "crashable workspace compensation failed: %s", error
+                "crashable workspace compensation failed: %s", failure["message"]
             )
+    return failures

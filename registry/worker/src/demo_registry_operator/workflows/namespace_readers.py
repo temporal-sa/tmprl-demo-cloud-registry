@@ -11,7 +11,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError, is_cancelled_exception
 
+from demo_registry_operator import errors
 from demo_registry_operator.activities import namespace_readers as activities
 from demo_registry_operator.workflows.namespace_readers_messages import (
     GrantNamespaceReadAccessRequest,
@@ -29,13 +31,27 @@ class GrantNamespaceReadAccessWorkflow:
     async def run(
         self, request: GrantNamespaceReadAccessRequest
     ) -> GrantNamespaceReadAccessResult:
-        return await workflow.execute_activity(
-            activities.grant_user_namespace_read_access,
-            request,
-            start_to_close_timeout=timedelta(minutes=3),
-            heartbeat_timeout=timedelta(minutes=1),
-            retry_policy=activities.GRANT_RETRY_POLICY,
-        )
+        try:
+            return await workflow.execute_activity(
+                activities.grant_user_namespace_read_access,
+                request,
+                start_to_close_timeout=timedelta(minutes=3),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=activities.GRANT_RETRY_POLICY,
+            )
+        except ActivityError as error:
+            if is_cancelled_exception(error) or not workflow.patched(
+                "namespace-read-access-recover-activity-failure"
+            ):
+                raise
+            status = errors.activity_failure_status(error, fallback_phase="Error")
+            return GrantNamespaceReadAccessResult(
+                status="error",
+                email=status.get("email") or request.email.strip(),
+                group=status.get("group"),
+                message=status.get("message"),
+                activity_failure=status["activityFailure"],
+            )
 
 
 @workflow.defn

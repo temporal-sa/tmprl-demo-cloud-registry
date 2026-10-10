@@ -47,6 +47,8 @@ class WorkspaceStatus:
     created_at: str | None = None
     expires_at: str | None = None
     last_error: str | None = None
+    failure: dict[str, Any] = field(default_factory=dict)
+    compensation_status: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

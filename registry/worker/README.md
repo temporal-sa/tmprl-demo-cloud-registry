@@ -53,6 +53,24 @@ The parent gate waits for every branch before reporting failure, and requests
 child cancellation on close so children can clean up. Temporal patches preserve
 the previous command sequence when replaying existing histories.
 
+Namespace read-access grants raise provider errors from the activity and recover
+the readable catalog response in the workflow. The result includes
+`activity_failure` with the original cause and activity event ID. Transient
+provider errors keep their bounded retries; missing users, groups, or feature
+configuration remain normal results. A Temporal patch preserves old failure
+histories.
+
+Crashable workspace provisioning retains the original `failure` and the
+`compensation_status` outcome, including any cleanup failures, in its status
+query. Namespace compensation is registered before apply and has a timeline
+summary beginning with `Compensate failed workspace provision`. Cleanup waits
+through cancellation; a Temporal patch preserves previous cancellation commands
+on replay. The catalog queries failed workspace status so the original error
+remains visible when the
+workflow closes. Failed crash/scale actions retain the cause and activity event
+ID while leaving Delete and TTL teardown available; teardown failures also
+retain their cause.
+
 External resource reconciliation runs before Kubernetes reconciliation. The
 operator creates or verifies ECR repositories, verifies required Secrets Manager
 paths and JSON property names, and manages Temporal Cloud namespace/service

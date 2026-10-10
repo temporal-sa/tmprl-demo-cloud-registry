@@ -20,6 +20,7 @@ from typing import Any
 
 from temporalio import activity
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 from demo_registry_operator import errors, resources
 from demo_registry_operator.activities import temporal_cloud
@@ -72,8 +73,16 @@ def grant_user_namespace_read_access(
             status="not-configured", email=email, group=group, message=reason
         )
     if not email:
-        return GrantNamespaceReadAccessResult(
-            status="error", email=email, group=group, message="No email address to look up."
+        raise errors.non_retryable_error(
+            "No email address to look up.",
+            details={
+                "status": {
+                    "status": "error",
+                    "email": email,
+                    "group": group,
+                    "message": "No email address to look up.",
+                }
+            },
         )
 
     checked_at = datetime.now(UTC).isoformat()
@@ -101,13 +110,21 @@ def grant_user_namespace_read_access(
         app_error = cloud_activities.temporal_cloud_application_error(
             error, operation="Grant namespace read access"
         )
-        # Permanent failures (e.g. the operator's key may not manage groups) go
-        # back to the catalog as a readable message instead of a failed workflow.
-        if getattr(app_error, "non_retryable", False):
-            return GrantNamespaceReadAccessResult(
-                status="error", email=email, group=group, message=str(app_error)
-            )
-        raise app_error from error
+        # The workflow returns the catalog response after Temporal records the
+        # activity failure. Keep provider classification for automatic retries.
+        raise ApplicationError(
+            app_error.message,
+            {
+                "status": {
+                    "status": "error",
+                    "email": email,
+                    "group": group,
+                    "message": str(app_error),
+                }
+            },
+            type=app_error.type,
+            non_retryable=app_error.non_retryable,
+        ) from error
     return GrantNamespaceReadAccessResult(
         status=str(outcome.get("status")),
         email=email,
