@@ -77,7 +77,7 @@ def resolve_project_image_build_plan(
         )
 
     if not config.codebuild_project:
-        return ProjectImageBuildPlan(build_statuses.completed_build_plan(
+        raise errors.terminal_activity_error(
             build_statuses.build_status(
                 demo_project,
                 phase="Error",
@@ -91,8 +91,9 @@ def resolve_project_image_build_plan(
                     "Set DEMO_REGISTRY_CODEBUILD_PROJECT to use "
                     "aws-codebuild mode."
                 ),
-            )
-        ))
+            ),
+            error_type=errors.CONFIGURATION_ERROR,
+        )
 
     try:
         source = build_source.source_config(demo_project)
@@ -103,7 +104,7 @@ def resolve_project_image_build_plan(
             config,
         )
     except ValueError as error:
-        return ProjectImageBuildPlan(build_statuses.completed_build_plan(
+        raise errors.terminal_activity_error(
             build_statuses.build_status(
                 demo_project,
                 phase="Error",
@@ -114,8 +115,9 @@ def resolve_project_image_build_plan(
                 message="AWS CodeBuild image build cannot start.",
                 build_entries=[],
                 error=str(error),
-            )
-        ))
+            ),
+            error_type=errors.CONFIGURATION_ERROR,
+        ) from error
 
     return ProjectImageBuildPlan({
         "action": "codebuild",

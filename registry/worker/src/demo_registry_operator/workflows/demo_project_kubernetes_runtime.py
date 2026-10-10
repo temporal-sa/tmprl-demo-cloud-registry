@@ -256,37 +256,43 @@ class DemoProjectKubernetesRuntimeWorkflow:
         demo_project: dict[str, Any],
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
-        timeout_seconds = int(smoke_plan.get("workerDeploymentTimeoutSeconds", 300))
-        worker_rollout_activity = await workflow.execute_activity(
-            reconcile_activities.wait_for_worker_deployment_rollouts,
-            reconcile_activities.WorkerDeploymentRolloutRequest(
-                demo_project=demo_project,
-                worker_deployments=smoke_plan.get("workerDeployments", {}),
-                timeout_seconds=timeout_seconds,
-                runtime_namespace=smoke_plan.get("runtimeNamespace"),
-            ),
-            start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        return worker_rollout_activity.status
+        try:
+            timeout_seconds = int(smoke_plan.get("workerDeploymentTimeoutSeconds", 300))
+            worker_rollout_activity = await workflow.execute_activity(
+                reconcile_activities.wait_for_worker_deployment_rollouts,
+                reconcile_activities.WorkerDeploymentRolloutRequest(
+                    demo_project=demo_project,
+                    worker_deployments=smoke_plan.get("workerDeployments", {}),
+                    timeout_seconds=timeout_seconds,
+                    runtime_namespace=smoke_plan.get("runtimeNamespace"),
+                ),
+                start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+            return worker_rollout_activity.status
+        except ActivityError as error:
+            return errors.activity_failure_status(error, fallback_phase="Error")
 
     async def _wait_for_candidate_readiness(
         self,
         demo_project: dict[str, Any],
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
-        readiness_activity = await workflow.execute_activity(
-            reconcile_activities.wait_for_candidate_readiness,
-            reconcile_activities.CandidateReadinessRequest(
-                demo_project=demo_project,
-                candidate=smoke_plan.get("candidate", {}),
-            ),
-            start_to_close_timeout=timedelta(minutes=10),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        return readiness_activity.status
+        try:
+            readiness_activity = await workflow.execute_activity(
+                reconcile_activities.wait_for_candidate_readiness,
+                reconcile_activities.CandidateReadinessRequest(
+                    demo_project=demo_project,
+                    candidate=smoke_plan.get("candidate", {}),
+                ),
+                start_to_close_timeout=timedelta(minutes=10),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+            return readiness_activity.status
+        except ActivityError as error:
+            return errors.activity_failure_status(error, fallback_phase="Error")
 
     async def _run_smoke_check(
         self,
@@ -294,20 +300,23 @@ class DemoProjectKubernetesRuntimeWorkflow:
         demo_project: dict[str, Any],
         smoke_plan: dict[str, Any],
     ) -> dict[str, Any]:
-        smoke_activity = await workflow.execute_activity(
-            reconcile_activities.run_smoke_check,
-            reconcile_activities.SmokeCheckRequest(
-                project=project,
-                demo_project=demo_project,
-                host=smoke_plan.get("host"),
-                candidate=smoke_plan.get("candidate", {}),
-                smoke_check=smoke_plan.get("smokeCheck"),
-            ),
-            start_to_close_timeout=timedelta(minutes=5),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        return smoke_activity.status
+        try:
+            smoke_activity = await workflow.execute_activity(
+                reconcile_activities.run_smoke_check,
+                reconcile_activities.SmokeCheckRequest(
+                    project=project,
+                    demo_project=demo_project,
+                    host=smoke_plan.get("host"),
+                    candidate=smoke_plan.get("candidate", {}),
+                    smoke_check=smoke_plan.get("smokeCheck"),
+                ),
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+            return smoke_activity.status
+        except ActivityError as error:
+            return errors.activity_failure_status(error, fallback_phase="Error")
 
     async def _promote_with_smoke_check(
         self,
@@ -614,6 +623,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
+            summary="Compensate failed rollout: restore active routes",
         )
         return rollback_result.status
 
@@ -644,6 +654,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
+            summary="Compensate failed rollout: delete candidate resources",
         )
         return delete_result.status
 
@@ -712,6 +723,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
                 "actualStatus": smoke_result.get("actualStatus"),
                 "checkedAt": smoke_result.get("checkedAt"),
                 "message": smoke_result.get("message"),
+                "activityFailure": smoke_result.get("activityFailure"),
             },
         }
         return self._status_with_cleanup(status, cleanup_status)
@@ -889,6 +901,7 @@ class DemoProjectKubernetesRuntimeWorkflow:
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
+            summary="Compensate failed rollout: restore active worker deployment",
         )
         return result.status
 

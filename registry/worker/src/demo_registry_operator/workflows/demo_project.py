@@ -1989,6 +1989,7 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
+                summary="Compensate Temporal Cloud provision: delete candidate API key",
             )
 
     async def _compensate_temporal_service_account(
@@ -2012,6 +2013,7 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
+                summary="Compensate Temporal Cloud provision: delete new service account",
             )
 
     async def _compensate_temporal_namespace(
@@ -2034,6 +2036,7 @@ class DemoProjectWorkflow:
                     ),
                     start_to_close_timeout=timedelta(minutes=2),
                     retry_policy=COMMON_RETRY_POLICY,
+                    summary="Compensate Temporal Cloud provision: delete new mTLS CA secret",
                 )
             await workflow.execute_activity(
                 external_resources.disable_temporal_cloud_namespace_delete_protection_by_name,
@@ -2045,6 +2048,7 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
+                summary="Compensate Temporal Cloud provision: remove new namespace",
             )
             await workflow.execute_activity(
                 external_resources.delete_temporal_cloud_namespace_by_name,
@@ -2056,6 +2060,7 @@ class DemoProjectWorkflow:
                 start_to_close_timeout=timedelta(minutes=10),
                 heartbeat_timeout=timedelta(minutes=1),
                 retry_policy=COMMON_RETRY_POLICY,
+                summary="Compensate Temporal Cloud provision: remove new namespace",
             )
 
     async def _handle_reconcile_failure(
@@ -2075,16 +2080,27 @@ class DemoProjectWorkflow:
             self._last_demo_project
         ):
             record_target = self._last_demo_project
+        compensation_status: dict[str, Any] = {"phase": "NotRequired"}
         if not project_has_active_version(record_target):
-            # First-time provision (no active version to fall back to): tear down
-            # everything created this pass so we don't orphan the Temporal Cloud
-            # namespace / credentials / secrets, then re-raise to fail the entity.
-            await self._compensate_first_time_external_resources()
-            raise error
-        # Established project: a new rollout failed. Preserve the active/production
-        # resources, settle to a terminal rollout-failure status, and keep the
-        # long-lived entity workflow running (it retries on the next change).
+            # Old histories failed here after teardown. New runs record the
+            # failure and remain available for another reconcile.
+            if not workflow.patched("keep-project-running-after-provision-failure"):
+                await self._compensate_first_time_external_resources()
+                raise error
+            try:
+                await self._compensate_first_time_external_resources()
+                compensation_status = {"phase": "Completed"}
+            except Exception as compensation_error:  # noqa: BLE001 - preserve original failure
+                compensation_status = {
+                    "phase": "Error",
+                    "failure": errors.failure_details(compensation_error),
+                }
+        # Settle to a terminal rollout-failure status and wait for the next change.
+        # Established projects retain their active resources.
         self._status = self._failed_rollout_status(record_target)
+        self._status["rolloutFailure"] = errors.failure_details(error)
+        self._status["compensationStatus"] = compensation_status
+        self._status["message"] = self._status["rolloutFailure"]["message"]
         await self._record_status(record_target, self._status)
         return True
 

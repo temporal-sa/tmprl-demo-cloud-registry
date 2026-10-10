@@ -498,6 +498,7 @@ def register_serverless_lambda_compensation(
             ),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=COMMON_RETRY_POLICY,
+            summary="Compensate failed Lambda provision: delete Lambda and IAM resources",
         )
     )
 

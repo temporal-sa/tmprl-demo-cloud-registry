@@ -5,6 +5,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError
 
 from demo_registry_operator import errors
 from demo_registry_operator.activities import reconcile as reconcile_activities
@@ -46,19 +47,22 @@ class DemoRolloutWorkflow:
                 "smokeCheck": request.smokeCheck,
             }
         )
-        smoke_activity = await workflow.execute_activity(
-            reconcile_activities.run_smoke_check,
-            reconcile_activities.SmokeCheckRequest(
-                project=str(plan.get("project", "unknown")),
-                demo_project=plan.get("demoProject"),
-                host=plan.get("host"),
-                candidate=plan.get("candidate", {}),
-                smoke_check=plan.get("smokeCheck"),
-            ),
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=CHECK_RETRY_POLICY,
-        )
-        smoke_result = smoke_activity.status
+        try:
+            smoke_activity = await workflow.execute_activity(
+                reconcile_activities.run_smoke_check,
+                reconcile_activities.SmokeCheckRequest(
+                    project=str(plan.get("project", "unknown")),
+                    demo_project=plan.get("demoProject"),
+                    host=plan.get("host"),
+                    candidate=plan.get("candidate", {}),
+                    smoke_check=plan.get("smokeCheck"),
+                ),
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=CHECK_RETRY_POLICY,
+            )
+            smoke_result = smoke_activity.status
+        except ActivityError as error:
+            smoke_result = errors.activity_failure_status(error, fallback_phase="Error")
         if not smoke_result.get("ok"):
             status = {
                 "project": plan.get("project"),

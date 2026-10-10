@@ -25,6 +25,17 @@ Each `DemoProject` entity workflow continues as new after 50 completed
 reconciles, or sooner when Temporal suggests history rollover. The workflow
 carries its latest status and any queued reconcile signal into the next run.
 
+Terminal build, worker-rollout, readiness, and smoke-check failures raise
+activity errors so the failed step and its error are visible in Temporal's
+timeline. The workflows catch those errors, retain their diagnostic status,
+and run the appropriate cleanup. Compensation activities have `Compensate`
+summaries to distinguish them from normal teardown. Unexpected reconcile
+failures record `rolloutFailure` with the original cause and activity/child
+workflow identifiers, plus `compensationStatus` for first-provision cleanup.
+New executions remain available for another reconcile after a failed first
+provision; a Temporal patch preserves the prior behavior when replaying old
+failure histories.
+
 External resource reconciliation runs before Kubernetes reconciliation. The
 operator creates or verifies ECR repositories, verifies required Secrets Manager
 paths and JSON property names, and manages Temporal Cloud namespace/service

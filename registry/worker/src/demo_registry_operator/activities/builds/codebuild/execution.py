@@ -57,7 +57,7 @@ def start_project_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return ProjectImageBuildStartResult(build_statuses.completed_build_plan(
+        return _start_result(build_statuses.completed_build_plan(
             build_statuses.build_status(
                 demo_project,
                 phase="Error",
@@ -89,7 +89,7 @@ def start_project_image_build(
                 "phase": "Reattaching",
             }
         )
-        return ProjectImageBuildStartResult({**plan, "codebuildBuildId": build_id})
+        return _start_result({**plan, "codebuildBuildId": build_id})
 
     start_args = codebuild_buildspec.codebuild_start_build_args(
         demo_project,
@@ -111,7 +111,7 @@ def start_project_image_build(
         response = codebuild.start_build(**start_args)
     except (BotoCoreError, ClientError) as error:
         if errors.aws_error_code(error) in errors.NON_RETRYABLE_AWS_ERROR_CODES:
-            return ProjectImageBuildStartResult(codebuild_api_error_status(
+            return _start_result(codebuild_api_error_status(
                 plan,
                 message="AWS CodeBuild image build failed.",
                 error=str(error),
@@ -138,7 +138,7 @@ def start_project_image_build(
             "phase": "Started",
         }
     )
-    return ProjectImageBuildStartResult({
+    return _start_result({
         **plan,
         "codebuildBuildId": build_id,
         "codebuild": codebuild_status_summary(
@@ -169,7 +169,7 @@ def wait_for_project_image_build(
         from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as error:
-        return ProjectImageBuildStatusResult(build_statuses.build_status(
+        return _build_result(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -212,8 +212,8 @@ def wait_for_project_image_build(
                 )
             )
             if status is not None:
-                return ProjectImageBuildStatusResult(status)
-            return ProjectImageBuildStatusResult(build_statuses.build_status(
+                return _build_result(status)
+            return _build_result(build_statuses.build_status(
                 demo_project,
                 phase="Error",
                 mode=config.build_mode,
@@ -236,7 +236,7 @@ def wait_for_project_image_build(
         project_name=config.codebuild_project,
     )
     if status != "SUCCEEDED":
-        return ProjectImageBuildStatusResult(build_statuses.build_status(
+        return _build_result(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -256,7 +256,7 @@ def wait_for_project_image_build(
         ))
 
     if not resolved_commit or not build_definitions.looks_like_commit_sha(resolved_commit):
-        return ProjectImageBuildStatusResult(build_statuses.build_status(
+        return _build_result(build_statuses.build_status(
             demo_project,
             phase="Error",
             mode=config.build_mode,
@@ -274,7 +274,7 @@ def wait_for_project_image_build(
         ))
 
     images = build_definitions.render_image_templates(demo_project, image_templates, resolved_commit)
-    return ProjectImageBuildStatusResult(build_statuses.build_status(
+    return _build_result(build_statuses.build_status(
         demo_project,
         phase="Pushed",
         mode=config.build_mode,
@@ -295,6 +295,19 @@ def wait_for_project_image_build(
         ],
         codebuild_status=codebuild_status,
     ))
+
+
+def _start_result(plan: dict[str, Any]) -> ProjectImageBuildStartResult:
+    status = build_statuses.completed_build_status(plan)
+    if status is not None and status.get("phase") == "Error":
+        raise errors.terminal_activity_error(status, error_type=errors.IMAGE_BUILD_FAILED)
+    return ProjectImageBuildStartResult(plan)
+
+
+def _build_result(status: dict[str, Any]) -> ProjectImageBuildStatusResult:
+    if status.get("phase") == "Error":
+        raise errors.terminal_activity_error(status, error_type=errors.IMAGE_BUILD_FAILED)
+    return ProjectImageBuildStatusResult(status)
 
 
 def codebuild_api_error_status(

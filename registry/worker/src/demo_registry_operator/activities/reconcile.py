@@ -769,9 +769,9 @@ def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
             message = (
                 last_error
                 if last_error
-                else "Smoke check status mismatch."
+                else f"Smoke check {url} returned HTTP {actual_status}; expected HTTP {expected_status}."
             )
-            return ActivityStatusResult({
+            raise errors.terminal_activity_error({
                 "ok": False,
                 "skipped": False,
                 "url": url,
@@ -781,7 +781,7 @@ def run_smoke_check(request: SmokeCheckRequest) -> ActivityStatusResult:
                 "checkedAt": checked_at,
                 "message": message,
                 "smokeCheck": smoke_check,
-            })
+            }, error_type=errors.SMOKE_CHECK_FAILED)
 
         activity.heartbeat({"smokeCheck": url, "attempt": attempt, "lastStatus": actual_status})
         time.sleep(smoke_check_poll_seconds(smoke_check))
@@ -841,13 +841,13 @@ def wait_for_candidate_readiness(
             })
 
         if time.monotonic() >= deadline:
-            return ActivityStatusResult({
+            raise errors.terminal_activity_error({
                 "phase": "TimedOut",
                 "ok": False,
                 "message": "Timed out waiting for candidate Deployments to become available.",
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "deployments": last_status,
-            })
+            }, error_type=errors.CANDIDATE_NOT_READY)
 
         activity.heartbeat(
             {
@@ -1482,15 +1482,15 @@ def wait_for_worker_deployment_rollouts(
                 "resources": list(last_status.values()),
             })
         if aggregate["phase"] in {"Failed", "Error"}:
-            return ActivityStatusResult({
+            raise errors.terminal_activity_error({
                 **aggregate,
                 "ok": False,
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "resources": list(last_status.values()),
-            })
+            }, error_type=errors.WORKER_ROLLOUT_FAILED)
 
         if time.monotonic() >= deadline:
-            return ActivityStatusResult({
+            raise errors.terminal_activity_error({
                 "phase": "TimedOut",
                 "ok": False,
                 "message": (
@@ -1499,7 +1499,7 @@ def wait_for_worker_deployment_rollouts(
                 ),
                 "checkedAt": datetime.now(UTC).isoformat(),
                 "resources": list(last_status.values()),
-            })
+            }, error_type=errors.WORKER_ROLLOUT_FAILED)
 
         activity.heartbeat(
             {

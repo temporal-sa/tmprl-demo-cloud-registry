@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
-
 from demo_registry_operator.activities import builds
 from demo_registry_operator.resources import (
     PLATFORM_SOURCE_AUTH_SECRET_PATH,
     SOURCE_ARTIFACT_DIGEST_ANNOTATION,
     SOURCE_COMMIT_ANNOTATION,
 )
-
+from temporalio.exceptions import ApplicationError
 
 SOURCE_SHA = "388c26cb1e5ed0842f44b7949416aeddbd908cba"
 SOURCE_DIGEST = "sha256:aaaabbbb"
@@ -202,14 +202,16 @@ def test_image_version_adds_build_hash_for_buildpack_projects():
 def test_build_does_not_reuse_workflow_cache_for_new_source_commit(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CODEBUILD_PROJECT", raising=False)
 
-    status = build_plan_status(
-        {
-            "demoProject": demo_project(
-                source_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            ),
-            "previousBuildStatus": previous_build_status(),
-        }
-    )
+    with pytest.raises(ApplicationError) as raised:
+        build_plan_status(
+            {
+                "demoProject": demo_project(
+                    source_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+                "previousBuildStatus": previous_build_status(),
+            }
+        )
+    status = raised.value.details[0]["status"]
 
     assert status["phase"] == "Error"
     assert status["message"] == "AWS CodeBuild project is not configured."
@@ -222,12 +224,14 @@ def test_build_does_not_reuse_workflow_cache_for_changed_build_definition(
     project = demo_project()
     project["spec"]["builds"]["frontend"]["dockerfile"] = "Dockerfile"
 
-    status = build_plan_status(
-        {
-            "demoProject": project,
-            "previousBuildStatus": previous_build_status(),
-        }
-    )
+    with pytest.raises(ApplicationError) as raised:
+        build_plan_status(
+            {
+                "demoProject": project,
+                "previousBuildStatus": previous_build_status(),
+            }
+        )
+    status = raised.value.details[0]["status"]
 
     assert status["phase"] == "Error"
     assert status["message"] == "AWS CodeBuild project is not configured."
