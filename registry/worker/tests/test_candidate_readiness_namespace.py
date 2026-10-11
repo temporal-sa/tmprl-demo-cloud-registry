@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import demo_registry_operator.workflows.demo_project_kubernetes_runtime as kubernetes_runtime_workflow
 import pytest
 from demo_registry_operator.activities import reconcile
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 
 class _Cfg:
@@ -146,6 +146,62 @@ def test_worker_rollout_waits_for_transient_temporal_failure(monkeypatch, reason
 
     assert attempts == 2
     assert result.status["phase"] == "Ready", result.status
+
+
+def test_worker_rollout_retries_failed_kubernetes_status_read(monkeypatch):
+    reads = 0
+    heartbeats = []
+    monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
+    monkeypatch.setattr(reconcile, "time", SimpleNamespace(monotonic=lambda: 0, sleep=lambda _: None))
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda status: heartbeats.append(status))
+
+    def read(namespace, name):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise SystemError("Objects/dictobject.c:1882: bad argument to internal function")
+        return {"name": name, "namespace": namespace, "conditions": [{"type": "Ready", "status": "True"}]}
+
+    monkeypatch.setattr(reconcile.kube, "read_worker_deployment_status", read)
+    result = reconcile.wait_for_worker_deployment_rollouts(
+        reconcile.WorkerDeploymentRolloutRequest(
+            demo_project={"metadata": {"name": "operator"}},
+            worker_deployments={"worker": "operator-blue"}, timeout_seconds=2,
+        )
+    )
+    assert reads == 2
+    assert result.status["phase"] == "Ready"
+    assert heartbeats[0]["workerDeployments"]["worker"]["phase"] == "Error"
+
+
+def test_worker_rollout_status_read_failures_remain_time_bounded(monkeypatch):
+    clock = iter([0, 1, 2])
+    monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
+    monkeypatch.setattr(reconcile, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None))
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda *args: None)
+
+    def read(namespace, name):
+        raise SystemError("status read failed")
+
+    monkeypatch.setattr(reconcile.kube, "read_worker_deployment_status", read)
+    with pytest.raises(ApplicationError) as raised:
+        reconcile.wait_for_worker_deployment_rollouts(
+            reconcile.WorkerDeploymentRolloutRequest(
+                demo_project={"metadata": {"name": "operator"}},
+                worker_deployments={"worker": "operator-blue"}, timeout_seconds=2,
+            )
+        )
+    status = raised.value.details[0]["status"]
+    assert status["phase"] == "TimedOut"
+    assert status["resources"][0]["message"] == "status read failed"
+
+
+def test_actual_gate_failure_takes_precedence_over_status_read_error():
+    aggregate = reconcile.aggregate_worker_deployment_status({
+        "unreadable": {"phase": "Error", "message": "client read error"},
+        "failed": {"targetVersion": {"testWorkflows": [{"status": "Failed"}]}},
+    })
+    assert aggregate["phase"] == "Failed"
 
 
 def test_worker_resources_wait_for_external_secrets_before_apply(monkeypatch):

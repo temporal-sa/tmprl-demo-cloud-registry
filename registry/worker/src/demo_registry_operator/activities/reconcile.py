@@ -1600,10 +1600,17 @@ def aggregate_worker_deployment_status(
         return {"phase": "Skipped", "message": "No WorkerDeployment resources."}
     if phases <= {"Ready"}:
         return {"phase": "Ready", "message": "All WorkerDeployments are ready."}
-    if phases & {"Failed", "Error"}:
+    if phases & {"Failed"}:
         return {
             "phase": "Failed",
             "message": "At least one WorkerDeployment rollout failed.",
+        }
+    if phases & {"Error"}:
+        # A failed Kubernetes read says nothing about the rollout itself. Keep
+        # the error in resource diagnostics and retry within the caller's deadline.
+        return {
+            "phase": "Waiting",
+            "message": "Could not read at least one WorkerDeployment; retrying status reads.",
         }
     if phases & {"Missing"}:
         return {
