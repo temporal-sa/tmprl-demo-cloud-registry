@@ -769,6 +769,11 @@ COMPUTE_RESOURCE_DENIED_MESSAGE = (
     "not authorized to perform: lambda:GetFunction because no identity-based "
     "policy allows the lambda:GetFunction action"
 )
+COMPUTE_RESOURCE_TOKEN_MESSAGE = (
+    "default: cannot access the compute resource: operation error Lambda: "
+    "GetFunction, https response error StatusCode: 403, api error UnrecognizedClientException: "
+    "The security token included in the request is invalid."
+)
 
 
 def _propagation_upsert_request():
@@ -801,7 +806,7 @@ async def _fake_connect(_path):
     return object(), "money-transfer.acct1"
 
 
-@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE, COMPUTE_RESOURCE_TOKEN_MESSAGE])
 def test_compute_provider_unreachable_matches_permission_propagation(message):
     denied = RPCError(
         message, RPCStatusCode.FAILED_PRECONDITION, b""
@@ -812,7 +817,19 @@ def test_compute_provider_unreachable_matches_permission_propagation(message):
     assert compute_provider_unreachable(unrelated) is False
 
 
-@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+def test_compute_provider_retry_does_not_mask_unrelated_authentication_errors():
+    error = RPCError(
+        "UnrecognizedClientException: The security token included in the request is invalid.",
+        RPCStatusCode.UNAUTHENTICATED,
+        b"",
+    )
+    assert compute_provider_unreachable(error) is False
+    application_error = temporal_service_application_error(error, operation="connect")
+    assert application_error.type == errors.PROVIDER_AUTHENTICATION_ERROR
+    assert application_error.non_retryable is True
+
+
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE, COMPUTE_RESOURCE_TOKEN_MESSAGE])
 def test_upsert_retries_when_compute_provider_unreachable(monkeypatch, message):
     # A freshly-created invoke role whose trust policy has not yet propagated
     # surfaces as AssumeRole AccessDenied. It must be retryable (transient), not
@@ -867,7 +884,7 @@ def test_upsert_stays_nonretryable_on_real_config_error(monkeypatch):
     assert excinfo.value.type == errors.PROVIDER_CONFIGURATION_ERROR
 
 
-@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE])
+@pytest.mark.parametrize("message", [COMPUTE_PROVIDER_DENIED_MESSAGE, COMPUTE_RESOURCE_DENIED_MESSAGE, COMPUTE_RESOURCE_TOKEN_MESSAGE])
 def test_validate_retries_when_compute_provider_unreachable(monkeypatch, message):
     async def fake_validate(client, **kwargs):
         raise RPCError(

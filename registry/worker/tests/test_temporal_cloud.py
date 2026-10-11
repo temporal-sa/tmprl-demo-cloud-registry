@@ -4,12 +4,15 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from demo_registry_operator.activities.temporal_cloud import (
     ApiKeyResult,
     CallerNamespaceNotReady,
     CloudApiReconciler,
     NamespaceInfo,
     NexusEndpointInfo,
+    SecretsManagerStore,
     delete_nexus_endpoints,
     nexus_namespace_id,
     reconcile_nexus_endpoints,
@@ -17,6 +20,9 @@ from demo_registry_operator.activities.temporal_cloud import (
     configure_temporal_cloud_namespace_mtls,
     create_temporal_api_key_candidate_secret,
     delete_temporal_cloud_api_key,
+    delete_temporal_cloud_service_account,
+    disable_temporal_cloud_namespace_delete_protection,
+    delete_temporal_cloud_namespace,
     delete_temporal_cloud_runtime_secret,
     ensure_temporal_cloud_search_attribute,
     ensure_temporal_cloud_search_attributes,
@@ -1289,6 +1295,59 @@ def test_finalize_is_idempotent_when_nothing_exists():
     assert reconciler.called("delete_namespace") == []
     assert reconciler.called("delete_api_key") == []
     assert "secret" not in status["deleted"]
+
+
+def test_finalization_repeats_after_compensation_scheduled_runtime_secret_deletion():
+    class DeletedSecretClient:
+        def get_secret_value(self, **_kwargs):
+            raise AwsInvalidRequest(
+                "You can't perform this operation on the secret because it was marked for deletion."
+            )
+
+        def delete_secret(self, **_kwargs):
+            raise AwsInvalidRequest("The secret is already marked for deletion.")
+
+    secrets = SecretsManagerStore(DeletedSecretClient())
+    reconciler = FakeReconciler()
+    for _ in range(2):
+        for step, key in (
+            (delete_temporal_cloud_api_key, "apiKey"),
+            (delete_temporal_cloud_service_account, "serviceAccount"),
+            (disable_temporal_cloud_namespace_delete_protection, "namespaceDeleteProtection"),
+            (delete_temporal_cloud_namespace, "namespace"),
+        ):
+            status = asyncio.run(
+                step(
+                    PROJECT,
+                    reconciler=reconciler,
+                    secret_store=secrets,
+                    checked_at="2026-06-13T00:00:00+00:00",
+                )
+            )
+            assert status["phase"] == "Deleted"
+            assert status["deleted"][key] == "not-found"
+        status = delete_temporal_cloud_runtime_secret(
+            PROJECT, secret_store=secrets, checked_at="2026-06-13T00:00:00+00:00"
+        )
+        assert status["deleted"]["secret"] == "scheduled-deletion"
+
+    assert reconciler.called("delete_api_key") == []
+    assert reconciler.called("delete_service_account") == []
+    assert reconciler.called("delete_namespace") == []
+
+
+def test_finalization_does_not_hide_unrelated_secret_errors():
+    error = AwsInvalidRequest("The secret is managed by another AWS service.")
+    secrets = FakeSecretStore(read_errors={RUNTIME_PATH: error})
+    with pytest.raises(AwsInvalidRequest, match="managed by another AWS service"):
+        asyncio.run(
+            delete_temporal_cloud_api_key(
+                PROJECT,
+                reconciler=FakeReconciler(),
+                secret_store=secrets,
+                checked_at="2026-06-13T00:00:00+00:00",
+            )
+        )
 
 
 def test_finalize_not_required_without_temporal_components():

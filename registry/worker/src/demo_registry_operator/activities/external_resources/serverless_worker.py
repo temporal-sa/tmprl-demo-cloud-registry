@@ -663,11 +663,15 @@ def task_queue_type(value: int) -> str:
 
 
 def compute_provider_unreachable(error: RPCError) -> bool:
-    # New invoke roles need both trust and Lambda permissions to propagate.
+    # Retry new-role permission and provider-issued token failures with the
+    # workflow's bounded policy. Temporal client authentication stays terminal.
     message = str(error).lower()
     return "cannot connect to the compute provider" in message or (
         "cannot access the compute resource" in message
-        and "accessdenied" in message
+        and (
+            "accessdenied" in message
+            or "unrecognizedclientexception" in message
+        )
     )
 
 

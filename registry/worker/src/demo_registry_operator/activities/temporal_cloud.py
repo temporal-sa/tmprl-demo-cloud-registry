@@ -2567,7 +2567,12 @@ def temporal_cloud_runtime_secret_with_path(
     secret_store: SecretStore,
 ) -> tuple[str, dict[str, Any]]:
     path = temporal_cloud_runtime_secret_path(demo_project)
-    existing = secret_store.read_json(path)
+    try:
+        existing = secret_store.read_json(path)
+    except Exception as error:  # noqa: BLE001 - normalize completed compensation
+        if not secret_marked_for_deletion(error):
+            raise
+        existing = None
     return path, existing if isinstance(existing, dict) else {}
 
 
@@ -3610,6 +3615,8 @@ class SecretsManagerStore:
         except Exception as error:  # noqa: BLE001 - tolerate already-deleted
             if _error_code(error) == "ResourceNotFoundException":
                 return "not-found"
+            if secret_marked_for_deletion(error):
+                return "scheduled-deletion"
             raise
         return "scheduled-deletion"
 
