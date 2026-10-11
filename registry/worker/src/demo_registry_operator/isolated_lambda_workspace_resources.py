@@ -88,7 +88,10 @@ def build_isolated_workspace_plan(
     )
     task_queue_env = str(settings["taskQueueEnv"])
     project = resources.project_name(demo_project)
-    temporal_secret_path = resources.temporal_secret_remote_path(demo_project)
+    temporal_secret_path = (
+        resources.temporal_runtime_secret_path_from_status(demo_project.get("status"))
+        or resources.temporal_secret_remote_path(demo_project)
+    )
     temporal_auth_mode = resources.temporal_auth_mode(demo_project)
     serverless_components = list(resources.serverless_lambda_components(demo_project).items())
     current_choices = _initial_current_choices(serverless_components)

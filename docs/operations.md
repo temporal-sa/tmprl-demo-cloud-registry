@@ -177,6 +177,21 @@ previous current WorkerDeployment version should remain current. Restore the
 good-image path and verify the canary creates, promotes, finalizes, and deletes
 its namespace.
 
+The gate also runs `crashable` and `isolated-lambda` workspace branches. Each
+promotes its own source demo, rotates credentials, then starts the catalog's
+workspace workflow pinned to the candidate operator version. It submits a demo
+workflow through the workspace app and checks that it completes on the isolated
+task queue. The crashable branch also crashes worker pods, waits for replacements,
+scales workers down while keeping client components ready, and scales them back
+up before another demo execution. The Lambda branch checks the promoted runtime
+secret and isolated function and Worker Deployment names.
+
+Workspace cleanup runs before source-demo finalization. The Lambda branch checks
+that its functions and Worker Deployments are gone and that source functions
+remain. A workspace cleanup failure fails the gate and retains the source demo
+and its shared dependencies for recovery. Inspect `workspace`, `workspaceCleanup`
+and `compensationFailures` in the branch result before retrying cleanup.
+
 ## Watching a rollout
 
 ```sh

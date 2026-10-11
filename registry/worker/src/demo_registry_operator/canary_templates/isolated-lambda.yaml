@@ -1,0 +1,57 @@
+name: isolated-lambda
+authMode: apiKey
+workspaceMode: isolated-lambda
+demoProjectTemplate:
+  apiVersion: registry.tmprl-demo.cloud/v1alpha1
+  kind: DemoProject
+  metadata:
+    name: operator-canary-template
+  spec:
+    registry:
+      title: Operator isolated Lambda workspace canary
+      summary: Exercises Lambda isolation, promoted runtime credentials, workflow execution and cleanup.
+      isolatedLambda:
+        enabled: true
+        taskQueueEnv: TEMPORAL_TASK_QUEUE
+        baseTaskQueue: serverless-webinar
+    source:
+      repo: https://github.com/temporal-sa/temporal-demo-serverless-no-roads
+    temporal:
+      auth:
+        mode: apiKey
+    builds:
+      app:
+        context: .
+        dockerfile: demo-app/Dockerfile
+      worker:
+        context: .
+        dockerfile: lambda-worker/Dockerfile
+    components:
+      app:
+        build: app
+        ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+        temporalAccess: true
+      worker:
+        build: worker
+        serverless:
+          provider: aws-lambda
+          packageType: image
+          architecture: x86_64
+          memoryMb: 512
+          timeoutSeconds: 600
+          workerDeployment:
+            deploymentName: serverless-webinar
+            buildId: 1.0.0
+    ingress:
+      subdomain: operator-canary-isolated-lambda
+      temporalAuthRequired: false
+      routes:
+      - pathPrefix: /
+        component: app
+        port: http
+    smokeCheck:
+      expectedStatus: 200
+      path: /

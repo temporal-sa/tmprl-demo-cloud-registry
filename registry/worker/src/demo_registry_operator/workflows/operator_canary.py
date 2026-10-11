@@ -148,4 +148,5 @@ def registry_operator_canary_branch_request(
         pollSeconds=request.pollSeconds,
         cleanupTimeoutSeconds=request.cleanupTimeoutSeconds,
         cleanupPolicy=request.cleanupPolicy,
+        workspaceMode=template.get("workspaceMode"),
     )

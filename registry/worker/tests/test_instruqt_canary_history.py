@@ -10,7 +10,7 @@ from datetime import timedelta
 
 import pytest
 from demo_registry_operator import errors, resources
-from demo_registry_operator.activities import canary, instruqt
+from demo_registry_operator.activities import canary, instruqt, workspace_canary
 from demo_registry_operator.worker import create_workflow_runner
 from demo_registry_operator.workflows import (
     instruqt_course,
@@ -124,7 +124,12 @@ def failure_events(history):
 
 
 def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch):
-    scenario = {"failure": "promotion", "legacy": False, "created": False}
+    scenario = {
+        "failure": "promotion",
+        "legacy": False,
+        "created": False,
+        "workspace_created": False,
+    }
     apply_started = None
     monkeypatch.setattr(
         canary.kube,
@@ -158,6 +163,15 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                 "timeoutSeconds": 1,
                 "pollSeconds": 1,
                 "cleanupTimeoutSeconds": 1,
+                **(
+                    {
+                        "workspaceMode": "isolated-lambda"
+                        if scenario["failure"] == "workspace-lambda-success"
+                        else "crashable"
+                    }
+                    if scenario["failure"].startswith("workspace")
+                    else {}
+                ),
             }
         )
 
@@ -191,7 +205,9 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
     def promotion(
         request: canary.RegistryOperatorCanaryPromotionWaitRequest,
     ) -> canary.RegistryOperatorCanaryActivityResult:
-        if scenario["failure"] in {"cleanup", "parent", "parent-legacy"}:
+        if scenario["failure"] in {"cleanup", "parent", "parent-legacy"} or scenario[
+            "failure"
+        ].startswith("workspace"):
             return canary.RegistryOperatorCanaryActivityResult(
                 {"phase": "Promoted", "ok": True}
             )
@@ -265,6 +281,57 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
             {"name": "good", "authMode": "apiKey"},
         ]
 
+    @activity.defn(name="begin_workspace_canary")
+    async def begin_workspace(
+        request: workspace_canary.WorkspaceCanaryRequest,
+    ) -> canary.RegistryOperatorCanaryActivityResult:
+        scenario["workspace_created"] = True
+        if scenario["failure"] == "workspace-start":
+            raise ApplicationError(
+                "lost workspace start acknowledgement",
+                type="WorkspaceStartFailed",
+                non_retryable=True,
+            )
+        if scenario["failure"] == "workspace-cancel":
+            apply_started.set()
+            await asyncio.Event().wait()
+        return canary.RegistryOperatorCanaryActivityResult(
+            {"phase": "Started", "ok": True, "source": {"namespace": "source"}}
+        )
+
+    @activity.defn(name="check_workspace_canary")
+    async def check_workspace(
+        request: workspace_canary.WorkspaceCanaryRequest,
+    ) -> canary.RegistryOperatorCanaryActivityResult:
+        if (
+            scenario["failure"] in {"workspace-check", "workspace-cleanup"}
+            and request.step == "exercise"
+        ):
+            raise ApplicationError(
+                "workspace secret mismatch",
+                type="WorkspaceCheckFailed",
+                non_retryable=True,
+            )
+        return canary.RegistryOperatorCanaryActivityResult(
+            {**request.workspace, "phase": "Succeeded", "ok": True}
+        )
+
+    @activity.defn(name="cleanup_workspace_canary")
+    async def cleanup_workspace(
+        request: workspace_canary.WorkspaceCanaryRequest,
+    ) -> canary.RegistryOperatorCanaryActivityResult:
+        assert scenario["created"], "source must still exist during workspace cleanup"
+        if scenario["failure"] == "workspace-cleanup":
+            raise ApplicationError(
+                "workspace Lambda remains",
+                type="WorkspaceCleanupFailed",
+                non_retryable=True,
+            )
+        scenario["workspace_created"] = False
+        return canary.RegistryOperatorCanaryActivityResult(
+            {"phase": "Deleted", "ok": True}
+        )
+
     async def verify():
         nonlocal apply_started
         apply_started = asyncio.Event()
@@ -279,8 +346,20 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                     ("promotion-and-delete", False),
                     ("cleanup", False),
                     ("cancel", False),
+                    ("workspace-success", False),
+                    ("workspace-lambda-success", False),
+                    ("workspace-start", False),
+                    ("workspace-check", False),
+                    ("workspace-cleanup", False),
+                    ("workspace-cancel", False),
                 ]:
-                    scenario.update(failure=failed_step, legacy=legacy, created=False)
+                    scenario.update(
+                        failure=failed_step,
+                        legacy=legacy,
+                        created=False,
+                        workspace_created=False,
+                    )
+                    apply_started.clear()
                     cls = (
                         LegacyAuthCanaryWorkflow
                         if legacy
@@ -301,6 +380,9 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                             delete,
                             finalize,
                             cleanup,
+                            begin_workspace,
+                            check_workspace,
+                            cleanup_workspace,
                         ],
                         activity_executor=executor,
                     ):
@@ -312,7 +394,7 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                             id=f"canary-{failed_step}-{legacy}",
                             task_queue="canary-saga-history",
                         )
-                        if failed_step == "cancel":
+                        if failed_step in {"cancel", "workspace-cancel"}:
                             await asyncio.wait_for(apply_started.wait(), 10)
                             await handle.cancel()
                             with pytest.raises(Exception) as raised:
@@ -323,7 +405,29 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                             ).status == WorkflowExecutionStatus.CANCELED
                         else:
                             result = await asyncio.wait_for(handle.result(), 15)
-                            assert result.phase == "Failed"
+                            assert result.phase == (
+                                "Succeeded"
+                                if failed_step
+                                in {"workspace-success", "workspace-lambda-success"}
+                                else "Failed"
+                            )
+                            if failed_step.startswith("workspace"):
+                                assert result.workspaceCleanup["phase"] == (
+                                    "CleanupFailed"
+                                    if failed_step == "workspace-cleanup"
+                                    else "Deleted"
+                                )
+                                assert scenario["created"] == (
+                                    failed_step == "workspace-cleanup"
+                                )
+                                assert scenario["workspace_created"] == (
+                                    failed_step == "workspace-cleanup"
+                                )
+                                if failed_step == "workspace-cleanup":
+                                    assert result.compensationFailures
+                                    assert (
+                                        "secret mismatch" in result.failure["message"]
+                                    )
                             if failed_step == "promotion-and-delete":
                                 assert (
                                     "worker could not start"
@@ -338,29 +442,84 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                                     result.compensationFailures[0]["message"]
                                     == "namespace still exists"
                                 )
-                        assert not scenario["created"]
+                        assert scenario["created"] == (
+                            failed_step == "workspace-cleanup"
+                        )
                         history = await handle.fetch_history()
                         scheduled = scheduled_activities(history)
                         names = [
                             event.activity_task_scheduled_event_attributes.activity_type.name
                             for event in scheduled
                         ]
-                        assert names[-3:] == [
-                            "delete_registry_operator_canary_project",
-                            "signal_registry_operator_canary_finalize",
-                            "wait_registry_operator_canary_cleanup",
-                        ]
+                        if failed_step == "workspace-cleanup":
+                            assert names[-1] == "cleanup_workspace_canary"
+                            assert (
+                                "delete_registry_operator_canary_project" not in names
+                            )
+                        else:
+                            assert names[-3:] == [
+                                "delete_registry_operator_canary_project",
+                                "signal_registry_operator_canary_finalize",
+                                "wait_registry_operator_canary_cleanup",
+                            ]
+                        if failed_step.startswith("workspace"):
+                            assert "cleanup_workspace_canary" in names
+                            if failed_step != "workspace-cleanup":
+                                assert names[-4] == "cleanup_workspace_canary"
+                        if failed_step in {
+                            "workspace-success",
+                            "workspace-lambda-success",
+                        }:
+                            steps = []
+                            for event in scheduled:
+                                attributes = (
+                                    event.activity_task_scheduled_event_attributes
+                                )
+                                if (
+                                    attributes.activity_type.name
+                                    == "check_workspace_canary"
+                                ):
+                                    decoded = await env.client.data_converter.decode(
+                                        attributes.input.payloads
+                                    )
+                                    steps.append(decoded[0]["step"])
+                            assert steps == (
+                                ["ready", "exercise"]
+                                if failed_step == "workspace-lambda-success"
+                                else [
+                                    "ready",
+                                    "exercise",
+                                    "crash",
+                                    "scale_down",
+                                    "scale_up",
+                                    "exercise",
+                                ]
+                            )
                         if not legacy:
-                            for event in scheduled[-3:]:
+                            for event in (
+                                []
+                                if failed_step == "workspace-cleanup"
+                                else scheduled[-3:]
+                            ):
                                 summary = await env.client.data_converter.decode(
                                     [event.user_metadata.summary]
                                 )
                                 assert summary[0].startswith(
                                     "Clean up operator canary:"
-                                    if failed_step == "cleanup"
+                                    if failed_step
+                                    in {
+                                        "cleanup",
+                                        "workspace-success",
+                                        "workspace-lambda-success",
+                                    }
                                     else "Compensate operator canary:"
                                 )
-                            if failed_step != "cancel":
+                            if failed_step not in {
+                                "cancel",
+                                "workspace-cancel",
+                                "workspace-success",
+                                "workspace-lambda-success",
+                            }:
                                 assert failure_events(history)
                         else:
                             assert not failure_events(history)
@@ -454,7 +613,9 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(
                     "phase": "Failed",
                     "message": "instruqt exited with 1",
                     "output": (
-                        "HTTP 503 Service Unavailable" if transient else "publish denied"
+                        "HTTP 503 Service Unavailable"
+                        if transient
+                        else "publish denied"
                     ),
                     "exitCode": 1,
                 },
@@ -582,9 +743,8 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(
                             )
                             if generation == 1 and not legacy:
                                 assert (
-                                    ("HTTP 503" if transient else "publish denied")
-                                    in status["rolloutFailure"]["message"]
-                                )
+                                    "HTTP 503" if transient else "publish denied"
+                                ) in status["rolloutFailure"]["message"]
                                 assert (
                                     status["compensationStatus"]["phase"]
                                     == "NotRequired"

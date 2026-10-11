@@ -49,6 +49,11 @@ def load_canary_templates() -> list[dict[str, Any]]:
                     "name": data.get("name") or entry.name.rsplit(".", 1)[0],
                     "authMode": data.get("authMode") or "apiKey",
                     "demoProjectTemplate": data["demoProjectTemplate"],
+                    **(
+                        {"workspaceMode": data["workspaceMode"]}
+                        if data.get("workspaceMode")
+                        else {}
+                    ),
                 }
             )
     if not templates:
@@ -78,6 +83,7 @@ class RegistryOperatorCanaryPlanRequest:
     poll_seconds: int = 10
     cleanup_timeout_seconds: int = 600
     cleanup_policy: str = "Always"
+    workspace_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +314,11 @@ def prepare_registry_operator_canary_plan(
         "pollSeconds": int(request.poll_seconds),
         "cleanupTimeoutSeconds": int(request.cleanup_timeout_seconds),
         "cleanupPolicy": request.cleanup_policy,
+        **(
+            {"workspaceMode": request.workspace_mode}
+            if request.workspace_mode
+            else {}
+        ),
         "sourceWatchNamespace": config.source_watch_namespace,
         "gitRepository": resources.source_git_repository_name(demo_project),
         "catalogStatusNamespace": config.catalog_status_namespace,

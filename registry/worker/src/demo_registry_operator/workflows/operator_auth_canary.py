@@ -12,6 +12,7 @@ from temporalio.exceptions import ActivityError, CancelledError, is_cancelled_ex
 
 from demo_registry_operator import errors
 from demo_registry_operator.activities import canary as canary_activities
+from demo_registry_operator.activities import workspace_canary
 from demo_registry_operator.workflows import messages
 
 COMMON_RETRY_POLICY = RetryPolicy(
@@ -55,6 +56,10 @@ class RegistryOperatorAuthCanaryState:
     failure: dict[str, Any] = field(default_factory=dict)
     compensation_failures: list[dict[str, Any]] = field(default_factory=list)
     cleanup_summary_prefix: str | None = None
+    workspace_result: dict[str, Any] = field(default_factory=dict)
+    workspace_cleanup_result: dict[str, Any] = field(default_factory=dict)
+    workspace_required: bool = False
+    workspace_ok: bool = False
 
 
 @workflow.defn
@@ -132,17 +137,35 @@ async def _run_registry_operator_auth_canary_saga(
         if state.promotion_ok:
             stage = "rotation_result"
             await _run_registry_operator_canary_rotation(state)
+            if (
+                state.rotation_ok
+                and plan.get("workspaceMode")
+                and workflow.patched("operator-canary-workspace-lifecycle")
+            ):
+                state.workspace_required = True
+                # Unwind the workspace before deleting its shared credentials,
+                # Lambda roles and Temporal namespace, including lost start acks.
+                compensations.append(
+                    (
+                        "workspace_cleanup_result",
+                        lambda: _cleanup_workspace_canary(state),
+                    )
+                )
+                stage = "workspace_result"
+                await _run_workspace_canary(state)
     except (ActivityError, CancelledError, asyncio.CancelledError) as error:
         failure = error
         state.failure = errors.failure_details(error)
         if isinstance(error, ActivityError) and not is_cancelled_exception(error):
             if error.activity_type == "rotate_registry_operator_canary_credentials":
                 stage = "rotation_signal_result"
-            setattr(
-                state,
-                stage,
-                errors.activity_failure_status(error, fallback_phase="Failed"),
+            failed_status = errors.activity_failure_status(
+                error, fallback_phase="Failed"
             )
+            if stage == "workspace_result":
+                state.workspace_result.update(failed_status)
+            else:
+                setattr(state, stage, failed_status)
     finally:
         state.cleanup_summary_prefix = (
             "Compensate operator canary"
@@ -184,6 +207,10 @@ async def _run_registry_operator_canary_compensations(
             workflow.logger.error(
                 "Operator canary compensation failed: %s", failure["message"]
             )
+            if result_field == "workspace_cleanup_result":
+                # Preserve the source dependencies so workspace cleanup can be
+                # retried after a failed gate rather than stranding resources.
+                break
 
 
 async def _prepare_registry_operator_canary_plan(
@@ -193,9 +220,7 @@ async def _prepare_registry_operator_canary_plan(
         canary_activities.prepare_registry_operator_canary_plan,
         canary_activities.RegistryOperatorCanaryPlanRequest(
             demo_project_template=(
-                branch_request.demoProjectTemplate
-                or branch_request.demoProject
-                or {}
+                branch_request.demoProjectTemplate or branch_request.demoProject or {}
             ),
             workflow_id=branch_request.workflowID,
             run_id=branch_request.runID,
@@ -210,6 +235,7 @@ async def _prepare_registry_operator_canary_plan(
             poll_seconds=int(branch_request.pollSeconds),
             cleanup_timeout_seconds=int(branch_request.cleanupTimeoutSeconds),
             cleanup_policy=str(branch_request.cleanupPolicy),
+            workspace_mode=branch_request.workspaceMode,
         ),
         start_to_close_timeout=timedelta(minutes=2),
         retry_policy=COMMON_RETRY_POLICY,
@@ -401,6 +427,10 @@ def _registry_operator_auth_canary_result(
         and bool(state.cleanup_result.get("ok"))
         and not state.failure
         and not state.compensation_failures
+        and (
+            not state.workspace_required
+            or (state.workspace_ok and bool(state.workspace_cleanup_result.get("ok")))
+        )
     )
     return messages.RegistryOperatorAuthCanaryResult(
         project=state.plan.get("project"),
@@ -416,4 +446,57 @@ def _registry_operator_auth_canary_result(
         cleanup=state.cleanup_result,
         failure=state.failure,
         compensationFailures=state.compensation_failures,
+        workspace=state.workspace_result,
+        workspaceCleanup=state.workspace_cleanup_result,
     )
+
+
+async def _run_workspace_canary(state: RegistryOperatorAuthCanaryState) -> None:
+    started = await workflow.execute_activity(
+        workspace_canary.begin_workspace_canary,
+        workspace_canary.WorkspaceCanaryRequest(state.plan),
+        start_to_close_timeout=timedelta(minutes=2),
+        retry_policy=COMMON_RETRY_POLICY,
+        summary="Start workspace on the candidate operator version",
+    )
+    state.workspace_result = started.status
+    await _check_workspace_canary(state, "ready")
+    await _check_workspace_canary(state, "exercise")
+    if state.plan["workspaceMode"] == "crashable":
+        await _check_workspace_canary(state, "crash")
+        await _check_workspace_canary(state, "scale_down")
+        await _check_workspace_canary(state, "scale_up")
+        await _check_workspace_canary(state, "exercise")
+    state.workspace_ok = bool(state.workspace_result.get("ok"))
+
+
+async def _check_workspace_canary(
+    state: RegistryOperatorAuthCanaryState, step: str
+) -> None:
+    checked = await workflow.execute_activity(
+        workspace_canary.check_workspace_canary,
+        workspace_canary.WorkspaceCanaryRequest(
+            state.plan, state.workspace_result, step
+        ),
+        start_to_close_timeout=timedelta(
+            seconds=int(state.plan.get("timeoutSeconds", 900)) + 60
+        ),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+        summary=f"Check workspace {step}",
+    )
+    state.workspace_result = checked.status
+
+
+async def _cleanup_workspace_canary(state: RegistryOperatorAuthCanaryState) -> None:
+    cleaned = await workflow.execute_activity(
+        workspace_canary.cleanup_workspace_canary,
+        workspace_canary.WorkspaceCanaryRequest(state.plan, state.workspace_result),
+        start_to_close_timeout=timedelta(
+            seconds=int(state.plan.get("cleanupTimeoutSeconds", 600)) + 60
+        ),
+        heartbeat_timeout=timedelta(minutes=2),
+        retry_policy=CHECK_RETRY_POLICY,
+        summary="Clean up workspace before its source demo",
+    )
+    state.workspace_cleanup_result = cleaned.status

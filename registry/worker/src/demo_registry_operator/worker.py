@@ -41,6 +41,11 @@ from demo_registry_operator.activities.canary import (
     wait_for_registry_operator_canary_rotation,
     wait_registry_operator_canary_cleanup,
 )
+from demo_registry_operator.activities.workspace_canary import (
+    begin_workspace_canary,
+    check_workspace_canary,
+    cleanup_workspace_canary,
+)
 from demo_registry_operator.activities.external_resources import (
     check_temporal_runtime_secret,
     configure_temporal_cloud_namespace_mtls,
@@ -333,6 +338,9 @@ async def main() -> None:
                     delete_registry_operator_canary_project,
                     signal_registry_operator_canary_finalize,
                     wait_registry_operator_canary_cleanup,
+                    begin_workspace_canary,
+                    check_workspace_canary,
+                    cleanup_workspace_canary,
                     load_current_demo_project_for_reconcile,
                     load_current_instruqt_course_for_reconcile,
                     resolve_project_image_build_plan,

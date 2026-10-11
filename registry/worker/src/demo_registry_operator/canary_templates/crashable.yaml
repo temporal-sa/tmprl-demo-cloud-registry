@@ -1,0 +1,58 @@
+name: crashable
+authMode: apiKey
+workspaceMode: crashable
+demoProjectTemplate:
+  apiVersion: registry.tmprl-demo.cloud/v1alpha1
+  kind: DemoProject
+  metadata:
+    name: operator-canary-template
+  spec:
+    registry:
+      title: Operator crashable workspace canary
+      summary: Exercises isolated task queues, worker crash recovery, scaling and workspace cleanup.
+      crashable:
+        enabled: true
+        taskQueueEnv: TEMPORAL_TASK_QUEUE
+        baseTaskQueue: dejavu-tacos
+    source:
+      repo: https://github.com/temporal-sa/temporal-demo-dejavu-tacos
+    builds:
+      frontend:
+        context: .
+        dockerfile: docker/frontend.Dockerfile
+      backend:
+        context: .
+        dockerfile: docker/backend.Dockerfile
+      worker-python:
+        context: .
+        dockerfile: docker/worker-python.Dockerfile
+    components:
+      frontend:
+        build: frontend
+        ports:
+        - containerPort: 5173
+          servicePort: 80
+      backend:
+        build: backend
+        temporalAccess: true
+        env:
+        - name: DEJAVU_WORKER_LANGUAGE
+          value: python
+        ports:
+        - containerPort: 8000
+          servicePort: 8000
+      worker:
+        build: worker-python
+        worker: true
+        env:
+        - name: DEJAVU_BACKEND_URL
+          value: http://backend:8000
+    ingress:
+      subdomain: operator-canary-crashable
+      temporalAuthRequired: false
+    smokeCheck:
+      path: /api/health
+      expectedStatus: 200
+    temporal:
+      auth:
+        mode: apiKey

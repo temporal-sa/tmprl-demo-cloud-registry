@@ -169,6 +169,27 @@ def test_isolated_plan_skips_crashable_labels_and_serverless_pods():
     assert by_name["orders-v1"].env["TEMPORAL_TASK_QUEUE"] == plan.task_queue
 
 
+@pytest.mark.parametrize("configured_path", [None, "superseded/temporal"])
+def test_isolated_plan_uses_promoted_runtime_secret_for_lambda_and_kubernetes(configured_path):
+    demo = _isolated_demo()
+    demo["spec"]["temporal"] = {"runtimeSecretPath": configured_path}
+    demo["status"] = {"temporalRuntimeSecretPath": "promoted/temporal-git-v2"}
+    plan = build_isolated_workspace_plan(
+        demo, {"app": "ecr/app:sha", "orders": "ecr/orders:sha"}, "abc123"
+    )
+    assert {component.temporal_secret_path for component in plan.components} == {
+        "promoted/temporal-git-v2"
+    }
+    remote_paths = {
+        item["remoteRef"]["key"]
+        for manifest in plan.resources
+        if manifest["kind"] == "ExternalSecret"
+        for item in manifest["spec"]["data"]
+        if item["remoteRef"]["property"] in {"address", "namespace", "apiKey"}
+    }
+    assert remote_paths == {"promoted/temporal-git-v2"}
+
+
 def test_missing_initial_current_uses_lexicographic_component():
     demo = _isolated_demo()
     demo["spec"]["components"]["orders-v1"]["serverless"]["workerDeployment"].pop(

@@ -154,6 +154,7 @@ class RegistryOperatorAuthCanaryRequest:
     pollSeconds: int = 10
     cleanupTimeoutSeconds: int = 600
     cleanupPolicy: str = "Always"
+    workspaceMode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,8 @@ class RegistryOperatorAuthCanaryResult:
     cleanup: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, Any] = field(default_factory=dict)
     compensationFailures: list[dict[str, Any]] = field(default_factory=list)
+    workspace: dict[str, Any] = field(default_factory=dict)
+    workspaceCleanup: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

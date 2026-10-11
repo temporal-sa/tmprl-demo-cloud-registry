@@ -87,14 +87,16 @@ def test_lambda_component_rejects_kubernetes_iam_role():
     ]
 
 
-def test_nexus_canary_demo_project_template_passes_schema_and_semantics():
+@pytest.mark.parametrize("name", ["api-key", "mtls", "lambda", "nexus", "crashable", "isolated-lambda"])
+def test_canary_demo_project_template_passes_schema_and_semantics(name):
+    template_path = NEXUS_CANARY_TEMPLATE.with_name(f"{name}.yaml")
     wrapper, load_errors = validate_projects.load_yaml_document(
-        NEXUS_CANARY_TEMPLATE
+        template_path
     )
     assert load_errors == []
     assert wrapper is not None
     document = validate_projects.ProjectDocument(
-        path=NEXUS_CANARY_TEMPLATE,
+        path=template_path,
         data=wrapper["demoProjectTemplate"],
     )
 
