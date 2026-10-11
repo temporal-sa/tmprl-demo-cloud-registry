@@ -23,7 +23,7 @@ spec:
       baseTaskQueue: dejavu-tacos
 
   source:
-    repo: https://github.com/temporal-sa/demo-dejavu-tacos
+    repo: https://github.com/temporal-sa/temporal-demo-dejavu-tacos
     # branch defaults to main
 
   builds:

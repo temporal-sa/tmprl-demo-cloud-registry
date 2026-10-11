@@ -17,9 +17,9 @@ spec:
     links:
       runbook:
         label: Advanced AI Agent runbook
-        url: https://github.com/temporal-sa/temporal-agent-harness-example/blob/catalog/advanced-ai-agent/docs/catalog.md
+        url: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent/blob/catalog/advanced-ai-agent/docs/catalog.md
   source:
-    repo: https://github.com/temporal-sa/temporal-agent-harness-example
+    repo: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent
     branch: catalog/advanced-ai-agent
   builds:
     app:
