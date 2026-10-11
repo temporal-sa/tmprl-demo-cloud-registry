@@ -4,7 +4,7 @@ metadata:
   name: temporal-podpocalypse
 spec:
   source:
-    repo: https://github.com/temporal-sa/temporal-podpocalypse
+    repo: https://github.com/temporal-sa/temporal-demo-podpocalypse
     branch: main
   registry:
     title: Podpocalypse

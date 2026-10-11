@@ -15,7 +15,7 @@ spec:
       - Go
 
   source:
-    repo: https://github.com/temporal-sa/temporal-versioning-demo
+    repo: https://github.com/temporal-sa/temporal-demo-versioning
     # branch defaults to main
 
   builds:

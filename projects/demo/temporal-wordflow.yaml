@@ -4,7 +4,7 @@ metadata:
   name: temporal-wordflow
 spec:
   source:
-    repo: https://github.com/temporal-sa/temporal-wordflow
+    repo: https://github.com/temporal-sa/temporal-demo-wordflow
   secrets:
     session-jwt:
       requiredProperties:

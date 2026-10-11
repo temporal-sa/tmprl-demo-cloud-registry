@@ -1,4 +1,4 @@
-# Serverless Workers demo (temporal-serverless-no-roads): a Go web UI/API on
+# Serverless Workers demo (temporal-demo-serverless-no-roads): a Go web UI/API on
 # Kubernetes that starts DemoWorkflows, plus a Temporal worker running on AWS
 # Lambda. Because the project has a serverless (AWS Lambda) worker, the operator
 # defaults its Temporal Cloud namespace region to the AWS region
@@ -9,7 +9,7 @@ metadata:
   name: no-roads-serverless
 spec:
   source:
-    repo: https://github.com/temporal-sa/temporal-serverless-no-roads
+    repo: https://github.com/temporal-sa/temporal-demo-serverless-no-roads
   temporal:
     auth:
       mode: apiKey

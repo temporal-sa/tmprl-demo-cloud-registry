@@ -14,7 +14,7 @@ spec:
       - Python
 
   source:
-    repo: https://github.com/temporal-sa/demo-banking-app-money-transfer
+    repo: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer
     # branch defaults to main
 
   builds:
