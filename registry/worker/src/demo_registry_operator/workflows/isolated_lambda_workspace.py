@@ -53,6 +53,16 @@ LAMBDA_RETRY_POLICY = RetryPolicy(
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT = timedelta(minutes=6)
+# Matching retains recently stopped pollers for five minutes by default. The
+# ordinary eight-attempt cleanup policy exhausts its delays after 4m15s.
+# Allow 8m15s of retry delays for deployment deletion while keeping it bounded.
+WORKER_DEPLOYMENT_CLEANUP_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=1),
+    maximum_attempts=12,
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
+)
 
 
 @workflow.defn
@@ -364,7 +374,7 @@ class IsolatedLambdaWorkspaceWorkflow:
                     build_ids=tuple(version.build_id for version in versions),
                 ),
                 start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=crashable_activities.CLEANUP_RETRY_POLICY,
+                retry_policy=WORKER_DEPLOYMENT_CLEANUP_RETRY_POLICY,
                 summary=f"Delete workspace Worker Deployment {deployment_name}",
             )
         for worker in self._workers:

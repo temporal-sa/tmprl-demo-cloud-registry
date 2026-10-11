@@ -192,6 +192,11 @@ remain. A workspace cleanup failure fails the gate and retains the source demo
 and its shared dependencies for recovery. Inspect `workspace`, `workspaceCleanup`
 and `compensationFailures` in the branch result before retrying cleanup.
 
+Workspace cleanup waits for Kubernetes namespace finalization after the workspace
+workflow completes. Lambda Worker Deployment deletion has a longer bounded retry
+window than ordinary cleanup because Temporal can retain stopped pollers in its
+poller history for five minutes; `skip_drainage` does not bypass that check.
+
 ## Watching a rollout
 
 ```sh

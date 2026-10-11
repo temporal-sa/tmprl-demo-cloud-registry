@@ -442,10 +442,15 @@ async def cleanup_workspace_canary(
     except RPCError as error:
         if error.status != RPCStatusCode.NOT_FOUND:
             raise
-    _require(
-        kube.read_namespace(namespace) is None,
-        "Workspace namespace remains after cleanup",
-    )
+    # Workspace teardown requests deletion; Kubernetes finishes namespace
+    # finalization asynchronously after the entity workflow has completed.
+    while kube.read_namespace(namespace) is not None:
+        activity.heartbeat({"step": "wait_namespace_deletion", "namespace": namespace})
+        _require(
+            time.monotonic() < deadline,
+            "Workspace namespace remains after cleanup timeout",
+        )
+        await asyncio.sleep(int(plan.get("pollSeconds", 10)))
     if plan["workspaceMode"] == "isolated-lambda":
         demo = kube.read_demo_project(plan["project"])
         (

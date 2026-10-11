@@ -233,12 +233,50 @@ def test_workspace_cleanup_requires_namespace_absent(monkeypatch):
     )
     monkeypatch.setattr(checks.WorkerConfig, "from_env", lambda: None)
     monkeypatch.setattr(checks.kube, "read_namespace", lambda _: {"name": "leftover"})
+    clock = iter([0, 1, 2])
+    monkeypatch.setattr(checks, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     with pytest.raises(ApplicationError, match="namespace remains"):
         asyncio.run(
             ActivityEnvironment().run(
                 checks.cleanup_workspace_canary, checks.WorkspaceCanaryRequest(plan())
             )
         )
+
+
+def test_workspace_cleanup_waits_for_namespace_finalization_after_workflow_completes(
+    monkeypatch,
+):
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=WorkflowExecutionStatus.COMPLETED)
+        )
+    )
+    monkeypatch.setattr(
+        checks,
+        "connect",
+        AsyncMock(return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)),
+    )
+    monkeypatch.setattr(checks.WorkerConfig, "from_env", lambda: None)
+    namespaces = iter(
+        [
+            {"phase": "Terminating", "deletionTimestamp": "2026-10-11T21:18:46Z"},
+            {"phase": "Terminating", "deletionTimestamp": "2026-10-11T21:18:46Z"},
+            None,
+        ]
+    )
+    monkeypatch.setattr(checks.kube, "read_namespace", lambda _: next(namespaces))
+    environment = ActivityEnvironment()
+    heartbeats = []
+    environment.on_heartbeat = lambda details: heartbeats.append(details)
+    result = asyncio.run(
+        environment.run(
+            checks.cleanup_workspace_canary, checks.WorkspaceCanaryRequest(plan())
+        )
+    )
+    assert result.status["phase"] == "Deleted"
+    assert len(heartbeats) == 2
+    assert all(h["step"] == "wait_namespace_deletion" for h in heartbeats)
+    handle.describe.assert_awaited_once()
 
 
 def test_scaled_down_readiness_keeps_client_components_running(monkeypatch):
