@@ -7,6 +7,26 @@ def lambda_function_name(project: str, component: str) -> str:
     return aws_name("tmprl-dem-cld", project, component, max_length=64)
 
 
+def workspace_lambda_function_name(
+    project: str, component: str, workspace_id: str
+) -> str:
+    """Stable Lambda name for one workspace copy of a serverless component.
+
+    ``workspace_id`` is ``derive.crashable_workspace_id`` (10 characters). The
+    same user and demo always hash to the same id, so retries and cleanup
+    address the same function. ``aws_name`` keeps the result inside Lambda's
+    64-character limit.
+    """
+
+    return aws_name(
+        "tmprl-dem-cld",
+        project,
+        component,
+        workspace_id,
+        max_length=64,
+    )
+
+
 def lambda_execution_role_name(project: str, component: str) -> str:
     return typed_aws_name("tmprl-dem-cld", project, component, "lambda", max_length=64)
 

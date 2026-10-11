@@ -1202,6 +1202,15 @@
 
   .panel-crash .panel-title { color: var(--pink-100); }
 
+  .panel-isolated {
+    background: linear-gradient(var(--deepest-blue), var(--deepest-blue)) padding-box, var(--grad-uv-edge) border-box;
+    border: 2px solid transparent;
+  }
+
+  .panel-isolated .panel-title { color: var(--indigo-300); }
+
+  .tag-isolated { color: var(--indigo-300); border-color: #444ce7; }
+
   .asset-cols {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

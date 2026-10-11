@@ -66,6 +66,7 @@ from demo_registry_operator.activities.external_resources import (
     delete_temporal_cloud_service_account,
     delete_temporal_cloud_service_account_by_id,
     delete_temporal_runtime_candidate_secret,
+    delete_serverless_worker_deployment,
     describe_serverless_worker_deployment_version,
     disable_temporal_cloud_namespace_delete_protection,
     disable_temporal_cloud_namespace_delete_protection_by_name,
@@ -130,6 +131,12 @@ from demo_registry_operator.activities.reconcile import (
     wait_for_candidate_readiness,
     wait_for_worker_deployment_rollouts,
 )
+from demo_registry_operator.activities.isolated_lambda_workspace import (
+    build_isolated_workspace_plan_activity,
+    delete_workspace_lambda_functions,
+    resolve_shared_lambda_roles,
+    update_workspace_lambda_invoke_policy,
+)
 from demo_registry_operator.activities.crashable_workspace import (
     apply_workspace_resource,
     build_workspace_plan,
@@ -173,6 +180,9 @@ from demo_registry_operator.workflows.demo_project_serverless_lambda import (
 from demo_registry_operator.workflows.crashable_workspace import (
     CrashableWorkspaceWorkflow,
 )
+from demo_registry_operator.workflows.isolated_lambda_workspace import (
+    IsolatedLambdaWorkspaceWorkflow,
+)
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
 from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
@@ -198,6 +208,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.builds.status",
     "demo_registry_operator.activities.canary",
     "demo_registry_operator.activities.crashable_workspace",
+    "demo_registry_operator.activities.isolated_lambda_workspace",
     "demo_registry_operator.activities.external_resources",
     "demo_registry_operator.activities.external_resources.serverless_names",
     "demo_registry_operator.activities.force_reconcile",
@@ -209,6 +220,8 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
     "demo_registry_operator.workflows.crashable_workspace_messages",
+    "demo_registry_operator.workflows.isolated_lambda_workspace_messages",
+    "demo_registry_operator.isolated_lambda_workspace_resources",
     "demo_registry_operator.workflows.demo_project_artifact_build",
     "demo_registry_operator.workflows.demo_project_kubernetes_runtime",
     "demo_registry_operator.workflows.demo_project_serverless_lambda",
@@ -305,6 +318,7 @@ async def main() -> None:
                     RegistryOperatorCanaryWorkflow,
                     RegistryOperatorAuthCanaryWorkflow,
                     CrashableWorkspaceWorkflow,
+                    IsolatedLambdaWorkspaceWorkflow,
                     GrantNamespaceReadAccessWorkflow,
                     SyncNamespaceReadersWorkflow,
                 ],
@@ -376,6 +390,7 @@ async def main() -> None:
                     validate_serverless_worker_compute_config,
                     set_serverless_worker_deployment_current,
                     describe_serverless_worker_deployment_version,
+                    delete_serverless_worker_deployment,
                     delete_serverless_lambda_resources,
                     delete_temporal_cloud_api_key,
                     delete_temporal_cloud_service_account,
@@ -415,6 +430,10 @@ async def main() -> None:
                     crash_workspace_pods,
                     scale_workspace_workloads,
                     delete_workspace_namespace,
+                    build_isolated_workspace_plan_activity,
+                    resolve_shared_lambda_roles,
+                    update_workspace_lambda_invoke_policy,
+                    delete_workspace_lambda_functions,
                     grant_user_namespace_read_access,
                     sync_namespace_readers_group,
                 ],

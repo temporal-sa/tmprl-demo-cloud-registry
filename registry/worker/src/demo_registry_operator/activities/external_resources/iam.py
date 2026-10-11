@@ -389,13 +389,16 @@ def temporal_lambda_invoke_policy(
     function_arn: str,
     function_version_arn: str,
 ) -> dict[str, Any]:
-    resources = sorted(
+    return temporal_lambda_invoke_policy_resources(
         {
             function_arn,
             f"{function_arn}:*",
             function_version_arn,
         }
     )
+
+
+def temporal_lambda_invoke_policy_resources(resources: set[str]) -> dict[str, Any]:
     return {
         "Version": "2012-10-17",
         "Statement": [
@@ -405,10 +408,58 @@ def temporal_lambda_invoke_policy(
                     "lambda:GetFunction",
                     "lambda:InvokeFunction",
                 ],
-                "Resource": resources,
+                "Resource": sorted(resources),
             }
         ],
     }
+
+
+def invoke_policy_resource_arns(document: dict[str, Any]) -> set[str]:
+    """Resource ARNs on the Lambda invoke statement. A string Resource is one ARN."""
+
+    statements = document.get("Statement")
+    if not isinstance(statements, list):
+        return set()
+    resources: set[str] = set()
+    for statement in statements:
+        if not isinstance(statement, dict):
+            continue
+        actions = statement.get("Action")
+        action_list = [actions] if isinstance(actions, str) else actions
+        if not isinstance(action_list, list) or "lambda:InvokeFunction" not in action_list:
+            continue
+        resource = statement.get("Resource", [])
+        if isinstance(resource, str):
+            resources.add(resource)
+        elif isinstance(resource, list):
+            resources.update(item for item in resource if isinstance(item, str))
+    return resources
+
+
+def union_invoke_policy_resources(
+    document: dict[str, Any],
+    extra_arns: set[str],
+) -> dict[str, Any]:
+    """Add workspace ARNs without dropping the ARNs already on the role."""
+
+    return temporal_lambda_invoke_policy_resources(
+        invoke_policy_resource_arns(document) | set(extra_arns)
+    )
+
+
+def remove_invoke_policy_resources(
+    document: dict[str, Any],
+    remove_arns: set[str],
+) -> dict[str, Any]:
+    """Drop only the given ARNs. The remaining list is the shared demo's."""
+
+    remaining = invoke_policy_resource_arns(document) - set(remove_arns)
+    if not remaining:
+        raise errors.non_retryable_error(
+            "Refusing to remove every ARN from the shared Lambda invoke policy",
+            error_type=errors.CONFIGURATION_ERROR,
+        )
+    return temporal_lambda_invoke_policy_resources(remaining)
 
 
 def temporal_cloud_lambda_invoke_principals() -> list[str]:

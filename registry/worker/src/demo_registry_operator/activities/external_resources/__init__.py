@@ -48,6 +48,8 @@ from demo_registry_operator.activities.external_resources.models import (
     PromoteTemporalMtlsCaRequest,
     PromoteTemporalRuntimeCredentialRequest,
     ReconcileTemporalCloudSearchAttributesRequest,
+    DeleteServerlessWorkerDeploymentRequest,
+    DeleteServerlessWorkerDeploymentResult,
     DescribeServerlessWorkerDeploymentVersionRequest,
     DescribeServerlessWorkerDeploymentVersionResult,
     SetServerlessWorkerDeploymentCurrentRequest,
@@ -93,6 +95,7 @@ from demo_registry_operator.activities.external_resources.secrets import (
     verify_secrets_manager_resources,
 )
 from demo_registry_operator.activities.external_resources.serverless_worker import (
+    delete_serverless_worker_deployment,
     describe_serverless_worker_deployment_version,
     ensure_serverless_worker_deployment,
     set_serverless_worker_deployment_current,
@@ -239,6 +242,7 @@ __all__ = [
     "plan_external_resources",
     "promote_temporal_mtls_ca",
     "promote_temporal_runtime_credential",
+    "delete_serverless_worker_deployment",
     "describe_serverless_worker_deployment_version",
     "ensure_serverless_worker_deployment",
     "set_serverless_worker_deployment_current",

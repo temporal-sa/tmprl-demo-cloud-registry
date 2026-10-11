@@ -137,6 +137,73 @@ def test_scale_endpoint_dispatches_workspace_update(
         httpd.shutdown()
 
 
+def test_isolated_demo_rejects_crash_and_scale(tmp_path, monkeypatch):
+    (tmp_path / "registry.json").write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": "rainbow",
+                        "isolatedLambda": {"enabled": True},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class Gateway:
+        def update_workspace(self, owner_email, demo_name, update_name):
+            calls.append((owner_email, demo_name, update_name))
+            return {"phase": "Active", "demo": demo_name}
+
+        def ensure_workspace(self, owner_email, demo_name, workflow_type):
+            calls.append((owner_email, demo_name, workflow_type))
+            return {"phase": "Provisioning", "demo": demo_name}
+
+    monkeypatch.setenv("AUTH_MODE", "bootstrap-allow")
+    httpd = run_test_server(tmp_path, Gateway())
+    try:
+        for path in (
+            "/api/crashable-workspace/crash",
+            "/api/crashable-workspace/scale-down",
+            "/api/crashable-workspace/scale-up",
+        ):
+            body = json.dumps({"demo": "rainbow"}).encode("utf-8")
+            request = Request(
+                f"http://127.0.0.1:{httpd.server_port}{path}",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                urlopen(request, timeout=2)
+            except HTTPError as error:
+                payload = json.loads(error.read().decode("utf-8"))
+                assert error.code == 409
+                assert payload["error"] == "worker-disruption-unsupported"
+            else:
+                raise AssertionError(f"{path} should reject an isolated demo")
+        create = Request(
+            f"http://127.0.0.1:{httpd.server_port}/api/crashable-workspace",
+            data=json.dumps({"demo": "rainbow"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response = urlopen(create, timeout=2)
+        assert response.status == 200
+        assert calls == [
+            (
+                "bootstrap@temporal.io",
+                "rainbow",
+                "IsolatedLambdaWorkspaceWorkflow",
+            )
+        ]
+    finally:
+        httpd.shutdown()
+
+
 def test_auth_verify_requires_explicit_bootstrap_mode(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTH_MODE", raising=False)
     httpd = run_test_server(tmp_path)

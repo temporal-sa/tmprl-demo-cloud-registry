@@ -56,6 +56,8 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 
 CRASHABLE_WORKFLOW_TYPE = "CrashableWorkspaceWorkflow"
+ISOLATED_LAMBDA_WORKFLOW_TYPE = "IsolatedLambdaWorkspaceWorkflow"
+WORKER_DISRUPTION_UPDATES = frozenset({"crash", "scale_down", "scale_up"})
 DEFAULT_CRASHABLE_TASK_QUEUE = "registry-management"
 # Bound how long a sync request thread will block on a Temporal RPC.
 CRASHABLE_RPC_TIMEOUT_SECONDS = 30
@@ -269,15 +271,22 @@ class TemporalGateway:
                 )
         return self._client
 
-    def ensure_workspace(self, owner_email: str, demo_name: str) -> dict[str, Any]:
-        return self._run(self._ensure_workspace(owner_email, demo_name))
+    def ensure_workspace(
+        self,
+        owner_email: str,
+        demo_name: str,
+        workflow_type: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            self._ensure_workspace(owner_email, demo_name, workflow_type)
+        )
 
     async def _ensure_workspace(
-        self, owner_email: str, demo_name: str
+        self, owner_email: str, demo_name: str, workflow_type: str
     ) -> dict[str, Any]:
         client = await self._get_client()
         operation = WithStartWorkflowOperation(
-            CRASHABLE_WORKFLOW_TYPE,
+            workflow_type,
             {
                 "demo_name": demo_name,
                 "owner_email": owner_email,
@@ -491,13 +500,26 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             raise AuthError("Session is missing an email claim.")
         return email
 
-    def demo_is_crashable(self, demo: str) -> bool:
+    def demo_workspace_mode(self, demo: str) -> str | None:
+        """Which private-environment workflow this catalog demo starts.
+
+        ``isolatedLambda.enabled`` and ``crashable.enabled`` in the catalog JSON
+        are already the two-field gates (enabled and a non-empty taskQueueEnv).
+        Isolated wins if a catalog entry ever carries both, so the API does not
+        offer crash or scale for a Lambda workspace.
+        """
+
         registry = load_registry(self.registry_path)
         for project in registry.get("projects", []):
-            if isinstance(project, dict) and project.get("name") == demo:
-                crashable = project.get("crashable")
-                return bool(isinstance(crashable, dict) and crashable.get("enabled"))
-        return False
+            if not isinstance(project, dict) or project.get("name") != demo:
+                continue
+            isolated = project.get("isolatedLambda")
+            if isinstance(isolated, dict) and isolated.get("enabled"):
+                return "isolated-lambda"
+            crashable = project.get("crashable")
+            if isinstance(crashable, dict) and crashable.get("enabled"):
+                return "crashable"
+        return None
 
     def crashable_request(self) -> tuple[str, str] | None:
         # Shared preamble for the mutating endpoints: auth + gateway + demo name.
@@ -530,7 +552,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if request is None:
             return
         email, demo = request
-        if not self.demo_is_crashable(demo):
+        mode = self.demo_workspace_mode(demo)
+        if mode is None:
             self.send_json(
                 {
                     "error": "not-crashable",
@@ -539,8 +562,15 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 status=HTTPStatus.FORBIDDEN,
             )
             return
+        workflow_type = (
+            ISOLATED_LAMBDA_WORKFLOW_TYPE
+            if mode == "isolated-lambda"
+            else CRASHABLE_WORKFLOW_TYPE
+        )
         try:
-            status = self.temporal_gateway.ensure_workspace(email, demo)
+            status = self.temporal_gateway.ensure_workspace(
+                email, demo, workflow_type
+            )
         except TemporalUnavailable as error:
             self.send_json(
                 {"error": "temporal-unavailable", "message": str(error)},
@@ -554,6 +584,21 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if request is None:
             return
         email, demo = request
+        if (
+            update in WORKER_DISRUPTION_UPDATES
+            and self.demo_workspace_mode(demo) == "isolated-lambda"
+        ):
+            self.send_json(
+                {
+                    "error": "worker-disruption-unsupported",
+                    "message": (
+                        "Isolated Lambda environments do not support crashing "
+                        "or scaling workers."
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         try:
             status = self.temporal_gateway.update_workspace(email, demo, update)
         except WorkspaceNotFound:

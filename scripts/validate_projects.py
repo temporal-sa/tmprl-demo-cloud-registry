@@ -211,6 +211,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_nexus_endpoints(document))
         errors.extend(validate_serverless_components(document))
         errors.extend(validate_registry(document))
+        errors.extend(validate_isolated_lambda(document))
 
     for document in instruqt_courses:
         errors.extend(validate_instruqt_course_source_path(document, "source"))
@@ -1288,6 +1289,77 @@ def validate_temporal_proxy(document: ProjectDocument) -> list[ProjectError]:
                 ProjectError(
                     document.path,
                     f"components.{component_name}.temporalProxy requires worker or temporalAccess",
+                )
+            )
+    return errors
+
+
+def validate_isolated_lambda(document: ProjectDocument) -> list[ProjectError]:
+    """Isolated Lambda workspaces are opt-in and exclusive with crashable mode.
+
+    ``initialCurrent`` selects the one SetCurrentVersion call for a shared
+    Worker Deployment. Two components of the same deploymentName cannot both
+    claim it.
+    """
+
+    errors: list[ProjectError] = []
+    registry = get_nested(document.data, ("spec", "registry"))
+    registry = registry if isinstance(registry, dict) else {}
+    isolated = registry.get("isolatedLambda")
+    isolated = isolated if isinstance(isolated, dict) else {}
+    crashable = registry.get("crashable")
+    crashable = crashable if isinstance(crashable, dict) else {}
+    if isolated.get("enabled") is True and crashable.get("enabled") is True:
+        errors.append(
+            ProjectError(
+                document.path,
+                "registry.isolatedLambda and registry.crashable cannot both be enabled",
+            )
+        )
+    if isolated.get("enabled") is True:
+        task_queue_env = isolated.get("taskQueueEnv")
+        if not isinstance(task_queue_env, str) or not task_queue_env.strip():
+            errors.append(
+                ProjectError(
+                    document.path,
+                    "registry.isolatedLambda.taskQueueEnv is required when isolatedLambda is enabled",
+                )
+            )
+        if not any(
+            serverless_lambda_enabled(component)
+            for component in components(document).values()
+        ):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    "registry.isolatedLambda requires at least one serverless aws-lambda component",
+                )
+            )
+
+    marked: dict[str, list[str]] = defaultdict(list)
+    for component_name, component in components(document).items():
+        if not serverless_lambda_enabled(component):
+            continue
+        worker_deployment = serverless_worker_deployment_config(component)
+        if worker_deployment.get("initialCurrent") is not True:
+            continue
+        deployment_name = worker_deployment.get("deploymentName")
+        group = (
+            deployment_name
+            if isinstance(deployment_name, str) and deployment_name
+            else component_name
+        )
+        marked[group].append(component_name)
+    for deployment_name, component_names in sorted(marked.items()):
+        if len(component_names) > 1:
+            errors.append(
+                ProjectError(
+                    document.path,
+                    (
+                        "at most one serverless component per worker deployment "
+                        f"{deployment_name!r} may set initialCurrent; "
+                        f"set by {', '.join(component_names)}"
+                    ),
                 )
             )
     return errors

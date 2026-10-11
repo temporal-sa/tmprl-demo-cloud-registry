@@ -1177,3 +1177,66 @@ def test_temporal_namespace_is_allowed_on_an_unversioned_worker():
     document = project_document(spec)
 
     assert validate_projects.validate_component_temporal_namespace_refs(document) == []
+
+
+def _isolated_spec() -> dict:
+    spec = base_spec()
+    spec["builds"]["worker"] = {"context": ".", "dockerfile": "Dockerfile"}
+    spec["components"]["orders"] = {
+        "build": "worker",
+        "serverless": {
+            "provider": "aws-lambda",
+            "workerDeployment": {"deploymentName": "orders", "buildId": "v1"},
+        },
+    }
+    spec["registry"] = {
+        "isolatedLambda": {
+            "enabled": True,
+            "taskQueueEnv": "TEMPORAL_TASK_QUEUE",
+            "baseTaskQueue": "orders",
+        }
+    }
+    return spec
+
+
+def test_isolated_lambda_rejects_being_enabled_with_crashable():
+    spec = _isolated_spec()
+    spec["registry"]["crashable"] = {
+        "enabled": True,
+        "taskQueueEnv": "TEMPORAL_TASK_QUEUE",
+    }
+    errors = validate_projects.validate_isolated_lambda(project_document(spec))
+    assert any("cannot both be enabled" in error.message for error in errors)
+
+
+def test_isolated_lambda_requires_task_queue_env_and_a_serverless_component():
+    spec = _isolated_spec()
+    del spec["registry"]["isolatedLambda"]["taskQueueEnv"]
+    errors = validate_projects.validate_isolated_lambda(project_document(spec))
+    assert any("taskQueueEnv is required" in error.message for error in errors)
+
+    spec = base_spec()
+    spec["registry"] = {"isolatedLambda": {"enabled": True, "taskQueueEnv": "TQ"}}
+    errors = validate_projects.validate_isolated_lambda(project_document(spec))
+    assert any("serverless aws-lambda" in error.message for error in errors)
+
+
+def test_initial_current_is_unique_per_worker_deployment():
+    spec = _isolated_spec()
+    spec["components"]["orders"]["serverless"]["workerDeployment"]["initialCurrent"] = True
+    spec["components"]["orders-b"] = {
+        "build": "worker",
+        "serverless": {
+            "provider": "aws-lambda",
+            "workerDeployment": {
+                "deploymentName": "orders",
+                "buildId": "v2",
+                "initialCurrent": True,
+            },
+        },
+    }
+    errors = validate_projects.validate_isolated_lambda(project_document(spec))
+    assert any("initialCurrent" in error.message for error in errors)
+
+    spec["components"]["orders-b"]["serverless"]["workerDeployment"]["initialCurrent"] = False
+    assert validate_projects.validate_isolated_lambda(project_document(spec)) == []

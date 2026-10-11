@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -234,6 +234,7 @@ class EnsureLambdaFunctionRequest:
     secret_env: tuple[LambdaSecretEnvironmentVariable, ...] = ()
     mtls_file_path_env: tuple[LambdaEnvironmentVariable, ...] = ()
     worker_deployment_env: tuple[LambdaEnvironmentVariable, ...] = ()
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -335,6 +336,18 @@ class DescribeServerlessWorkerDeploymentVersionRequest:
 
 @dataclass(frozen=True)
 class DescribeServerlessWorkerDeploymentVersionResult:
+    status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DeleteServerlessWorkerDeploymentRequest:
+    temporal_secret_path: str
+    deployment_name: str
+    build_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DeleteServerlessWorkerDeploymentResult:
     status: dict[str, Any]
 
 

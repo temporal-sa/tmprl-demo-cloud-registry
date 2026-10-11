@@ -34,6 +34,7 @@ const ICONS = {
   external: '<path d="M7 4h9v9"/><path d="M16 4 5 15"/>',
   lock: '<rect x="4" y="9" width="12" height="8" rx="2"/><path d="M7 9V6a3 3 0 0 1 6 0v3"/>',
   bolt: '<path d="M11 2 4 11h5l-1 7 7-9h-5z"/>',
+  stack: '<path d="M10 3 3 7l7 4 7-4-7-4z"/><path d="m3 10 7 4 7-4"/><path d="m3 13 7 4 7-4"/>',
   star: '<path d="m10 2.5 2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z"/>',
   link: '<path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L10 5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1-1"/>',
   close: '<path d="m5 5 10 10M15 5 5 15"/>',
@@ -197,6 +198,7 @@ function normalizeDemo(project) {
     },
     authRequired: !!project.authRequired,
     crashable: !!(project.crashable && project.crashable.enabled),
+    isolatedLambda: !!(project.isolatedLambda && project.isolatedLambda.enabled),
   };
 }
 
@@ -535,6 +537,17 @@ function flagTags(demo) {
           },
           icon("bolt"),
           "Crashable"
+        )
+      : null,
+    demo.isolatedLambda
+      ? el(
+          "span",
+          {
+            class: "tag tag-isolated",
+            title: "Supports a private isolated environment",
+          },
+          icon("stack"),
+          "Isolated"
         )
       : null,
   ];
@@ -949,7 +962,11 @@ function renderDrawerContent(demo) {
       { class: "drawer-body" },
       title,
       launch,
-      demo.crashable ? crashableWorkspaceCard(demo) : null,
+      demo.isolatedLambda
+        ? workspaceCard(demo, isolatedWorkspacePresentation())
+        : demo.crashable
+          ? workspaceCard(demo, crashableWorkspacePresentation())
+          : null,
       assets,
       meta
     ),
@@ -1118,9 +1135,31 @@ function armWorkspaceCountdown(demo, expiresAt) {
   }, 1000);
 }
 
-function crashableWorkspaceCard(demo) {
+function crashableWorkspacePresentation() {
+  return {
+    mode: "crashable",
+    title: "Crashable environment",
+    panelClass: "panel panel-crash",
+    emptyNote:
+      "Spin up a private, time-limited copy of this demo’s Kubernetes workers that you can crash or scale down to watch Temporal recover. Auto-deletes after 1 hour.",
+    createLabel: "Create crashable environment",
+  };
+}
+
+function isolatedWorkspacePresentation() {
+  return {
+    mode: "isolated-lambda",
+    title: "Isolated environment",
+    panelClass: "panel panel-isolated",
+    emptyNote:
+      "Spin up a private, time-limited copy of this demo. Your traffic and deployments stay on their own workers. Auto-deletes after 1 hour.",
+    createLabel: "Create isolated environment",
+  };
+}
+
+function workspaceCard(demo, presentation) {
   const container = el("section", {
-    class: "panel panel-crash",
+    class: presentation.panelClass,
     dataset: { workspace: demo.id },
   });
   renderWorkspaceInto(demo, container);
@@ -1167,6 +1206,9 @@ function workspaceCountdown(expiresAt) {
 }
 
 function renderWorkspaceInto(demo, container) {
+  const presentation = demo.isolatedLambda
+    ? isolatedWorkspacePresentation()
+    : crashableWorkspacePresentation();
   clearWorkspaceTimers(demo.id);
   const status = workspaceState.get(demo.id) || null;
   const phase = status
@@ -1174,8 +1216,9 @@ function renderWorkspaceInto(demo, container) {
     : workspaceFetching.has(demo.id)
     ? "Loading"
     : "None";
+  const isolated = presentation.mode === "isolated-lambda";
 
-  const children = [el("h3", { class: "panel-title", text: "Crashable environment" })];
+  const children = [el("h3", { class: "panel-title", text: presentation.title })];
   const note = (text) => el("p", { class: "ws-note", text });
   const expiresAt = status && status.expires_at ? Date.parse(status.expires_at) : null;
   const trailer = () => [
@@ -1196,13 +1239,11 @@ function renderWorkspaceInto(demo, container) {
     children.push(note("Checking for an existing environment…"));
   } else if (phase === "None") {
     children.push(
-      note(
-        "Spin up a private, time-limited copy of this demo’s Kubernetes workers that you can crash or scale down to watch Temporal recover. Auto-deletes after 1 hour."
-      ),
+      note(presentation.emptyNote),
       el(
         "div",
         { class: "ws-actions" },
-        workspaceButton("Create crashable environment", "btn-primary", () =>
+        workspaceButton(presentation.createLabel, "btn-primary", () =>
           workspaceAction(demo, "/api/crashable-workspace")
         )
       )
@@ -1246,25 +1287,33 @@ function renderWorkspaceInto(demo, container) {
     );
   } else if (phase === "Active") {
     const appUrl = (status && status.app_url) || null;
+    const open = appUrl
+      ? externalLink(appUrl, { class: "btn btn-sm btn-primary" }, "Open environment", icon("external"))
+      : null;
+    const runningActions = isolated
+      ? [open, extend(), remove()]
+      : [
+          open,
+          workspaceButton("Crash workers", "btn-pink", () =>
+            workspaceAction(demo, "/api/crashable-workspace/crash")
+          ),
+          workspaceButton("Scale down workers", "btn-secondary", () =>
+            workspaceAction(demo, "/api/crashable-workspace/scale-down")
+          ),
+          extend(),
+          remove(),
+        ];
     children.push(
       el("span", { class: "ws-live", text: "Running" }),
       el(
         "div",
         { class: "ws-actions", style: "margin-top:0" },
-        appUrl ? externalLink(appUrl, { class: "btn btn-sm btn-primary" }, "Open environment", icon("external")) : null,
-        workspaceButton("Crash workers", "btn-pink", () =>
-          workspaceAction(demo, "/api/crashable-workspace/crash")
-        ),
-        workspaceButton("Scale down workers", "btn-secondary", () =>
-          workspaceAction(demo, "/api/crashable-workspace/scale-down")
-        ),
-        extend(),
-        remove()
+        ...runningActions
       ),
       ...trailer()
     );
     setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));
-  } else if (phase === "ScaledDown") {
+  } else if (phase === "ScaledDown" && !isolated) {
     children.push(
       el("span", { class: "ws-live is-paused", text: "Workers scaled to zero" }),
       note(

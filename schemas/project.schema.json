@@ -434,6 +434,28 @@
         },
         "crashable": {
           "$ref": "#/$defs/registryCrashable"
+        },
+        "isolatedLambda": {
+          "$ref": "#/$defs/registryIsolatedLambda",
+          "description": "Opt-in private workspace for a Lambda-backed demo whose application already reads taskQueueEnv, derives any extra queues from that value, and includes the active task queue in workflow IDs. Leave disabled when the demo hardcodes a queue, Worker Deployment name, or workflow ID; those demos need an application change before isolation can pair their clients with the workspace workers."
+        }
+      }
+    },
+    "registryIsolatedLambda": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "taskQueueEnv": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseTaskQueue": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -666,6 +688,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 255
+        },
+        "initialCurrent": {
+          "type": "boolean",
+          "description": "When isolated Lambda workspaces register several versions of one Worker Deployment, the component marked initialCurrent is the one SetCurrentVersion call. At most one component per deploymentName may set this."
         },
         "env": {
           "$ref": "#/$defs/serverlessWorkerDeploymentEnv"

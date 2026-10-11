@@ -428,6 +428,146 @@ async def describe_worker_deployment_version_status(
     }
 
 
+@activity.defn
+async def delete_serverless_worker_deployment(
+    request: models.DeleteServerlessWorkerDeploymentRequest,
+) -> models.DeleteServerlessWorkerDeploymentResult:
+    """Delete one workspace Worker Deployment and its versions.
+
+    A deployment can be deleted only after it has no versions, and the current
+    version cannot be deleted until current is cleared. Missing deployments and
+    versions are success. Versions that still have pollers fail with a retryable
+    error so cleanup can run again after the workspace Lambda is gone.
+    """
+
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        request.temporal_secret_path,
+    )
+    identity = "tmprl-demo-cloud-registry"
+    operation = (
+        "Delete Temporal Serverless Worker Deployment "
+        f"{request.deployment_name}"
+    )
+    try:
+        action = await delete_worker_deployment_and_versions(
+            client,
+            namespace=namespace,
+            deployment_name=request.deployment_name,
+            build_ids=request.build_ids,
+            identity=identity,
+        )
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            action = "not-found"
+        elif error.status == RPCStatusCode.FAILED_PRECONDITION:
+            raise errors.retryable_provider_error(
+                f"{operation} failed: {error}"
+            ) from error
+        else:
+            raise temporal_service_application_error(
+                error,
+                operation=operation,
+            ) from error
+
+    return models.DeleteServerlessWorkerDeploymentResult(
+        status={
+            "phase": "Deleted" if action != "not-found" else "NotFound",
+            "action": action,
+            "namespace": namespace,
+            "deploymentName": request.deployment_name,
+        }
+    )
+
+
+async def delete_worker_deployment_and_versions(
+    client: Client,
+    *,
+    namespace: str,
+    deployment_name: str,
+    build_ids: tuple[str, ...],
+    identity: str,
+) -> str:
+    try:
+        described = await client.workflow_service.describe_worker_deployment(
+            workflowservice_pb2.DescribeWorkerDeploymentRequest(
+                namespace=namespace,
+                deployment_name=deployment_name,
+            ),
+            retry=False,
+            timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
+        )
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            return "not-found"
+        raise
+
+    await client.workflow_service.set_worker_deployment_current_version(
+        workflowservice_pb2.SetWorkerDeploymentCurrentVersionRequest(
+            namespace=namespace,
+            deployment_name=deployment_name,
+            build_id="",
+            conflict_token=described.conflict_token,
+            identity=identity,
+            ignore_missing_task_queues=True,
+            allow_no_pollers=True,
+        ),
+        retry=False,
+        timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
+    )
+
+    for build_id in _deployment_build_ids(described, build_ids):
+        try:
+            await client.workflow_service.delete_worker_deployment_version(
+                workflowservice_pb2.DeleteWorkerDeploymentVersionRequest(
+                    namespace=namespace,
+                    deployment_version=deployment_pb2.WorkerDeploymentVersion(
+                        deployment_name=deployment_name,
+                        build_id=build_id,
+                    ),
+                    skip_drainage=True,
+                    identity=identity,
+                ),
+                retry=False,
+                timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
+            )
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                continue
+            raise
+
+    try:
+        await client.workflow_service.delete_worker_deployment(
+            workflowservice_pb2.DeleteWorkerDeploymentRequest(
+                namespace=namespace,
+                deployment_name=deployment_name,
+                identity=identity,
+            ),
+            retry=False,
+            timeout=SERVERLESS_WORKER_DEPLOYMENT_RPC_TIMEOUT,
+        )
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            return "not-found"
+        raise
+    return "deleted"
+
+
+def _deployment_build_ids(described: Any, recorded: tuple[str, ...]) -> list[str]:
+    build_ids = [build_id for build_id in recorded if build_id]
+    info = getattr(described, "worker_deployment_info", None)
+    summaries = getattr(info, "version_summaries", []) if info is not None else []
+    for summary in summaries:
+        deployment_version = getattr(summary, "deployment_version", None)
+        build_id = ""
+        if deployment_version is not None:
+            build_id = getattr(deployment_version, "build_id", "") or ""
+        if not build_id:
+            build_id = getattr(summary, "build_id", "") or ""
+        if build_id and build_id not in build_ids:
+            build_ids.append(build_id)
+    return build_ids
+
+
 def compute_scaling_group(
     request: (
         models.UpsertServerlessWorkerDeploymentVersionRequest

@@ -223,11 +223,7 @@ def ensure_image_lambda(
             Timeout=request.timeout_seconds,
             Environment={"Variables": environment},
             Description=lambda_description(request),
-            Tags={
-                "managed-by": "demo-registry",
-                "project": request.project,
-                "component": request.component,
-            },
+            Tags=lambda_function_tags(request),
         )
         wait_for_function_active(lambda_client, request.function_name)
         action = "created"
@@ -257,6 +253,15 @@ def ensure_image_lambda(
             )
             wait_for_function_updated(lambda_client, request.function_name)
             action = "updated"
+
+    if request.tags:
+        latest_for_tags = get_function_configuration(
+            lambda_client, request.function_name
+        )
+        lambda_client.tag_resource(
+            Resource=str(latest_for_tags["FunctionArn"]),
+            Tags=lambda_function_tags(request),
+        )
 
     latest = get_function_configuration(lambda_client, request.function_name)
     published = matching_published_version(lambda_client, request.function_name, latest)
@@ -565,11 +570,34 @@ def temporal_secret_file_manifest(
     ]
 
 
+def lambda_function_tags(
+    request: models.EnsureLambdaFunctionRequest,
+) -> dict[str, str]:
+    tags = {
+        "managed-by": "demo-registry",
+        "project": request.project,
+        "component": request.component,
+    }
+    tags.update(request.tags)
+    return tags
+
+
 def lambda_description(request: models.EnsureLambdaFunctionRequest) -> str:
     return (
         "tmprl-demo.cloud Temporal Serverless Worker "
         f"{request.project}/{request.component} {request.build_id}"
     )
+
+
+def workspace_invoke_arns(function_arn: str, function_version_arn: str) -> set[str]:
+    """ARNs to add or remove for one workspace function.
+
+    The unqualified ARN, every version of it, and the qualified version ARN
+    match the always-on invoke policy shape.
+    """
+
+    base = unqualified_function_arn(function_arn)
+    return {base, f"{base}:*", function_version_arn}
 
 
 def unqualified_function_arn(function_arn: str) -> str:

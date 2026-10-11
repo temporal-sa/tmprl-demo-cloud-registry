@@ -8,6 +8,19 @@ kind: DemoProject
 metadata:
   name: no-roads-serverless
 spec:
+  registry:
+    title: No Roads Serverless
+    summary: >-
+      Audience members submit a name and watch Temporal scale Lambda workers
+      against task-queue backlog, concurrency, and sync match rate.
+    # Opt-in. The application reads TEMPORAL_TASK_QUEUE, claims the Worker
+    # Deployment from TEMPORAL_WORKER_DEPLOYMENT_NAME / TEMPORAL_WORKER_BUILD_ID,
+    # and appends the active queue to workflow IDs. Unset, those stay
+    # serverless-webinar / 1.0.0 for the shared demo.
+    isolatedLambda:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: serverless-webinar
   source:
     repo: https://github.com/temporal-sa/temporal-demo-serverless-no-roads
   temporal:
@@ -31,9 +44,9 @@ spec:
           containerPort: 8080
           servicePort: 80
       temporalAccess: true
-    # Temporal worker on AWS Lambda. The app code pins the Worker Deployment to
-    # serverless-webinar / 1.0.0, so the platform manages that exact deployment
-    # version (fixed buildId) rather than a generated rollout build ID.
+    # Temporal worker on AWS Lambda. The always-on function keeps Worker
+    # Deployment serverless-webinar / 1.0.0 (fixed buildId). An isolated
+    # workspace reuses this image and suffixes the deployment name.
     worker:
       build: worker
       serverless:

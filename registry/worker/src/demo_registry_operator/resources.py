@@ -3914,6 +3914,11 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
     name = project_name(demo_project)
     host = project_host(demo_project)
     crashable = registry.get("crashable") if isinstance(registry.get("crashable"), dict) else {}
+    isolated = (
+        registry.get("isolatedLambda")
+        if isinstance(registry.get("isolatedLambda"), dict)
+        else {}
+    )
     return {
         "name": name,
         "title": registry.get("title") or humanized_title(name),
@@ -3924,6 +3929,13 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         "crashable": {
             "enabled": bool(crashable.get("enabled"))
             and bool(crashable.get("taskQueueEnv")),
+        },
+        # Same two-field gate as crashable: a visible Isolated card requires both
+        # the opt-in flag and the env var the application reads. A Lambda demo
+        # that hardcodes its queue stays disabled until that contract is met.
+        "isolatedLambda": {
+            "enabled": bool(isolated.get("enabled"))
+            and bool(isolated.get("taskQueueEnv")),
         },
         "summary": registry.get("summary", ""),
         "host": host,

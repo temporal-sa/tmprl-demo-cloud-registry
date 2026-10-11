@@ -27,6 +27,9 @@ def build_workspace_manifests(
     demo_project: dict[str, Any],
     images: dict[str, str],
     workspace_id: str,
+    *,
+    label_workers: bool = True,
+    isolation: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str, str, str, list[str]]:
     """Render the ordered manifests for one crashable workspace.
 
@@ -34,8 +37,9 @@ def build_workspace_manifests(
     """
     registry = _dict(_dict(demo_project.get("spec")).get("registry"))
     crashable = _dict(registry.get("crashable"))
-    task_queue_env = crashable.get("taskQueueEnv")
-    base_task_queue = crashable.get("baseTaskQueue")
+    queue_config = isolation if isolation is not None else crashable
+    task_queue_env = queue_config.get("taskQueueEnv")
+    base_task_queue = queue_config.get("baseTaskQueue")
 
     # Clone the demo and point its ingress at the per-workspace subdomain BEFORE
     # rendering, so project_host(cloned) — and every host/cert/route derived from
@@ -88,7 +92,8 @@ def build_workspace_manifests(
             namespace=namespace,
         )
     )
-    _label_crashable_worker_workloads(ordered, cloned)
+    if label_workers:
+        _label_crashable_worker_workloads(ordered, cloned)
 
     deployment_names = [
         manifest["metadata"]["name"]
