@@ -195,7 +195,10 @@ and `compensationFailures` in the branch result before retrying cleanup.
 Workspace cleanup waits for Kubernetes namespace finalization after the workspace
 workflow completes. Lambda Worker Deployment deletion has a longer bounded retry
 window than ordinary cleanup because Temporal can retain stopped pollers in its
-poller history for five minutes; `skip_drainage` does not bypass that check.
+poller history for five minutes after a running Lambda invocation stops;
+`skip_drainage` does not bypass that check. Deployment deletion allows 20m15s of
+retry delays to cover a Lambda invocation of up to 15 minutes plus poller history.
+The operator gate reserves 30 minutes for cleanup.
 
 ## Watching a rollout
 

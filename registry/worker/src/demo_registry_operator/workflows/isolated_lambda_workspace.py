@@ -53,14 +53,14 @@ LAMBDA_RETRY_POLICY = RetryPolicy(
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT = timedelta(minutes=6)
-# Matching retains recently stopped pollers for five minutes by default. The
-# ordinary eight-attempt cleanup policy exhausts its delays after 4m15s.
-# Allow 8m15s of retry delays for deployment deletion while keeping it bounded.
+# An already-running Lambda invocation can poll until its timeout (up to 15m),
+# followed by Matching's default 5m poller history. Allow 20m15s of retry delays
+# for deployment deletion; the rollout gate reserves 30m for cleanup.
 WORKER_DEPLOYMENT_CLEANUP_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=1),
-    maximum_attempts=12,
+    maximum_attempts=24,
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
 

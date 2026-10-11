@@ -49,7 +49,7 @@ def test_lambda_cleanup_retries_cached_pollers_and_replays_previous_budget(monke
         )
         for attempt in range(policy.maximum_attempts - 1)
     )
-    assert retry_window > 5 * 60
+    assert 20 * 60 < retry_window < 30 * 60
     scenario = {"attempts": 0, "steps": []}
 
     class Service:
@@ -62,7 +62,7 @@ def test_lambda_cleanup_retries_cached_pollers_and_replays_previous_budget(monke
         async def delete_worker_deployment_version(self, request, **kwargs):
             scenario["attempts"] += 1
             assert request.skip_drainage
-            if scenario["attempts"] <= 8:
+            if scenario["attempts"] <= 12:
                 raise RPCError(
                     "version cannot be deleted since it has active pollers",
                     RPCStatusCode.FAILED_PRECONDITION,
@@ -131,7 +131,7 @@ def test_lambda_cleanup_retries_cached_pollers_and_replays_previous_budget(monke
         async with await WorkflowEnvironment.start_local(
             dev_server_existing_path=shutil.which("temporal")
         ) as env:
-            for attempts in (8, policy.maximum_attempts):
+            for attempts in (8, 12, policy.maximum_attempts):
                 scenario.update(attempts=0, steps=[])
                 monkeypatch.setattr(
                     workspace,
@@ -161,7 +161,7 @@ def test_lambda_cleanup_retries_cached_pollers_and_replays_previous_budget(monke
                         id=f"lambda-cleanup-{attempts}",
                         task_queue="lambda-cleanup-history",
                     )
-                    if attempts == 8:
+                    if attempts < policy.maximum_attempts:
                         with pytest.raises(WorkflowFailureError):
                             await asyncio.wait_for(handle.result(), 15)
                         assert scenario["steps"] == ["function"]
@@ -170,7 +170,7 @@ def test_lambda_cleanup_retries_cached_pollers_and_replays_previous_budget(monke
                         assert (
                             await handle.describe()
                         ).status == WorkflowExecutionStatus.COMPLETED
-                        assert scenario["attempts"] == 9
+                        assert scenario["attempts"] == 13
                         assert scenario["steps"] == [
                             "function",
                             "deployment",

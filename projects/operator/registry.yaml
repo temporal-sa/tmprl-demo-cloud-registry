@@ -152,7 +152,9 @@ spec:
               input:
                 projectNamePrefix: operator-canary
                 timeoutSeconds: 900
-                cleanupTimeoutSeconds: 900
+                # Allow Lambda invocations and cached pollers to expire before
+                # deleting workspace Worker Deployments and source dependencies.
+                cleanupTimeoutSeconds: 1800
                 pollSeconds: 10
                 cleanupPolicy: Always
           sunset:
