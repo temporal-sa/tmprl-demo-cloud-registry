@@ -34,6 +34,7 @@ def test_demoproject_status_persists_revision_bookkeeping_keys():
         "lastFailedRevision",
         "workerDeploymentRollbackStatus",
         "revisionCleanupStatus",
+        "serverlessWorkerStatus",
     ):
         assert key in status_props, f"{key} missing from DemoProject status schema"
         assert status_props[key]["type"] == "object"

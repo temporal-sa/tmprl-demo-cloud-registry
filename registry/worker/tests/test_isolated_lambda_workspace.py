@@ -3,9 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
-from demo_registry_operator import derive
+import pytest
+import yaml
+from temporalio.exceptions import ApplicationError
+
+from demo_registry_operator import derive, errors
 from demo_registry_operator.activities import crashable_workspace as crashable_activities
 from demo_registry_operator.activities import external_resources
 from demo_registry_operator.activities import isolated_lambda_workspace as isolated_activities
@@ -24,6 +29,7 @@ from demo_registry_operator.activities.external_resources.serverless_names impor
 from demo_registry_operator.crashable_workspace_resources import CRASHABLE_WORKER_LABEL
 from demo_registry_operator.isolated_lambda_workspace_resources import (
     build_isolated_workspace_plan,
+    serverless_status_images,
 )
 from demo_registry_operator.resources import catalog_entry
 from demo_registry_operator.workflows import crashable_workspace as crashable_workflow
@@ -42,6 +48,7 @@ from demo_registry_operator.workflows.isolated_lambda_workspace import (
     IsolatedLambdaWorkspaceWorkflow,
 )
 from demo_registry_operator.workflows.isolated_lambda_workspace_messages import (
+    BuildIsolatedWorkspacePlanRequest,
     EnsureIsolatedWorkspaceRequest,
     UpdateWorkspaceLambdaInvokePolicyRequest,
     WorkspaceLambdaWorker,
@@ -176,6 +183,84 @@ def test_missing_initial_current_uses_lexicographic_component():
     current = [component for component in plan.components if component.set_current]
     assert [component.component for component in current] == ["orders-v1"]
     assert plan.initial_current_defaulted
+
+
+def test_plan_activity_reuses_promoted_worker_image_when_status_was_pruned(monkeypatch):
+    root = Path(__file__).resolve().parents[3]
+    demo = yaml.safe_load((root / "projects/demo/no-roads-serverless.yaml").read_text())
+    demo["status"] = {
+        "activeImages": {"app": "ecr/app:promoted", "worker": "ecr/worker:promoted"},
+        "buildStatus": {"images": {"worker": "ecr/worker:unpromoted"}},
+    }
+    monkeypatch.setattr(isolated_activities.kube, "read_demo_project", lambda _name: demo)
+    plan = isolated_activities.build_isolated_workspace_plan_activity(
+        BuildIsolatedWorkspacePlanRequest(
+            demo_name="no-roads-serverless",
+            owner_email="alice@temporal.io",
+            workspace_id="0123456789",
+            images={"app": "ecr/app:running"},
+        )
+    )
+
+    assert len(plan.components) == 1
+    assert plan.components[0].image_uri == "ecr/worker:promoted"
+    assert plan.components[0].build_id == "1.0.0"
+    deployments = [item for item in plan.resources if item.get("kind") == "Deployment"]
+    assert len(deployments) == 1
+    assert deployments[0]["spec"]["template"]["spec"]["containers"][0]["image"] == (
+        "ecr/app:running"
+    )
+
+
+def test_serverless_status_images_prefers_component_image_over_promoted_images():
+    demo = _isolated_demo()
+    demo["status"] = {
+        "activeImages": {"orders": "ecr/orders:promoted", "app": "ecr/app:promoted"},
+        "serverlessWorkerStatus": {
+            "components": {
+                "orders-v1": {"image": "ecr/orders:running"},
+                "orders-v2": {"image": "ecr/orders:running"},
+            }
+        },
+    }
+
+    assert serverless_status_images(demo) == {"orders": "ecr/orders:running"}
+
+
+@pytest.mark.parametrize("recorded_image", [None, "", 123])
+def test_serverless_status_images_uses_promoted_image_for_missing_component_image(
+    recorded_image,
+):
+    demo = _isolated_demo()
+    demo["status"] = {
+        "activeImages": {"orders": "ecr/orders:promoted"},
+        "serverlessWorkerStatus": {
+            "components": {
+                name: {"image": recorded_image} for name in ("orders-v1", "orders-v2")
+            }
+        },
+    }
+
+    assert serverless_status_images(demo) == {"orders": "ecr/orders:promoted"}
+
+
+def test_plan_activity_rejects_unpromoted_images_when_no_running_image_exists(monkeypatch):
+    demo = _isolated_demo()
+    demo["status"] = {"buildStatus": {"images": {"orders": "ecr/orders:unpromoted"}}}
+    monkeypatch.setattr(isolated_activities.kube, "read_demo_project", lambda _name: demo)
+
+    with pytest.raises(ApplicationError, match="has no resolved image") as failure:
+        isolated_activities.build_isolated_workspace_plan_activity(
+            BuildIsolatedWorkspacePlanRequest(
+                demo_name="rainbow",
+                owner_email="alice@temporal.io",
+                workspace_id="0123456789",
+                images={"app": "ecr/app:running"},
+            )
+        )
+
+    assert failure.value.type == errors.VALIDATION_ERROR
+    assert failure.value.non_retryable is True
 
 
 def test_invoke_policy_union_keeps_the_always_on_function():

@@ -69,6 +69,8 @@ Provisioning order:
 7. Set the current Worker Deployment Version once per deployment name.
 8. Wait until the Kubernetes workloads are ready and each workspace Lambda version can be described.
 
+Resolve Lambda images from `status.serverlessWorkerStatus.components.<name>.image`, falling back to the build's entry in `status.activeImages` when that component status is absent. The DemoProject CRD preserves `serverlessWorkerStatus` in both clusters. The fallback supports demos whose status was pruned by the older CRD; `buildStatus.images` may contain an unpromoted build and must not supply the workspace image.
+
 Reject `crash`, `scale_down`, and `scale_up` updates in isolated-lambda mode with a stable application error. Extend and delete still work. Delete and TTL expiry run the Lambda cleanup below, then delete the Kubernetes namespace as they do today. Provisioning failure compensates both.
 
 The workspace still reuses the demo's Temporal namespace and Secrets Manager paths. The ExternalSecret behavior in `crashable_workspace_resources.py` stays as it is.

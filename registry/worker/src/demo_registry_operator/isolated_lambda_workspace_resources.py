@@ -41,21 +41,28 @@ def isolated_lambda_settings(demo_project: dict[str, Any]) -> dict[str, Any] | N
 
 
 def serverless_status_images(demo_project: dict[str, Any]) -> dict[str, str]:
-    """Map each serverless component's build to the image recorded on the demo."""
+    """Read Lambda images, falling back to promoted images for pruned status."""
 
     status = demo_project.get("status")
-    serverless = status.get("serverlessWorkerStatus") if isinstance(status, dict) else None
+    if not isinstance(status, dict):
+        return {}
+    active_images = status.get("activeImages")
+    active_images = active_images if isinstance(active_images, dict) else {}
+    serverless = status.get("serverlessWorkerStatus")
     component_status = (
         serverless.get("components") if isinstance(serverless, dict) else None
     )
-    if not isinstance(component_status, dict):
-        return {}
+    component_status = component_status if isinstance(component_status, dict) else {}
     images: dict[str, str] = {}
     for name, component in resources.serverless_lambda_components(demo_project).items():
         recorded = component_status.get(name)
         image = recorded.get("image") if isinstance(recorded, dict) else None
         build_name = component.get("build")
-        if isinstance(build_name, str) and isinstance(image, str) and image:
+        if not isinstance(build_name, str) or not build_name:
+            continue
+        if not isinstance(image, str) or not image:
+            image = active_images.get(build_name)
+        if isinstance(image, str) and image:
             images[build_name] = image
     return images
 

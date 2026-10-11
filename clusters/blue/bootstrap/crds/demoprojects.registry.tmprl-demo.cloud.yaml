@@ -371,6 +371,9 @@ spec:
                 buildStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                serverlessWorkerStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 readinessStatus:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
