@@ -702,16 +702,19 @@ function presenterAssets(demo) {
   ];
 }
 
-// Catalog cards only call out the assets a demo has; the drawer lists the rest.
+// Catalog cards give every asset a fixed slot so each one sits in the same
+// place on every card; missing assets stay as dimmed placeholders.
 function cardAssets(demo) {
-  const present = presenterAssets(demo).filter(([, short, url]) => short && url);
-  if (!present.length) return null;
   return el(
     "div",
     { class: "card-assets", role: "list", "aria-label": "Presenter assets" },
-    ...present.map(([label, short, url]) =>
-      externalLink(url, { role: "listitem", title: label }, short)
-    )
+    ...presenterAssets(demo)
+      .filter(([, short]) => short)
+      .map(([label, short, url]) =>
+        url
+          ? externalLink(url, { role: "listitem", title: label }, short)
+          : el("span", { role: "listitem", title: `${label}: not provided yet`, text: short })
+      )
   );
 }
 
@@ -787,8 +790,7 @@ function renderDemoCard(demo) {
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
-    cardAssets(demo),
-    el("div", { class: "card-foot" }, sdkList(demo.sdks), cardActions(demo))
+    el("div", { class: "card-foot" }, cardAssets(demo), sdkList(demo.sdks), cardActions(demo))
   );
 }
 
