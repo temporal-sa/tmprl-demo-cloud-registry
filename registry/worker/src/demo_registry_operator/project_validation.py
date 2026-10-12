@@ -13,18 +13,19 @@ from functools import cache
 from pathlib import Path
 from types import ModuleType
 
-SOURCE_CHECKOUT_VALIDATOR = (
-    Path(__file__).resolve().parents[4] / "scripts" / "validate_projects.py"
-)
-
 
 @cache
 def validator_module() -> ModuleType:
     try:
         import validate_projects
     except ModuleNotFoundError:
+        # Resolved only here: in the image this file is just four levels below
+        # /, so the checkout root does not exist there.
+        checkout_validator = (
+            Path(__file__).resolve().parents[4] / "scripts" / "validate_projects.py"
+        )
         spec = importlib.util.spec_from_file_location(
-            "validate_projects", SOURCE_CHECKOUT_VALIDATOR
+            "validate_projects", checkout_validator
         )
         if spec is None or spec.loader is None:
             raise
