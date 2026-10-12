@@ -15,7 +15,7 @@
 
 # EKS control-plane version. Defaults to the latest GA — a fresh stack is the
 # upgrade vehicle (stand up latest, validate, roll to it).
-# kubernetes_version = "1.36"
+# kubernetes_version = "1.37"
 
 # One shared NAT gateway instead of one-per-AZ (halves NAT baseline cost).
 # single_nat_gateway = false
