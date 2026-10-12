@@ -80,26 +80,7 @@ async def _run_registry_operator_auth_canary(
     auth_mode: str,
 ) -> messages.RegistryOperatorAuthCanaryResult:
     plan = await _prepare_registry_operator_canary_plan(branch_request)
-    if workflow.patched("operator-auth-canary-compensation"):
-        return await _run_registry_operator_auth_canary_saga(plan, auth_mode)
-    apply_result = await _apply_registry_operator_canary_project(plan)
-    signal_result = await _signal_registry_operator_canary_reconcile(plan)
-    state = RegistryOperatorAuthCanaryState(
-        plan=plan,
-        auth_mode=auth_mode,
-        apply_result=apply_result,
-        signal_result=signal_result,
-        workflow_id=str(signal_result.get("workflowID") or ""),
-        run_id=str(signal_result.get("runID") or ""),
-    )
-    try:
-        await _wait_for_registry_operator_canary_promotion(state)
-        if state.promotion_ok:
-            await _run_registry_operator_canary_rotation(state)
-    finally:
-        await _cleanup_registry_operator_canary(state)
-
-    return _registry_operator_auth_canary_result(state)
+    return await _run_registry_operator_auth_canary_saga(plan, auth_mode)
 
 
 async def _run_registry_operator_auth_canary_saga(
@@ -137,11 +118,7 @@ async def _run_registry_operator_auth_canary_saga(
         if state.promotion_ok:
             stage = "rotation_result"
             await _run_registry_operator_canary_rotation(state)
-            if (
-                state.rotation_ok
-                and plan.get("workspaceMode")
-                and workflow.patched("operator-canary-workspace-lifecycle")
-            ):
+            if state.rotation_ok and plan.get("workspaceMode"):
                 state.workspace_required = True
                 # Unwind the workspace before deleting its shared credentials,
                 # Lambda roles and Temporal namespace, including lost start acks.
@@ -332,16 +309,6 @@ async def _run_registry_operator_canary_rotation(
     )
     state.rotation_result = rotation_activity.status
     state.rotation_ok = bool(state.rotation_result.get("ok"))
-
-
-async def _cleanup_registry_operator_canary(
-    state: RegistryOperatorAuthCanaryState,
-) -> None:
-    await _delete_registry_operator_canary_project(state)
-    if state.cleanup_result.get("phase") == "Skipped":
-        return
-    await _signal_registry_operator_canary_finalize(state)
-    await _wait_registry_operator_canary_cleanup(state)
 
 
 async def _delete_registry_operator_canary_project(

@@ -29,6 +29,7 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     ApplyWorkspaceResourceRequest,
     DeleteWorkspaceNamespaceRequest,
     ResolveSourceImagesRequest,
+    TerminateWorkspaceWorkflowsRequest,
     WaitWorkspaceReadyRequest,
 )
 from demo_registry_operator.workflows.isolated_lambda_workspace_messages import (
@@ -109,6 +110,22 @@ class IsolatedLambdaWorkspaceWorkflow:
         await self._run_ttl_loop(request)
 
         self._status.phase = "Deleting"
+        try:
+            # Before Lambda cleanup, so no pinned executions remain on the
+            # workspace Worker Deployment when it is deleted.
+            await self._terminate_task_queue_workflows()
+        except ActivityError as error:
+            # Best effort: never let it strand the workspace's own resources.
+            if is_cancelled_exception(error):
+                raise
+            self._status.failure = errors.failure_details(error)
+            self._status.last_error = (
+                "Failed to terminate workspace workflows: "
+                f"{self._status.failure['message']}"
+            )
+            workflow.logger.error(
+                "isolated lambda workspace workflow termination failed: %s", error
+            )
         self._status.step = "Deleting environment"
         try:
             await self._cleanup_lambda()
@@ -168,6 +185,9 @@ class IsolatedLambdaWorkspaceWorkflow:
                 )
             )
             compensations.append(self._cleanup_lambda)
+            # Runs first (compensations run in reverse); the app may already
+            # have started executions on the workspace queue.
+            compensations.append(self._terminate_task_queue_workflows)
 
             for manifest in plan.resources:
                 metadata = manifest.get("metadata", {})
@@ -344,6 +364,29 @@ class IsolatedLambdaWorkspaceWorkflow:
             ),
             start_to_close_timeout=SERVERLESS_WORKER_DEPLOYMENT_ACTIVITY_TIMEOUT,
             retry_policy=LAMBDA_RETRY_POLICY,
+        )
+
+    async def _terminate_task_queue_workflows(self) -> None:
+        """Terminate executions left open on the workspace task queue.
+
+        The workspace shares the demo's Temporal namespace, so nothing else
+        cleans these up once its Lambda workers are gone.
+        """
+
+        if not self._status.task_queue:
+            return
+        self._status.step = "Terminating workspace workflows"
+        await workflow.execute_activity(
+            crashable_activities.terminate_workspace_workflows,
+            TerminateWorkspaceWorkflowsRequest(
+                demo_name=self._status.demo,
+                workspace_id=self._workspace_id,
+                task_queue=self._status.task_queue,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(seconds=30),
+            retry_policy=crashable_activities.CLEANUP_RETRY_POLICY,
+            summary="Terminate workflows left on the workspace task queue",
         )
 
     async def _cleanup_lambda(self) -> None:

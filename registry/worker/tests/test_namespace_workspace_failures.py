@@ -117,7 +117,6 @@ def test_grant_workflow_recovers_readable_result_with_activity_identity(
         raise error
 
     monkeypatch.setattr(namespace_readers.workflow, "execute_activity", execute)
-    monkeypatch.setattr(namespace_readers.workflow, "patched", lambda _: True)
     result = asyncio.run(
         namespace_readers.GrantNamespaceReadAccessWorkflow().run(
             GrantNamespaceReadAccessRequest(" user@temporal.io ")
@@ -136,19 +135,13 @@ def test_grant_workflow_recovers_readable_result_with_activity_identity(
     }
 
 
-@pytest.mark.parametrize("cancelled", [False, True])
-def test_grant_preserves_cancellation_and_unpatched_failure_history(
-    monkeypatch, cancelled
-):
-    error = activity_failure(
-        CancelledError("cancelled") if cancelled else ApplicationError("denied")
-    )
+def test_grant_preserves_cancellation(monkeypatch):
+    error = activity_failure(CancelledError("cancelled"))
 
     async def execute(*_, **__):
         raise error
 
     monkeypatch.setattr(namespace_readers.workflow, "execute_activity", execute)
-    monkeypatch.setattr(namespace_readers.workflow, "patched", lambda _: cancelled)
     with pytest.raises(ActivityError) as raised:
         asyncio.run(
             namespace_readers.GrantNamespaceReadAccessWorkflow().run(

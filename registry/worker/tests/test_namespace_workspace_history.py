@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from demo_registry_operator.activities import crashable_workspace as activities
 from demo_registry_operator.activities import namespace_readers as grants
 from demo_registry_operator.worker import create_workflow_runner
 from demo_registry_operator.workflows import crashable_workspace, namespace_readers
@@ -19,7 +18,7 @@ from demo_registry_operator.workflows.namespace_readers_messages import (
     GrantNamespaceReadAccessRequest,
     GrantNamespaceReadAccessResult,
 )
-from temporalio import activity, workflow
+from temporalio import activity
 from temporalio.client import WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
@@ -36,86 +35,7 @@ def events(history, attributes):
     return [event for event in history.events if event.HasField(attributes)]
 
 
-@workflow.defn(name="GrantNamespaceReadAccessWorkflow")
-class LegacyGrantWorkflow:
-    @workflow.run
-    async def run(
-        self, request: GrantNamespaceReadAccessRequest
-    ) -> GrantNamespaceReadAccessResult:
-        return await workflow.execute_activity(
-            grants.grant_user_namespace_read_access,
-            request,
-            start_to_close_timeout=timedelta(minutes=3),
-            heartbeat_timeout=timedelta(minutes=1),
-            retry_policy=grants.GRANT_RETRY_POLICY,
-        )
-
-
-@workflow.defn(name="CrashableWorkspaceWorkflow")
-class LegacyWorkspaceWorkflow(crashable_workspace.CrashableWorkspaceWorkflow):
-    @workflow.init
-    def __init__(self, request: messages.EnsureWorkspaceRequest):
-        super().__init__(request)
-
-    @workflow.run
-    async def run(self, request: messages.EnsureWorkspaceRequest) -> None:
-        # Original provisioning commands and cancellation behavior, without patches.
-        compensations = []
-        try:
-            images = await workflow.execute_activity(
-                activities.resolve_source_images,
-                messages.ResolveSourceImagesRequest(request.demo_name),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=activities.PROVISIONING_RETRY_POLICY,
-            )
-            plan = await workflow.execute_activity(
-                activities.build_workspace_plan,
-                messages.BuildWorkspacePlanRequest(
-                    request.demo_name,
-                    request.owner_email,
-                    self._workspace_id,
-                    images.images,
-                ),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=activities.PROVISIONING_RETRY_POLICY,
-            )
-            compensations.append(
-                lambda: workflow.execute_activity(
-                    activities.delete_workspace_namespace,
-                    messages.DeleteWorkspaceNamespaceRequest(self._namespace),
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=activities.CLEANUP_RETRY_POLICY,
-                )
-            )
-            for manifest in plan.resources:
-                await workflow.execute_activity(
-                    activities.apply_workspace_resource,
-                    messages.ApplyWorkspaceResourceRequest(manifest),
-                    start_to_close_timeout=timedelta(minutes=3),
-                    retry_policy=activities.PROVISIONING_RETRY_POLICY,
-                )
-            await workflow.execute_activity(
-                activities.wait_workspace_ready,
-                messages.WaitWorkspaceReadyRequest(
-                    self._namespace, plan.deployment_names, plan.worker_deployment_names
-                ),
-                start_to_close_timeout=timedelta(minutes=6),
-                heartbeat_timeout=timedelta(seconds=30),
-                retry_policy=activities.WAIT_READY_RETRY_POLICY,
-            )
-        except asyncio.CancelledError:
-            await asyncio.shield(
-                asyncio.ensure_future(
-                    crashable_workspace._run_compensations(compensations)
-                )
-            )
-            raise
-        except Exception:
-            await crashable_workspace._run_compensations(compensations)
-            raise
-
-
-def test_grant_native_failures_bounded_retries_and_legacy_replay(monkeypatch):
+def test_grant_native_failures_bounded_retries_and_replay(monkeypatch):
     scenario = {"mode": "permanent", "attempts": 0}
     config = SimpleNamespace(
         namespace_readers_group="readers",
@@ -133,8 +53,6 @@ def test_grant_native_failures_bounded_retries_and_legacy_replay(monkeypatch):
         scenario["attempts"] += 1
         if scenario["mode"] == "transient":
             raise RPCError("internal server error", RPCStatusCode.INTERNAL, b"")
-        if scenario["mode"] == "legacy-failed":
-            raise TimeoutError("Cloud Ops timed out")
         raise RuntimeError("permission denied")
 
     monkeypatch.setattr(grants.cloud_activities, "cloud_reconciler", reconciler)
@@ -143,30 +61,16 @@ def test_grant_native_failures_bounded_retries_and_legacy_replay(monkeypatch):
     def grant(
         request: GrantNamespaceReadAccessRequest,
     ) -> GrantNamespaceReadAccessResult:
-        try:
-            return grants.grant_user_namespace_read_access(request)
-        except ApplicationError as error:
-            if scenario["mode"] == "legacy-result":
-                return GrantNamespaceReadAccessResult(**error.details[0]["status"])
-            raise
+        return grants.grant_user_namespace_read_access(request)
 
     async def verify():
+        cls = namespace_readers.GrantNamespaceReadAccessWorkflow
         async with await WorkflowEnvironment.start_local(
             dev_server_existing_path=shutil.which("temporal")
         ) as env:
             with ThreadPoolExecutor(max_workers=2) as executor:
-                for mode in (
-                    "legacy-result",
-                    "legacy-failed",
-                    "permanent",
-                    "transient",
-                ):
+                for mode in ("permanent", "transient"):
                     scenario.update(mode=mode, attempts=0)
-                    cls = (
-                        LegacyGrantWorkflow
-                        if mode.startswith("legacy")
-                        else namespace_readers.GrantNamespaceReadAccessWorkflow
-                    )
                     async with Worker(
                         env.client,
                         task_queue="grant-history",
@@ -181,43 +85,29 @@ def test_grant_native_failures_bounded_retries_and_legacy_replay(monkeypatch):
                             id=mode,
                             task_queue="grant-history",
                         )
-                        if mode == "legacy-failed":
-                            with pytest.raises(WorkflowFailureError):
-                                await asyncio.wait_for(handle.result(), 15)
-                        else:
-                            result = await asyncio.wait_for(handle.result(), 15)
-                            assert result.status == "error"
-                            assert result.group == "readers"
-                            assert result.email == "user@temporal.io"
-                            assert bool(result.activity_failure) == (
-                                not mode.startswith("legacy")
-                            )
-                            assert (
-                                await handle.describe()
-                            ).status == WorkflowExecutionStatus.COMPLETED
-                        assert scenario["attempts"] == (
-                            3 if mode in {"transient", "legacy-failed"} else 1
-                        )
+                        result = await asyncio.wait_for(handle.result(), 15)
+                        assert result.status == "error"
+                        assert result.group == "readers"
+                        assert result.email == "user@temporal.io"
+                        assert result.activity_failure
+                        assert (
+                            await handle.describe()
+                        ).status == WorkflowExecutionStatus.COMPLETED
+                        assert scenario["attempts"] == (3 if mode == "transient" else 1)
                         history = await handle.fetch_history()
                         failures = events(
                             history, "activity_task_failed_event_attributes"
                         )
-                        assert len(failures) == (0 if mode == "legacy-result" else 1)
-                        if mode in {"permanent", "transient"}:
-                            assert (
-                                result.activity_failure["scheduledEventId"]
-                                == failures[
-                                    0
-                                ].activity_task_failed_event_attributes.scheduled_event_id
-                            )
-                        if mode.startswith("legacy"):
-                            assert not events(
-                                history, "marker_recorded_event_attributes"
-                            )
+                        assert len(failures) == 1
+                        assert (
+                            result.activity_failure["scheduledEventId"]
+                            == failures[
+                                0
+                            ].activity_task_failed_event_attributes.scheduled_event_id
+                        )
+                        assert not events(history, "marker_recorded_event_attributes")
                         await Replayer(
-                            workflows=[
-                                namespace_readers.GrantNamespaceReadAccessWorkflow
-                            ],
+                            workflows=[cls],
                             workflow_runner=create_workflow_runner(),
                         ).replay_workflow(history)
 
@@ -351,7 +241,7 @@ def test_workspace_action_failures_remain_running_and_teardown_errors_are_visibl
     asyncio.run(verify())
 
 
-def test_workspace_failure_compensation_cancellation_and_legacy_replay():
+def test_workspace_failure_compensation_cancellation_and_replay():
     scenario = {}
     apply_started = cleanup_started = cleanup_release = None
 
@@ -421,8 +311,17 @@ def test_workspace_failure_compensation_cancellation_and_legacy_replay():
         scenario["created"] = False
         return messages.DeleteWorkspaceNamespaceResult("deleted")
 
+    @activity.defn(name="terminate_workspace_workflows")
+    async def terminate(
+        request: messages.TerminateWorkspaceWorkflowsRequest,
+    ) -> messages.TerminateWorkspaceWorkflowsResult:
+        assert request.task_queue == "workspace"
+        scenario["terminated"] += 1
+        return messages.TerminateWorkspaceWorkflowsResult("none")
+
     async def verify():
         nonlocal apply_started, cleanup_started, cleanup_release
+        cls = crashable_workspace.CrashableWorkspaceWorkflow
         async with await WorkflowEnvironment.start_local(
             dev_server_existing_path=shutil.which("temporal")
         ) as env:
@@ -433,28 +332,24 @@ def test_workspace_failure_compensation_cancellation_and_legacy_replay():
                 "cleanup-failed",
                 "cancel-provision",
                 "cancel-cleanup",
-                "legacy-ready",
-                "legacy-cancel-cleanup",
             ):
                 scenario.update(
-                    mode=mode, created=False, deleted=0, cleanup_cancelled=False
+                    mode=mode,
+                    created=False,
+                    deleted=0,
+                    terminated=0,
+                    cleanup_cancelled=False,
                 )
                 apply_started, cleanup_started, cleanup_release = (
                     asyncio.Event(),
                     asyncio.Event(),
                     asyncio.Event(),
                 )
-                legacy = mode.startswith("legacy")
-                cls = (
-                    LegacyWorkspaceWorkflow
-                    if legacy
-                    else crashable_workspace.CrashableWorkspaceWorkflow
-                )
                 async with Worker(
                     env.client,
                     task_queue="workspace-history",
                     workflows=[cls],
-                    activities=[images, plan, apply, ready, delete],
+                    activities=[images, plan, apply, ready, delete, terminate],
                     workflow_runner=create_workflow_runner(),
                 ):
                     handle = await env.client.start_workflow(
@@ -466,86 +361,85 @@ def test_workspace_failure_compensation_cancellation_and_legacy_replay():
                     if mode == "cancel-provision":
                         await asyncio.wait_for(apply_started.wait(), 10)
                         await handle.cancel()
-                    if mode in {"cancel-cleanup", "legacy-cancel-cleanup"}:
+                    if mode == "cancel-cleanup":
                         await asyncio.wait_for(cleanup_started.wait(), 10)
                         await handle.cancel()
                         # Query processing follows the cancellation workflow task.
                         await handle.query("status")
-                        if not legacy:
-                            assert (
-                                await handle.describe()
-                            ).status == WorkflowExecutionStatus.RUNNING
+                        assert (
+                            await handle.describe()
+                        ).status == WorkflowExecutionStatus.RUNNING
                         cleanup_release.set()
                     with pytest.raises(WorkflowFailureError) as raised:
                         await asyncio.wait_for(handle.result(), 10)
                     status = await handle.query("status")
-                    if not legacy:
-                        assert status["compensation_status"]["phase"] == (
-                            "NotRequired"
-                            if mode == "images"
-                            else "Error"
-                            if mode == "cleanup-failed"
-                            else "Completed"
+                    assert status["compensation_status"]["phase"] == (
+                        "NotRequired"
+                        if mode == "images"
+                        else "Error"
+                        if mode == "cleanup-failed"
+                        else "Completed"
+                    )
+                    if mode != "cancel-provision":
+                        assert status["failure"]["message"] == status["last_error"]
+                    if "cancel" not in mode:
+                        assert status["failure"]["message"] in str(
+                            raised.value.__cause__.__cause__
                         )
-                        if mode != "cancel-provision":
-                            assert status["failure"]["message"] == status["last_error"]
-                        if "cancel" not in mode:
-                            assert status["failure"]["message"] in str(
-                                raised.value.__cause__.__cause__
-                            )
-                        if mode == "cleanup-failed":
-                            assert (
-                                status["failure"]["message"]
-                                == "worker pods never became ready"
-                            )
-                            assert (
-                                status["compensation_status"]["failures"][0]["message"]
-                                == "namespace delete denied"
-                            )
-                        if "cancel" in mode:
-                            assert (
-                                await handle.describe()
-                            ).status == WorkflowExecutionStatus.CANCELED
-                            assert not scenario["cleanup_cancelled"]
+                    if mode == "cleanup-failed":
+                        assert (
+                            status["failure"]["message"]
+                            == "worker pods never became ready"
+                        )
+                        assert (
+                            status["compensation_status"]["failures"][0]["message"]
+                            == "namespace delete denied"
+                        )
+                    if "cancel" in mode:
+                        assert (
+                            await handle.describe()
+                        ).status == WorkflowExecutionStatus.CANCELED
+                        assert not scenario["cleanup_cancelled"]
                     assert scenario["deleted"] == (0 if mode == "images" else 1)
-                    if mode not in {"cleanup-failed", "legacy-cancel-cleanup"}:
+                    assert scenario["terminated"] == (0 if mode == "images" else 1)
+                    if mode != "cleanup-failed":
                         assert not scenario["created"]
                     history = await handle.fetch_history()
                     scheduled = events(
                         history, "activity_task_scheduled_event_attributes"
                     )
                     if mode != "images":
-                        assert (
-                            scheduled[
-                                -1
-                            ].activity_task_scheduled_event_attributes.activity_type.name
-                            == "delete_workspace_namespace"
+                        assert [
+                            event.activity_task_scheduled_event_attributes.activity_type.name
+                            for event in scheduled[-2:]
+                        ] == [
+                            "terminate_workspace_workflows",
+                            "delete_workspace_namespace",
+                        ]
+                        summary = await env.client.data_converter.decode(
+                            [scheduled[-1].user_metadata.summary]
                         )
-                        if not legacy:
-                            summary = await env.client.data_converter.decode(
-                                [scheduled[-1].user_metadata.summary]
-                            )
-                            assert summary == [
-                                "Compensate failed workspace provision: delete namespace"
-                            ]
-                            cancel_requests = events(
-                                history,
-                                "activity_task_cancel_requested_event_attributes",
-                            )
-                            cleanup_id = scheduled[-1].event_id
-                            assert any(
-                                event.activity_task_cancel_requested_event_attributes.scheduled_event_id
-                                == cleanup_id
-                                for event in cancel_requests
-                            ) == (mode == "legacy-cancel-cleanup")
-                    if mode not in {"cancel-provision", "legacy-cancel-cleanup"}:
+                        assert summary == [
+                            "Compensate failed workspace provision: delete namespace"
+                        ]
+                        cancel_requests = events(
+                            history,
+                            "activity_task_cancel_requested_event_attributes",
+                        )
+                        cleanup_id = scheduled[-1].event_id
+                        assert not any(
+                            event.activity_task_cancel_requested_event_attributes.scheduled_event_id
+                            == cleanup_id
+                            for event in cancel_requests
+                        )
+                    if mode != "cancel-provision":
                         assert len(
                             events(history, "activity_task_failed_event_attributes")
                         ) == (2 if mode == "cleanup-failed" else 1)
-                    if legacy:
-                        assert not events(history, "marker_recorded_event_attributes")
+                    # Pinned Worker Versioning, not patching, isolates changes.
+                    assert not events(history, "marker_recorded_event_attributes")
                     await Replayer(
-                        workflows=[crashable_workspace.CrashableWorkspaceWorkflow],
+                        workflows=[cls],
                         workflow_runner=create_workflow_runner(),
                     ).replay_workflow(history)
 

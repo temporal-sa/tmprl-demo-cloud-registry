@@ -212,7 +212,6 @@ def test_cancelled_gate_is_not_treated_as_a_rollout_failure():
 def test_entity_records_failure_and_stays_available(
     monkeypatch, established, compensation_fails
 ):
-    monkeypatch.setattr(demo_project.workflow, "patched", lambda _: True)
     entity = demo_project.DemoProjectWorkflow(
         messages.DemoProjectRunRequest(project_name="demo")
     )
@@ -250,16 +249,3 @@ def test_entity_records_failure_and_stays_available(
             entity._status["compensationStatus"]["failure"]["message"]
             == "cleanup denied"
         )
-
-
-def test_legacy_first_provision_failure_retains_its_replay_path(monkeypatch):
-    monkeypatch.setattr(demo_project.workflow, "patched", lambda _: False)
-    entity = demo_project.DemoProjectWorkflow(
-        messages.DemoProjectRunRequest(project_name="demo")
-    )
-    entity._compensate_first_time_external_resources = AsyncMock()
-    failure = wrap_activity_error(ApplicationError("provision failed"))
-    with pytest.raises(ActivityError) as raised:
-        asyncio.run(entity._handle_reconcile_failure("demo", PROJECT, failure))
-    assert raised.value is failure
-    entity._compensate_first_time_external_resources.assert_awaited_once()

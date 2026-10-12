@@ -2082,11 +2082,7 @@ class DemoProjectWorkflow:
             record_target = self._last_demo_project
         compensation_status: dict[str, Any] = {"phase": "NotRequired"}
         if not project_has_active_version(record_target):
-            # Old histories failed here after teardown. New runs record the
-            # failure and remain available for another reconcile.
-            if not workflow.patched("keep-project-running-after-provision-failure"):
-                await self._compensate_first_time_external_resources()
-                raise error
+            # Record the failure and remain available for another reconcile.
             try:
                 await self._compensate_first_time_external_resources()
                 compensation_status = {"phase": "Completed"}

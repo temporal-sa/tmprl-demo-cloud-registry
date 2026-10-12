@@ -18,7 +18,7 @@ from demo_registry_operator.workflows import (
     operator_auth_canary,
     operator_canary,
 )
-from temporalio import activity, workflow
+from temporalio import activity
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.testing import WorkflowEnvironment
@@ -28,83 +28,6 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("DEMO_REGISTRY_TEST_TEMPORAL_HISTORY"),
     reason="Requires an explicitly enabled local Temporal dev server",
 )
-
-
-@workflow.defn(name="RegistryOperatorAuthCanaryWorkflow")
-class LegacyAuthCanaryWorkflow:
-    """The pre-patch command sequence, for genuine unpatched history replay."""
-
-    @workflow.run
-    async def run(
-        self, request: messages.RegistryOperatorAuthCanaryRequest
-    ) -> messages.RegistryOperatorAuthCanaryResult:
-        plan = await operator_auth_canary._prepare_registry_operator_canary_plan(
-            request
-        )
-        applied = await operator_auth_canary._apply_registry_operator_canary_project(
-            plan
-        )
-        signaled = (
-            await operator_auth_canary._signal_registry_operator_canary_reconcile(plan)
-        )
-        state = operator_auth_canary.RegistryOperatorAuthCanaryState(
-            plan,
-            request.authMode,
-            applied,
-            signaled,
-            str(signaled.get("workflowID") or ""),
-            str(signaled.get("runID") or ""),
-        )
-        try:
-            await operator_auth_canary._wait_for_registry_operator_canary_promotion(
-                state
-            )
-            if state.promotion_ok:
-                await operator_auth_canary._run_registry_operator_canary_rotation(state)
-        finally:
-            await operator_auth_canary._cleanup_registry_operator_canary(state)
-        return operator_auth_canary._registry_operator_auth_canary_result(state)
-
-
-@workflow.defn(name="RegistryOperatorCanaryWorkflow")
-class LegacyOperatorCanaryWorkflow:
-    @workflow.run
-    async def run(
-        self, request: messages.RegistryOperatorCanaryRequest
-    ) -> messages.RegistryOperatorCanaryResult:
-        info = workflow.info()
-        templates = await workflow.execute_activity(
-            canary.load_canary_templates,
-            start_to_close_timeout=operator_canary.timedelta(seconds=30),
-            retry_policy=operator_canary.LOAD_CANARY_TEMPLATES_RETRY_POLICY,
-        )
-        results = await asyncio.gather(
-            *(
-                workflow.execute_child_workflow(
-                    operator_auth_canary.RegistryOperatorAuthCanaryWorkflow.run,
-                    branch,
-                    id=branch.workflowID,
-                    task_queue=info.task_queue,
-                    parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
-                    versioning_intent=workflow.VersioningIntent.COMPATIBLE,
-                )
-                for branch in (
-                    operator_canary.registry_operator_canary_branch_request(
-                        request,
-                        template=template,
-                        workflow_id=info.workflow_id,
-                        run_id=info.run_id,
-                    )
-                    for template in templates
-                )
-            )
-        )
-        return messages.RegistryOperatorCanaryResult(
-            phase="Succeeded",
-            canaries=operator_canary.canary_results_by_template_name(
-                templates, results
-            ),
-        )
 
 
 def scheduled_activities(history):
@@ -123,10 +46,9 @@ def failure_events(history):
     ]
 
 
-def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch):
+def test_canary_failure_compensation_cancellation_and_replay(monkeypatch):
     scenario = {
         "failure": "promotion",
-        "legacy": False,
         "created": False,
         "workspace_created": False,
     }
@@ -205,20 +127,13 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
     def promotion(
         request: canary.RegistryOperatorCanaryPromotionWaitRequest,
     ) -> canary.RegistryOperatorCanaryActivityResult:
-        if scenario["failure"] in {"cleanup", "parent", "parent-legacy"} or scenario[
+        if scenario["failure"] in {"cleanup", "parent"} or scenario[
             "failure"
         ].startswith("workspace"):
             return canary.RegistryOperatorCanaryActivityResult(
                 {"phase": "Promoted", "ok": True}
             )
-        try:
-            return canary.wait_for_registry_operator_canary_promotion(request)
-        except ApplicationError as error:
-            if scenario["legacy"]:
-                return canary.RegistryOperatorCanaryActivityResult(
-                    error.details[0]["status"]
-                )
-            raise
+        return canary.wait_for_registry_operator_canary_promotion(request)
 
     @activity.defn(name="rotate_registry_operator_canary_credentials")
     async def rotate(
@@ -339,32 +254,26 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
             dev_server_existing_path=shutil.which("temporal")
         ) as env:
             with ThreadPoolExecutor(max_workers=3) as executor:
-                for failed_step, legacy in [
-                    ("promotion", True),
-                    ("apply", False),
-                    ("promotion", False),
-                    ("promotion-and-delete", False),
-                    ("cleanup", False),
-                    ("cancel", False),
-                    ("workspace-success", False),
-                    ("workspace-lambda-success", False),
-                    ("workspace-start", False),
-                    ("workspace-check", False),
-                    ("workspace-cleanup", False),
-                    ("workspace-cancel", False),
-                ]:
+                cls = operator_auth_canary.RegistryOperatorAuthCanaryWorkflow
+                for failed_step in (
+                    "apply",
+                    "promotion",
+                    "promotion-and-delete",
+                    "cleanup",
+                    "cancel",
+                    "workspace-success",
+                    "workspace-lambda-success",
+                    "workspace-start",
+                    "workspace-check",
+                    "workspace-cleanup",
+                    "workspace-cancel",
+                ):
                     scenario.update(
                         failure=failed_step,
-                        legacy=legacy,
                         created=False,
                         workspace_created=False,
                     )
                     apply_started.clear()
-                    cls = (
-                        LegacyAuthCanaryWorkflow
-                        if legacy
-                        else operator_auth_canary.RegistryOperatorAuthCanaryWorkflow
-                    )
                     async with Worker(
                         env.client,
                         task_queue="canary-saga-history",
@@ -391,7 +300,7 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                             messages.RegistryOperatorAuthCanaryRequest(
                                 "gate", "run", "apiKey"
                             ),
-                            id=f"canary-{failed_step}-{legacy}",
+                            id=f"canary-{failed_step}",
                             task_queue="canary-saga-history",
                         )
                         if failed_step in {"cancel", "workspace-cancel"}:
@@ -495,102 +404,81 @@ def test_canary_failure_compensation_cancellation_and_legacy_replay(monkeypatch)
                                     "exercise",
                                 ]
                             )
-                        if not legacy:
-                            for event in (
-                                []
-                                if failed_step == "workspace-cleanup"
-                                else scheduled[-3:]
-                            ):
-                                summary = await env.client.data_converter.decode(
-                                    [event.user_metadata.summary]
-                                )
-                                assert summary[0].startswith(
-                                    "Clean up operator canary:"
-                                    if failed_step
-                                    in {
-                                        "cleanup",
-                                        "workspace-success",
-                                        "workspace-lambda-success",
-                                    }
-                                    else "Compensate operator canary:"
-                                )
-                            if failed_step not in {
-                                "cancel",
-                                "workspace-cancel",
-                                "workspace-success",
-                                "workspace-lambda-success",
-                            }:
-                                assert failure_events(history)
-                        else:
-                            assert not failure_events(history)
-                            assert not any(
-                                event.HasField("marker_recorded_event_attributes")
-                                for event in history.events
+                        for event in (
+                            []
+                            if failed_step == "workspace-cleanup"
+                            else scheduled[-3:]
+                        ):
+                            summary = await env.client.data_converter.decode(
+                                [event.user_metadata.summary]
                             )
-                        await Replayer(
-                            workflows=[
-                                operator_auth_canary.RegistryOperatorAuthCanaryWorkflow
-                            ],
-                            workflow_runner=create_workflow_runner(),
-                        ).replay_workflow(history)
-                for legacy in (True, False):
-                    scenario.update(
-                        failure="parent-legacy" if legacy else "parent", created=False
-                    )
-                    cls = (
-                        LegacyOperatorCanaryWorkflow
-                        if legacy
-                        else operator_canary.RegistryOperatorCanaryWorkflow
-                    )
-                    async with Worker(
-                        env.client,
-                        task_queue="canary-parent-history",
-                        workflows=[
-                            cls,
-                            operator_auth_canary.RegistryOperatorAuthCanaryWorkflow,
-                        ],
-                        workflow_runner=create_workflow_runner(),
-                        activities=[
-                            templates,
-                            prepare,
-                            apply,
-                            signal,
-                            promotion,
-                            rotate,
-                            rotation,
-                            delete,
-                            finalize,
-                            cleanup,
-                        ],
-                        activity_executor=executor,
-                    ):
-                        handle = await env.client.start_workflow(
-                            cls.run,
-                            messages.RegistryOperatorCanaryRequest(),
-                            id=f"parent-{legacy}",
-                            task_queue="canary-parent-history",
+                            assert summary[0].startswith(
+                                "Clean up operator canary:"
+                                if failed_step
+                                in {
+                                    "cleanup",
+                                    "workspace-success",
+                                    "workspace-lambda-success",
+                                }
+                                else "Compensate operator canary:"
+                            )
+                        if failed_step not in {
+                            "cancel",
+                            "workspace-cancel",
+                            "workspace-success",
+                            "workspace-lambda-success",
+                        }:
+                            assert failure_events(history)
+                        assert not any(
+                            event.HasField("marker_recorded_event_attributes")
+                            for event in history.events
                         )
-                        if legacy:
-                            assert (
-                                await asyncio.wait_for(handle.result(), 15)
-                            ).phase == "Succeeded"
-                        else:
-                            with pytest.raises(Exception) as raised:
-                                await asyncio.wait_for(handle.result(), 15)
-                            result = raised.value.__cause__.details[0]
-                            assert result["canaries"]["bad"]["phase"] == "Failed"
-                            assert result["canaries"]["good"]["phase"] == "Succeeded"
-                            assert not scenario["created"]
-                        history = await handle.fetch_history()
-                        if legacy:
-                            assert not any(
-                                event.HasField("marker_recorded_event_attributes")
-                                for event in history.events
-                            )
                         await Replayer(
-                            workflows=[operator_canary.RegistryOperatorCanaryWorkflow],
+                            workflows=[cls],
                             workflow_runner=create_workflow_runner(),
                         ).replay_workflow(history)
+                scenario.update(failure="parent", created=False)
+                parent_cls = operator_canary.RegistryOperatorCanaryWorkflow
+                async with Worker(
+                    env.client,
+                    task_queue="canary-parent-history",
+                    workflows=[parent_cls, cls],
+                    workflow_runner=create_workflow_runner(),
+                    activities=[
+                        templates,
+                        prepare,
+                        apply,
+                        signal,
+                        promotion,
+                        rotate,
+                        rotation,
+                        delete,
+                        finalize,
+                        cleanup,
+                    ],
+                    activity_executor=executor,
+                ):
+                    handle = await env.client.start_workflow(
+                        parent_cls.run,
+                        messages.RegistryOperatorCanaryRequest(),
+                        id="parent",
+                        task_queue="canary-parent-history",
+                    )
+                    with pytest.raises(Exception) as raised:
+                        await asyncio.wait_for(handle.result(), 15)
+                    result = raised.value.__cause__.details[0]
+                    assert result["canaries"]["bad"]["phase"] == "Failed"
+                    assert result["canaries"]["good"]["phase"] == "Succeeded"
+                    assert not scenario["created"]
+                    history = await handle.fetch_history()
+                    assert not any(
+                        event.HasField("marker_recorded_event_attributes")
+                        for event in history.events
+                    )
+                    await Replayer(
+                        workflows=[parent_cls],
+                        workflow_runner=create_workflow_runner(),
+                    ).replay_workflow(history)
 
     asyncio.run(verify())
 

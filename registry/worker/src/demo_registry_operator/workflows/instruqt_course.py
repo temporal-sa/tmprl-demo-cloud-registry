@@ -236,9 +236,7 @@ class InstruqtCourseWorkflow:
                     await self._run_finalize(course_name)
                     return
                 except ActivityError as error:
-                    if is_cancelled_exception(error) or not workflow.patched(
-                        "instruqt-course-recover-terminal-failures"
-                    ):
+                    if is_cancelled_exception(error):
                         raise
                     self._finalize = False
                     self._status = self._failure_status(error, phase="DeleteFailed")
@@ -269,9 +267,7 @@ class InstruqtCourseWorkflow:
                     reconcile_input,
                 )
             except ActivityError as error:
-                if is_cancelled_exception(error) or not workflow.patched(
-                    "instruqt-course-recover-terminal-failures"
-                ):
+                if is_cancelled_exception(error):
                     raise
                 self._status = self._failure_status(error)
                 reconciled = True
@@ -435,18 +431,14 @@ class InstruqtCourseWorkflow:
                 self._status = finalized_instruqt_status(self._status)
 
         except ActivityError as error:
-            if is_cancelled_exception(error) or not workflow.patched(
-                "instruqt-course-recover-terminal-failures"
-            ):
+            if is_cancelled_exception(error):
                 raise
             self._status = self._failure_status(error)
 
         try:
             await self._record_status(instruqt_course, self._status)
         except ActivityError as error:
-            if is_cancelled_exception(error) or not workflow.patched(
-                "instruqt-course-recover-terminal-failures"
-            ):
+            if is_cancelled_exception(error):
                 raise
             if self._status.get("rolloutFailure"):
                 self._status["statusRecordFailure"] = errors.failure_details(error)
@@ -653,9 +645,7 @@ class InstruqtCourseWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
         except ActivityError as error:
-            if is_cancelled_exception(error) or not workflow.patched(
-                "instruqt-course-recover-terminal-failures"
-            ):
+            if is_cancelled_exception(error):
                 raise
             status = errors.activity_failure_status(error, fallback_phase="PushFailed")
             self._status = self._failure_status(
@@ -681,9 +671,7 @@ class InstruqtCourseWorkflow:
                 previous_build_status=previous_build_status,
             )
         except ActivityError as error:
-            if is_cancelled_exception(error) or not workflow.patched(
-                "instruqt-course-recover-terminal-failures"
-            ):
+            if is_cancelled_exception(error):
                 raise
             self._status = self._failure_status(error, phase="BuildFailed")
             return errors.activity_failure_status(error, fallback_phase="Error")

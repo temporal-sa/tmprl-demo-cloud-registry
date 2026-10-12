@@ -133,3 +133,23 @@ class DeleteWorkspaceNamespaceRequest:
 @dataclass(frozen=True)
 class DeleteWorkspaceNamespaceResult:
     action: str
+
+
+@dataclass(frozen=True)
+class TerminateWorkspaceWorkflowsRequest:
+    """Terminate executions still running on one workspace's task queue.
+
+    ``workspace_id`` is a guard: the activity refuses any queue that is not the
+    workspace's suffixed queue, so it can never target the always-on demo.
+    """
+
+    demo_name: str
+    workspace_id: str
+    task_queue: str
+
+
+@dataclass(frozen=True)
+class TerminateWorkspaceWorkflowsResult:
+    action: str
+    terminated: int = 0
+    job_id: str | None = None

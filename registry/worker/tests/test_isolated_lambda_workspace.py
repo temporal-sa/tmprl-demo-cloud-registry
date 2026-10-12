@@ -531,6 +531,7 @@ def test_cleanup_after_continue_as_new_uses_carried_workers(monkeypatch):
     asyncio.run(workspace.run(request))
 
     assert calls == [
+        crashable_activities.terminate_workspace_workflows,
         isolated_activities.delete_workspace_lambda_functions,
         external_resources.delete_serverless_worker_deployment,
         isolated_activities.update_workspace_lambda_invoke_policy,

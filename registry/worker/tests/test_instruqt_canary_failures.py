@@ -311,7 +311,6 @@ def test_canary_saga_cleans_up_early_failures_and_keeps_cleanup_errors(
         )
 
     monkeypatch.setattr(operator_auth_canary.workflow, "execute_activity", execute)
-    monkeypatch.setattr(operator_auth_canary.workflow, "patched", lambda _: True)
     result = asyncio.run(
         operator_auth_canary._run_registry_operator_auth_canary(
             messages.RegistryOperatorAuthCanaryRequest("wf", "run", "apiKey"), "apiKey"
@@ -372,27 +371,6 @@ def test_canary_saga_cancellation_runs_cleanup_and_respects_policy(monkeypatch, 
     assert calls[1:] == (CANARY_STEPS[-3:-2] if never else CANARY_STEPS[-3:])
 
 
-def test_canary_legacy_patch_preserves_apply_failure_behavior(monkeypatch):
-    calls = []
-
-    async def execute(fn, request, **kwargs):
-        calls.append(fn.__name__)
-        if fn is canary.prepare_registry_operator_canary_plan:
-            return canary.RegistryOperatorCanaryPlan(canary_plan())
-        raise activity_error(fn.__name__)
-
-    monkeypatch.setattr(operator_auth_canary.workflow, "execute_activity", execute)
-    monkeypatch.setattr(operator_auth_canary.workflow, "patched", lambda _: False)
-    with pytest.raises(ActivityError):
-        asyncio.run(
-            operator_auth_canary._run_registry_operator_auth_canary(
-                messages.RegistryOperatorAuthCanaryRequest("wf", "run", "apiKey"),
-                "apiKey",
-            )
-        )
-    assert calls == ["prepare_registry_operator_canary_plan", CANARY_STEPS[0]]
-
-
 def test_canary_parent_waits_for_other_branches_on_child_failure(monkeypatch):
     completed = []
 
@@ -419,7 +397,6 @@ def test_canary_parent_waits_for_other_branches_on_child_failure(monkeypatch):
         "info",
         lambda: SimpleNamespace(workflow_id="gate", run_id="run", task_queue="queue"),
     )
-    monkeypatch.setattr(operator_canary.workflow, "patched", lambda _: True)
     with pytest.raises(ApplicationError) as raised:
         asyncio.run(
             operator_canary.RegistryOperatorCanaryWorkflow().run(
@@ -441,7 +418,6 @@ def test_instruqt_failure_is_recorded_and_resources_are_retained(monkeypatch):
         return instruqt.InstruqtActivityResult(request.status)
 
     monkeypatch.setattr(instruqt_course.workflow, "execute_activity", execute)
-    monkeypatch.setattr(instruqt_course.workflow, "patched", lambda _: True)
     monkeypatch.setattr(
         instruqt_course.workflow,
         "now",
@@ -476,7 +452,6 @@ def test_instruqt_status_write_failure_preserves_publish_failure(monkeypatch):
         return {"phase": "NotRequired", "images": {}}
 
     monkeypatch.setattr(instruqt_course.workflow, "execute_activity", execute)
-    monkeypatch.setattr(instruqt_course.workflow, "patched", lambda _: True)
     monkeypatch.setattr(
         instruqt_course.workflow,
         "now",
@@ -531,7 +506,6 @@ def test_instruqt_failed_finalization_keeps_finalizer_and_accepts_retry(monkeypa
 
     monkeypatch.setattr(entity, "_wait_for_next_action", next_action)
     monkeypatch.setattr(instruqt_course.workflow, "execute_activity", execute)
-    monkeypatch.setattr(instruqt_course.workflow, "patched", lambda _: True)
     asyncio.run(entity.run(messages.InstruqtCourseRunRequest("course")))
     assert calls.count("load_instruqt_course_finalization_plan") == 2
     assert calls.count("remove_instruqt_course_finalizer_resource") == 1

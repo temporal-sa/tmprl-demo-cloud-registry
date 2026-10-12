@@ -31,6 +31,7 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     EnsureWorkspaceRequest,
     ResolveSourceImagesRequest,
     ScaleWorkspaceWorkloadsRequest,
+    TerminateWorkspaceWorkflowsRequest,
     WaitWorkspaceReadyRequest,
     WorkspaceStatus,
 )
@@ -96,9 +97,24 @@ class CrashableWorkspaceWorkflow:
 
         await self._run_ttl_loop(request)
 
-        # Teardown (TTL expired or explicit delete): drop the namespace, which
-        # cascades to everything in it.
+        # Teardown (TTL expired or explicit delete): terminate what is left on
+        # the workspace queue, then drop the namespace, which cascades to
+        # everything in it.
         self._status.phase = "Deleting"
+        try:
+            await self._terminate_task_queue_workflows()
+        except ActivityError as error:
+            # Best effort: never let it strand the workspace's own resources.
+            if is_cancelled_exception(error):
+                raise
+            self._status.failure = errors.failure_details(error)
+            self._status.last_error = (
+                "Failed to terminate workspace workflows: "
+                f"{self._status.failure['message']}"
+            )
+            workflow.logger.error(
+                "crashable workspace workflow termination failed: %s", error
+            )
         self._status.step = "Deleting environment"
         try:
             await workflow.execute_activity(
@@ -158,6 +174,9 @@ class CrashableWorkspaceWorkflow:
                     summary="Compensate failed workspace provision: delete namespace",
                 )
             )
+            # Runs first (compensations run in reverse); the app may already
+            # have started executions on the workspace queue.
+            compensations.append(self._terminate_task_queue_workflows)
 
             for manifest in plan.resources:
                 metadata = manifest.get("metadata", {})
@@ -192,17 +211,6 @@ class CrashableWorkspaceWorkflow:
             self._status.phase = "Deleting" if cancelled else "Failed"
             self._status.failure = errors.failure_details(error)
             self._status.last_error = self._status.failure["message"]
-            if not workflow.patched(
-                "crashable-workspace-shield-provision-compensation"
-            ):
-                # Keep cancellation commands compatible with older histories.
-                if isinstance(error, asyncio.CancelledError):
-                    await asyncio.shield(
-                        asyncio.ensure_future(self._compensate_provision(compensations))
-                    )
-                else:
-                    await self._compensate_provision(compensations)
-                raise
             cleanup = asyncio.create_task(self._compensate_provision(compensations))
             try:
                 await asyncio.shield(cleanup)
@@ -211,6 +219,29 @@ class CrashableWorkspaceWorkflow:
                 await asyncio.shield(cleanup)
                 raise
             raise
+
+    async def _terminate_task_queue_workflows(self) -> None:
+        """Terminate executions left open on the workspace task queue.
+
+        The workspace shares the demo's Temporal namespace, so nothing else
+        cleans these up once its workers are gone.
+        """
+
+        if not self._status.task_queue:
+            return
+        self._status.step = "Terminating workspace workflows"
+        await workflow.execute_activity(
+            activities.terminate_workspace_workflows,
+            TerminateWorkspaceWorkflowsRequest(
+                demo_name=self._status.demo,
+                workspace_id=self._workspace_id,
+                task_queue=self._status.task_queue,
+            ),
+            start_to_close_timeout=timedelta(minutes=5),
+            heartbeat_timeout=timedelta(seconds=30),
+            retry_policy=activities.CLEANUP_RETRY_POLICY,
+            summary="Terminate workflows left on the workspace task queue",
+        )
 
     async def _compensate_provision(
         self,

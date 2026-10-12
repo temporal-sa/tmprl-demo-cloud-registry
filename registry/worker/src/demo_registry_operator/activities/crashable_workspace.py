@@ -10,11 +10,17 @@ mode rather than retrying forever.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import timedelta
 
 from temporalio import activity
+from temporalio.api.batch.v1 import message_pb2 as batch_pb2
+from temporalio.api.enums.v1 import batch_operation_pb2 as enums_pb2
+from temporalio.api.workflowservice.v1 import request_response_pb2 as workflowservice_pb2
+from temporalio.client import Client
 from temporalio.common import RetryPolicy
+from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator import derive, errors, kube, resources
 from demo_registry_operator.crashable_workspace_resources import (
@@ -34,6 +40,8 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     ResolveSourceImagesResult,
     ScaleWorkspaceWorkloadsRequest,
     ScaleWorkspaceWorkloadsResult,
+    TerminateWorkspaceWorkflowsRequest,
+    TerminateWorkspaceWorkflowsResult,
     WaitWorkspaceReadyRequest,
     WaitWorkspaceReadyResult,
 )
@@ -86,6 +94,9 @@ READINESS_TIMEOUT_SECONDS = 300
 READINESS_POLL_SECONDS = 5
 SECRET_SYNC_TIMEOUT_SECONDS = 120
 SECRET_DEPENDENT_KINDS = frozenset({"Connection", "Deployment", "WorkerDeployment"})
+TERMINATE_RPC_TIMEOUT = timedelta(seconds=30)
+TERMINATE_POLL_SECONDS = 2
+TERMINATE_SETTLE_SECONDS = 30
 
 
 @activity.defn
@@ -447,6 +458,143 @@ def delete_workspace_namespace(
 
     action = delete_runtime_namespace_in_dependency_order(request.namespace)
     return DeleteWorkspaceNamespaceResult(action=action)
+
+
+@activity.defn
+async def terminate_workspace_workflows(
+    request: TerminateWorkspaceWorkflowsRequest,
+) -> TerminateWorkspaceWorkflowsResult:
+    """Batch-terminate executions still running on the workspace task queue.
+
+    A workspace shares the demo's Temporal namespace and is isolated only by its
+    suffixed task queue. Once its workers are gone nothing polls that queue
+    again, so open executions would otherwise stay Running until retention.
+
+    Each attempt counts first (no batch job when nothing is open), then starts
+    one server-side batch terminate and waits for it, then waits for visibility
+    to report the queue empty. Stragglers that visibility had not indexed when
+    the batch query ran fail the attempt so the retry starts a fresh batch.
+    """
+
+    # Import locally so the Workflow sandbox can import this activity module
+    # without traversing the external-resource client modules.
+    from demo_registry_operator.activities.external_resources.serverless_worker import (
+        connect_to_project_namespace_from_secret_path,
+    )
+
+    query = workspace_task_queue_query(request.task_queue, request.workspace_id)
+    demo_project = await asyncio.to_thread(kube.read_demo_project, request.demo_name)
+    if demo_project is None:
+        # The demo's Temporal namespace is deprovisioned with the DemoProject,
+        # taking the workspace's executions with it.
+        activity.logger.warning(
+            "DemoProject %s not found; skipping workspace workflow termination",
+            request.demo_name,
+        )
+        return TerminateWorkspaceWorkflowsResult(action="skipped")
+    secret_path = resources.temporal_runtime_secret_path_from_status(
+        demo_project.get("status")
+    ) or resources.temporal_secret_remote_path(demo_project)
+    client, namespace = await connect_to_project_namespace_from_secret_path(
+        secret_path
+    )
+
+    if await _count_workflows(client, query) == 0:
+        return TerminateWorkspaceWorkflowsResult(action="none")
+
+    info = activity.info()
+    # One job per attempt: a retry after stragglers needs a fresh batch, and a
+    # duplicate start within an attempt lands on ALREADY_EXISTS. The workflow id
+    # carries the owner's email, so keep it out of the namespace-visible job id.
+    job_id = (
+        f"workspace-cleanup-{info.workflow_run_id}-{info.activity_id}-{info.attempt}"
+    )
+    try:
+        await client.workflow_service.start_batch_operation(
+            workflowservice_pb2.StartBatchOperationRequest(
+                namespace=namespace,
+                job_id=job_id,
+                visibility_query=query,
+                reason=(
+                    f"Workspace {request.workspace_id} torn down; no workers remain "
+                    f"on task queue {request.task_queue}"
+                ),
+                termination_operation=batch_pb2.BatchOperationTermination(
+                    identity=client.identity,
+                ),
+            ),
+            timeout=TERMINATE_RPC_TIMEOUT,
+        )
+    except RPCError as error:
+        if error.status != RPCStatusCode.ALREADY_EXISTS:
+            raise
+
+    progress = {"step": "batch_terminate", "jobId": job_id}
+    while True:
+        activity.heartbeat(progress)
+        try:
+            described = await client.workflow_service.describe_batch_operation(
+                workflowservice_pb2.DescribeBatchOperationRequest(
+                    namespace=namespace,
+                    job_id=job_id,
+                ),
+                timeout=TERMINATE_RPC_TIMEOUT,
+            )
+        except RPCError as error:
+            # A just-started batch can be briefly invisible to describe.
+            if error.status != RPCStatusCode.NOT_FOUND:
+                raise
+        else:
+            if described.state == enums_pb2.BATCH_OPERATION_STATE_COMPLETED:
+                break
+            if described.state == enums_pb2.BATCH_OPERATION_STATE_FAILED:
+                raise RuntimeError(
+                    f"batch terminate {job_id} on task queue "
+                    f"{request.task_queue} failed"
+                )
+        await asyncio.sleep(TERMINATE_POLL_SECONDS)
+
+    deadline = time.monotonic() + TERMINATE_SETTLE_SECONDS
+    remaining = await _count_workflows(client, query)
+    while remaining:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"{remaining} workflows still running on task queue "
+                f"{request.task_queue} after batch terminate {job_id}"
+            )
+        activity.heartbeat({**progress, "step": "wait_visibility"})
+        await asyncio.sleep(TERMINATE_POLL_SECONDS)
+        remaining = await _count_workflows(client, query)
+
+    return TerminateWorkspaceWorkflowsResult(
+        action="terminated",
+        terminated=described.complete_operation_count,
+        job_id=job_id,
+    )
+
+
+def workspace_task_queue_query(task_queue: str, workspace_id: str) -> str:
+    """Visibility query for open executions on one workspace's task queue."""
+
+    # Refuse anything but the workspace's suffixed queue: an empty or shared
+    # queue here would terminate the always-on demo's executions.
+    if not workspace_id or not task_queue.endswith(f"-{workspace_id}"):
+        raise errors.non_retryable_error(
+            f"task queue {task_queue!r} is not the queue for workspace "
+            f"{workspace_id!r}",
+            error_type=errors.VALIDATION_ERROR,
+        )
+    if "'" in task_queue or "\\" in task_queue:
+        raise errors.non_retryable_error(
+            f"task queue {task_queue!r} cannot be quoted in a visibility query",
+            error_type=errors.VALIDATION_ERROR,
+        )
+    return f"TaskQueue = '{task_queue}' AND ExecutionStatus = 'Running'"
+
+
+async def _count_workflows(client: Client, query: str) -> int:
+    counted = await client.count_workflows(query, rpc_timeout=TERMINATE_RPC_TIMEOUT)
+    return counted.count
 
 
 def _deployment_ready(namespace: str, name: str) -> bool:

@@ -4,13 +4,22 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from temporalio.exceptions import ActivityError
+import pytest
+from temporalio.api.enums.v1.batch_operation_pb2 import (
+    BATCH_OPERATION_STATE_COMPLETED,
+    BATCH_OPERATION_STATE_FAILED,
+    BATCH_OPERATION_STATE_RUNNING,
+)
+from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
+from temporalio.testing import ActivityEnvironment
 
 from demo_registry_operator import derive
 from demo_registry_operator.activities import (
     crashable_workspace as crashable_activities,
 )
 from demo_registry_operator.activities import reconcile
+from demo_registry_operator.activities.external_resources import serverless_worker
 from demo_registry_operator.crashable_workspace_resources import (
     CRASHABLE_WORKER_LABEL,
     build_workspace_manifests,
@@ -30,6 +39,7 @@ from demo_registry_operator.workflows.crashable_workspace_messages import (
     EnsureWorkspaceRequest,
     ResolveSourceImagesRequest,
     ScaleWorkspaceWorkloadsRequest,
+    TerminateWorkspaceWorkflowsRequest,
     WaitWorkspaceReadyRequest,
 )
 
@@ -544,6 +554,207 @@ def test_delete_workspace_namespace_uses_dependency_ordered_cleanup(monkeypatch)
     assert deleted == ["tmprl-dem-cld-crash-0123abcd89"]
 
 
+# --- terminate workspace workflows -----------------------------------------
+
+WORKSPACE_QUEUE_QUERY = (
+    "TaskQueue = 'music-0123abcd89' AND ExecutionStatus = 'Running'"
+)
+
+
+class _FakeWorkflowService:
+    def __init__(self, states, *, start_error=None):
+        self.states = list(states)
+        self.start_error = start_error
+        self.started = []
+        self.described = []
+
+    async def start_batch_operation(self, request, **_kwargs):
+        self.started.append(request)
+        if self.start_error is not None:
+            raise self.start_error
+
+    async def describe_batch_operation(self, request, **_kwargs):
+        self.described.append(request.job_id)
+        state = self.states.pop(0)
+        if isinstance(state, Exception):
+            raise state
+        return SimpleNamespace(state=state, complete_operation_count=3)
+
+
+class _FakeProjectClient:
+    identity = "registry-operator"
+
+    def __init__(self, counts, service):
+        self.counts = list(counts)
+        self.queries = []
+        self.workflow_service = service
+
+    async def count_workflows(self, query, **_kwargs):
+        self.queries.append(query)
+        return SimpleNamespace(count=self.counts.pop(0))
+
+
+def _terminate_request(task_queue="music-0123abcd89"):
+    return TerminateWorkspaceWorkflowsRequest(
+        demo_name="canonical-ai-demo",
+        workspace_id="0123abcd89",
+        task_queue=task_queue,
+    )
+
+
+def _patch_project_namespace(monkeypatch, client, *, demo=None):
+    connected = []
+
+    async def connect(secret_path):
+        connected.append(secret_path)
+        return client, "demo-ns.acct"
+
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_demo_project",
+        lambda name: demo
+        if demo is not None
+        else {
+            "metadata": {"name": name},
+            "spec": {},
+            "status": {"temporalRuntimeSecretPath": "demo/temporal-v2"},
+        },
+    )
+    monkeypatch.setattr(
+        serverless_worker,
+        "connect_to_project_namespace_from_secret_path",
+        connect,
+    )
+    monkeypatch.setattr(crashable_activities, "TERMINATE_POLL_SECONDS", 0)
+    return connected
+
+
+def test_workspace_task_queue_query_targets_only_the_workspace_queue():
+    assert (
+        crashable_activities.workspace_task_queue_query(
+            "music-0123abcd89", "0123abcd89"
+        )
+        == WORKSPACE_QUEUE_QUERY
+    )
+    for task_queue, workspace_id in (
+        ("music", "0123abcd89"),
+        ("", "0123abcd89"),
+        ("music-0123abcd89", ""),
+        ("music' OR '1'='1-0123abcd89", "0123abcd89"),
+    ):
+        with pytest.raises(ApplicationError) as raised:
+            crashable_activities.workspace_task_queue_query(task_queue, workspace_id)
+        assert raised.value.non_retryable
+
+
+def test_terminate_workspace_workflows_skips_batch_when_queue_is_empty(monkeypatch):
+    service = _FakeWorkflowService([])
+    client = _FakeProjectClient([0], service)
+    connected = _patch_project_namespace(monkeypatch, client)
+
+    result = asyncio.run(
+        ActivityEnvironment().run(
+            crashable_activities.terminate_workspace_workflows, _terminate_request()
+        )
+    )
+
+    assert result.action == "none"
+    assert connected == ["demo/temporal-v2"]
+    assert client.queries == [WORKSPACE_QUEUE_QUERY]
+    assert service.started == []
+
+
+def test_terminate_workspace_workflows_batch_terminates_and_waits(monkeypatch):
+    service = _FakeWorkflowService(
+        [
+            RPCError("not yet", RPCStatusCode.NOT_FOUND, b""),
+            BATCH_OPERATION_STATE_RUNNING,
+            BATCH_OPERATION_STATE_COMPLETED,
+        ],
+        start_error=RPCError("duplicate", RPCStatusCode.ALREADY_EXISTS, b""),
+    )
+    client = _FakeProjectClient([3, 1, 0], service)
+    _patch_project_namespace(monkeypatch, client)
+    heartbeats = []
+    env = ActivityEnvironment()
+    env.on_heartbeat = lambda *details: heartbeats.append(details[0]["step"])
+
+    result = asyncio.run(
+        env.run(crashable_activities.terminate_workspace_workflows, _terminate_request())
+    )
+
+    assert result.action == "terminated"
+    assert result.terminated == 3
+    (started,) = service.started
+    assert started.namespace == "demo-ns.acct"
+    assert started.visibility_query == WORKSPACE_QUEUE_QUERY
+    assert started.HasField("termination_operation")
+    assert started.job_id == result.job_id
+    assert "@" not in started.job_id
+    assert service.described == [result.job_id] * 3
+    assert "wait_visibility" in heartbeats
+
+
+def test_terminate_workspace_workflows_fails_attempt_on_stragglers(monkeypatch):
+    service = _FakeWorkflowService([BATCH_OPERATION_STATE_COMPLETED])
+    client = _FakeProjectClient([2, 1, 1], service)
+    _patch_project_namespace(monkeypatch, client)
+    monkeypatch.setattr(crashable_activities, "TERMINATE_SETTLE_SECONDS", 0)
+
+    with pytest.raises(RuntimeError, match="1 workflows still running"):
+        asyncio.run(
+            ActivityEnvironment().run(
+                crashable_activities.terminate_workspace_workflows,
+                _terminate_request(),
+            )
+        )
+
+
+def test_terminate_workspace_workflows_raises_when_batch_fails(monkeypatch):
+    service = _FakeWorkflowService([BATCH_OPERATION_STATE_FAILED])
+    client = _FakeProjectClient([2], service)
+    _patch_project_namespace(monkeypatch, client)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(
+            ActivityEnvironment().run(
+                crashable_activities.terminate_workspace_workflows,
+                _terminate_request(),
+            )
+        )
+
+
+def test_terminate_workspace_workflows_skips_missing_demo(monkeypatch):
+    monkeypatch.setattr(
+        crashable_activities.kube, "read_demo_project", lambda name: None
+    )
+
+    result = asyncio.run(
+        ActivityEnvironment().run(
+            crashable_activities.terminate_workspace_workflows, _terminate_request()
+        )
+    )
+
+    assert result.action == "skipped"
+
+
+def test_terminate_workspace_workflows_rejects_shared_queue(monkeypatch):
+    def read_demo_project(name):
+        raise AssertionError("must reject before touching the cluster")
+
+    monkeypatch.setattr(
+        crashable_activities.kube, "read_demo_project", read_demo_project
+    )
+
+    with pytest.raises(ApplicationError):
+        asyncio.run(
+            ActivityEnvironment().run(
+                crashable_activities.terminate_workspace_workflows,
+                _terminate_request(task_queue="music"),
+            )
+        )
+
+
 def test_crash_workspace_pods_deletes_only_worker_pods(monkeypatch):
     deleted = []
 
@@ -711,6 +922,7 @@ def test_scale_down_and_up_preserve_workspace_lifecycle(monkeypatch):
     assert [activity_fn for activity_fn, _ in activities_run] == [
         crashable_activities.scale_workspace_workloads,
         crashable_activities.scale_workspace_workloads,
+        crashable_activities.terminate_workspace_workflows,
         crashable_activities.delete_workspace_namespace,
     ]
     assert [
@@ -821,6 +1033,7 @@ def test_scale_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch)
 
     assert [activity_fn for activity_fn, _ in activities_run] == [
         crashable_activities.scale_workspace_workloads,
+        crashable_activities.terminate_workspace_workflows,
         crashable_activities.delete_workspace_namespace,
     ]
     assert workspace._status.phase == "Deleting"
@@ -882,14 +1095,141 @@ def test_crash_failure_does_not_prevent_requested_workspace_cleanup(monkeypatch)
 
     assert [activity_fn for activity_fn, _ in activities_run] == [
         crashable_activities.crash_workspace_pods,
+        crashable_activities.terminate_workspace_workflows,
         crashable_activities.delete_workspace_namespace,
     ]
     assert isinstance(activities_run[0][1], CrashWorkspacePodsRequest)
     assert activities_run[0][1].demo_name == "canonical-ai-demo"
-    assert isinstance(activities_run[1][1], DeleteWorkspaceNamespaceRequest)
+    assert activities_run[1][1] == TerminateWorkspaceWorkflowsRequest(
+        demo_name="canonical-ai-demo",
+        workspace_id="0123abcd89",
+        task_queue="music-0123abcd89",
+    )
+    assert isinstance(activities_run[2][1], DeleteWorkspaceNamespaceRequest)
     assert workspace._status.phase == "Deleting"
     assert "pod deletion forbidden" in (workspace._status.last_error or "")
     assert logged
+
+
+def _carried_workspace_request():
+    now = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+    return now, EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+        carried_already_provisioned=True,
+        carried_expires_at=(now + timedelta(hours=1)).isoformat(),
+        carried_created_at=now.isoformat(),
+        carried_task_queue="music-0123abcd89",
+        carried_workspace_id="0123abcd89",
+    )
+
+
+def _run_teardown(monkeypatch, execute_activity):
+    now, request = _carried_workspace_request()
+    workspace = CrashableWorkspaceWorkflow(request)
+
+    async def request_delete(_predicate, *, timeout):
+        workspace.delete()
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: False),
+    )
+    monkeypatch.setattr(crashable_workflow.workflow, "wait_condition", request_delete)
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "execute_activity", execute_activity
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "logger",
+        SimpleNamespace(error=lambda *args: None),
+    )
+    asyncio.run(workspace.run(request))
+    return workspace
+
+
+def test_terminate_failure_does_not_prevent_workspace_deletion(monkeypatch):
+    activities_run = []
+
+    async def execute_activity(activity_fn, activity_request, **_kwargs):
+        activities_run.append(activity_fn)
+        if activity_fn is crashable_activities.terminate_workspace_workflows:
+            raise ActivityError(
+                "batch limit reached",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="registry-operator",
+                activity_type="terminate_workspace_workflows",
+                activity_id="3",
+                retry_state=None,
+            )
+        return SimpleNamespace(action="deleting")
+
+    workspace = _run_teardown(monkeypatch, execute_activity)
+
+    assert activities_run == [
+        crashable_activities.terminate_workspace_workflows,
+        crashable_activities.delete_workspace_namespace,
+    ]
+    assert "Failed to terminate workspace workflows" in (
+        workspace._status.last_error or ""
+    )
+
+
+def test_failed_provision_terminates_queue_workflows_before_namespace_delete(
+    monkeypatch,
+):
+    request = EnsureWorkspaceRequest(
+        demo_name="canonical-ai-demo",
+        owner_email="alice@temporal.io",
+    )
+    workspace = CrashableWorkspaceWorkflow(request)
+    calls = []
+
+    async def execute_activity(activity_fn, activity_request, **_kwargs):
+        calls.append(activity_fn)
+        if activity_fn is crashable_activities.resolve_source_images:
+            return SimpleNamespace(images={"app": "ecr/app:sha"})
+        if activity_fn is crashable_activities.build_workspace_plan:
+            return SimpleNamespace(
+                resources=[],
+                task_queue="music-0123abcd89",
+                deployment_names=[],
+                worker_deployment_names=[],
+            )
+        if activity_fn is crashable_activities.wait_workspace_ready:
+            raise ActivityError(
+                "pods never ready",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="registry-operator",
+                activity_type="wait_workspace_ready",
+                activity_id="3",
+                retry_state=None,
+            )
+        return SimpleNamespace(action="ok")
+
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "now",
+        lambda: datetime(2026, 10, 11, tzinfo=UTC),
+    )
+    monkeypatch.setattr(crashable_workflow.workflow, "execute_activity", execute_activity)
+
+    with pytest.raises(ActivityError):
+        asyncio.run(workspace._provision(request))
+
+    assert calls[-2:] == [
+        crashable_activities.terminate_workspace_workflows,
+        crashable_activities.delete_workspace_namespace,
+    ]
+    assert workspace._status.compensation_status == {
+        "phase": "Completed",
+        "failures": [],
+    }
+    assert "pods never ready" in (workspace._status.last_error or "")
 
 
 # --- catalog flag ---------------------------------------------------------

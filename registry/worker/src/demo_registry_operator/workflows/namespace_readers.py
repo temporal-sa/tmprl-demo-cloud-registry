@@ -40,9 +40,7 @@ class GrantNamespaceReadAccessWorkflow:
                 retry_policy=activities.GRANT_RETRY_POLICY,
             )
         except ActivityError as error:
-            if is_cancelled_exception(error) or not workflow.patched(
-                "namespace-read-access-recover-activity-failure"
-            ):
+            if is_cancelled_exception(error):
                 raise
             status = errors.activity_failure_status(error, fallback_phase="Error")
             return GrantNamespaceReadAccessResult(

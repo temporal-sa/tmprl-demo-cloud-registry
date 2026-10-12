@@ -1178,10 +1178,10 @@ def test_reconcile_wraps_children_in_saga_compensation_boundary():
 def test_handle_reconcile_failure_splits_first_time_vs_existing():
     source = inspect.getsource(DemoProjectWorkflow._handle_reconcile_failure)
     assert "project_has_active_version" in source
-    # first-time: compensate then re-raise (fail the entity workflow)
+    # first-time: compensate, then settle like an existing project
     assert "_compensate_first_time_external_resources" in source
-    assert "raise error" in source
-    # existing: settle to a failed rollout, keep running (no destructive teardown)
+    assert "raise error" not in source
+    # both: settle to a failed rollout, keep running
     assert "_failed_rollout_status" in source
     assert "_record_status" in source
 
