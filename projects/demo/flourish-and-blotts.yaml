@@ -17,6 +17,8 @@ spec:
       maxScore: 5
       note: Full demo runs on Cloud with no Slack. Ops-escalation forced failures need optional Slack.
     links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/1mxn2Gb68o5jLTEGUKekFuajcc5GrWOOr
       runbook:
         label: Quick start
         url: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts#readme
