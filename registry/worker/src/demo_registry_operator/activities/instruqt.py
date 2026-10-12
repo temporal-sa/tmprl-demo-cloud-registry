@@ -6,6 +6,7 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,10 @@ INSTRUQT_CHANNELS = {INSTRUQT_PRODUCTION_CHANNEL, INSTRUQT_TESTING_CHANNEL}
 INSTRUQT_TEST_TIMEOUT_SECONDS = 7200
 INSTRUQT_IMAGE_REGISTRY_MODE = "public-ecr-v1"
 PUBLIC_ECR_REGISTRY = "public.ecr.aws"
+INSTRUQT_CLI_CACHE_DIR_ENV = "INSTRUQT_CLI_CACHE_DIR"
+INSTRUQT_CLI_UPDATE_REQUIRED_MARKER = "update of the cli is required"
+INSTRUQT_CLI_UPDATE_TIMEOUT_SECONDS = 60
+_INSTRUQT_CLI_UPDATE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -1775,9 +1780,9 @@ def testing_track_status(instruqt_course: dict[str, Any]) -> dict[str, Any]:
 
 
 def instruqt_cli_status() -> dict[str, Any]:
-    path = shutil.which("instruqt")
+    image_path = shutil.which("instruqt")
     token = os.getenv("INSTRUQT_TOKEN")
-    if not path:
+    if not image_path:
         return {
             "phase": "Unavailable",
             "reason": "InstruqtCLINotFound",
@@ -1789,40 +1794,39 @@ def instruqt_cli_status() -> dict[str, Any]:
             "phase": "Unavailable",
             "reason": "InstruqtTokenMissing",
             "message": "INSTRUQT_TOKEN is not set in the worker environment.",
-            "executable": path,
+            "executable": image_path,
             "ready": False,
         }
 
+    cached = instruqt_cli_cache_path()
+    path = str(cached) if cached.is_file() else image_path
+    command = "version"
     try:
-        with tempfile.TemporaryDirectory(prefix="instruqt-cli-status-") as home:
-            result = subprocess.run(
-                [path, "version"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env=instruqt_cli_environment(Path(home)),
-            )
+        result = run_instruqt_cli_version(path)
+        if result.returncode != 0 and instruqt_cli_update_required(instruqt_output(result)):
+            path, command, result = update_instruqt_cli(image_path)
     except (OSError, subprocess.TimeoutExpired) as error:
         return {
             "phase": "Unavailable",
             "reason": "InstruqtVersionFailed",
-            "message": f"instruqt version failed: {error}",
+            "message": f"instruqt {command} failed: {error}",
             "executable": path,
             "ready": False,
             "retryable": isinstance(error, (ConnectionError, subprocess.TimeoutExpired)),
         }
 
-    output = bounded_text(result.stdout or result.stderr)
+    output = bounded_text(instruqt_output(result))
     if result.returncode != 0:
+        update_failed = command == "update" or instruqt_cli_update_required(output)
         return {
             "phase": "Unavailable",
-            "reason": "InstruqtVersionFailed",
-            "message": f"instruqt version exited with {result.returncode}.",
+            "reason": "InstruqtCLIUpdateFailed" if update_failed else "InstruqtVersionFailed",
+            "message": f"instruqt {command} exited with {result.returncode}.",
             "executable": path,
             **({"versionOutput": output} if output else {}),
             "ready": False,
-            "retryable": instruqt_transient_error_message(output),
+            # A failed self-update is almost always a download problem, so retry it.
+            "retryable": update_failed or instruqt_transient_error_message(output),
         }
     return {
         "phase": "Ready",
@@ -1832,6 +1836,76 @@ def instruqt_cli_status() -> dict[str, Any]:
         **({"versionOutput": output} if output else {}),
         "ready": True,
     }
+
+
+def instruqt_cli_cache_path() -> Path:
+    configured = os.getenv(INSTRUQT_CLI_CACHE_DIR_ENV)
+    cache_dir = (
+        Path(configured)
+        if isinstance(configured, str) and configured.strip()
+        else Path(tempfile.gettempdir()) / "instruqt-cli"
+    )
+    return cache_dir / "instruqt"
+
+
+def run_instruqt_cli_version(path: str) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory(prefix="instruqt-cli-status-") as home:
+        return subprocess.run(
+            [path, "version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=instruqt_cli_environment(Path(home)),
+        )
+
+
+def instruqt_cli_update_required(output: str) -> bool:
+    return INSTRUQT_CLI_UPDATE_REQUIRED_MARKER in output.lower()
+
+
+def update_instruqt_cli(image_path: str) -> tuple[str, str, Any]:
+    """Self-update a writable copy of the worker image's Instruqt CLI.
+
+    Instruqt refuses to run a CLI older than its current minimum version, and a
+    pinned worker version keeps its image long after that minimum moves. The
+    image copy is not writable, so `instruqt update` runs on a copy in a scratch
+    directory, and the copy only replaces the cached CLI once `instruqt version`
+    accepts it. Returns the executable, the last command run, and its result.
+    """
+    cached = instruqt_cli_cache_path()
+    with _INSTRUQT_CLI_UPDATE_LOCK:
+        # Another activity may have finished an update while this one waited.
+        if cached.is_file():
+            current = run_instruqt_cli_version(str(cached))
+            if current.returncode == 0:
+                return str(cached), "version", current
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="update-", dir=cached.parent) as scratch:
+            candidate = Path(scratch) / "instruqt"
+            shutil.copy2(image_path, candidate)
+            candidate.chmod(0o755)
+            with tempfile.TemporaryDirectory(prefix="instruqt-cli-update-") as home:
+                update = subprocess.run(
+                    [str(candidate), "update"],
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=INSTRUQT_CLI_UPDATE_TIMEOUT_SECONDS,
+                    env=instruqt_cli_environment(Path(home)),
+                )
+            if update.returncode != 0:
+                return image_path, "update", update
+            version = run_instruqt_cli_version(str(candidate))
+            if version.returncode != 0:
+                return image_path, "version", version
+            os.replace(candidate, cached)
+            return str(cached), "version", version
+
+
+def instruqt_output(result: Any) -> str:
+    return "\n".join(part for part in (result.stdout, result.stderr) if part)
 
 
 def bounded_text(value: str, limit: int = 500) -> str:
@@ -2061,7 +2135,7 @@ def run_instruqt_track_validate(track_dir: Path) -> dict[str, Any]:
             "retryable": isinstance(error, (ConnectionError, subprocess.TimeoutExpired)),
         }
 
-    output = bounded_text(result.stdout or result.stderr, limit=1000)
+    output = bounded_text(instruqt_output(result), limit=1000)
     if result.returncode == 0:
         return {
             "phase": "Validated",

@@ -6,9 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Pin the CLI so release updates invalidate the Docker layer predictably.
-ARG INSTRUQT_CLI_VERSION=2380-865ec91
-ARG INSTRUQT_CLI_SHA256=6b0f67a39fac4b202782ce3730fd6c2aab34dd8bf165adb44436febfdbb19942
+# Pin the CLI so release updates invalidate the Docker layer predictably. The
+# worker self-updates a copy at runtime if Instruqt later requires a newer CLI.
+ARG INSTRUQT_CLI_VERSION=2427-422d0f4
+ARG INSTRUQT_CLI_SHA256=6bcef7c37b82fce83653c620d1eb1d11577e0d5b962fcc34ebb4358e61220735
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git unzip \

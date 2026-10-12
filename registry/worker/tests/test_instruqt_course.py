@@ -263,9 +263,10 @@ def test_instruqt_cli_status_reports_missing_token(monkeypatch):
     assert status["ready"] is False
 
 
-def test_instruqt_cli_status_reports_ready_without_home(monkeypatch):
+def test_instruqt_cli_status_reports_ready_without_home(monkeypatch, tmp_path):
     monkeypatch.setattr(instruqt_activities.shutil, "which", lambda name: "/usr/bin/instruqt")
     monkeypatch.setenv("INSTRUQT_TOKEN", "token")
+    monkeypatch.setenv("INSTRUQT_CLI_CACHE_DIR", str(tmp_path))
     monkeypatch.delenv("HOME", raising=False)
     observed = {}
 
@@ -284,6 +285,92 @@ def test_instruqt_cli_status_reports_ready_without_home(monkeypatch):
     assert status["versionOutput"] == "instruqt version test"
     assert status["ready"] is True
     assert not observed["home"].exists()
+
+
+UPDATE_REQUIRED_STDERR = (
+    "An update of the CLI is required. To update, run the CLI in an interactive "
+    "terminal, or run `instruqt update`.\n"
+)
+
+
+def fake_instruqt_cli(monkeypatch, tmp_path, *, update_returncode=0):
+    image = tmp_path / "image" / "instruqt"
+    image.parent.mkdir()
+    image.write_text("pinned")
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(instruqt_activities.shutil, "which", lambda name: str(image))
+    monkeypatch.setenv("INSTRUQT_TOKEN", "token")
+    monkeypatch.setenv("INSTRUQT_CLI_CACHE_DIR", str(cache))
+    calls = []
+
+    def run(command, **kwargs):
+        executable, subcommand = Path(command[0]), command[1]
+        calls.append((executable, subcommand))
+        if subcommand == "update":
+            if update_returncode == 0:
+                executable.write_text("updated")
+            return SimpleNamespace(
+                returncode=update_returncode, stdout="", stderr="download failed\n"
+            )
+        if executable.read_text() == "pinned":
+            return SimpleNamespace(
+                returncode=1, stdout="Version: 2380-865ec91\n", stderr=UPDATE_REQUIRED_STDERR
+            )
+        return SimpleNamespace(returncode=0, stdout="Version: 2427-422d0f4\n", stderr="")
+
+    monkeypatch.setattr(instruqt_activities.subprocess, "run", run)
+    return image, cache / "instruqt", calls
+
+
+def test_instruqt_cli_status_self_updates_when_update_required(monkeypatch, tmp_path):
+    image, cached, calls = fake_instruqt_cli(monkeypatch, tmp_path)
+
+    status = instruqt_cli_status()
+
+    assert status["phase"] == "Ready"
+    assert status["executable"] == str(cached)
+    assert status["versionOutput"] == "Version: 2427-422d0f4"
+    assert cached.read_text() == "updated"
+    assert image.read_text() == "pinned"
+    assert [subcommand for _, subcommand in calls] == ["version", "update", "version"]
+    assert list(cached.parent.iterdir()) == [cached]
+
+    calls.clear()
+    assert instruqt_cli_status()["executable"] == str(cached)
+    assert calls == [(cached, "version")]
+
+
+def test_instruqt_cli_status_reports_failed_self_update_as_retryable(monkeypatch, tmp_path):
+    image, cached, _ = fake_instruqt_cli(monkeypatch, tmp_path, update_returncode=1)
+
+    status = instruqt_cli_status()
+
+    assert status["ready"] is False
+    assert status["reason"] == "InstruqtCLIUpdateFailed"
+    assert status["message"] == "instruqt update exited with 1."
+    assert status["versionOutput"] == "download failed"
+    assert status["executable"] == str(image)
+    assert status["retryable"] is True
+    assert not cached.exists()
+
+
+def test_instruqt_cli_status_reports_stdout_and_stderr(monkeypatch, tmp_path):
+    monkeypatch.setattr(instruqt_activities.shutil, "which", lambda name: "/usr/bin/instruqt")
+    monkeypatch.setenv("INSTRUQT_TOKEN", "token")
+    monkeypatch.setenv("INSTRUQT_CLI_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        instruqt_activities.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stdout="Version: 2380-865ec91\n", stderr="token is invalid\n"
+        ),
+    )
+
+    status = instruqt_cli_status()
+
+    assert status["reason"] == "InstruqtVersionFailed"
+    assert status["versionOutput"] == "Version: 2380-865ec91 token is invalid"
+    assert status["retryable"] is False
 
 
 def test_instruqt_track_validate_supplies_writable_home(monkeypatch, tmp_path):
