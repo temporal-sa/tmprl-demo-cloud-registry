@@ -2215,6 +2215,317 @@ function askControl(pointer) {
   );
 }
 
+// ─── Onboarding: secrets ───────────────────────────────────────────────────
+// Project secret values go straight from this form to AWS Secrets Manager
+// (POST /api/onboarding/secrets); the workflow and the draft only ever hold
+// names. The draft declares each secret under spec.secrets and lists it on the
+// components that need it.
+
+const onboardSecrets = {
+  project: undefined, // the project the list below was loaded for
+  loading: false,
+  stored: [], // project secrets in Secrets Manager: {name, properties, owner, onboarding}
+  shared: [], // platform shared secrets: {name, properties, description}
+  error: null,
+  editing: null, // {name, rows: [{key, value}]} while the store form is open
+};
+
+function draftProjectName(status) {
+  const name = getIn(status && status.document, ["metadata", "name"]);
+  return typeof name === "string" ? name : null;
+}
+
+async function loadSecrets() {
+  const project = draftProjectName(onboard.status);
+  onboardSecrets.loading = true;
+  onboardSecrets.project = project;
+  try {
+    const res = await fetch("/api/onboarding/secrets", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    onboardSecrets.stored = data.secrets || [];
+    onboardSecrets.shared = data.shared || [];
+    onboardSecrets.error = null;
+  } catch (err) {
+    onboardSecrets.error = err.message;
+  } finally {
+    onboardSecrets.loading = false;
+    const section = document.querySelector("[data-onboard-secrets]");
+    if (section && onboard.working) section.replaceChildren(...secretsBody(onboard.working));
+  }
+}
+
+function secretsNeedLoading() {
+  return (
+    !onboardSecrets.loading &&
+    onboard.status &&
+    onboard.status.repo &&
+    onboardSecrets.project !== draftProjectName(onboard.status)
+  );
+}
+
+function rerenderSecrets() {
+  const section = document.querySelector("[data-onboard-secrets]");
+  if (section) section.replaceChildren(...secretsBody(onboard.working));
+  renderOnboardingActions();
+}
+
+function componentSecretNames(component) {
+  return Array.isArray(component.secrets) ? component.secrets : [];
+}
+
+function setComponentSecret(component, name, on) {
+  const names = componentSecretNames(component).filter((item) => item !== name);
+  if (on) names.push(name);
+  setIn(component, ["secrets"], names.length ? names : undefined);
+}
+
+function removeSecret(doc, name) {
+  setIn(doc, ["spec", "secrets", name], undefined);
+  Object.values(getIn(doc, ["spec", "components"]) || {}).forEach((component) =>
+    setComponentSecret(component, name, false)
+  );
+}
+
+async function storeSecret(doc) {
+  const editing = onboardSecrets.editing;
+  const values = {};
+  for (const row of editing.rows) {
+    const key = row.key.trim();
+    if (key) values[key] = row.value;
+  }
+  try {
+    const result = await postJSON("/api/onboarding/secrets", { name: editing.name.trim(), values });
+    const existing = getIn(doc, ["spec", "secrets", result.name]) || {};
+    setIn(doc, ["spec", "secrets", result.name], { ...existing, requiredProperties: result.properties });
+    delete getIn(doc, ["spec", "secrets", result.name]).shared;
+    onboardSecrets.editing = null; // drops the typed values
+    toast(result.created ? "Secret stored" : "Secret updated");
+    onboardSecrets.project = undefined;
+    await loadSecrets();
+  } catch (err) {
+    onboardSecrets.error = err.message;
+  }
+  rerenderSecrets();
+}
+
+function secretEditor(doc) {
+  const editing = onboardSecrets.editing;
+  const savedName = draftProjectName(onboard.status);
+  const renamed = savedName && getIn(doc, ["metadata", "name"]) !== savedName;
+  return el(
+    "form",
+    {
+      class: "onboard-secret-editor",
+      autocomplete: "off",
+      onsubmit: (event) => {
+        event.preventDefault();
+        storeSecret(doc);
+      },
+    },
+    field(
+      "Secret name",
+      null,
+      textControl(editing.name, (value) => (editing.name = value), { placeholder: "app-credentials" }),
+      `Stored at tmprl-dem-cld/${savedName || "<project>"}/<name>. Values go straight to AWS Secrets Manager; nobody can read them back from here.`
+    ),
+    renamed
+      ? onboardAlert("warn", "Validate your rename first.", `Secrets are stored under the saved project name, ${savedName}.`)
+      : null,
+    ...editing.rows.map((row, index) =>
+      el(
+        "div",
+        { class: "onboard-secret-row" },
+        textControl(row.key, (value) => (row.key = value), { placeholder: "API_KEY", "aria-label": "Property name" }),
+        Object.assign(
+          el("input", {
+            type: "password",
+            autocomplete: "new-password",
+            placeholder: "value",
+            "aria-label": "Property value",
+            oninput: (event) => (row.value = event.target.value),
+          }),
+          // A property, not an attribute, so the value never lands in the HTML.
+          { value: row.value }
+        ),
+        editing.rows.length > 1
+          ? el("button", {
+              type: "button",
+              class: "btn btn-quiet btn-sm",
+              text: "Remove",
+              onclick: () => {
+                editing.rows.splice(index, 1);
+                rerenderSecrets();
+              },
+            })
+          : null
+      )
+    ),
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", {
+        type: "button",
+        class: "btn btn-ghost btn-sm",
+        text: "+ Property",
+        onclick: () => {
+          editing.rows.push({ key: "", value: "" });
+          rerenderSecrets();
+        },
+      }),
+      el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(renamed)), text: "Store in Secrets Manager" }),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Cancel",
+        onclick: () => {
+          onboardSecrets.editing = null;
+          rerenderSecrets();
+        },
+      })
+    )
+  );
+}
+
+function declaredSecretRow(doc, name, definition) {
+  const components = getIn(doc, ["spec", "components"]) || {};
+  const shared = typeof definition.shared === "string" ? definition.shared : null;
+  const stored = onboardSecrets.stored.find((item) => item.name === name);
+  let state;
+  if (shared) {
+    const known = onboardSecrets.shared.find((item) => item.name === shared);
+    state = `Shared: ${shared}${known && known.properties.length ? ` (${known.properties.join(", ")})` : ""}`;
+  } else if (stored) {
+    state = `Stored${stored.properties.length ? ` (${stored.properties.join(", ")})` : ""}`;
+  } else {
+    state = "Not stored yet";
+  }
+  return el(
+    "div",
+    { class: "onboard-card", dataset: { pointer: `/spec/secrets/${name}` } },
+    el(
+      "div",
+      { class: "onboard-secret-head" },
+      el("strong", { text: name }),
+      el("span", { class: `mono ${!shared && !stored ? "is-missing" : ""}`, text: state })
+    ),
+    Object.keys(components).length
+      ? el(
+          "div",
+          { class: "onboard-checks" },
+          ...Object.entries(components).map(([componentName, component]) =>
+            checkControl(
+              `Give it to ${componentName}`,
+              `/spec/components/${componentName}/secrets`,
+              componentSecretNames(component).includes(name),
+              (on) => setComponentSecret(component, name, on)
+            )
+          )
+        )
+      : null,
+    el(
+      "div",
+      { class: "onboard-actions" },
+      !shared
+        ? el("button", {
+            type: "button",
+            class: "btn btn-ghost btn-sm",
+            text: stored ? "Replace the value" : "Store a value",
+            onclick: () => {
+              const keys = (definition.requiredProperties || []).length
+                ? definition.requiredProperties
+                : (stored && stored.properties) || [""];
+              onboardSecrets.editing = { name, rows: keys.map((key) => ({ key, value: "" })) };
+              rerenderSecrets();
+            },
+          })
+        : null,
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove from the draft",
+        onclick: () => {
+          removeSecret(doc, name);
+          rerenderSecrets();
+        },
+      })
+    )
+  );
+}
+
+function sharedPicker(doc) {
+  const declared = new Set(
+    Object.values(getIn(doc, ["spec", "secrets"]) || {}).map((definition) => definition.shared)
+  );
+  const options = onboardSecrets.shared.filter((item) => !declared.has(item.name));
+  if (!options.length) return null;
+  const select = el(
+    "select",
+    { "aria-label": "Shared secret" },
+    ...options.map((item) =>
+      el("option", { value: item.name, text: `${item.name}${item.properties.length ? ` (${item.properties.join(", ")})` : ""}` })
+    )
+  );
+  return el(
+    "div",
+    { class: "onboard-inline" },
+    select,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "Use this shared secret",
+      onclick: () => {
+        const item = onboardSecrets.shared.find((candidate) => candidate.name === select.value);
+        const name = item.name.replace(/[^a-z0-9-]+/g, "-");
+        setIn(doc, ["spec", "secrets", name], {
+          shared: item.name,
+          ...(item.properties.length ? { requiredProperties: item.properties } : {}),
+        });
+        rerenderSecrets();
+      },
+    })
+  );
+}
+
+function secretsBody(doc) {
+  const declared = getIn(doc, ["spec", "secrets"]) || {};
+  const parts = [
+    el("legend", { text: "Secrets" }),
+    el("p", {
+      class: "onboard-hint",
+      text: "API keys and other credentials the demo reads from environment variables. Each property of a secret becomes an environment variable on the components you give it to.",
+    }),
+  ];
+  if (onboardSecrets.error) parts.push(onboardAlert("error", "Secrets", onboardSecrets.error));
+  parts.push(...Object.entries(declared).map(([name, definition]) => declaredSecretRow(doc, name, definition || {})));
+  if (onboardSecrets.editing) {
+    parts.push(secretEditor(doc));
+  } else {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          text: "+ Add a project secret",
+          onclick: () => {
+            onboardSecrets.editing = { name: "", rows: [{ key: "", value: "" }] };
+            rerenderSecrets();
+          },
+        })
+      ),
+      sharedPicker(doc)
+    );
+  }
+  return parts;
+}
+
+function secretsFields(doc) {
+  if (secretsNeedLoading()) loadSecrets();
+  return el("fieldset", { class: "onboard-fields onboard-wide", "data-onboard-secrets": "" }, ...secretsBody(doc));
+}
+
 // ─── Onboarding: rendering ─────────────────────────────────────────────────
 
 function onboardStep(number, title, ...children) {
@@ -2647,9 +2958,10 @@ function draftEditor(status) {
       runtimeFields(doc),
       buildRows(doc),
       componentCards(doc),
+      secretsFields(doc),
       el("p", {
         class: "onboard-hint onboard-wide",
-        text: "Secrets, environment variables, serverless (Lambda) components, Worker Versioning, Nexus endpoints and extra namespaces: edit them in the YAML tab.",
+        text: "Environment variables, serverless (Lambda) components, Worker Versioning, Nexus endpoints and extra namespaces: edit them in the YAML tab.",
       })
     );
   }

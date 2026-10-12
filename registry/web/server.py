@@ -7,6 +7,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import threading
 import time
@@ -122,6 +123,22 @@ ONBOARDING_UPDATES = {
     "agent/cancel": "cancel_agent",
 }
 ONBOARDING_AGENT_ACTIVITY = "run_onboarding_agent"
+# Project secrets a user enters while onboarding go straight to Secrets Manager
+# at <prefix>/<project>/<secret>; Temporal only ever sees their names. The web's
+# IAM role (infra/irsa.tf, registry_web) only creates secrets with the
+# managed-by tag and only updates secrets that carry it.
+SECRET_PREFIX = "tmprl-dem-cld"
+SHARED_SECRET_PREFIX = f"{SECRET_PREFIX}/platform/shared/"
+SECRET_MANAGED_BY_TAG = "registry.tmprl-demo.cloud/managed-by"
+SECRET_MANAGED_BY = "catalog-onboarding"
+SECRET_OWNER_TAG = "registry.tmprl-demo.cloud/owner"
+SECRET_PROJECT_TAG = "registry.tmprl-demo.cloud/project"
+SECRET_ONBOARDING_TAG = "registry.tmprl-demo.cloud/onboarding"
+SECRET_DESCRIPTION_PREFIX = "Catalog onboarding secret. Properties: "
+SECRET_NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+SECRET_PROPERTY_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+MAX_SECRET_PROPERTIES = 20
+MAX_SECRET_VALUE_CHARS = 8192
 ONBOARDING_AGENT_MODES = frozenset({"draft", "section"})
 
 
@@ -259,6 +276,177 @@ class WorkspaceNotFound(Exception):
 
 class OnboardingRejected(Exception):
     """The onboarding workflow refused an edit; the message is for the user."""
+
+
+class SecretsUnavailable(Exception):
+    """Secrets Manager can't be reached or the web has no role for it."""
+
+
+class OnboardingSecrets:
+    """Project secrets for onboarding drafts, in AWS Secrets Manager.
+
+    Reads metadata only (ListSecrets, DescribeSecret); the only values this ever
+    handles are the ones a user is writing. Property names are kept in the
+    secret's description, so listing never needs the value.
+    """
+
+    def __init__(self, client_factory: Any | None = None) -> None:
+        self._client_factory = client_factory or default_secrets_client
+        self._client: Any | None = None
+        self._lock = threading.Lock()
+
+    def _secretsmanager(self) -> Any:
+        with self._lock:
+            if self._client is None:
+                self._client = self._client_factory()
+            return self._client
+
+    def _call(self, method: str, **kwargs: Any) -> Any:
+        try:
+            return getattr(self._secretsmanager(), method)(**kwargs)
+        except Exception as error:  # noqa: BLE001 - mapped to a clean 503 / 404
+            if aws_error_code(error) == "ResourceNotFoundException":
+                raise KeyError(kwargs.get("SecretId")) from error
+            raise SecretsUnavailable(
+                f"Secrets Manager {method} failed: {aws_error_code(error) or type(error).__name__}"
+            ) from error
+
+    def _list(self, prefix: str) -> list[dict[str, Any]]:
+        secrets: list[dict[str, Any]] = []
+        token = None
+        while True:
+            kwargs: dict[str, Any] = {"Filters": [{"Key": "name", "Values": [prefix]}]}
+            if token:
+                kwargs["NextToken"] = token
+            response = self._call("list_secrets", **kwargs)
+            secrets.extend(
+                item
+                for item in response.get("SecretList", [])
+                if str(item.get("Name", "")).startswith(prefix)
+            )
+            token = response.get("NextToken")
+            if not token:
+                return secrets
+
+    def list_project(self, project: str) -> list[dict[str, Any]]:
+        prefix = f"{SECRET_PREFIX}/{project}/"
+        result = []
+        for item in self._list(prefix):
+            tags = secret_tags(item)
+            changed = item.get("LastChangedDate")
+            result.append(
+                {
+                    "name": item["Name"][len(prefix) :],
+                    "properties": description_properties(item.get("Description")),
+                    "owner": tags.get(SECRET_OWNER_TAG),
+                    "onboarding": tags.get(SECRET_MANAGED_BY_TAG) == SECRET_MANAGED_BY,
+                    "updated_at": changed.isoformat() if hasattr(changed, "isoformat") else None,
+                }
+            )
+        return sorted(result, key=lambda item: item["name"])
+
+    def list_shared(self) -> list[dict[str, Any]]:
+        result = []
+        for item in self._list(SHARED_SECRET_PREFIX):
+            properties = secret_tags(item).get("properties", "")
+            result.append(
+                {
+                    "name": item["Name"][len(SHARED_SECRET_PREFIX) :],
+                    "properties": properties.split(),
+                    "description": item.get("Description") or "",
+                }
+            )
+        return sorted(result, key=lambda item: item["name"])
+
+    def store(
+        self,
+        project: str,
+        name: str,
+        values: dict[str, str],
+        *,
+        owner: str,
+        onboarding_id: str,
+    ) -> dict[str, Any]:
+        path = f"{SECRET_PREFIX}/{project}/{name}"
+        description = SECRET_DESCRIPTION_PREFIX + " ".join(sorted(values))
+        body = json.dumps(values)
+        try:
+            existing = self._call("describe_secret", SecretId=path)
+        except KeyError:
+            self._call(
+                "create_secret",
+                Name=path,
+                SecretString=body,
+                Description=description,
+                Tags=[
+                    {"Key": SECRET_MANAGED_BY_TAG, "Value": SECRET_MANAGED_BY},
+                    {"Key": SECRET_OWNER_TAG, "Value": owner},
+                    {"Key": SECRET_PROJECT_TAG, "Value": project},
+                    {"Key": SECRET_ONBOARDING_TAG, "Value": onboarding_id[:256]},
+                ],
+            )
+            return {"name": name, "properties": sorted(values), "created": True}
+        tags = secret_tags(existing)
+        if tags.get(SECRET_MANAGED_BY_TAG) != SECRET_MANAGED_BY:
+            raise OnboardingRejected(
+                f"{path} already exists and wasn't created by onboarding. Pick "
+                "another name, or ask a catalog owner to change it."
+            )
+        if tags.get(SECRET_OWNER_TAG) != owner:
+            raise OnboardingRejected(f"{path} belongs to {tags.get(SECRET_OWNER_TAG)}.")
+        self._call("put_secret_value", SecretId=path, SecretString=body)
+        self._call("update_secret", SecretId=path, Description=description)
+        return {"name": name, "properties": sorted(values), "created": False}
+
+
+def default_secrets_client() -> Any:
+    try:
+        import boto3
+    except ImportError as error:
+        raise SecretsUnavailable("boto3 is not installed") from error
+    region = os.environ.get("DEMO_REGISTRY_AWS_REGION", "").strip() or "us-west-1"
+    return boto3.session.Session(region_name=region).client("secretsmanager")
+
+
+def aws_error_code(error: Exception) -> str | None:
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        return code if isinstance(code, str) else None
+    return None
+
+
+def secret_tags(item: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(tag.get("Key")): str(tag.get("Value"))
+        for tag in item.get("Tags") or []
+        if isinstance(tag, dict)
+    }
+
+
+def description_properties(description: Any) -> list[str]:
+    if isinstance(description, str) and description.startswith(SECRET_DESCRIPTION_PREFIX):
+        return description[len(SECRET_DESCRIPTION_PREFIX) :].split()
+    return []
+
+
+def secret_write_problem(name: Any, values: Any) -> str | None:
+    """Why a secret write is malformed, or None. Messages never include values."""
+
+    if not isinstance(name, str) or not SECRET_NAME_PATTERN.match(name) or len(name) > 63:
+        return "The secret name must be a DNS label, like anthropic-credentials."
+    if not isinstance(values, dict) or not values:
+        return "Add at least one property."
+    if len(values) > MAX_SECRET_PROPERTIES:
+        return f"A secret can have at most {MAX_SECRET_PROPERTIES} properties."
+    for key, value in values.items():
+        if not isinstance(key, str) or not SECRET_PROPERTY_PATTERN.match(key):
+            return f"{key!s} isn't an environment variable name (like API_KEY)."
+        if not isinstance(value, str) or not value:
+            return f"{key} needs a value."
+        if len(value) > MAX_SECRET_VALUE_CHARS:
+            return f"{key} is longer than {MAX_SECRET_VALUE_CHARS} characters."
+    return None
 
 
 class TemporalGateway:
@@ -614,6 +802,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
     registry_path: Path
     status_dir: Path
     temporal_gateway: TemporalGateway | None = None
+    onboarding_secrets: OnboardingSecrets | None = None
     server_version = "DemoRegistryWeb/0.1"
 
     def do_GET(self) -> None:
@@ -630,6 +819,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.crashable_status(parse_query(parsed.query))
             elif path == "/api/onboarding":
                 self.onboarding_status()
+            elif path == "/api/onboarding/secrets":
+                self.onboarding_secrets_list()
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
             elif path == "/_auth/verify-workspace":
@@ -685,6 +876,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.namespace_access_grant()
             elif path == "/api/onboarding":
                 self.onboarding_start()
+            elif path == "/api/onboarding/secrets":
+                self.onboarding_secret_store()
             elif path.startswith("/api/onboarding/"):
                 self.onboarding_update(path.removeprefix("/api/onboarding/"))
             else:
@@ -1087,6 +1280,79 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         self.send_onboarding_result(
             lambda: self.temporal_gateway.onboarding_update(email, update, arg)
         )
+
+    def onboarding_project(self, email: str) -> tuple[str | None, dict[str, Any]]:
+        """The project name of the user's open onboarding draft, if it has one."""
+
+        status = self.temporal_gateway.onboarding_status(email)
+        if status.get("phase") in {"None", "HandedOff", "Abandoned", "Expired"}:
+            return None, status
+        metadata = (status.get("document") or {}).get("metadata") or {}
+        name = metadata.get("name")
+        if isinstance(name, str) and SECRET_NAME_PATTERN.match(name):
+            return name, status
+        return None, status
+
+    def onboarding_secrets_list(self) -> None:
+        email = self.onboarding_request(mutating=False)
+        if email is None:
+            return
+        if self.onboarding_secrets is None:
+            self.send_json({"error": "secrets-unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        try:
+            project, _status = self.onboarding_project(email)
+            payload = {
+                "project": project,
+                "secrets": self.onboarding_secrets.list_project(project) if project else [],
+                "shared": self.onboarding_secrets.list_shared(),
+            }
+        except TemporalUnavailable as error:
+            self.send_json({"error": "temporal-unavailable", "message": str(error)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        except SecretsUnavailable as error:
+            self.send_json({"error": "secrets-unavailable", "message": str(error)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self.send_json(payload)
+
+    def onboarding_secret_store(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        if self.onboarding_secrets is None:
+            self.send_json({"error": "secrets-unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        body = self.read_json_body()
+        name, values = body.get("name"), body.get("values")
+        problem = secret_write_problem(name, values)
+        if problem:
+            self.send_json({"error": "bad_request", "message": problem}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            project, _status = self.onboarding_project(email)
+            if project is None:
+                raise OnboardingRejected("Pick a repo and a valid project name first.")
+            if self.catalog_project(project) is not None:
+                raise OnboardingRejected(
+                    f"{project} is already in the catalog; its secrets are managed there."
+                )
+            result = self.onboarding_secrets.store(
+                project,
+                name,
+                values,
+                owner=email,
+                onboarding_id=onboarding_workflow_id(email, self.temporal_gateway.cluster),
+            )
+        except OnboardingRejected as error:
+            self.send_json({"error": "rejected", "message": str(error)}, status=HTTPStatus.CONFLICT)
+            return
+        except TemporalUnavailable as error:
+            self.send_json({"error": "temporal-unavailable", "message": str(error)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        except SecretsUnavailable as error:
+            self.send_json({"error": "secrets-unavailable", "message": str(error)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self.send_json({**result, "project": project})
 
     def send_onboarding_result(self, call: Any) -> None:
         try:
@@ -2059,6 +2325,7 @@ def make_handler(
     registry_path: Path,
     status_dir: Path,
     temporal_gateway: TemporalGateway | None = None,
+    onboarding_secrets: OnboardingSecrets | None = None,
 ) -> type[RegistryRequestHandler]:
     class ConfiguredRegistryRequestHandler(RegistryRequestHandler):
         pass
@@ -2066,6 +2333,7 @@ def make_handler(
     ConfiguredRegistryRequestHandler.registry_path = registry_path
     ConfiguredRegistryRequestHandler.status_dir = status_dir
     ConfiguredRegistryRequestHandler.temporal_gateway = temporal_gateway
+    ConfiguredRegistryRequestHandler.onboarding_secrets = onboarding_secrets
     return ConfiguredRegistryRequestHandler
 
 
@@ -2074,7 +2342,10 @@ def main() -> None:
     status_dir = configured_path("CATALOG_STATUS_DIR", DEFAULT_STATUS_DIR)
     port = int(os.environ.get("PORT", "8080"))
     temporal_gateway = build_temporal_gateway()
-    handler = make_handler(registry_path, status_dir, temporal_gateway)
+    # Onboarding secrets need Temporal (to find the user's draft) and AWS; the
+    # client is created on first use, so a missing role only fails that call.
+    onboarding_secrets = OnboardingSecrets() if temporal_gateway else None
+    handler = make_handler(registry_path, status_dir, temporal_gateway, onboarding_secrets)
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     crashable = "enabled" if temporal_gateway else "disabled (no TEMPORAL_ADDRESS)"
     print(f"Serving registry catalog on :{port} (crashable workspaces: {crashable})")

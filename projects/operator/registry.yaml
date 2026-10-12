@@ -71,6 +71,9 @@ spec:
   components:
     web:
       build: web
+      # Stores secrets users enter while onboarding a demo (infra/irsa.tf,
+      # registry_web): create and update onboarding-tagged project secrets only.
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-registry-web-bg
       # The catalog UI drives the CrashableWorkspaceWorkflow via an untyped
       # Temporal client. The platform Temporal connection
       # (TEMPORAL_ADDRESS/NAMESPACE/API_KEY/TLS) is injected via the operator's

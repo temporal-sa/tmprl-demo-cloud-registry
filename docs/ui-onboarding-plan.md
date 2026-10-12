@@ -143,16 +143,46 @@ locally; they get exercised on first deploy.
 
 ## Secrets (milestone 3)
 
-- New web endpoints write project secrets to
-  `tmprl-dem-cld/<name>/<secret>`, tagged with the submitter and onboarding ID.
-  They refuse to overwrite a secret someone else owns or one that belongs to a
-  project already merged.
-- The web pod gets Secrets Manager write access, scoped to `tmprl-dem-cld/*`
-  with an explicit deny on `tmprl-dem-cld/platform/*`.
-- The shared-secret picker lists `tmprl-dem-cld/platform/shared/*` by name.
-  Property names come from tags on each shared secret.
-- Secrets from PRs that never merge are tagged now, so a later sweep can remove
-  them.
+The form's Secrets section declares the secrets the draft needs and gives each
+one to the components that read it.
+
+- **Project secrets.** The user types property names and values. The web
+  server writes them straight to Secrets Manager at
+  `tmprl-dem-cld/<project>/<secret>` (`POST /api/onboarding/secrets`), so
+  values never pass through Temporal and are never shown again.
+  - The project name comes from the user's own open draft, never the request.
+  - Projects already in the catalog are refused.
+  - New secrets are tagged `registry.tmprl-demo.cloud/managed-by:
+    catalog-onboarding` plus owner, project and onboarding ID.
+  - Property names go in the description, so listing never reads a value.
+  - Existing secrets are updated only if they carry that tag and the same
+    owner.
+- **Shared secrets.** A picker lists `tmprl-dem-cld/platform/shared/*` by name.
+  Property names come from a `properties` tag on each shared secret
+  (`infra/secrets.tf`; space-separated, since tag values can't contain commas).
+- **Validation.** Once a draft passes the schema and semantic checks, the
+  operator runs the same Secrets Manager check it runs before deploying. A
+  declared secret that isn't stored, or lacks a required property, is a draft
+  error on `/spec/secrets/<name>` and blocks hand-off.
+- **Web IAM role** (`infra/irsa.tf`, `registry_web`, bound to the `web`
+  service account):
+  - Create secrets only with the onboarding tag.
+  - Update (`PutSecretValue`, `UpdateSecret`) only secrets that carry it.
+  - `DescribeSecret` on the prefix, and `ListSecrets` (metadata only).
+  - An explicit deny on `platform/*`, and no `GetSecretValue`.
+  - The web code never calls `TagResource`. Creating a tagged secret needs
+    that permission, though, so a compromised pod could tag another project's
+    secret and then overwrite it. The hard boundary is "the prefix except
+    platform".
+- **Renames.** Secrets are stored under the saved project name. Renaming the
+  project means storing them again; the form says so. Secrets from drafts that
+  never merge carry the onboarding tag, so a later sweep can find them.
+
+**Deploying it.** `tofu apply` in `infra/` first. It creates the
+`tmprl-dem-cld-registry-web-bg` role and tags the three shared secrets. Then
+merge: the web component gets the role through `awsIamRoleArn`. Until the role
+exists, the Secrets section reports that Secrets Manager is unavailable;
+nothing else breaks.
 
 ## Test deploy (milestone 4)
 
@@ -181,7 +211,7 @@ DemoProject directly to the cluster, the way the operator canary does.
    - The onboarding workflow and edit loop.
    - The onboarding page: form, YAML tab, hand-off.
 2. **Agent pod.** Done on this branch; see above.
-3. **Secrets.** Project secret entry and the shared-secret picker.
+3. **Secrets.** Done on this branch; see above.
 4. **Test deploys.**
 5. **Instruqt.**
 6. **Automatic demo-repo PRs**, after the rest works end to end.

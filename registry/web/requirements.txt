@@ -1,4 +1,6 @@
 # The catalog server is stdlib-only except for the Temporal client, which powers
-# the crashable-workspace endpoints. Keep the pin aligned with the worker
+# the crashable-workspace and onboarding endpoints, and boto3 for onboarding secrets. Keep the pin aligned with the worker
 # (registry/worker/requirements.txt) so both talk to the same Temporal Cloud.
 temporalio>=1.29,<2
+# Onboarding writes project secrets straight to Secrets Manager.
+boto3>=1.34,<2

@@ -60,17 +60,20 @@ locals {
     }
     "shared/anthropic" = {
       description = "Platform-managed shared anthropic credentials for opt-in demos"
-      tags        = { managed-by = "platform", secret-scope = "shared" }
-      import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/shared/anthropic-4UvLL0"
+      # properties lists the JSON keys (space-separated; tag values can't hold
+      # commas) so the catalog's onboarding page can offer them without reading
+      # the value.
+      tags       = { managed-by = "platform", secret-scope = "shared", properties = "ANTHROPIC_API_KEY" }
+      import_arn = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/shared/anthropic-4UvLL0"
     }
     "shared/openai" = {
       description = "Platform-managed shared openai credentials for opt-in demos"
-      tags        = { managed-by = "platform", secret-scope = "shared" }
+      tags        = { managed-by = "platform", secret-scope = "shared", properties = "OPENAI_API_KEY" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/shared/openai-FoIoqU"
     }
     "shared/gemini" = {
       description = "Platform-managed shared gemini credentials for opt-in demos"
-      tags        = { managed-by = "platform", secret-scope = "shared" }
+      tags        = { managed-by = "platform", secret-scope = "shared", properties = "GEMINI_API_KEY GOOGLE_API_KEY" }
       import_arn  = "arn:aws:secretsmanager:us-west-1:429214323166:secret:tmprl-dem-cld/platform/shared/gemini-fgbh4N"
     }
   }

@@ -3,7 +3,8 @@
 - ``inspect_onboarding_repo`` checks that a demo repo is public and in an allowed
   org, and pins its default-branch commit.
 - ``validate_onboarding_draft`` runs scripts/validate_projects.py against the
-  draft plus every project already in the cluster, and renders the YAML and the
+  draft plus every project already in the cluster, checks that every secret it
+  declares is stored with its required properties, and renders the YAML and the
   GitHub new-file link the user opens the PR from.
 - ``verify_onboarding_pull_request`` checks that the PR the user opened adds
   exactly the validated file.
@@ -26,6 +27,10 @@ from temporalio import activity
 from temporalio.common import RetryPolicy
 
 from demo_registry_operator import errors, kube, project_validation, resources
+from demo_registry_operator.activities.external_resources.models import (
+    SecretRequirement,
+)
+from demo_registry_operator.activities.external_resources.secrets import secret_status
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.workflows.catalog_onboarding_messages import (
     DraftError,
@@ -161,6 +166,8 @@ def validate_onboarding_draft(request: ValidateDraftRequest) -> DraftValidation:
                     pointer=validator.error_pointer(error, spec_fields),
                 )
             )
+        if project_path and not draft_errors:
+            draft_errors.extend(secret_errors(document))
 
     return DraftValidation(
         document=document,
@@ -239,6 +246,49 @@ def verify_onboarding_pull_request(
         number=number,
         author=author if isinstance(author, str) else None,
     )
+
+
+def secret_errors(document: dict[str, Any]) -> list[DraftError]:
+    """A declared secret that isn't stored would block the first deploy, so
+    report it now. Uses the same check the operator runs before deploying."""
+
+    names = list(resources.project_secret_definitions(document))
+    if not names:
+        return []
+    import boto3
+
+    secretsmanager = boto3.session.Session(
+        region_name=WorkerConfig.from_env().aws_region
+    ).client("secretsmanager")
+    problems = []
+    for name in names:
+        try:
+            path = resources.user_secret_remote_path(document, name)
+        except ValueError:
+            continue  # the validator already reported the bad shared path
+        status = secret_status(
+            secretsmanager,
+            SecretRequirement(
+                path=path,
+                required=True,
+                managed_by=resources.user_secret_managed_by(document, name),
+                required_properties=tuple(
+                    resources.user_secret_required_properties(document, name)
+                ),
+            ),
+        )
+        if status.get("phase") == "MissingValue":
+            message = (
+                f"Secret {name} isn't stored yet. Add its value in the Secrets section."
+                if status.get("managedBy") != "platform"
+                else f"Shared secret {path} doesn't exist."
+            )
+        elif status.get("phase") == "MissingProperties":
+            message = f"Secret {name} is missing {', '.join(status.get('missingProperties') or [])}."
+        else:
+            continue
+        problems.append(DraftError(message, pointer=f"/spec/secrets/{name}"))
+    return problems
 
 
 def parse_repo_url(repo_url: str) -> tuple[str, str]:

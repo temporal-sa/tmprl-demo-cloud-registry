@@ -29,6 +29,9 @@ locals {
     traefik                 = "system:serviceaccount:traefik:traefik"
     instruqt-litellm-broker = "system:serviceaccount:${var.name_prefix}-instruqt-litellm:instruqt-litellm-broker"
     registry-operator       = "system:serviceaccount:${var.name_prefix}-registry-operator:registry-operator"
+    # The catalog web, rendered by the registry-operator self-demo (service
+    # accounts are named after the component).
+    registry-web = "system:serviceaccount:${var.name_prefix}-registry-operator:web"
   }
 
   # One assume-role-with-web-identity statement per color for a given SA. Adding a
@@ -379,3 +382,77 @@ resource "aws_iam_role_policy" "registry_operator_serverless" {
     ]
   })
 }
+
+# --- registry web (catalog onboarding secrets) -----------------------------
+# Lets the catalog web store the secrets a user enters while onboarding a demo,
+# straight into Secrets Manager so values never pass through Temporal. It reads
+# metadata only (no GetSecretValue) and never writes platform secrets.
+#
+# Creates must carry the onboarding tag, and updates are limited to secrets that
+# carry it, so a bug in the web can't overwrite a secret a person or the
+# operator created. The web code never calls TagResource (property names go in
+# the description). CreateSecret with tags needs TagResource, though, so a
+# compromised pod could tag another project's secret and then update it: the
+# hard boundary is "<prefix>/* except platform/*".
+locals {
+  onboarding_secret_tag = "registry.tmprl-demo.cloud/managed-by"
+}
+
+resource "aws_iam_role" "registry_web" {
+  name               = "${var.name_prefix}-registry-web-bg"
+  assume_role_policy = local.irsa_assume_role_policies["registry-web"]
+}
+
+resource "aws_iam_role_policy" "registry_web_onboarding_secrets" {
+  name = "${var.name_prefix}-registry-web-onboarding-secrets"
+  role = aws_iam_role.registry_web.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "CreateOnboardingSecrets"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:CreateSecret", "secretsmanager:TagResource"]
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/*"
+        Condition = {
+          StringEquals = { "aws:RequestTag/${local.onboarding_secret_tag}" = "catalog-onboarding" }
+        }
+      },
+      {
+        Sid      = "UpdateOnboardingSecrets"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret"]
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/*"
+        Condition = {
+          StringEquals = { "secretsmanager:ResourceTag/${local.onboarding_secret_tag}" = "catalog-onboarding" }
+        }
+      },
+      {
+        Sid      = "DescribeSecrets"
+        Effect   = "Allow"
+        Action   = "secretsmanager:DescribeSecret"
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/*"
+      },
+      {
+        # ListSecrets can't be scoped to a resource; it returns metadata only.
+        Sid      = "ListSecretsMetadata"
+        Effect   = "Allow"
+        Action   = "secretsmanager:ListSecrets"
+        Resource = "*"
+      },
+      {
+        Sid    = "NeverPlatformSecrets"
+        Effect = "Deny"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:TagResource",
+        ]
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/platform/*"
+      },
+    ]
+  })
+}
+

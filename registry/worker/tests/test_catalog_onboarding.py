@@ -631,3 +631,60 @@ def test_agent_runs_propose_without_editing_and_can_be_stopped():
 
     asyncio.run(scenario())
     assert release["cancelled"]
+
+
+def document_with_secrets() -> dict:
+    document = seed_document(REPO)
+    document["spec"]["secrets"] = {
+        "app-credentials": {"requiredProperties": ["API_KEY"]},
+        "anthropic": {"shared": "anthropic"},
+        "ready": {},
+    }
+    document["spec"]["components"]["app"]["secrets"] = ["app-credentials", "anthropic", "ready"]
+    return document
+
+
+def test_secret_errors_point_at_secrets_that_are_not_stored(monkeypatch):
+    checked = []
+
+    def fake_status(secretsmanager, requirement):
+        checked.append((requirement.path, requirement.required_properties))
+        if requirement.path.endswith("/app-credentials"):
+            return {"phase": "MissingProperties", "missingProperties": ["API_KEY"], "managedBy": "project-owner"}
+        if requirement.path.endswith("/anthropic"):
+            return {"phase": "MissingValue", "managedBy": "platform"}
+        return {"phase": "Ready", "managedBy": "project-owner"}
+
+    monkeypatch.setattr(activities, "secret_status", fake_status)
+
+    problems = activities.secret_errors(document_with_secrets())
+
+    assert [(p.pointer, p.message) for p in problems] == [
+        ("/spec/secrets/app-credentials", "Secret app-credentials is missing API_KEY."),
+        ("/spec/secrets/anthropic", "Shared secret tmprl-dem-cld/platform/shared/anthropic doesn't exist."),
+    ]
+    assert ("tmprl-dem-cld/money-transfer-demo/app-credentials", ("API_KEY",)) in checked
+
+
+def test_secret_errors_need_no_aws_call_without_secrets(monkeypatch):
+    monkeypatch.setattr(activities, "secret_status", lambda *args: pytest.fail("checked"))
+
+    assert activities.secret_errors(seed_document(REPO)) == []
+
+
+def test_validate_reports_unstored_secrets_only_once_the_draft_is_valid(cluster, monkeypatch):
+    monkeypatch.setattr(
+        activities,
+        "secret_errors",
+        lambda document: [activities.DraftError("not stored", pointer="/spec/secrets/x")],
+    )
+    broken = seed_document(REPO)
+    broken["spec"]["registry"]["summary"] = ""
+
+    assert [e.message for e in activities.validate_onboarding_draft(
+        ValidateDraftRequest(document=seed_document(REPO))
+    ).errors] == ["not stored"]
+    assert "not stored" not in [
+        e.message
+        for e in activities.validate_onboarding_draft(ValidateDraftRequest(document=broken)).errors
+    ]
