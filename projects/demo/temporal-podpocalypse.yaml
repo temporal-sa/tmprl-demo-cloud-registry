@@ -11,6 +11,10 @@ spec:
     summary: A booth game where crashing the ship deletes the worker for that flight. Checked-in events start from a flight code instead of asking for the same details again.
     tags: [Entity Workflows, Nexus, Games]
     temporalSdks: [Go]
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/temporal-demo-podpocalypse#readme
   builds:
     app:
       context: .

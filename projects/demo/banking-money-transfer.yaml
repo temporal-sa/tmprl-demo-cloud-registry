@@ -12,6 +12,10 @@ spec:
       - Saga
     temporalSdks:
       - Python
+    links:
+      runbook:
+        label: README (The Demo)
+        url: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer#the-demo
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer

@@ -17,6 +17,10 @@ spec:
       - TypeScript
       - Java
       - .NET
+    links:
+      runbook:
+        label: README (The Demo)
+        url: https://github.com/temporal-sa/temporal-demo-dejavu-tacos#the-demo
     crashable:
       enabled: true
       taskQueueEnv: TEMPORAL_TASK_QUEUE

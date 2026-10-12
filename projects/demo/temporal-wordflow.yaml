@@ -18,6 +18,10 @@ spec:
       score: 5
       maxScore: 5
       note: Ready for demos and events.
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/temporal-demo-wordflow#readme
   builds:
     web:
       context: .

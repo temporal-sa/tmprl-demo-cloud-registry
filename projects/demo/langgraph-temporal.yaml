@@ -15,6 +15,10 @@ spec:
       including tool use, human approval, retries, and worker recovery.
     tags: [AI, Agents, LangGraph, Human-in-the-Loop, Comparison]
     temporalSdks: [Python]
+    links:
+      runbook:
+        label: README (Run the demo)
+        url: https://github.com/temporal-sa/langgraph-temporal-demo#run-the-demo
 
   source:
     repo: https://github.com/temporal-sa/langgraph-temporal-demo

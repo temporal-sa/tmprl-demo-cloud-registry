@@ -21,6 +21,10 @@ spec:
       enabled: true
       taskQueueEnv: TEMPORAL_TASK_QUEUE
       baseTaskQueue: serverless-webinar
+    links:
+      runbook:
+        label: README (Presenter mode)
+        url: https://github.com/temporal-sa/temporal-demo-serverless-no-roads#presenter-mode
   source:
     repo: https://github.com/temporal-sa/temporal-demo-serverless-no-roads
   temporal:

@@ -17,6 +17,10 @@ spec:
     temporalSdks:
       - Python
       - Go
+    links:
+      runbook:
+        label: Operations runbook
+        url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/docs/operations.md
 
   source:
     repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry

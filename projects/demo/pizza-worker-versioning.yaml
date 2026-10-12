@@ -13,6 +13,10 @@ spec:
       - Workflows
     temporalSdks:
       - Go
+    links:
+      runbook:
+        label: README (Demo script)
+        url: https://github.com/temporal-sa/temporal-demo-versioning#demo-script
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-versioning

@@ -53,6 +53,10 @@ spec:
     summary: A Claude agent chats about money transfers while a deterministic Temporal workflow moves the money — plan, a human approval gate, and a withdraw/deposit saga that refunds on failure.
     tags: [AI, Agents, Banking, Workflows]
     temporalSdks: [Python]
+    links:
+      runbook:
+        label: README (What to try)
+        url: https://github.com/temporal-sa/durable-claude-skills#what-to-try
     readiness:
       score: 4
       maxScore: 5
