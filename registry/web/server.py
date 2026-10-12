@@ -118,7 +118,11 @@ ONBOARDING_UPDATES = {
     "draft": "update_draft",
     "submit": "submit_pull_request",
     "abandon": "abandon",
+    "agent": "request_agent",
+    "agent/cancel": "cancel_agent",
 }
+ONBOARDING_AGENT_ACTIVITY = "run_onboarding_agent"
+ONBOARDING_AGENT_MODES = frozenset({"draft", "section"})
 
 
 class AuthError(Exception):
@@ -423,7 +427,13 @@ class TemporalGateway:
                 return {"phase": "None"}
             raise
         if description.status == WorkflowExecutionStatus.RUNNING:
-            return await handle.query("status")
+            status = await handle.query("status")
+            agent = status.get("agent") if isinstance(status, dict) else None
+            if isinstance(agent, dict) and agent.get("phase") == "Running":
+                agent["progress"] = await onboarding_agent_progress(
+                    client, description
+                )
+            return status
         if description.status == WorkflowExecutionStatus.COMPLETED:
             # Hand-off, abandon, and expiry all complete with the final status,
             # so the page can show how the last onboarding ended.
@@ -516,6 +526,24 @@ class TemporalGateway:
         return {"phase": "None", "demo": demo_name}
 
 
+async def onboarding_agent_progress(client: Any, description: Any) -> str | None:
+    """The agent's latest step ("Reading worker/main.go"), from the heartbeat
+    details of its running activity."""
+
+    raw = getattr(description, "raw_description", None)
+    for pending in getattr(raw, "pending_activities", None) or []:
+        if pending.activity_type.name != ONBOARDING_AGENT_ACTIVITY:
+            continue
+        payloads = list(pending.heartbeat_details.payloads)
+        if not payloads:
+            return None
+        details = await client.data_converter.decode(payloads)
+        latest = details[-1] if details else None
+        if isinstance(latest, dict) and isinstance(latest.get("progress"), str):
+            return latest["progress"]
+    return None
+
+
 def onboarding_update_arg(action: str, body: dict[str, Any]) -> dict[str, Any] | str | None:
     """The update argument for an onboarding action, or a message for a 400.
 
@@ -543,6 +571,16 @@ def onboarding_update_arg(action: str, body: dict[str, Any]) -> dict[str, Any] |
         if not isinstance(url, str) or not url.strip():
             return "pull_request_url is required"
         return {"pull_request_url": url.strip()}
+    if action == "agent":
+        mode = body.get("mode")
+        if mode not in ONBOARDING_AGENT_MODES:
+            return "mode must be draft or section"
+        arg: dict[str, Any] = {"mode": mode}
+        for key in ("pointer", "question"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                arg[key] = value.strip()
+        return arg
     return None
 
 

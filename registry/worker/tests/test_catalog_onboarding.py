@@ -6,13 +6,14 @@ import concurrent.futures
 import json
 import os
 import shutil
+from datetime import timedelta
 
 import pytest
 import yaml
 from temporalio import activity
 from temporalio.client import WithStartWorkflowOperation, WorkflowUpdateFailedError
 from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
@@ -24,6 +25,10 @@ from demo_registry_operator.workflows.catalog_onboarding import (
     seed_document,
 )
 from demo_registry_operator.workflows.catalog_onboarding_messages import (
+    AgentField,
+    AgentRequest,
+    AgentRunRequest,
+    AgentRunResult,
     DraftError,
     DraftValidation,
     InspectRepoRequest,
@@ -494,3 +499,135 @@ def test_onboarding_runs_from_repo_to_hand_off_and_replays():
 
     asyncio.run(scenario())
     assert seen["verified"] == ["https://x/1", "https://x/2"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DEMO_REGISTRY_TEST_TEMPORAL_HISTORY"),
+    reason="Requires an explicitly enabled local Temporal server",
+)
+def test_agent_runs_propose_without_editing_and_can_be_stopped():
+    seen: dict[str, list] = {"agent": [], "validated": []}
+    release = {"cancelled": False}
+
+    @activity.defn(name="inspect_onboarding_repo")
+    def inspect(request: InspectRepoRequest) -> OnboardingRepo:
+        return REPO
+
+    @activity.defn(name="validate_onboarding_draft")
+    def validate(request: ValidateDraftRequest) -> DraftValidation:
+        seen["validated"].append(request.document)
+        return DraftValidation(
+            document=request.document,
+            yaml=activities.render_yaml(request.document),
+            project_path="projects/demo/money-transfer-demo.yaml",
+        )
+
+    @activity.defn(name="run_onboarding_agent")
+    def run_agent(request: AgentRunRequest) -> AgentRunResult:
+        seen["agent"].append(request)
+        if request.mode == "section":
+            # Block until the workflow cancels us, heartbeating like the real one.
+            # The SDK may raise the cancel inside this thread at any point.
+            try:
+                while not activity.is_cancelled():
+                    activity.heartbeat({"progress": "Reading"})
+                    activity.wait_for_cancelled_sync(timeout=0.2)
+                raise CancelledError("stopped")
+            finally:
+                release["cancelled"] = activity.is_cancelled()
+        drafted = {**request.document, "metadata": {"name": "drafted"}}
+        return AgentRunResult(
+            summary="Drafted it.",
+            fields=[AgentField(pointer="/metadata/name", reason="repo name")],
+            document=drafted,
+            patch="diff --git a/x b/x\n",
+            prompt="Fix it.",
+            cost_usd=0.3,
+            num_turns=9,
+        )
+
+    async def wait_for_agent(handle, phase):
+        for _ in range(100):
+            status = await handle.query(CatalogOnboardingWorkflow.status)
+            if status["agent"] and status["agent"]["phase"] == phase:
+                return status
+            await asyncio.sleep(0.1)
+        raise AssertionError(f"agent never reached {phase}")
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_local(
+            dev_server_existing_path=shutil.which("temporal")
+        ) as env:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                async with Worker(
+                    env.client,
+                    task_queue="catalog-onboarding",
+                    workflows=[CatalogOnboardingWorkflow],
+                    activities=[inspect, validate, run_agent],
+                    activity_executor=executor,
+                    workflow_runner=create_workflow_runner(),
+                    # Deliver the cancel on the next heartbeat, not 24s later.
+                    max_heartbeat_throttle_interval=timedelta(milliseconds=200),
+                    default_heartbeat_throttle_interval=timedelta(milliseconds=200),
+                ):
+                    handle = await env.client.start_workflow(
+                        CatalogOnboardingWorkflow.run,
+                        StartOnboardingRequest(owner_email="ada@temporal.io"),
+                        id="catalog-onboarding/agent",
+                        task_queue="catalog-onboarding",
+                    )
+                    status = await handle.execute_update(
+                        CatalogOnboardingWorkflow.set_repo,
+                        SetRepoRequest(repo_url=REPO.url),
+                    )
+                    original = status.document
+
+                    status = await handle.execute_update(
+                        CatalogOnboardingWorkflow.request_agent,
+                        AgentRequest(mode="draft"),
+                    )
+                    assert status.agent.phase == "Running"
+                    done = await wait_for_agent(handle, "Done")
+                    proposal = done["agent"]["proposal"]
+                    assert proposal["summary"] == "Drafted it."
+                    assert proposal["document"]["metadata"]["name"] == "drafted"
+                    assert proposal["patch"].startswith("diff")
+                    # A proposal, not an edit: the draft is unchanged.
+                    assert done["document"] == original
+                    assert done["revision"] == 1
+                    assert seen["validated"][-1]["metadata"]["name"] == "drafted"
+
+                    await handle.execute_update(
+                        CatalogOnboardingWorkflow.request_agent,
+                        AgentRequest(
+                            mode="section",
+                            pointer="/spec/components",
+                            question="Which are workers?",
+                        ),
+                    )
+                    with pytest.raises(WorkflowUpdateFailedError):
+                        await handle.execute_update(
+                            CatalogOnboardingWorkflow.request_agent,
+                            AgentRequest(mode="draft"),
+                        )
+                    stopping = await handle.execute_update(
+                        CatalogOnboardingWorkflow.cancel_agent
+                    )
+                    assert stopping.agent.stopping
+                    cancelled = await wait_for_agent(handle, "Cancelled")
+                    assert cancelled["agent"]["stopping"] is False
+                    assert cancelled["agent_runs"] == 2
+                    assert seen["agent"][1].run_id == "catalog-onboarding/agent#2"
+                    assert seen["agent"][1].question == "Which are workers?"
+
+                    await handle.execute_update(CatalogOnboardingWorkflow.abandon)
+                    await handle.result()
+                    history = await handle.fetch_history()
+
+            await Replayer(
+                workflows=[CatalogOnboardingWorkflow],
+                workflow_runner=create_workflow_runner(),
+            ).replay_workflow(history)
+
+    asyncio.run(scenario())
+    assert release["cancelled"]

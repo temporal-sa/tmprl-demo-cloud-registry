@@ -1,0 +1,25 @@
+# Where the operator runs catalog onboarding agent Jobs
+# (activities/onboarding_agent.py). Each Job is a credential-free pod with a
+# firewall that drops private networks; the quota bounds how many run at once.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tmprl-dem-cld-onboarding-agents
+  labels:
+    app.kubernetes.io/name: onboarding-agent
+    app.kubernetes.io/managed-by: flux
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: onboarding-agents
+  namespace: tmprl-dem-cld-onboarding-agents
+spec:
+  hard:
+    # Each agent pod requests 500m / 1Gi and is limited to 2 CPU / 3Gi.
+    count/jobs.batch: "6"
+    pods: "6"
+    requests.cpu: "3"
+    requests.memory: 6Gi
+    limits.cpu: "12"
+    limits.memory: 18Gi

@@ -52,38 +52,94 @@ The workflow gives up after 14 days with no edits.
 
 ## Agent (milestone 2)
 
-The agent runs as a Kubernetes Job, one per request, in its own namespace with
-resource limits.
+The page offers "Draft with the agent" (the whole DemoProject) and "Ask the
+agent about this" on each form section. The `request_agent` update queues a run
+and returns at once. The workflow's main loop runs `run_onboarding_agent`, and
+the page polls status. The run's latest step comes from the activity's
+heartbeat details, which the web server reads with `describe`. The result is a
+**proposal**: the operator validates it the same way as any edit, and the user
+applies it or ignores it. The agent never edits the draft itself.
+`cancel_agent` stops a run. Cancellation reaches the activity on its next
+heartbeat, so Stop takes up to about 24 seconds.
 
-- **Isolation.** The pod uses the isolated-executor profile
-  (`isolated_executor.py`): no service-account token, no AWS or Temporal
-  credentials, runs as non-root, and private address ranges are firewalled.
-- **Model access.** For each run, the operator mints a LiteLLM virtual key
-  through the Instruqt broker: $2 budget, 1 hour, Anthropic models only, no
-  default model, so the SDK picks its own models. The operator signs requests
-  with the existing broker credential (key ID `v1`). It reads only the
-  `BROKER_HMAC_SECRETS_JSON` property of
-  `tmprl-dem-cld/platform/instruqt-litellm/broker`, never the whole secret,
-  which also holds the LiteLLM master key. The broker and its secret are not
-  changed. Mints carry `track_id=registry-onboarding`, so spend can be found.
-- **Gateway route.** The gateway needs a `claude-*` → `anthropic/claude-*`
-  route, because the SDK sends plain model names. This only adds a route.
-- **Repo access.** Repos are public, so the pod clones the repo itself.
-- **Grounding.** The agent image is built from this repo, so it carries the
-  schema, `projects/README.md`, example projects, the validator, and the
-  buildkit guides 07 and 12 at the operator's own commit. The old
-  `skills/tmprl-demo-cloud-onboarding` skill is stale and is not used.
-- **Tools.** Read, Grep, Glob and Bash, with turn and cost limits. The agent can
-  run the validator on its own draft.
-- **Output.** The pod prints a result JSON: the draft, a reason for each field
-  with `file:line` citations, findings, and a `git diff` of suggested demo-repo
-  changes. The activity reads it from the pod's logs. Suggested code changes go
-  to the user as a patch plus a ready-made Claude Code prompt. The agent opens
-  no PRs for now.
-- **Temporal.** One activity creates the Job. Its name derives from the
-  workflow ID and request number, so a retry reattaches. The activity mints the
-  key inside itself, so the key never enters history. It reports progress as
-  heartbeat details, and deletes the Job if cancelled.
+**Job and pod** (`activities/onboarding_agent.py`, `registry/onboarding-agent/`)
+
+- One Kubernetes Job per run in `tmprl-dem-cld-onboarding-agents`, with a
+  quota of 6 pods, a 25-minute deadline, and no retries. The Job name derives
+  from the run ID, so a retried activity reattaches to a Job that is still
+  running.
+- The pod has no service-account token and no AWS or Temporal credentials. It
+  runs as non-root with a read-only root filesystem and all capabilities
+  dropped. An init container applies the isolated-executor firewall, which
+  allows only DNS and public HTTP(S).
+- The image is the operator project's `onboarding-agent` build. The operator
+  gets its URI as `DEMO_REGISTRY_ONBOARDING_AGENT_IMAGE`, the same way it gets
+  the Temporal Cloud proxy image. The Python Agent SDK wheel bundles the Claude
+  Code CLI, so the image needs no Node.
+
+**Model access**
+
+- Each run mints a LiteLLM key through the Instruqt broker: $2, one hour,
+  models `claude-*` and `anthropic/*`, no default model, so the SDK picks.
+  Mints carry `track_id=registry-onboarding`.
+- The operator signs with the existing `v1` credential. The
+  `onboarding-litellm-broker` ExternalSecret copies only the
+  `BROKER_HMAC_SECRETS_JSON` property; the broker and its secret are unchanged.
+- The key is minted inside the activity and goes only into a Secret owned by
+  the Job, so it never enters workflow history and is deleted with the Job. It
+  is revoked when the run ends.
+- The pod reaches the gateway at `https://litellm-instruqt.tmprl-demo.cloud`
+  with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. The gateway gets a
+  `claude-*` → `anthropic/claude-*` route, because the SDK sends bare model
+  names.
+
+**Grounding**
+
+- The request carries the catalog contract as of the operator's own commit:
+  both schemas, the validator, and `projects/README.md` from the operator image,
+  plus five deployed example projects read live from the cluster.
+- Buildkit guides 07 and 12 are copied into the agent image
+  (`registry/onboarding-agent/context/buildkit/`), since the buildkit repo is
+  private. The old `skills/tmprl-demo-cloud-onboarding` skill is not used.
+
+**Agent run** (`registry/onboarding-agent/agent.py`)
+
+- The pod clones the repo at the pinned commit.
+- The agent gets Read, Grep, Glob, Bash, Write and Edit, with bypassed
+  permissions, because the pod is the sandbox.
+- It loads no settings, hooks or CLAUDE.md from the repo.
+- It stops at 80 turns or $1.50.
+- It writes the draft to a file and checks it with the validator. The wrapper
+  gives it one bounded repair pass if validation still fails.
+- Its edits to the checkout become a patch, new files included. The activity
+  turns its findings into a Claude Code prompt. The agent opens no PRs.
+- Output goes to stdout as `@@progress`, `@@result` (chunked base64 JSON) and
+  `@@error` lines, which the activity reads from the pod log.
+
+**Verified locally on 2026-10-12:**
+
+- I ran `agent.py` with a real minted key against
+  `temporalio/money-transfer-project-template-go` through the live gateway. It
+  took 11 turns and cost $0.14.
+- It found the repo is a worker plus a CLI starter. It drafted a worker-only
+  project that passes the validator, patched the hardcoded task queue, and
+  added a Dockerfile.
+- It flagged the missing web app and the fixed workflow ID.
+
+The image build, the firewall, and running inside a Job are not verified
+locally; they get exercised on first deploy.
+
+**Deploying it**
+
+- Merging rolls the operator: there's a new build, and the operator now watches
+  more of the repo.
+- Flux applies the new `onboarding-agents` Kustomization, the RBAC change for
+  `batch/jobs`, and the broker ExternalSecret.
+- The gateway ConfigMap and the `config-revision` annotation roll the LiteLLM
+  pods.
+- No canary covers the agent. After deploy: open "Add a Demo", check a public
+  repo, run "Draft with the agent", and watch progress, the proposal, Apply,
+  and the patch download.
 
 ## Secrets (milestone 3)
 
@@ -124,8 +180,7 @@ DemoProject directly to the cluster, the way the operator canary does.
    - Ship the validator and schemas in the operator image.
    - The onboarding workflow and edit loop.
    - The onboarding page: form, YAML tab, hand-off.
-2. **Agent pod.** Context builder, image, Job activity, broker key minting,
-   draft and section-help modes, patch-plus-prompt output.
+2. **Agent pod.** Done on this branch; see above.
 3. **Secrets.** Project secret entry and the shared-secret picker.
 4. **Test deploys.**
 5. **Instruqt.**

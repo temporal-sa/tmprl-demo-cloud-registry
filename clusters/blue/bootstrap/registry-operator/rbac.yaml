@@ -98,6 +98,17 @@ rules:
       - pods/log
     verbs:
       - get
+  # Catalog onboarding agent runs (one Job each, in
+  # tmprl-dem-cld-onboarding-agents).
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - create
+      - delete
   - apiGroups:
       - apps
     resources:

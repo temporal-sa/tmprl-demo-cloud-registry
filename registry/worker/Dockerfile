@@ -28,5 +28,7 @@ COPY registry/worker/src /app/src
 # parent directory, so it lands in /app/src and the schemas in /app/schemas.
 COPY schemas /app/schemas
 COPY scripts/validate_projects.py /app/src/validate_projects.py
+# The onboarding agent's grounding also includes the projects README.
+COPY projects/README.md /app/projects/README.md
 
 CMD ["python", "-m", "demo_registry_operator.worker"]

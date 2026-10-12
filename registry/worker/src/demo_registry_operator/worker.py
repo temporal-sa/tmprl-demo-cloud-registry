@@ -119,6 +119,7 @@ from demo_registry_operator.activities.catalog_onboarding import (
     validate_onboarding_draft,
     verify_onboarding_pull_request,
 )
+from demo_registry_operator.activities.onboarding_agent import run_onboarding_agent
 from demo_registry_operator.activities.namespace_readers import (
     grant_user_namespace_read_access,
     sync_namespace_readers_group,
@@ -234,6 +235,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.force_reconcile",
     "demo_registry_operator.activities.instruqt",
     "demo_registry_operator.activities.namespace_readers",
+    "demo_registry_operator.activities.onboarding_agent",
     "demo_registry_operator.activities.reconcile",
     "demo_registry_operator.activities.rollout_diagnostics",
     "demo_registry_operator.derive",
@@ -465,6 +467,7 @@ async def main() -> None:
                     inspect_onboarding_repo,
                     validate_onboarding_draft,
                     verify_onboarding_pull_request,
+                    run_onboarding_agent,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,

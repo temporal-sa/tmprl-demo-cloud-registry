@@ -1596,6 +1596,56 @@
   .onboard-handoff-steps .btn { justify-self: start; }
 
   .onboard-discard { justify-self: start; }
+
+  .onboard-agent {
+    display: grid;
+    gap: .75rem;
+    padding: 1rem 1.1rem 1.15rem;
+    background: var(--deepest-blue);
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--bubble-gum);
+  }
+
+  .onboard-agent .eyebrow { color: var(--bubble-gum); font-size: .75rem; }
+  .onboard-agent [data-onboard-agent] { display: grid; gap: .9rem; }
+  .onboard-agent-summary { color: var(--off-white); font-size: .9375rem; font-weight: 300; line-height: 1.6; white-space: pre-line; }
+
+  .onboard-findings { display: grid; gap: .6rem; }
+  .onboard-findings strong { font-weight: 500; }
+  .onboard-findings ul { display: grid; gap: .6rem; }
+
+  .onboard-findings li {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    gap: .2rem .75rem;
+    color: var(--indigo-100);
+    font-size: .875rem;
+    font-weight: 300;
+    line-height: 1.5;
+  }
+
+  .onboard-findings li strong { color: var(--off-white); font-weight: 500; }
+  .onboard-findings code { grid-column: 2; color: var(--gray-300); font-family: var(--mono); font-size: .75rem; word-break: break-all; }
+
+  .onboard-severity {
+    align-self: start;
+    font-family: var(--mono);
+    font-size: .6875rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .onboard-findings .is-blocker .onboard-severity { color: var(--coral); }
+  .onboard-findings .is-warning .onboard-severity { color: var(--mustard); }
+  .onboard-findings .is-suggestion .onboard-severity { color: var(--indigo-300); }
+
+  .onboard-reasons summary { color: var(--indigo-200); font-size: .875rem; cursor: pointer; }
+  .onboard-reasons ul { display: grid; gap: .6rem; margin-top: .75rem; }
+  .onboard-reasons li { display: grid; gap: .15rem; color: var(--indigo-100); font-size: .8125rem; font-weight: 300; line-height: 1.5; }
+  .onboard-reasons code { color: var(--mint); font-family: var(--mono); font-size: .75rem; word-break: break-all; }
+
+  .onboard-ask { justify-self: start; margin-top: -.5rem; }
+  .onboard-ask-form { display: grid; gap: .6rem; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1640,6 +1690,8 @@
   .site-footer nav { margin-left: 0; }
   .onboard-step { padding: 1.25rem 1rem 1.5rem; }
   .onboard-form, .onboard-row, .onboard-card-fields, .onboard-checks { grid-template-columns: 1fr; }
+  .onboard-findings li { grid-template-columns: 1fr; }
+  .onboard-findings code { grid-column: 1; }
 }
 
 @media (max-width: 420px) {

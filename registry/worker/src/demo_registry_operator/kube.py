@@ -1686,6 +1686,73 @@ def delete_pod(
         raise
 
 
+def read_job(namespace: str, name: str) -> dict[str, Any] | None:
+    """A Job as a plain dict (API field names), or None if it doesn't exist."""
+
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        job = client.BatchV1Api().read_namespaced_job(name, namespace)
+    except Exception as error:
+        if _api_status(error) == 404:
+            return None
+        raise
+    return client.ApiClient().sanitize_for_serialization(job)
+
+
+def create_job(job: dict[str, Any]) -> dict[str, Any]:
+    client = _client_module()
+    load_kubernetes_config()
+    created = client.BatchV1Api().create_namespaced_job(
+        job["metadata"]["namespace"], job
+    )
+    return client.ApiClient().sanitize_for_serialization(created)
+
+
+def delete_job(namespace: str, name: str) -> str:
+    """Deletes a Job and, in the background, its pods and owned objects."""
+
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.BatchV1Api().delete_namespaced_job(
+            name, namespace, propagation_policy="Background"
+        )
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
+def create_secret(secret: dict[str, Any]) -> str:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CoreV1Api().create_namespaced_secret(
+            secret["metadata"]["namespace"], secret
+        )
+        return "created"
+    except Exception as error:
+        if _api_status(error) == 409:
+            return "exists"
+        raise
+
+
+def read_pod_log(namespace: str, name: str, *, container: str) -> str:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        return client.CoreV1Api().read_namespaced_pod_log(
+            name, namespace, container=container, _request_timeout=(5, 30)
+        )
+    except Exception as error:
+        if _api_status(error) in {400, 404}:
+            # Not started yet, or already gone.
+            return ""
+        raise
+
+
 def list_services(
     namespace: str,
     *,

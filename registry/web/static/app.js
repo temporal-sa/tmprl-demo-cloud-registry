@@ -1825,6 +1825,7 @@ const onboard = {
   error: null, // last request error, shown above the steps
   signInUrl: null,
   changingRepo: false,
+  askOpen: null, // pointer of the form section whose "Ask the agent" box is open
 };
 
 function clone(value) {
@@ -1949,6 +1950,271 @@ function switchOnboardTab(tab) {
   renderOnboarding();
 }
 
+// ─── Onboarding: the agent ─────────────────────────────────────────────────
+// The agent reads the repo and proposes a draft (or answers a question about
+// one section). Its run takes minutes, so the page polls status and refreshes
+// only the agent panel, leaving the form and any unsaved edits alone.
+
+const AGENT_SEVERITY_LABEL = { blocker: "Blocker", warning: "Warning", suggestion: "Suggestion" };
+let onboardPollTimer = null;
+
+function agentRunning(status) {
+  return Boolean(status && status.agent && status.agent.phase === "Running");
+}
+
+function scheduleOnboardPoll() {
+  clearTimeout(onboardPollTimer);
+  if (agentRunning(onboard.status) && currentView() === "onboard") {
+    onboardPollTimer = setTimeout(refreshAgentPanel, 3000);
+  }
+}
+
+async function refreshAgentPanel() {
+  try {
+    const res = await fetch("/api/onboarding", { credentials: "same-origin" });
+    if (res.ok) {
+      const data = await res.json();
+      // The agent never edits the draft, so only its own state is new here.
+      onboard.status = { ...onboard.status, agent: data.agent, agent_runs: data.agent_runs };
+    }
+  } catch (err) {
+    // Keep polling; a blip shouldn't end the run's display.
+  }
+  const panel = document.querySelector("[data-onboard-agent]");
+  if (panel) panel.replaceChildren(...agentPanelBody(onboard.status));
+  scheduleOnboardPoll();
+}
+
+function askAgent(body) {
+  onboardCall("Starting the agent", [["/api/onboarding/agent", body]]);
+}
+
+function applyProposal(proposal) {
+  if (onboardDirty() && !window.confirm("Replace your unsaved changes with the agent's draft?")) return;
+  onboard.tab = "form";
+  onboardCall("Applying the agent's draft", [
+    ["/api/onboarding/draft", { base_revision: onboard.status.revision, document: proposal.document }],
+  ]);
+}
+
+function downloadPatch(patch) {
+  const url = URL.createObjectURL(new Blob([patch], { type: "text/x-diff" }));
+  const link = el("a", { href: url, download: "onboarding.patch" });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function copyPrompt(prompt) {
+  navigator.clipboard.writeText(prompt).then(
+    () => toast("Prompt copied"),
+    () => toast("Couldn't copy the prompt")
+  );
+}
+
+function proposalView(proposal) {
+  const errors = proposal.errors || [];
+  const changed =
+    proposal.document && JSON.stringify(proposal.document) !== JSON.stringify(onboard.status.document);
+  const parts = [];
+  if (proposal.question) {
+    parts.push(el("p", { class: "onboard-hint", text: `You asked about ${proposal.pointer || "the draft"}: ${proposal.question}` }));
+  }
+  if (proposal.summary) parts.push(el("p", { class: "onboard-agent-summary", text: proposal.summary }));
+  if (changed) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-primary btn-sm",
+          "aria-disabled": String(Boolean(onboard.busy)),
+          text: proposal.mode === "section" ? "Apply the suggested change" : "Apply the agent's draft",
+          onclick: () => applyProposal(proposal),
+        }),
+        el("span", {
+          class: "mono",
+          text: errors.length ? `${errors.length} validator problem${errors.length === 1 ? "" : "s"} to fix after applying` : "Passes the validator",
+        })
+      )
+    );
+  } else if (proposal.mode === "section") {
+    parts.push(el("p", { class: "onboard-hint", text: "No change suggested for the draft." }));
+  }
+  const findings = proposal.findings || [];
+  if (findings.length) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-findings" },
+        el("strong", { text: "Catalog readiness" }),
+        el(
+          "ul",
+          {},
+          ...findings.map((finding) =>
+            el(
+              "li",
+              { class: `is-${finding.severity}` },
+              el("span", { class: "onboard-severity", text: AGENT_SEVERITY_LABEL[finding.severity] || finding.severity }),
+              el("span", {}, el("strong", { text: finding.title }), ` ${finding.detail}`),
+              finding.location ? el("code", { text: finding.location }) : null
+            )
+          )
+        )
+      )
+    );
+  }
+  if (proposal.patch || proposal.prompt) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("span", { class: "onboard-hint", text: "Suggested changes to the demo repo:" }),
+        proposal.patch
+          ? el("button", { type: "button", class: "btn btn-secondary btn-sm", text: "Download patch", onclick: () => downloadPatch(proposal.patch) })
+          : null,
+        proposal.prompt
+          ? el("button", { type: "button", class: "btn btn-secondary btn-sm", text: "Copy Claude Code prompt", onclick: () => copyPrompt(proposal.prompt) })
+          : null
+      )
+    );
+  }
+  const fields = proposal.fields || [];
+  if (fields.length) {
+    parts.push(
+      el(
+        "details",
+        { class: "onboard-reasons" },
+        el("summary", { text: `Why each field is set (${fields.length})` }),
+        el(
+          "ul",
+          {},
+          ...fields.map((item) =>
+            el(
+              "li",
+              {},
+              el("code", { text: item.pointer }),
+              el("span", { text: item.reason }),
+              (item.evidence || []).length ? el("span", { class: "mono", text: item.evidence.join(", ") }) : null
+            )
+          )
+        )
+      )
+    );
+  }
+  parts.push(el("span", { class: "mono", text: `${proposal.num_turns} steps · $${Number(proposal.cost_usd || 0).toFixed(2)}` }));
+  return parts;
+}
+
+function agentPanelBody(status) {
+  const agent = status.agent;
+  const dirty = onboardDirty();
+  const start = el("button", {
+    type: "button",
+    class: "btn btn-pink btn-sm",
+    "aria-disabled": String(dirty || Boolean(onboard.busy) || agentRunning(status)),
+    title: dirty ? "Validate your changes first; the agent works from the saved draft." : null,
+    text: agent ? "Draft again with the agent" : "Draft with the agent",
+    onclick: () => askAgent({ mode: "draft" }),
+  });
+  const intro = el("p", {
+    class: "onboard-hint",
+    text: "The agent reads the repo, writes the whole project config with a reason for each field, and points out what the repo needs to change to run in the catalog. It takes a few minutes; you can keep editing meanwhile.",
+  });
+  if (!agent) return [intro, el("div", { class: "onboard-actions" }, start)];
+  if (agent.phase === "Running" && agent.stopping) {
+    return [el("p", { class: "onboard-busy", role: "status", text: "Stopping the agent…" })];
+  }
+  if (agent.phase === "Running") {
+    return [
+      el(
+        "p",
+        { class: "onboard-busy", role: "status" },
+        `${agent.mode === "section" ? "Answering your question" : "Drafting"}: ${agent.progress || "starting"}…`
+      ),
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-quiet btn-sm",
+          text: "Stop the agent",
+          onclick: () => onboardCall("Stopping the agent", [["/api/onboarding/agent/cancel", {}]]),
+        })
+      ),
+    ];
+  }
+  const parts = [];
+  if (agent.phase === "Failed") parts.push(onboardAlert("error", "The agent didn't finish.", agent.error));
+  if (agent.phase === "Cancelled") parts.push(el("p", { class: "onboard-hint", text: "The last agent run was stopped." }));
+  if (agent.phase === "Done" && agent.proposal) parts.push(...proposalView(agent.proposal));
+  parts.push(el("div", { class: "onboard-actions" }, start));
+  return parts;
+}
+
+function agentPanel(status) {
+  return el(
+    "div",
+    { class: "onboard-agent" },
+    el("p", { class: "eyebrow", text: "Agent" }),
+    el("div", { "data-onboard-agent": "" }, ...agentPanelBody(status))
+  );
+}
+
+// "Ask the agent" under a form section: one question about that part.
+function askControl(pointer) {
+  if (onboard.askOpen !== pointer) {
+    return el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm onboard-ask",
+      "aria-disabled": String(agentRunning(onboard.status) || Boolean(onboard.busy)),
+      text: "Ask the agent about this",
+      onclick: () => {
+        onboard.askOpen = pointer;
+        renderOnboarding();
+      },
+    });
+  }
+  const question = el("textarea", {
+    rows: 2,
+    maxlength: 2000,
+    placeholder: "e.g. Which of these processes are Temporal workers?",
+    "aria-label": "Question for the agent",
+  });
+  return el(
+    "form",
+    {
+      class: "onboard-ask-form",
+      onsubmit: (event) => {
+        event.preventDefault();
+        if (onboardDirty()) {
+          toast("Validate your changes first");
+          return;
+        }
+        onboard.askOpen = null;
+        askAgent({ mode: "section", pointer, question: question.value });
+      },
+    },
+    question,
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", { type: "submit", class: "btn btn-secondary btn-sm", text: "Ask" }),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Cancel",
+        onclick: () => {
+          onboard.askOpen = null;
+          renderOnboarding();
+        },
+      })
+    )
+  );
+}
+
 // ─── Onboarding: rendering ─────────────────────────────────────────────────
 
 function onboardStep(number, title, ...children) {
@@ -2027,6 +2293,7 @@ function catalogFields(doc) {
     "fieldset",
     { class: "onboard-fields" },
     el("legend", { text: "Catalog entry" }),
+    askControl("/spec/registry"),
     field(
       "Project name",
       "/metadata/name",
@@ -2119,6 +2386,7 @@ function buildRows(doc) {
     "fieldset",
     { class: "onboard-fields onboard-wide" },
     el("legend", { text: "Builds" }),
+    askControl("/spec/builds"),
     el("p", { class: "onboard-hint", text: "One container image per entry, built by CodeBuild from the repo." }),
     ...rows,
     el("button", {
@@ -2229,6 +2497,7 @@ function componentCards(doc) {
     "fieldset",
     { class: "onboard-fields onboard-wide" },
     el("legend", { text: "Components" }),
+    askControl("/spec/components"),
     el("p", { class: "onboard-hint", text: "One long-running process each. Exactly one should be public." }),
     ...cards,
     el("button", {
@@ -2253,6 +2522,7 @@ function runtimeFields(doc) {
     "fieldset",
     { class: "onboard-fields" },
     el("legend", { text: "Ingress and crashable environments" }),
+    askControl("/spec/ingress"),
     field(
       "Subdomain",
       "/spec/ingress/subdomain",
@@ -2384,6 +2654,7 @@ function draftEditor(status) {
     );
   }
   return [
+    agentPanel(status),
     tabs,
     errorList(status.errors || []),
     status.ready && !dirty ? onboardAlert("success", "The draft is valid.", "Open the pull request below.") : null,
@@ -2414,6 +2685,8 @@ function renderOnboardingActions() {
   if (actions) actions.replaceChildren(...draftActions(onboardDirty()));
   const handoff = document.querySelector("[data-onboard-handoff]");
   if (handoff) handoff.replaceChildren(...handoffBody(onboard.status));
+  const agent = document.querySelector("[data-onboard-agent]");
+  if (agent) agent.replaceChildren(...agentPanelBody(onboard.status));
 }
 
 function repoStep(status) {
@@ -2604,6 +2877,7 @@ function renderOnboarding() {
   root.replaceChildren(...children);
   root.setAttribute("aria-busy", String(Boolean(onboard.busy)));
   markErrorFields(root, status.errors || []);
+  scheduleOnboardPoll();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,4 @@
+# The SDK wheel bundles the Claude Code CLI, so the image needs no Node.
+claude-agent-sdk==0.2.165
+PyYAML>=6.0.1,<7
+jsonschema>=4.22,<5

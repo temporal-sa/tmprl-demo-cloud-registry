@@ -1129,3 +1129,83 @@ def test_onboarding_status_returns_the_final_status_of_a_completed_run():
 
     assert result == final
     assert ids == ["catalog-onboarding/blue/ada@temporal.io"]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"mode": "draft"}, {"mode": "draft"}),
+        (
+            {"mode": "section", "pointer": "/spec/components", "question": " Workers? ", "owner": "x"},
+            {"mode": "section", "pointer": "/spec/components", "question": "Workers?"},
+        ),
+    ],
+)
+def test_onboarding_agent_requests_forward_only_known_fields(
+    tmp_path, monkeypatch, body, expected
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        onboarding_request(httpd, "/api/onboarding/agent", body=body)
+        onboarding_request(httpd, "/api/onboarding/agent/cancel", body={})
+        assert gateway.calls == [
+            ("request_agent", "mjones@temporal.io", expected),
+            ("cancel_agent", "mjones@temporal.io", None),
+        ]
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_agent_rejects_unknown_modes(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/onboarding/agent", body={"mode": "deploy"})
+        assert raised.value.code == 400
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_status_adds_the_running_agents_latest_step():
+    from temporalio.api.common.v1 import Payloads
+    from temporalio.api.workflow.v1 import PendingActivityInfo
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+    from temporalio.converter import DataConverter
+
+    async def scenario():
+        payloads = await DataConverter.default.encode([{"progress": "Reading main.go"}])
+        raw = DescribeWorkflowExecutionResponse(
+            pending_activities=[
+                PendingActivityInfo(
+                    activity_type={"name": "validate_onboarding_draft"},
+                ),
+                PendingActivityInfo(
+                    activity_type={"name": "run_onboarding_agent"},
+                    heartbeat_details=Payloads(payloads=payloads),
+                ),
+            ]
+        )
+        handle = SimpleNamespace(
+            describe=AsyncMock(
+                return_value=SimpleNamespace(
+                    status=server.WorkflowExecutionStatus.RUNNING,
+                    raw_description=raw,
+                )
+            ),
+            query=AsyncMock(return_value={"phase": "Drafting", "agent": {"phase": "Running"}}),
+        )
+        client = SimpleNamespace(
+            get_workflow_handle=lambda _: handle,
+            data_converter=DataConverter.default,
+        )
+        gateway = SimpleNamespace(cluster="blue", _get_client=AsyncMock(return_value=client))
+        return await server.TemporalGateway._onboarding_status(gateway, "ada@temporal.io")
+
+    status = asyncio.run(scenario())
+
+    assert status["agent"]["progress"] == "Reading main.go"

@@ -894,11 +894,16 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         "!/registry/worker/**",
         "!/registry/temporal-cloud-proxy/",
         "!/registry/temporal-cloud-proxy/**",
+        "!/registry/onboarding-agent/",
+        "!/registry/onboarding-agent/**",
         "!/schemas/",
         "!/schemas/**",
         "!/scripts/",
         "/scripts/*",
         "!/scripts/validate_projects.py",
+        "!/projects/",
+        "/projects/*",
+        "!/projects/README.md",
     ]
     assert source_git_repository(
         demo_project,
@@ -920,11 +925,16 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
                 "!/registry/worker/**",
                 "!/registry/temporal-cloud-proxy/",
                 "!/registry/temporal-cloud-proxy/**",
+                "!/registry/onboarding-agent/",
+                "!/registry/onboarding-agent/**",
                 "!/schemas/",
                 "!/schemas/**",
                 "!/scripts/",
                 "/scripts/*",
                 "!/scripts/validate_projects.py",
+                "!/projects/",
+                "/projects/*",
+                "!/projects/README.md",
             ]
         ),
     }
@@ -941,11 +951,16 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
             "!/registry/worker/**\n"
             "!/registry/temporal-cloud-proxy/\n"
             "!/registry/temporal-cloud-proxy/**\n"
+            "!/registry/onboarding-agent/\n"
+            "!/registry/onboarding-agent/**\n"
             "!/schemas/\n"
             "!/schemas/**\n"
             "!/scripts/\n"
             "/scripts/*\n"
             "!/scripts/validate_projects.py\n"
+            "!/projects/\n"
+            "/projects/*\n"
+            "!/projects/README.md\n"
         ),
     }
     assert "registry.tmprl-demo.cloud/image-overrides" not in demo_project["metadata"][
@@ -978,6 +993,7 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         ),
         "web": "example.com/registry/web:git-e12b0ed9d450",
         "worker": "example.com/registry/worker:git-e12b0ed9d450",
+        "onboarding-agent": "example.com/registry/onboarding-agent:git-e12b0ed9d450",
     }
     registry_external_resources = {
         "temporalCloud": {
@@ -1048,6 +1064,10 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
     assert {
         "name": "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE",
         "value": "example.com/registry/temporal-cloud-proxy:git-e12b0ed9d450",
+    } in container["env"]
+    assert {
+        "name": "DEMO_REGISTRY_ONBOARDING_AGENT_IMAGE",
+        "value": "example.com/registry/onboarding-agent:git-e12b0ed9d450",
     } in container["env"]
     # The operator no longer bakes an explicit DEMO_REGISTRY_TASK_QUEUE: it derives
     # registry-management-<color> from the injected DEMO_REGISTRY_CLUSTER (config.
