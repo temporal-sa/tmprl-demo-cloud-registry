@@ -319,11 +319,104 @@ def test_auth_verify_allows_signed_session_cookie(tmp_path, monkeypatch):
         assert response.headers["X-Temporal-Auth-Email"] == "mjones@temporal.io"
         assert response.headers["X-Temporal-Auth-Subject"] == "google:google-subject"
         assert response.headers["X-Temporal-Auth-Name"] == "M Jones"
-        claims = server.decode_jwt(response.headers["X-Temporal-Auth-JWT"])
+        claims = server.decode_jwt(
+            response.headers["X-Temporal-Auth-JWT"],
+            typ=server.TOKEN_TYPE_DOWNSTREAM,
+        )
         assert claims["aud"] == "banking-app.tmprl-demo.cloud"
         assert claims["project_host"] == "banking-app.tmprl-demo.cloud"
     finally:
         httpd.shutdown()
+
+
+def assert_verify_rejects_cookie(httpd, token):
+    request = Request(
+        f"http://127.0.0.1:{httpd.server_port}/_auth/verify",
+        headers={
+            "Cookie": f"{server.AUTH_SESSION_COOKIE}={token}",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "banking-app.tmprl-demo.cloud",
+            "X-Forwarded-Uri": "/",
+        },
+    )
+    with pytest.raises(HTTPError) as raised:
+        urlopen_no_redirect(request)
+    assert raised.value.code == 302
+    assert urlparse(raised.value.headers["Location"]).path == "/auth/login"
+
+
+def test_auth_verify_rejects_downstream_jwt_replayed_as_session(
+    tmp_path, monkeypatch
+):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path)
+    try:
+        response = urlopen(
+            Request(
+                f"http://127.0.0.1:{httpd.server_port}/_auth/verify",
+                headers={
+                    "Cookie": signed_session_cookie(),
+                    "X-Forwarded-Host": "banking-app.tmprl-demo.cloud",
+                },
+            ),
+            timeout=2,
+        )
+        downstream = response.headers["X-Temporal-Auth-JWT"]
+        assert_verify_rejects_cookie(httpd, downstream)
+    finally:
+        httpd.shutdown()
+
+
+def test_auth_verify_rejects_oauth_state_token_as_session(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    state = server.create_state_token({"return_to": "", "nonce": "n"})
+    httpd = run_test_server(tmp_path)
+    try:
+        assert_verify_rejects_cookie(httpd, state)
+    finally:
+        httpd.shutdown()
+
+
+def test_auth_verify_rejects_untyped_legacy_session(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    now = int(time.time())
+    header = server.base64url_json({"alg": "HS256", "typ": "JWT"})
+    body = server.base64url_json(
+        {
+            "iss": "https://catalog.tmprl-demo.cloud",
+            "aud": "tmprl-demo.cloud",
+            "sub": "google:google-subject",
+            "email": "mjones@temporal.io",
+            "iat": now,
+            "exp": now + 300,
+        }
+    )
+    signature = server.base64url_encode(
+        server.hmac.new(
+            b"test-signing-key",
+            f"{header}.{body}".encode("ascii"),
+            server.hashlib.sha256,
+        ).digest()
+    )
+    httpd = run_test_server(tmp_path)
+    try:
+        assert_verify_rejects_cookie(httpd, f"{header}.{body}.{signature}")
+    finally:
+        httpd.shutdown()
+
+
+def test_session_token_is_not_accepted_as_oauth_state(monkeypatch):
+    configure_google_auth(monkeypatch)
+    token = server.create_session_token(
+        server.GoogleIdentity(
+            subject="google-subject",
+            email="mjones@temporal.io",
+            name="M Jones",
+            hosted_domain="temporal.io",
+        )
+    )
+    with pytest.raises(server.AuthError):
+        server.decode_state_token(token)
 
 
 def test_google_callback_sets_shared_domain_cookie(tmp_path, monkeypatch):

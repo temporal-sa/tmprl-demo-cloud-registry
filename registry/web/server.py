@@ -51,6 +51,13 @@ DEFAULT_AUTH_ISSUER = "https://catalog.tmprl-demo.cloud"
 DEFAULT_ALLOWED_DOMAIN = "temporal.io"
 DEFAULT_SESSION_SECONDS = 60 * 60 * 24 * 7
 DEFAULT_DOWNSTREAM_JWT_SECONDS = 5 * 60
+# Every token this server signs carries a "typ" claim, and every decoder requires
+# its own typ. All typs share one signing key, so without this a downstream JWT
+# (handed to demo backends in X-Temporal-Auth-JWT) would replay as a session.
+TOKEN_TYPE_SESSION = "session"
+TOKEN_TYPE_DOWNSTREAM = "downstream"
+TOKEN_TYPE_OAUTH_STATE = "oauth-state"
+SESSION_AUDIENCE = "tmprl-demo.cloud"
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
@@ -751,7 +758,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             jwt = create_jwt(
                 {
                     "iss": auth_issuer(),
-                    "aud": host or "tmprl-demo.cloud",
+                    "aud": host or SESSION_AUDIENCE,
                     "sub": session_claims["sub"],
                     "email": session_claims["email"],
                     "name": session_claims.get("name"),
@@ -759,7 +766,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                     "project_host": host,
                     "iat": now,
                     "exp": now + downstream_jwt_seconds(),
-                }
+                },
+                typ=TOKEN_TYPE_DOWNSTREAM,
             )
             self.send_response(HTTPStatus.NO_CONTENT)
             self.send_header("Cache-Control", "no-store")
@@ -1172,7 +1180,10 @@ def session_from_request(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     token = cookie_value(handler, AUTH_SESSION_COOKIE)
     if not token:
         raise AuthError("Missing auth session.")
-    return decode_jwt(token)
+    claims = decode_jwt(token, typ=TOKEN_TYPE_SESSION)
+    if claims.get("aud") != SESSION_AUDIENCE:
+        raise AuthError("Invalid session audience.")
+    return claims
 
 
 def create_session_token(identity: GoogleIdentity) -> str:
@@ -1181,7 +1192,7 @@ def create_session_token(identity: GoogleIdentity) -> str:
     return create_jwt(
         {
             "iss": auth_issuer(),
-            "aud": "tmprl-demo.cloud",
+            "aud": SESSION_AUDIENCE,
             "sub": subject,
             "email": identity.email,
             "name": identity.name,
@@ -1189,7 +1200,8 @@ def create_session_token(identity: GoogleIdentity) -> str:
             "iat": now,
             "exp": now + session_seconds(),
             "auth_time": now,
-        }
+        },
+        typ=TOKEN_TYPE_SESSION,
     )
 
 
@@ -1203,12 +1215,13 @@ def create_state_token(payload: dict[str, Any]) -> str:
             "sub": "oauth-state",
             "iat": now,
             "exp": now + 10 * 60,
-        }
+        },
+        typ=TOKEN_TYPE_OAUTH_STATE,
     )
 
 
 def decode_state_token(token: str) -> dict[str, Any]:
-    claims = decode_jwt(token)
+    claims = decode_jwt(token, typ=TOKEN_TYPE_OAUTH_STATE)
     if claims.get("aud") != "google-oauth-state":
         raise AuthError("Invalid OAuth state.")
     if not isinstance(claims.get("nonce"), str):
@@ -1216,11 +1229,12 @@ def decode_state_token(token: str) -> dict[str, Any]:
     return claims
 
 
-def create_jwt(payload: dict[str, Any]) -> str:
+def create_jwt(payload: dict[str, Any], *, typ: str) -> str:
     if not auth_signing_key():
         raise AuthError("Auth signing key is not configured.")
     header = {"alg": "HS256", "typ": "JWT"}
     body = {key: value for key, value in payload.items() if value is not None}
+    body["typ"] = typ
     signing_input = ".".join([base64url_json(header), base64url_json(body)])
     signature = hmac.new(
         auth_signing_key().encode("utf-8"),
@@ -1230,7 +1244,7 @@ def create_jwt(payload: dict[str, Any]) -> str:
     return f"{signing_input}.{base64url_encode(signature)}"
 
 
-def decode_jwt(token: str) -> dict[str, Any]:
+def decode_jwt(token: str, *, typ: str) -> dict[str, Any]:
     if not auth_signing_key():
         raise AuthError("Auth signing key is not configured.")
     parts = token.split(".")
@@ -1260,6 +1274,8 @@ def decode_jwt(token: str) -> dict[str, Any]:
         raise AuthError("Session token expired.")
     if payload.get("iss") != auth_issuer():
         raise AuthError("Invalid session issuer.")
+    if payload.get("typ") != typ:
+        raise AuthError("Invalid token type.")
     if not isinstance(payload.get("sub"), str):
         raise AuthError("Session token is missing subject.")
     return payload
