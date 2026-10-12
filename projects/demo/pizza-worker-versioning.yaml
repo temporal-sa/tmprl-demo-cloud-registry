@@ -14,6 +14,8 @@ spec:
     temporalSdks:
       - Go
     links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/160Gm9ihtMLM9OmevttsBXLX2iT5SUO-I6giJVukUc4Q
       runbook:
         label: README (Demo script)
         url: https://github.com/temporal-sa/temporal-demo-versioning#demo-script
