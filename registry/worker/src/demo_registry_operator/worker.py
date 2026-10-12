@@ -114,6 +114,12 @@ from demo_registry_operator.activities.instruqt import (
     test_instruqt_course_track,
     wait_for_instruqt_course_image_build,
 )
+from demo_registry_operator.activities.catalog_onboarding import (
+    inspect_onboarding_repo,
+    validate_onboarding_draft,
+    verify_onboarding_pull_request,
+)
+from demo_registry_operator.activities.onboarding_agent import run_onboarding_agent
 from demo_registry_operator.activities.namespace_readers import (
     grant_user_namespace_read_access,
     sync_namespace_readers_group,
@@ -167,6 +173,7 @@ from demo_registry_operator.activities.rollout_diagnostics import (
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.derive import (
+    catalog_onboarding_workflow_id,
     demo_project_workflow_id,
     instruqt_course_workflow_id,
 )
@@ -190,6 +197,9 @@ from demo_registry_operator.workflows.isolated_lambda_workspace import (
     IsolatedLambdaWorkspaceWorkflow,
 )
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
+from demo_registry_operator.workflows.catalog_onboarding import (
+    CatalogOnboardingWorkflow,
+)
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
 from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
 from demo_registry_operator.workflows.namespace_readers import (
@@ -206,13 +216,18 @@ from demo_registry_operator.workflows.operator_canary import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ENTITY_WORKFLOW_TYPES = ("DemoProjectWorkflow", "InstruqtCourseWorkflow")
+ENTITY_WORKFLOW_TYPES = (
+    "DemoProjectWorkflow",
+    "InstruqtCourseWorkflow",
+    "CatalogOnboardingWorkflow",
+)
 CHECK_WORKER_VERSION_SIGNAL = "check_worker_version"
 WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.builds.codebuild.execution",
     "demo_registry_operator.activities.builds.planning",
     "demo_registry_operator.activities.builds.status",
     "demo_registry_operator.activities.canary",
+    "demo_registry_operator.activities.catalog_onboarding",
     "demo_registry_operator.activities.crashable_workspace",
     "demo_registry_operator.activities.isolated_lambda_workspace",
     "demo_registry_operator.activities.external_resources",
@@ -220,11 +235,13 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.force_reconcile",
     "demo_registry_operator.activities.instruqt",
     "demo_registry_operator.activities.namespace_readers",
+    "demo_registry_operator.activities.onboarding_agent",
     "demo_registry_operator.activities.reconcile",
     "demo_registry_operator.activities.rollout_diagnostics",
     "demo_registry_operator.derive",
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
+    "demo_registry_operator.workflows.catalog_onboarding_messages",
     "demo_registry_operator.workflows.crashable_workspace_messages",
     "demo_registry_operator.workflows.isolated_lambda_workspace_messages",
     "demo_registry_operator.isolated_lambda_workspace_resources",
@@ -327,6 +344,7 @@ async def main() -> None:
                     IsolatedLambdaWorkspaceWorkflow,
                     GrantNamespaceReadAccessWorkflow,
                     SyncNamespaceReadersWorkflow,
+                    CatalogOnboardingWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -446,6 +464,10 @@ async def main() -> None:
                     delete_workspace_lambda_functions,
                     grant_user_namespace_read_access,
                     sync_namespace_readers_group,
+                    inspect_onboarding_repo,
+                    validate_onboarding_draft,
+                    verify_onboarding_pull_request,
+                    run_onboarding_agent,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,
@@ -695,9 +717,11 @@ def running_entity_workflows_query(cluster: str | None = None) -> str:
         # "<type>/<color>/" segment) so the scope can never drift from real ids.
         demo_prefix = demo_project_workflow_id("", cluster)
         course_prefix = instruqt_course_workflow_id("", cluster)
+        onboarding_prefix = catalog_onboarding_workflow_id("", cluster)
         query += (
             f' AND (WorkflowId STARTS_WITH "{demo_prefix}"'
-            f' OR WorkflowId STARTS_WITH "{course_prefix}")'
+            f' OR WorkflowId STARTS_WITH "{course_prefix}"'
+            f' OR WorkflowId STARTS_WITH "{onboarding_prefix}")'
         )
     return query
 

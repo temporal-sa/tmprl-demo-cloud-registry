@@ -41,6 +41,10 @@ spec:
         app: instruqt-litellm
         app.kubernetes.io/name: instruqt-litellm
         app.kubernetes.io/component: litellm
+      annotations:
+        # LiteLLM reads config.yaml only at startup. Bump this with any change to
+        # instruqt-litellm-config so the pods roll and pick it up.
+        instruqt-litellm/config-revision: "2"
     spec:
       automountServiceAccountToken: false
       topologySpreadConstraints:

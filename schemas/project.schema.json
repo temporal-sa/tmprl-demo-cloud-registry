@@ -33,7 +33,7 @@
           "properties": {
             "repo": {
               "type": "string",
-              "pattern": "^https://github\\.com/temporal-sa/[A-Za-z0-9_.-]+/?$"
+              "pattern": "^https://github\\.com/(temporal-sa|temporalio|temporal-community)/[A-Za-z0-9_.-]+/?$"
             },
             "branch": {
               "type": "string",

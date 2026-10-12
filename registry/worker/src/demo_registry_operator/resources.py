@@ -251,6 +251,8 @@ TEMPORAL_MTLS_CERT_FILE_PATH_ENVS = {
 TEMPORAL_PROXY_BUILD_NAME = "temporal-cloud-proxy"
 TEMPORAL_PROXY_CONTAINER_NAME = "temporal-cloud-proxy"
 TEMPORAL_PROXY_IMAGE_ENV = "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE"
+ONBOARDING_AGENT_BUILD_NAME = "onboarding-agent"
+ONBOARDING_AGENT_IMAGE_ENV = "DEMO_REGISTRY_ONBOARDING_AGENT_IMAGE"
 TEMPORAL_PROXY_LOCAL_ADDRESS = "127.0.0.1:7233"
 TEMPORAL_PROXY_DEFAULT_ADDRESS_ENVS = ["TEMPORAL_ADDRESS", "TEMPORAL_HOST"]
 TEMPORAL_WORKER_DEFAULT_ROLLOUT_STRATEGY = "AllAtOnce"
@@ -2434,6 +2436,9 @@ def platform_env_vars(
         proxy_image = image_overrides.get(TEMPORAL_PROXY_BUILD_NAME)
         if proxy_image:
             env.append({"name": TEMPORAL_PROXY_IMAGE_ENV, "value": proxy_image})
+        agent_image = image_overrides.get(ONBOARDING_AGENT_BUILD_NAME)
+        if agent_image:
+            env.append({"name": ONBOARDING_AGENT_IMAGE_ENV, "value": agent_image})
         diagnostics_bucket = os.getenv(
             "DEMO_REGISTRY_ROLLOUT_DIAGNOSTICS_BUCKET", ""
         ).strip()
@@ -2462,6 +2467,10 @@ def platform_env_vars(
                 "value": derive.registry_task_queue(cluster),
             }
         )
+        # The web builds color-scoped workflow ids (catalog onboarding) the same
+        # way the operator does, so it needs the color itself, not just the queue.
+        if cluster:
+            env.append({"name": "DEMO_REGISTRY_CLUSTER", "value": cluster})
     return env
 
 

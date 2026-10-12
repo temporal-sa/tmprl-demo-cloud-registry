@@ -29,7 +29,7 @@ variable "active_color" {
 variable "kubernetes_version" {
   description = "EKS control-plane version for all colors. Defaults to the latest GA — a fresh stack is the upgrade vehicle (stand up latest, validate, roll to it)."
   type        = string
-  default     = "1.36"
+  default     = "1.37"
 }
 
 variable "flux_chart_version" {

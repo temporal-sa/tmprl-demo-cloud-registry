@@ -42,6 +42,7 @@ output "irsa_role_arns" {
     traefik                 = aws_iam_role.traefik.arn
     instruqt_litellm_broker = aws_iam_role.instruqt_litellm_broker.arn
     registry_operator       = aws_iam_role.registry_operator.arn
+    registry_web            = aws_iam_role.registry_web.arn
   }
 }
 

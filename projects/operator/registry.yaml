@@ -37,6 +37,16 @@ spec:
         !/registry/worker/**
         !/registry/temporal-cloud-proxy/
         !/registry/temporal-cloud-proxy/**
+        !/registry/onboarding-agent/
+        !/registry/onboarding-agent/**
+        !/schemas/
+        !/schemas/**
+        !/scripts/
+        /scripts/*
+        !/scripts/validate_projects.py
+        !/projects/
+        /projects/*
+        !/projects/README.md
     # branch defaults to main
 
   builds:
@@ -49,6 +59,11 @@ spec:
     temporal-cloud-proxy:
       context: .
       dockerfile: registry/temporal-cloud-proxy/Dockerfile
+    # The catalog onboarding agent. No component runs it; the operator gets its
+    # image as DEMO_REGISTRY_ONBOARDING_AGENT_IMAGE and runs it as Jobs.
+    onboarding-agent:
+      context: .
+      dockerfile: registry/onboarding-agent/Dockerfile
 
   secrets:
     temporal-cloud-bootstrap: {}
@@ -56,6 +71,9 @@ spec:
   components:
     web:
       build: web
+      # Stores secrets users enter while onboarding a demo (infra/irsa.tf,
+      # registry_web): create and update onboarding-tagged project secrets only.
+      awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-registry-web-bg
       # The catalog UI drives the CrashableWorkspaceWorkflow via an untyped
       # Temporal client. The platform Temporal connection
       # (TEMPORAL_ADDRESS/NAMESPACE/API_KEY/TLS) is injected via the operator's

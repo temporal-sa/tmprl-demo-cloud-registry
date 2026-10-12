@@ -910,3 +910,541 @@ def test_workspace_verifier_redirects_anonymous_visitors_to_login(share_env):
     response = forward_auth(httpd, "/_auth/verify-workspace")
     assert response.code == 302
     assert urlparse(response.headers["Location"]).path == "/auth/login"
+
+
+# --- catalog onboarding --------------------------------------------------
+
+
+class OnboardingGateway:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def _record(self, *call):
+        self.calls.append(call)
+        if self.error:
+            raise self.error
+        return {"phase": "Drafting", "revision": 3}
+
+    def onboarding_status(self, email):
+        return self._record("status", email)
+
+    def onboarding_start(self, email):
+        return self._record("start", email)
+
+    def onboarding_update(self, email, update, arg):
+        return self._record(update, email, arg)
+
+
+def onboarding_request(httpd, path, *, body=None, method="POST", headers=None):
+    return urlopen(
+        Request(
+            f"http://127.0.0.1:{httpd.server_port}{path}",
+            data=None if body is None else json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": signed_session_cookie(),
+                **(headers or {}),
+            },
+            method=method,
+        ),
+        timeout=2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "expected"),
+    [
+        (
+            "/api/onboarding/repo",
+            {"repo_url": " https://github.com/temporalio/demo ", "owner": "x"},
+            ("set_repo", "mjones@temporal.io", {"repo_url": "https://github.com/temporalio/demo"}),
+        ),
+        (
+            "/api/onboarding/draft",
+            {"base_revision": 3, "yaml": "kind: DemoProject\n"},
+            ("update_draft", "mjones@temporal.io", {"base_revision": 3, "yaml": "kind: DemoProject\n"}),
+        ),
+        (
+            "/api/onboarding/draft",
+            {"base_revision": 3, "document": {"kind": "DemoProject"}},
+            ("update_draft", "mjones@temporal.io", {"base_revision": 3, "document": {"kind": "DemoProject"}}),
+        ),
+        (
+            "/api/onboarding/submit",
+            {"pull_request_url": "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/9"},
+            ("submit_pull_request", "mjones@temporal.io", {"pull_request_url": "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/9"}),
+        ),
+        ("/api/onboarding/abandon", {}, ("abandon", "mjones@temporal.io", None)),
+        ("/api/onboarding", {}, ("start", "mjones@temporal.io")),
+    ],
+)
+def test_onboarding_endpoints_forward_only_known_fields_for_the_session_user(
+    tmp_path, monkeypatch, path, body, expected
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, path, body=body)
+        assert response.status == 200
+        assert gateway.calls == [expected]
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/onboarding/repo", {}),
+        ("/api/onboarding/draft", {"yaml": "x"}),
+        ("/api/onboarding/draft", {"base_revision": 1, "yaml": "x", "document": {}}),
+        ("/api/onboarding/draft", {"base_revision": True, "yaml": "x"}),
+        ("/api/onboarding/submit", {"pull_request_url": " "}),
+    ],
+)
+def test_onboarding_rejects_malformed_edits(tmp_path, monkeypatch, path, body):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, path, body=body)
+        assert raised.value.code == 400
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_refuses_cross_origin_writes(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/onboarding/abandon",
+                body={},
+                headers={"Origin": "https://evil.tmprl-demo.cloud"},
+            )
+        assert raised.value.code == 403
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_status_reads_the_session_users_workflow(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, "/api/onboarding", method="GET")
+        assert json.loads(response.read().decode("utf-8"))["phase"] == "Drafting"
+        assert gateway.calls == [("status", "mjones@temporal.io")]
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_rejections_are_conflicts_with_the_workflow_message(
+    tmp_path, monkeypatch
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway(error=server.OnboardingRejected("Pick a repo first."))
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd, "/api/onboarding/draft", body={"base_revision": 0, "yaml": "x"}
+            )
+        assert raised.value.code == 409
+        payload = json.loads(raised.value.read().decode("utf-8"))
+        assert payload == {"error": "rejected", "message": "Pick a repo first."}
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_rejects_oversized_drafts(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/onboarding/draft",
+                body={"base_revision": 0, "yaml": "x" * server.ONBOARDING_MAX_BODY_BYTES},
+            )
+        assert raised.value.code == 413
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_page_is_served_by_the_spa(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path)
+    try:
+        response = urlopen(f"http://127.0.0.1:{httpd.server_port}/onboard", timeout=2)
+        assert response.status == 200
+        assert b"data-view=\"onboard\"" in response.read()
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_workflow_id_matches_the_operator():
+    # demo_registry_operator.derive.catalog_onboarding_workflow_id
+    assert server.onboarding_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "catalog-onboarding/blue/ada@temporal.io"
+    )
+    assert server.onboarding_workflow_id("ada@temporal.io", None) == (
+        "catalog-onboarding/ada@temporal.io"
+    )
+
+
+def test_onboarding_status_returns_the_final_status_of_a_completed_run():
+    final = {"phase": "HandedOff", "pull_request_url": "https://github.com/x/pull/1"}
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=server.WorkflowExecutionStatus.COMPLETED
+            )
+        ),
+        result=AsyncMock(return_value=final),
+    )
+    ids = []
+    gateway = SimpleNamespace(
+        cluster="blue",
+        _get_client=AsyncMock(
+            return_value=SimpleNamespace(
+                get_workflow_handle=lambda workflow_id: ids.append(workflow_id)
+                or handle
+            )
+        ),
+    )
+
+    result = asyncio.run(
+        server.TemporalGateway._onboarding_status(gateway, "ada@temporal.io")
+    )
+
+    assert result == final
+    assert ids == ["catalog-onboarding/blue/ada@temporal.io"]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"mode": "draft"}, {"mode": "draft"}),
+        (
+            {"mode": "section", "pointer": "/spec/components", "question": " Workers? ", "owner": "x"},
+            {"mode": "section", "pointer": "/spec/components", "question": "Workers?"},
+        ),
+    ],
+)
+def test_onboarding_agent_requests_forward_only_known_fields(
+    tmp_path, monkeypatch, body, expected
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        onboarding_request(httpd, "/api/onboarding/agent", body=body)
+        onboarding_request(httpd, "/api/onboarding/agent/cancel", body={})
+        assert gateway.calls == [
+            ("request_agent", "mjones@temporal.io", expected),
+            ("cancel_agent", "mjones@temporal.io", None),
+        ]
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_agent_rejects_unknown_modes(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/onboarding/agent", body={"mode": "deploy"})
+        assert raised.value.code == 400
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_status_adds_the_running_agents_latest_step():
+    from temporalio.api.common.v1 import Payloads
+    from temporalio.api.workflow.v1 import PendingActivityInfo
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+    from temporalio.converter import DataConverter
+
+    async def scenario():
+        payloads = await DataConverter.default.encode([{"progress": "Reading main.go"}])
+        raw = DescribeWorkflowExecutionResponse(
+            pending_activities=[
+                PendingActivityInfo(
+                    activity_type={"name": "validate_onboarding_draft"},
+                ),
+                PendingActivityInfo(
+                    activity_type={"name": "run_onboarding_agent"},
+                    heartbeat_details=Payloads(payloads=payloads),
+                ),
+            ]
+        )
+        handle = SimpleNamespace(
+            describe=AsyncMock(
+                return_value=SimpleNamespace(
+                    status=server.WorkflowExecutionStatus.RUNNING,
+                    raw_description=raw,
+                )
+            ),
+            query=AsyncMock(return_value={"phase": "Drafting", "agent": {"phase": "Running"}}),
+        )
+        client = SimpleNamespace(
+            get_workflow_handle=lambda _: handle,
+            data_converter=DataConverter.default,
+        )
+        gateway = SimpleNamespace(cluster="blue", _get_client=AsyncMock(return_value=client))
+        return await server.TemporalGateway._onboarding_status(gateway, "ada@temporal.io")
+
+    status = asyncio.run(scenario())
+
+    assert status["agent"]["progress"] == "Reading main.go"
+
+
+# --- onboarding secrets ---------------------------------------------------
+
+
+class NotFound(Exception):
+    response = {"Error": {"Code": "ResourceNotFoundException"}}
+
+
+class FakeSecretsManager:
+    def __init__(self, secrets=None):
+        # name -> {"SecretString", "Description", "Tags"}
+        self.secrets = secrets or {}
+        self.calls = []
+
+    def list_secrets(self, Filters, NextToken=None):
+        prefix = Filters[0]["Values"][0]
+        return {
+            "SecretList": [
+                {"Name": name, "Description": item.get("Description"), "Tags": item.get("Tags", [])}
+                for name, item in self.secrets.items()
+                if name.startswith(prefix)
+            ]
+        }
+
+    def describe_secret(self, SecretId):
+        if SecretId not in self.secrets:
+            raise NotFound()
+        return {"Name": SecretId, "Tags": self.secrets[SecretId].get("Tags", [])}
+
+    def create_secret(self, Name, SecretString, Description, Tags):
+        self.calls.append(("create", Name))
+        self.secrets[Name] = {"SecretString": SecretString, "Description": Description, "Tags": Tags}
+
+    def put_secret_value(self, SecretId, SecretString):
+        self.calls.append(("put", SecretId))
+        self.secrets[SecretId]["SecretString"] = SecretString
+
+    def update_secret(self, SecretId, Description):
+        self.calls.append(("describe-update", SecretId))
+        self.secrets[SecretId]["Description"] = Description
+
+
+def onboarding_tags(owner):
+    return [
+        {"Key": server.SECRET_MANAGED_BY_TAG, "Value": server.SECRET_MANAGED_BY},
+        {"Key": server.SECRET_OWNER_TAG, "Value": owner},
+    ]
+
+
+def test_store_creates_a_tagged_secret_with_property_names_in_the_description():
+    fake = FakeSecretsManager()
+    store = server.OnboardingSecrets(lambda: fake)
+
+    result = store.store(
+        "money", "api", {"B_KEY": "b", "A_KEY": "a"},
+        owner="ada@temporal.io", onboarding_id="catalog-onboarding/blue/ada@temporal.io",
+    )
+
+    secret = fake.secrets["tmprl-dem-cld/money/api"]
+    assert json.loads(secret["SecretString"]) == {"B_KEY": "b", "A_KEY": "a"}
+    assert secret["Description"] == server.SECRET_DESCRIPTION_PREFIX + "A_KEY B_KEY"
+    assert {tag["Key"]: tag["Value"] for tag in secret["Tags"]} == {
+        server.SECRET_MANAGED_BY_TAG: "catalog-onboarding",
+        server.SECRET_OWNER_TAG: "ada@temporal.io",
+        server.SECRET_PROJECT_TAG: "money",
+        server.SECRET_ONBOARDING_TAG: "catalog-onboarding/blue/ada@temporal.io",
+    }
+    assert result == {"name": "api", "properties": ["A_KEY", "B_KEY"], "created": True}
+
+
+def test_store_updates_your_own_onboarding_secret_without_retagging():
+    fake = FakeSecretsManager(
+        {"tmprl-dem-cld/money/api": {"SecretString": "{}", "Tags": onboarding_tags("ada@temporal.io")}}
+    )
+    store = server.OnboardingSecrets(lambda: fake)
+
+    store.store("money", "api", {"KEY": "new"}, owner="ada@temporal.io", onboarding_id="x")
+
+    assert fake.calls == [("put", "tmprl-dem-cld/money/api"), ("describe-update", "tmprl-dem-cld/money/api")]
+    assert json.loads(fake.secrets["tmprl-dem-cld/money/api"]["SecretString"]) == {"KEY": "new"}
+
+
+@pytest.mark.parametrize(
+    ("tags", "message"),
+    [
+        ([], "wasn't created by onboarding"),
+        (onboarding_tags("bob@temporal.io"), "belongs to bob@temporal.io"),
+    ],
+)
+def test_store_never_overwrites_someone_elses_secret(tags, message):
+    fake = FakeSecretsManager({"tmprl-dem-cld/money/api": {"SecretString": "{}", "Tags": tags}})
+    store = server.OnboardingSecrets(lambda: fake)
+
+    with pytest.raises(server.OnboardingRejected, match=message):
+        store.store("money", "api", {"KEY": "v"}, owner="ada@temporal.io", onboarding_id="x")
+
+    assert fake.calls == []
+
+
+def test_list_shows_metadata_only():
+    fake = FakeSecretsManager(
+        {
+            "tmprl-dem-cld/money/api": {
+                "SecretString": '{"KEY": "hidden"}',
+                "Description": server.SECRET_DESCRIPTION_PREFIX + "KEY",
+                "Tags": onboarding_tags("ada@temporal.io"),
+            },
+            "tmprl-dem-cld/platform/shared/gemini": {
+                "SecretString": "x",
+                "Description": "Shared gemini",
+                "Tags": [{"Key": "properties", "Value": "GEMINI_API_KEY GOOGLE_API_KEY"}],
+            },
+        }
+    )
+    store = server.OnboardingSecrets(lambda: fake)
+
+    assert store.list_project("money") == [
+        {"name": "api", "properties": ["KEY"], "owner": "ada@temporal.io", "onboarding": True, "updated_at": None}
+    ]
+    assert store.list_shared() == [
+        {"name": "gemini", "properties": ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "description": "Shared gemini"}
+    ]
+    assert "hidden" not in json.dumps(store.list_project("money"))
+
+
+class SecretsGateway(OnboardingGateway):
+    cluster = "blue"
+
+    def __init__(self, status):
+        super().__init__()
+        self.status = status
+
+    def onboarding_status(self, email):
+        self.calls.append(("status", email))
+        return self.status
+
+
+def drafting(name="money"):
+    return {"phase": "Drafting", "document": {"metadata": {"name": name}}}
+
+
+def secrets_server(tmp_path, monkeypatch, status, fake=None, catalog=()):
+    configure_google_auth(monkeypatch)
+    (tmp_path / "registry.json").write_text(
+        json.dumps({"projects": [{"name": name} for name in catalog]})
+    )
+    handler = server.make_handler(
+        tmp_path / "registry.json",
+        tmp_path / "status",
+        SecretsGateway(status),
+        server.OnboardingSecrets(lambda: fake or FakeSecretsManager()),
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def test_storing_a_secret_uses_the_session_users_draft_and_echoes_no_values(tmp_path, monkeypatch):
+    fake = FakeSecretsManager()
+    httpd = secrets_server(tmp_path, monkeypatch, drafting(), fake)
+    try:
+        response = onboarding_request(
+            httpd,
+            "/api/onboarding/secrets",
+            body={"name": "api", "values": {"API_KEY": "s3cret"}, "project": "someone-else"},
+        )
+        payload = response.read().decode("utf-8")
+        assert json.loads(payload) == {"name": "api", "properties": ["API_KEY"], "created": True, "project": "money"}
+        assert "s3cret" not in payload
+        tags = {t["Key"]: t["Value"] for t in fake.secrets["tmprl-dem-cld/money/api"]["Tags"]}
+        assert tags[server.SECRET_OWNER_TAG] == "mjones@temporal.io"
+        assert tags[server.SECRET_ONBOARDING_TAG] == "catalog-onboarding/blue/mjones@temporal.io"
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("status", "catalog", "code"),
+    [
+        ({"phase": "None"}, (), 409),
+        ({"phase": "HandedOff", "document": {"metadata": {"name": "money"}}}, (), 409),
+        (drafting("Not A Label"), (), 409),
+        (drafting(), ("money",), 409),
+    ],
+    ids=["no-onboarding", "handed-off", "invalid-name", "already-in-catalog"],
+)
+def test_secrets_are_only_stored_for_an_open_draft_not_in_the_catalog(
+    tmp_path, monkeypatch, status, catalog, code
+):
+    fake = FakeSecretsManager()
+    httpd = secrets_server(tmp_path, monkeypatch, status, fake, catalog)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/onboarding/secrets", body={"name": "api", "values": {"K": "v"}})
+        assert raised.value.code == code
+        assert fake.secrets == {}
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "Bad_Name", "values": {"K": "v"}},
+        {"name": "api", "values": {}},
+        {"name": "api", "values": {"lower": "v"}},
+        {"name": "api", "values": {"K": ""}},
+        {"name": "api", "values": {"K": 5}},
+        {"name": "api", "values": {"K": "x" * (server.MAX_SECRET_VALUE_CHARS + 1)}},
+    ],
+)
+def test_malformed_secrets_are_rejected_without_echoing_values(tmp_path, monkeypatch, body):
+    fake = FakeSecretsManager()
+    httpd = secrets_server(tmp_path, monkeypatch, drafting(), fake)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/onboarding/secrets", body=body)
+        assert raised.value.code == 400
+        assert "xxxxx" not in raised.value.read().decode("utf-8")
+        assert fake.secrets == {}
+    finally:
+        httpd.shutdown()
+
+
+def test_listing_secrets_for_the_draft(tmp_path, monkeypatch):
+    fake = FakeSecretsManager(
+        {"tmprl-dem-cld/money/api": {"Description": server.SECRET_DESCRIPTION_PREFIX + "K", "Tags": onboarding_tags("x")}}
+    )
+    httpd = secrets_server(tmp_path, monkeypatch, drafting(), fake)
+    try:
+        payload = json.loads(
+            onboarding_request(httpd, "/api/onboarding/secrets", method="GET").read()
+        )
+        assert payload["project"] == "money"
+        assert [item["name"] for item in payload["secrets"]] == ["api"]
+        assert payload["shared"] == []
+    finally:
+        httpd.shutdown()

@@ -1,8 +1,9 @@
 // Demo Registry — vanilla JS SPA.
-// Two views over the same catalog JSON:
+// Two views over the same catalog JSON, plus onboarding:
 //   /         → demos (canonical feature cards + a grid of everything else;
 //               each demo opens in a detail drawer, deep-linked as /#<id>)
 //   /courses  → Instruqt workshops (the server routes this path to the SPA)
+//   /onboard  → add a demo to the catalog (the user's onboarding workflow)
 
 const LINK_SOURCES = [
   { pattern: "github.com", label: "GitHub" },
@@ -17,6 +18,7 @@ const LINK_SOURCES = [
 ];
 
 const WORKSHOPS_ROUTE = "/courses";
+const ONBOARD_ROUTE = "/onboard";
 
 const state = {
   demos: [],
@@ -252,6 +254,7 @@ async function loadData() {
 // ─── Routing ───────────────────────────────────────────────────────────────
 
 function currentView() {
+  if (state.route === ONBOARD_ROUTE) return "onboard";
   return state.route === WORKSHOPS_ROUTE ? "workshops" : "demos";
 }
 
@@ -259,7 +262,12 @@ function setRoute(target) {
   if (target === state.route) return;
   closeDrawer({ updateHash: false });
   state.route = target;
-  const search = target === WORKSHOPS_ROUTE ? workshopsQueryString() : demosQueryString();
+  const search =
+    target === WORKSHOPS_ROUTE
+      ? workshopsQueryString()
+      : target === ONBOARD_ROUTE
+        ? ""
+        : demosQueryString();
   window.history.pushState(null, "", target + search);
   render();
   window.scrollTo({ top: 0 });
@@ -289,7 +297,7 @@ function setupKeyboard() {
       return;
     }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-    if (event.key === "/" && !typing && !state.openDemoId) {
+    if (event.key === "/" && !typing && !state.openDemoId && currentView() !== "onboard") {
       event.preventDefault();
       const selector =
         currentView() === "workshops" ? "[data-workshops-search]" : "[data-demos-search]";
@@ -1784,16 +1792,1406 @@ function render() {
       link.removeAttribute("aria-current");
     }
   });
-  document.title =
-    view === "workshops" ? "Workshops · Temporal Field Kit" : "Demos · Temporal Field Kit";
+  document.title = {
+    workshops: "Workshops · Temporal Field Kit",
+    onboard: "Add a Demo · Temporal Field Kit",
+  }[view] || "Demos · Temporal Field Kit";
   renderCounts();
-  if (view === "workshops") {
+  if (view === "onboard") {
+    if (!onboard.loaded) loadOnboarding();
+    renderOnboarding();
+  } else if (view === "workshops") {
     renderWorkshopsFilters();
     renderWorkshopsList();
   } else {
     renderDemosFilters();
     renderDemosList();
   }
+}
+
+// ─── Onboarding ────────────────────────────────────────────────────────────
+// /onboard drives the signed-in user's CatalogOnboardingWorkflow: pick a repo,
+// edit the draft DemoProject (form or YAML), then hand off by opening a pull
+// request on GitHub. The workflow validates every edit; this page edits a
+// working copy and shows what the workflow says about it.
+
+const ONBOARD_CLOSED = new Set(["HandedOff", "Abandoned", "Expired"]);
+
+const onboard = {
+  loaded: false,
+  status: null, // last status from the workflow ({phase: "None"} when there is none)
+  working: null, // the form's working copy of status.document
+  yamlText: null, // unsaved YAML tab text
+  tab: "form",
+  busy: null, // label for the request in flight
+  error: null, // last request error, shown above the steps
+  signInUrl: null,
+  changingRepo: false,
+  askOpen: null, // pointer of the form section whose "Ask the agent" box is open
+};
+
+function clone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function getIn(obj, path) {
+  return path.reduce((node, key) => (node == null ? undefined : node[key]), obj);
+}
+
+// Sets a nested value, creating parents. An empty value deletes the key and
+// prunes parents it leaves empty, so clearing a field removes it from the YAML.
+function setIn(obj, path, value) {
+  const empty =
+    value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+  const parents = [obj];
+  let node = obj;
+  for (const key of path.slice(0, -1)) {
+    if (node[key] == null || typeof node[key] !== "object") {
+      if (empty) return;
+      node[key] = {};
+    }
+    node = node[key];
+    parents.push(node);
+  }
+  const last = path[path.length - 1];
+  if (empty) delete node[last];
+  else node[last] = value;
+  for (let i = parents.length - 1; i > 0; i -= 1) {
+    if (Object.keys(parents[i]).length > 0) break;
+    delete parents[i - 1][path[i - 1]];
+  }
+}
+
+// Renames an object key in place, keeping key order.
+function renameKey(obj, from, to) {
+  const entries = Object.entries(obj).map(([key, value]) => [key === from ? to : key, value]);
+  Object.keys(obj).forEach((key) => delete obj[key]);
+  entries.forEach(([key, value]) => (obj[key] = value));
+}
+
+function onboardDirty() {
+  const status = onboard.status || {};
+  if (onboard.tab === "yaml") return onboard.yamlText !== null && onboard.yamlText !== status.yaml;
+  return JSON.stringify(onboard.working) !== JSON.stringify(status.document);
+}
+
+function acceptOnboardStatus(status) {
+  onboard.status = status;
+  onboard.working = clone(status.document) || null;
+  onboard.yamlText = null;
+  onboard.changingRepo = false;
+}
+
+async function loadOnboarding() {
+  try {
+    const res = await fetch("/api/onboarding", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      onboard.signInUrl = `/auth/login?return_to=${encodeURIComponent(window.location.href)}`;
+    } else if (!res.ok) {
+      onboard.error = data.message || data.error || `HTTP ${res.status}`;
+    } else {
+      acceptOnboardStatus(data);
+    }
+  } catch (err) {
+    onboard.error = err.message;
+  }
+  onboard.loaded = true;
+  renderOnboarding();
+}
+
+async function onboardCall(label, steps) {
+  if (onboard.busy) return;
+  onboard.busy = label;
+  onboard.error = null;
+  renderOnboarding();
+  try {
+    for (const [url, body] of steps) acceptOnboardStatus(await postJSON(url, body));
+  } catch (err) {
+    onboard.error = err.message;
+  } finally {
+    onboard.busy = null;
+    renderOnboarding();
+  }
+}
+
+function onboardOpen() {
+  const phase = onboard.status && onboard.status.phase;
+  return phase && phase !== "None" && !ONBOARD_CLOSED.has(phase);
+}
+
+function chooseRepo(repoUrl) {
+  if (!repoUrl.trim()) return;
+  if (onboard.status && onboard.status.repo && !window.confirm("Changing the repo replaces the draft. Continue?")) {
+    return;
+  }
+  const steps = onboardOpen() ? [] : [["/api/onboarding", {}]];
+  steps.push(["/api/onboarding/repo", { repo_url: repoUrl }]);
+  onboardCall("Checking repository", steps);
+}
+
+function saveDraft() {
+  const body = { base_revision: onboard.status.revision };
+  if (onboard.tab === "yaml") body.yaml = onboard.yamlText ?? onboard.status.yaml;
+  else body.document = onboard.working;
+  onboardCall("Validating draft", [["/api/onboarding/draft", body]]);
+}
+
+function discardDraftChanges() {
+  acceptOnboardStatus(onboard.status);
+  renderOnboarding();
+}
+
+function switchOnboardTab(tab) {
+  if (tab === onboard.tab) return;
+  if (onboardDirty()) {
+    toast("Validate or discard your changes first");
+    return;
+  }
+  onboard.tab = tab;
+  renderOnboarding();
+}
+
+// ─── Onboarding: the agent ─────────────────────────────────────────────────
+// The agent reads the repo and proposes a draft (or answers a question about
+// one section). Its run takes minutes, so the page polls status and refreshes
+// only the agent panel, leaving the form and any unsaved edits alone.
+
+const AGENT_SEVERITY_LABEL = { blocker: "Blocker", warning: "Warning", suggestion: "Suggestion" };
+let onboardPollTimer = null;
+
+function agentRunning(status) {
+  return Boolean(status && status.agent && status.agent.phase === "Running");
+}
+
+function scheduleOnboardPoll() {
+  clearTimeout(onboardPollTimer);
+  if (agentRunning(onboard.status) && currentView() === "onboard") {
+    onboardPollTimer = setTimeout(refreshAgentPanel, 3000);
+  }
+}
+
+async function refreshAgentPanel() {
+  try {
+    const res = await fetch("/api/onboarding", { credentials: "same-origin" });
+    if (res.ok) {
+      const data = await res.json();
+      // The agent never edits the draft, so only its own state is new here.
+      onboard.status = { ...onboard.status, agent: data.agent, agent_runs: data.agent_runs };
+    }
+  } catch (err) {
+    // Keep polling; a blip shouldn't end the run's display.
+  }
+  const panel = document.querySelector("[data-onboard-agent]");
+  if (panel) panel.replaceChildren(...agentPanelBody(onboard.status));
+  scheduleOnboardPoll();
+}
+
+function askAgent(body) {
+  onboardCall("Starting the agent", [["/api/onboarding/agent", body]]);
+}
+
+function applyProposal(proposal) {
+  if (onboardDirty() && !window.confirm("Replace your unsaved changes with the agent's draft?")) return;
+  onboard.tab = "form";
+  onboardCall("Applying the agent's draft", [
+    ["/api/onboarding/draft", { base_revision: onboard.status.revision, document: proposal.document }],
+  ]);
+}
+
+function downloadPatch(patch) {
+  const url = URL.createObjectURL(new Blob([patch], { type: "text/x-diff" }));
+  const link = el("a", { href: url, download: "onboarding.patch" });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function copyPrompt(prompt) {
+  navigator.clipboard.writeText(prompt).then(
+    () => toast("Prompt copied"),
+    () => toast("Couldn't copy the prompt")
+  );
+}
+
+function proposalView(proposal) {
+  const errors = proposal.errors || [];
+  const changed =
+    proposal.document && JSON.stringify(proposal.document) !== JSON.stringify(onboard.status.document);
+  const parts = [];
+  if (proposal.question) {
+    parts.push(el("p", { class: "onboard-hint", text: `You asked about ${proposal.pointer || "the draft"}: ${proposal.question}` }));
+  }
+  if (proposal.summary) parts.push(el("p", { class: "onboard-agent-summary", text: proposal.summary }));
+  if (changed) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-primary btn-sm",
+          "aria-disabled": String(Boolean(onboard.busy)),
+          text: proposal.mode === "section" ? "Apply the suggested change" : "Apply the agent's draft",
+          onclick: () => applyProposal(proposal),
+        }),
+        el("span", {
+          class: "mono",
+          text: errors.length ? `${errors.length} validator problem${errors.length === 1 ? "" : "s"} to fix after applying` : "Passes the validator",
+        })
+      )
+    );
+  } else if (proposal.mode === "section") {
+    parts.push(el("p", { class: "onboard-hint", text: "No change suggested for the draft." }));
+  }
+  const findings = proposal.findings || [];
+  if (findings.length) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-findings" },
+        el("strong", { text: "Catalog readiness" }),
+        el(
+          "ul",
+          {},
+          ...findings.map((finding) =>
+            el(
+              "li",
+              { class: `is-${finding.severity}` },
+              el("span", { class: "onboard-severity", text: AGENT_SEVERITY_LABEL[finding.severity] || finding.severity }),
+              el("span", {}, el("strong", { text: finding.title }), ` ${finding.detail}`),
+              finding.location ? el("code", { text: finding.location }) : null
+            )
+          )
+        )
+      )
+    );
+  }
+  if (proposal.patch || proposal.prompt) {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("span", { class: "onboard-hint", text: "Suggested changes to the demo repo:" }),
+        proposal.patch
+          ? el("button", { type: "button", class: "btn btn-secondary btn-sm", text: "Download patch", onclick: () => downloadPatch(proposal.patch) })
+          : null,
+        proposal.prompt
+          ? el("button", { type: "button", class: "btn btn-secondary btn-sm", text: "Copy Claude Code prompt", onclick: () => copyPrompt(proposal.prompt) })
+          : null
+      )
+    );
+  }
+  const fields = proposal.fields || [];
+  if (fields.length) {
+    parts.push(
+      el(
+        "details",
+        { class: "onboard-reasons" },
+        el("summary", { text: `Why each field is set (${fields.length})` }),
+        el(
+          "ul",
+          {},
+          ...fields.map((item) =>
+            el(
+              "li",
+              {},
+              el("code", { text: item.pointer }),
+              el("span", { text: item.reason }),
+              (item.evidence || []).length ? el("span", { class: "mono", text: item.evidence.join(", ") }) : null
+            )
+          )
+        )
+      )
+    );
+  }
+  parts.push(el("span", { class: "mono", text: `${proposal.num_turns} steps · $${Number(proposal.cost_usd || 0).toFixed(2)}` }));
+  return parts;
+}
+
+function agentPanelBody(status) {
+  const agent = status.agent;
+  const dirty = onboardDirty();
+  const start = el("button", {
+    type: "button",
+    class: "btn btn-pink btn-sm",
+    "aria-disabled": String(dirty || Boolean(onboard.busy) || agentRunning(status)),
+    title: dirty ? "Validate your changes first; the agent works from the saved draft." : null,
+    text: agent ? "Draft again with the agent" : "Draft with the agent",
+    onclick: () => askAgent({ mode: "draft" }),
+  });
+  const intro = el("p", {
+    class: "onboard-hint",
+    text: "The agent reads the repo, writes the whole project config with a reason for each field, and points out what the repo needs to change to run in the catalog. It takes a few minutes; you can keep editing meanwhile.",
+  });
+  if (!agent) return [intro, el("div", { class: "onboard-actions" }, start)];
+  if (agent.phase === "Running" && agent.stopping) {
+    return [el("p", { class: "onboard-busy", role: "status", text: "Stopping the agent…" })];
+  }
+  if (agent.phase === "Running") {
+    return [
+      el(
+        "p",
+        { class: "onboard-busy", role: "status" },
+        `${agent.mode === "section" ? "Answering your question" : "Drafting"}: ${agent.progress || "starting"}…`
+      ),
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-quiet btn-sm",
+          text: "Stop the agent",
+          onclick: () => onboardCall("Stopping the agent", [["/api/onboarding/agent/cancel", {}]]),
+        })
+      ),
+    ];
+  }
+  const parts = [];
+  if (agent.phase === "Failed") parts.push(onboardAlert("error", "The agent didn't finish.", agent.error));
+  if (agent.phase === "Cancelled") parts.push(el("p", { class: "onboard-hint", text: "The last agent run was stopped." }));
+  if (agent.phase === "Done" && agent.proposal) parts.push(...proposalView(agent.proposal));
+  parts.push(el("div", { class: "onboard-actions" }, start));
+  return parts;
+}
+
+function agentPanel(status) {
+  return el(
+    "div",
+    { class: "onboard-agent" },
+    el("p", { class: "eyebrow", text: "Agent" }),
+    el("div", { "data-onboard-agent": "" }, ...agentPanelBody(status))
+  );
+}
+
+// "Ask the agent" under a form section: one question about that part.
+function askControl(pointer) {
+  if (onboard.askOpen !== pointer) {
+    return el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm onboard-ask",
+      "aria-disabled": String(agentRunning(onboard.status) || Boolean(onboard.busy)),
+      text: "Ask the agent about this",
+      onclick: () => {
+        onboard.askOpen = pointer;
+        renderOnboarding();
+      },
+    });
+  }
+  const question = el("textarea", {
+    rows: 2,
+    maxlength: 2000,
+    placeholder: "e.g. Which of these processes are Temporal workers?",
+    "aria-label": "Question for the agent",
+  });
+  return el(
+    "form",
+    {
+      class: "onboard-ask-form",
+      onsubmit: (event) => {
+        event.preventDefault();
+        if (onboardDirty()) {
+          toast("Validate your changes first");
+          return;
+        }
+        onboard.askOpen = null;
+        askAgent({ mode: "section", pointer, question: question.value });
+      },
+    },
+    question,
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", { type: "submit", class: "btn btn-secondary btn-sm", text: "Ask" }),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Cancel",
+        onclick: () => {
+          onboard.askOpen = null;
+          renderOnboarding();
+        },
+      })
+    )
+  );
+}
+
+// ─── Onboarding: secrets ───────────────────────────────────────────────────
+// Project secret values go straight from this form to AWS Secrets Manager
+// (POST /api/onboarding/secrets); the workflow and the draft only ever hold
+// names. The draft declares each secret under spec.secrets and lists it on the
+// components that need it.
+
+const onboardSecrets = {
+  project: undefined, // the project the list below was loaded for
+  loading: false,
+  stored: [], // project secrets in Secrets Manager: {name, properties, owner, onboarding}
+  shared: [], // platform shared secrets: {name, properties, description}
+  error: null,
+  editing: null, // {name, rows: [{key, value}]} while the store form is open
+};
+
+function draftProjectName(status) {
+  const name = getIn(status && status.document, ["metadata", "name"]);
+  return typeof name === "string" ? name : null;
+}
+
+async function loadSecrets() {
+  const project = draftProjectName(onboard.status);
+  onboardSecrets.loading = true;
+  onboardSecrets.project = project;
+  try {
+    const res = await fetch("/api/onboarding/secrets", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    onboardSecrets.stored = data.secrets || [];
+    onboardSecrets.shared = data.shared || [];
+    onboardSecrets.error = null;
+  } catch (err) {
+    onboardSecrets.error = err.message;
+  } finally {
+    onboardSecrets.loading = false;
+    const section = document.querySelector("[data-onboard-secrets]");
+    if (section && onboard.working) section.replaceChildren(...secretsBody(onboard.working));
+  }
+}
+
+function secretsNeedLoading() {
+  return (
+    !onboardSecrets.loading &&
+    onboard.status &&
+    onboard.status.repo &&
+    onboardSecrets.project !== draftProjectName(onboard.status)
+  );
+}
+
+function rerenderSecrets() {
+  const section = document.querySelector("[data-onboard-secrets]");
+  if (section) section.replaceChildren(...secretsBody(onboard.working));
+  renderOnboardingActions();
+}
+
+function componentSecretNames(component) {
+  return Array.isArray(component.secrets) ? component.secrets : [];
+}
+
+function setComponentSecret(component, name, on) {
+  const names = componentSecretNames(component).filter((item) => item !== name);
+  if (on) names.push(name);
+  setIn(component, ["secrets"], names.length ? names : undefined);
+}
+
+function removeSecret(doc, name) {
+  setIn(doc, ["spec", "secrets", name], undefined);
+  Object.values(getIn(doc, ["spec", "components"]) || {}).forEach((component) =>
+    setComponentSecret(component, name, false)
+  );
+}
+
+async function storeSecret(doc) {
+  const editing = onboardSecrets.editing;
+  const values = {};
+  for (const row of editing.rows) {
+    const key = row.key.trim();
+    if (key) values[key] = row.value;
+  }
+  try {
+    const result = await postJSON("/api/onboarding/secrets", { name: editing.name.trim(), values });
+    const existing = getIn(doc, ["spec", "secrets", result.name]) || {};
+    setIn(doc, ["spec", "secrets", result.name], { ...existing, requiredProperties: result.properties });
+    delete getIn(doc, ["spec", "secrets", result.name]).shared;
+    onboardSecrets.editing = null; // drops the typed values
+    toast(result.created ? "Secret stored" : "Secret updated");
+    onboardSecrets.project = undefined;
+    await loadSecrets();
+  } catch (err) {
+    onboardSecrets.error = err.message;
+  }
+  rerenderSecrets();
+}
+
+function secretEditor(doc) {
+  const editing = onboardSecrets.editing;
+  const savedName = draftProjectName(onboard.status);
+  const renamed = savedName && getIn(doc, ["metadata", "name"]) !== savedName;
+  return el(
+    "form",
+    {
+      class: "onboard-secret-editor",
+      autocomplete: "off",
+      onsubmit: (event) => {
+        event.preventDefault();
+        storeSecret(doc);
+      },
+    },
+    field(
+      "Secret name",
+      null,
+      textControl(editing.name, (value) => (editing.name = value), { placeholder: "app-credentials" }),
+      `Stored at tmprl-dem-cld/${savedName || "<project>"}/<name>. Values go straight to AWS Secrets Manager; nobody can read them back from here.`
+    ),
+    renamed
+      ? onboardAlert("warn", "Validate your rename first.", `Secrets are stored under the saved project name, ${savedName}.`)
+      : null,
+    ...editing.rows.map((row, index) =>
+      el(
+        "div",
+        { class: "onboard-secret-row" },
+        textControl(row.key, (value) => (row.key = value), { placeholder: "API_KEY", "aria-label": "Property name" }),
+        Object.assign(
+          el("input", {
+            type: "password",
+            autocomplete: "new-password",
+            placeholder: "value",
+            "aria-label": "Property value",
+            oninput: (event) => (row.value = event.target.value),
+          }),
+          // A property, not an attribute, so the value never lands in the HTML.
+          { value: row.value }
+        ),
+        editing.rows.length > 1
+          ? el("button", {
+              type: "button",
+              class: "btn btn-quiet btn-sm",
+              text: "Remove",
+              onclick: () => {
+                editing.rows.splice(index, 1);
+                rerenderSecrets();
+              },
+            })
+          : null
+      )
+    ),
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", {
+        type: "button",
+        class: "btn btn-ghost btn-sm",
+        text: "+ Property",
+        onclick: () => {
+          editing.rows.push({ key: "", value: "" });
+          rerenderSecrets();
+        },
+      }),
+      el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(renamed)), text: "Store in Secrets Manager" }),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Cancel",
+        onclick: () => {
+          onboardSecrets.editing = null;
+          rerenderSecrets();
+        },
+      })
+    )
+  );
+}
+
+function declaredSecretRow(doc, name, definition) {
+  const components = getIn(doc, ["spec", "components"]) || {};
+  const shared = typeof definition.shared === "string" ? definition.shared : null;
+  const stored = onboardSecrets.stored.find((item) => item.name === name);
+  let state;
+  if (shared) {
+    const known = onboardSecrets.shared.find((item) => item.name === shared);
+    state = `Shared: ${shared}${known && known.properties.length ? ` (${known.properties.join(", ")})` : ""}`;
+  } else if (stored) {
+    state = `Stored${stored.properties.length ? ` (${stored.properties.join(", ")})` : ""}`;
+  } else {
+    state = "Not stored yet";
+  }
+  return el(
+    "div",
+    { class: "onboard-card", dataset: { pointer: `/spec/secrets/${name}` } },
+    el(
+      "div",
+      { class: "onboard-secret-head" },
+      el("strong", { text: name }),
+      el("span", { class: `mono ${!shared && !stored ? "is-missing" : ""}`, text: state })
+    ),
+    Object.keys(components).length
+      ? el(
+          "div",
+          { class: "onboard-checks" },
+          ...Object.entries(components).map(([componentName, component]) =>
+            checkControl(
+              `Give it to ${componentName}`,
+              `/spec/components/${componentName}/secrets`,
+              componentSecretNames(component).includes(name),
+              (on) => setComponentSecret(component, name, on)
+            )
+          )
+        )
+      : null,
+    el(
+      "div",
+      { class: "onboard-actions" },
+      !shared
+        ? el("button", {
+            type: "button",
+            class: "btn btn-ghost btn-sm",
+            text: stored ? "Replace the value" : "Store a value",
+            onclick: () => {
+              const keys = (definition.requiredProperties || []).length
+                ? definition.requiredProperties
+                : (stored && stored.properties) || [""];
+              onboardSecrets.editing = { name, rows: keys.map((key) => ({ key, value: "" })) };
+              rerenderSecrets();
+            },
+          })
+        : null,
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove from the draft",
+        onclick: () => {
+          removeSecret(doc, name);
+          rerenderSecrets();
+        },
+      })
+    )
+  );
+}
+
+function sharedPicker(doc) {
+  const declared = new Set(
+    Object.values(getIn(doc, ["spec", "secrets"]) || {}).map((definition) => definition.shared)
+  );
+  const options = onboardSecrets.shared.filter((item) => !declared.has(item.name));
+  if (!options.length) return null;
+  const select = el(
+    "select",
+    { "aria-label": "Shared secret" },
+    ...options.map((item) =>
+      el("option", { value: item.name, text: `${item.name}${item.properties.length ? ` (${item.properties.join(", ")})` : ""}` })
+    )
+  );
+  return el(
+    "div",
+    { class: "onboard-inline" },
+    select,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "Use this shared secret",
+      onclick: () => {
+        const item = onboardSecrets.shared.find((candidate) => candidate.name === select.value);
+        const name = item.name.replace(/[^a-z0-9-]+/g, "-");
+        setIn(doc, ["spec", "secrets", name], {
+          shared: item.name,
+          ...(item.properties.length ? { requiredProperties: item.properties } : {}),
+        });
+        rerenderSecrets();
+      },
+    })
+  );
+}
+
+function secretsBody(doc) {
+  const declared = getIn(doc, ["spec", "secrets"]) || {};
+  const parts = [
+    el("legend", { text: "Secrets" }),
+    el("p", {
+      class: "onboard-hint",
+      text: "API keys and other credentials the demo reads from environment variables. Each property of a secret becomes an environment variable on the components you give it to.",
+    }),
+  ];
+  if (onboardSecrets.error) parts.push(onboardAlert("error", "Secrets", onboardSecrets.error));
+  parts.push(...Object.entries(declared).map(([name, definition]) => declaredSecretRow(doc, name, definition || {})));
+  if (onboardSecrets.editing) {
+    parts.push(secretEditor(doc));
+  } else {
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          text: "+ Add a project secret",
+          onclick: () => {
+            onboardSecrets.editing = { name: "", rows: [{ key: "", value: "" }] };
+            rerenderSecrets();
+          },
+        })
+      ),
+      sharedPicker(doc)
+    );
+  }
+  return parts;
+}
+
+function secretsFields(doc) {
+  if (secretsNeedLoading()) loadSecrets();
+  return el("fieldset", { class: "onboard-fields onboard-wide", "data-onboard-secrets": "" }, ...secretsBody(doc));
+}
+
+// ─── Onboarding: rendering ─────────────────────────────────────────────────
+
+function onboardStep(number, title, ...children) {
+  return el(
+    "section",
+    { class: "onboard-step" },
+    el(
+      "header",
+      { class: "onboard-step-head" },
+      el("p", { class: "eyebrow", text: `0${number}` }),
+      el("h2", { text: title })
+    ),
+    ...children
+  );
+}
+
+function onboardAlert(tone, title, body) {
+  return el(
+    "div",
+    { class: `onboard-alert is-${tone}`, role: tone === "error" ? "alert" : "status" },
+    el("strong", { text: title }),
+    body ? el("p", { text: body }) : null
+  );
+}
+
+function field(label, pointer, control, hint) {
+  return el(
+    "label",
+    { class: "onboard-field", dataset: pointer ? { pointer } : null },
+    el("span", { class: "onboard-label", text: label }),
+    control,
+    hint ? el("span", { class: "onboard-hint", text: hint }) : null
+  );
+}
+
+function textControl(value, onInput, attrs = {}) {
+  return el("input", {
+    type: "text",
+    value: value ?? "",
+    spellcheck: "false",
+    oninput: (event) => onInput(event.target.value),
+    ...attrs,
+  });
+}
+
+function checkControl(label, pointer, checked, onChange, { disabled = false, hint } = {}) {
+  return el(
+    "label",
+    { class: "onboard-check", dataset: { pointer } },
+    el("input", {
+      type: "checkbox",
+      checked: Boolean(checked),
+      disabled,
+      onchange: (event) => onChange(event.target.checked),
+    }),
+    el("span", { text: label }),
+    hint ? el("span", { class: "onboard-hint", text: hint }) : null
+  );
+}
+
+function listValue(value) {
+  return Array.isArray(value) ? value.join(", ") : "";
+}
+
+function parseList(text) {
+  return text
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function catalogFields(doc) {
+  const spec = ["spec", "registry"];
+  const set = (path) => (value) => setIn(doc, path, value);
+  return el(
+    "fieldset",
+    { class: "onboard-fields" },
+    el("legend", { text: "Catalog entry" }),
+    askControl("/spec/registry"),
+    field(
+      "Project name",
+      "/metadata/name",
+      textControl(getIn(doc, ["metadata", "name"]), set(["metadata", "name"])),
+      "Lowercase letters, digits and dashes; ideally 25 characters or fewer. Everything else is named after it."
+    ),
+    field("Title", "/spec/registry/title", textControl(getIn(doc, [...spec, "title"]), set([...spec, "title"]))),
+    field(
+      "Summary",
+      "/spec/registry/summary",
+      el("textarea", {
+        rows: 3,
+        oninput: (event) => setIn(doc, [...spec, "summary"], event.target.value),
+        text: getIn(doc, [...spec, "summary"]) ?? "",
+      })
+    ),
+    field(
+      "Tags",
+      "/spec/registry/tags",
+      textControl(listValue(getIn(doc, [...spec, "tags"])), (text) => setIn(doc, [...spec, "tags"], parseList(text))),
+      "Comma separated, e.g. Workflows, Signals."
+    ),
+    field(
+      "Temporal SDKs",
+      "/spec/registry/temporalSdks",
+      textControl(listValue(getIn(doc, [...spec, "temporalSdks"])), (text) =>
+        setIn(doc, [...spec, "temporalSdks"], parseList(text))
+      ),
+      "Comma separated, e.g. Go, Python."
+    ),
+    field(
+      "Runbook URL",
+      "/spec/registry/links/runbook",
+      textControl(getIn(doc, [...spec, "links", "runbook", "url"]), set([...spec, "links", "runbook", "url"]), {
+        type: "url",
+        placeholder: "https://github.com/…#demo-script",
+      })
+    ),
+    field(
+      "Slide deck URL",
+      "/spec/registry/links/slideDeck",
+      textControl(getIn(doc, [...spec, "links", "slideDeck", "url"]), set([...spec, "links", "slideDeck", "url"]), {
+        type: "url",
+        placeholder: "https://docs.google.com/presentation/…",
+      })
+    )
+  );
+}
+
+function buildRows(doc) {
+  const builds = getIn(doc, ["spec", "builds"]) || {};
+  const rows = Object.entries(builds).map(([name, build]) => {
+    const pointer = `/spec/builds/${name}`;
+    return el(
+      "div",
+      { class: "onboard-row", dataset: { pointer } },
+      field(
+        "Build",
+        null, // the row carries the build's pointer
+        textControl(name, () => {}, {
+          onchange: (event) => {
+            const next = event.target.value.trim();
+            if (!next || next === name || builds[next]) return renderOnboarding();
+            renameKey(builds, name, next);
+            Object.values(getIn(doc, ["spec", "components"]) || {}).forEach((component) => {
+              if (component.build === name) component.build = next;
+            });
+            renderOnboarding();
+          },
+        })
+      ),
+      field("Context", `${pointer}/context`, textControl(build.context, (value) => setIn(build, ["context"], value))),
+      field(
+        "Dockerfile",
+        `${pointer}/dockerfile`,
+        textControl(build.dockerfile, (value) => setIn(build, ["dockerfile"], value), { placeholder: "Dockerfile" })
+      ),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove",
+        onclick: () => {
+          delete builds[name];
+          renderOnboarding();
+        },
+      })
+    );
+  });
+  return el(
+    "fieldset",
+    { class: "onboard-fields onboard-wide" },
+    el("legend", { text: "Builds" }),
+    askControl("/spec/builds"),
+    el("p", { class: "onboard-hint", text: "One container image per entry, built by CodeBuild from the repo." }),
+    ...rows,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "+ Add build",
+      onclick: () => {
+        const spec = doc.spec || (doc.spec = {});
+        spec.builds = spec.builds || {};
+        let n = Object.keys(spec.builds).length + 1;
+        while (spec.builds[`build-${n}`]) n += 1;
+        spec.builds[`build-${n}`] = { context: "." };
+        renderOnboarding();
+      },
+    })
+  );
+}
+
+function componentCards(doc) {
+  const components = getIn(doc, ["spec", "components"]) || {};
+  const buildNames = Object.keys(getIn(doc, ["spec", "builds"]) || {});
+  const cards = Object.entries(components).map(([name, component]) => {
+    const pointer = `/spec/components/${name}`;
+    const ports = Array.isArray(component.ports) ? component.ports : [];
+    const port = ports[0] || {};
+    const workerIsObject = component.worker && typeof component.worker === "object";
+    const setPort = (key, value) => {
+      if (value === undefined && Object.keys(port).every((k) => k === key)) {
+        delete component.ports;
+        return;
+      }
+      if (!ports.length) component.ports = [port];
+      setIn(port, [key], value);
+    };
+    return el(
+      "div",
+      { class: "onboard-card", dataset: { pointer } },
+      el(
+        "div",
+        { class: "onboard-card-fields" },
+        field(
+          "Component",
+          null, // the card carries the component's pointer
+          textControl(name, () => {}, {
+            onchange: (event) => {
+              const next = event.target.value.trim();
+              if (!next || next === name || components[next]) return renderOnboarding();
+              renameKey(components, name, next);
+              renderOnboarding();
+            },
+          })
+        ),
+        field(
+          "Build",
+          `${pointer}/build`,
+          el(
+            "select",
+            { onchange: (event) => setIn(component, ["build"], event.target.value) },
+            ...[...new Set([...buildNames, component.build].filter(Boolean))].map((build) =>
+              el("option", { value: build, selected: build === component.build, text: build })
+            )
+          )
+        ),
+        field(
+          "Container port",
+          `${pointer}/ports/0/containerPort`,
+          textControl(port.containerPort, (value) => setPort("containerPort", value === "" ? undefined : Number(value)), {
+            type: "number",
+            min: 1,
+            max: 65535,
+            placeholder: "none",
+          }),
+          ports.length > 1 ? "Only the first port is shown; edit the rest in YAML." : null
+        )
+      ),
+      el(
+        "div",
+        { class: "onboard-checks" },
+        checkControl("Public (serves the demo's ingress on port 80)", `${pointer}/ports/0/servicePort`, port.servicePort === 80, (on) =>
+          setPort("servicePort", on ? 80 : undefined)
+        ),
+        checkControl(
+          "Temporal worker",
+          `${pointer}/worker`,
+          component.worker,
+          (on) => setIn(component, ["worker"], on ? true : undefined),
+          { disabled: workerIsObject, hint: workerIsObject ? "Worker Versioning is configured in YAML." : null }
+        ),
+        checkControl("Starts or queries workflows (not a worker)", `${pointer}/temporalAccess`, component.temporalAccess, (on) =>
+          setIn(component, ["temporalAccess"], on ? true : undefined)
+        ),
+        checkControl("Needs the local Temporal proxy", `${pointer}/temporalProxy`, getIn(component, ["temporalProxy", "enabled"]), (on) =>
+          setIn(component, ["temporalProxy"], on ? { enabled: true } : undefined)
+        )
+      ),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove component",
+        onclick: () => {
+          delete components[name];
+          renderOnboarding();
+        },
+      })
+    );
+  });
+  return el(
+    "fieldset",
+    { class: "onboard-fields onboard-wide" },
+    el("legend", { text: "Components" }),
+    askControl("/spec/components"),
+    el("p", { class: "onboard-hint", text: "One long-running process each. Exactly one should be public." }),
+    ...cards,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "+ Add component",
+      onclick: () => {
+        const spec = doc.spec || (doc.spec = {});
+        spec.components = spec.components || {};
+        let n = Object.keys(spec.components).length + 1;
+        while (spec.components[`component-${n}`]) n += 1;
+        spec.components[`component-${n}`] = { build: buildNames[0] || "" };
+        renderOnboarding();
+      },
+    })
+  );
+}
+
+function runtimeFields(doc) {
+  const crashable = ["spec", "registry", "crashable"];
+  return el(
+    "fieldset",
+    { class: "onboard-fields" },
+    el("legend", { text: "Ingress and crashable environments" }),
+    askControl("/spec/ingress"),
+    field(
+      "Subdomain",
+      "/spec/ingress/subdomain",
+      textControl(getIn(doc, ["spec", "ingress", "subdomain"]), (value) => setIn(doc, ["spec", "ingress", "subdomain"], value)),
+      "The demo is served at <subdomain>.tmprl-demo.cloud."
+    ),
+    field(
+      "Health check path",
+      "/spec/smokeCheck",
+      textControl(getIn(doc, ["spec", "smokeCheck", "path"]), (value) => setIn(doc, ["spec", "smokeCheck", "path"], value), {
+        placeholder: "/healthz",
+      }),
+      "A cheap GET that returns 200; rollouts wait for it."
+    ),
+    checkControl(
+      "Require Temporal sign-in to open the demo",
+      "/spec/ingress/temporalAuthRequired",
+      getIn(doc, ["spec", "ingress", "temporalAuthRequired"]) !== false,
+      (on) => setIn(doc, ["spec", "ingress", "temporalAuthRequired"], on ? undefined : false)
+    ),
+    checkControl(
+      "Crashable: users can launch a private copy and kill its workers",
+      "/spec/registry/crashable",
+      getIn(doc, [...crashable, "enabled"]),
+      (on) => {
+        setIn(doc, crashable, on ? { ...getIn(doc, crashable), enabled: true } : undefined);
+        renderOnboarding();
+      }
+    ),
+    getIn(doc, [...crashable, "enabled"])
+      ? el(
+          "div",
+          { class: "onboard-subfields" },
+          field(
+            "Task queue env var",
+            "/spec/registry/crashable/taskQueueEnv",
+            textControl(getIn(doc, [...crashable, "taskQueueEnv"]), (value) => setIn(doc, [...crashable, "taskQueueEnv"], value), {
+              placeholder: "TASK_QUEUE",
+            }),
+            "Every process reads its task queue from this variable."
+          ),
+          field(
+            "Base task queue",
+            "/spec/registry/crashable/baseTaskQueue",
+            textControl(getIn(doc, [...crashable, "baseTaskQueue"]), (value) => setIn(doc, [...crashable, "baseTaskQueue"], value))
+          )
+        )
+      : null
+  );
+}
+
+function errorList(errors) {
+  if (!errors.length) return null;
+  return el(
+    "div",
+    { class: "onboard-errors", role: "alert" },
+    el("strong", { text: errors.length === 1 ? "1 problem" : `${errors.length} problems` }),
+    el(
+      "ul",
+      {},
+      ...errors.map((error) =>
+        el(
+          "li",
+          {},
+          error.pointer ? el("code", { text: error.pointer }) : null,
+          el("span", { text: error.message })
+        )
+      )
+    )
+  );
+}
+
+// Marks every field an error points at, or inside of.
+function markErrorFields(root, errors) {
+  root.querySelectorAll("[data-pointer]").forEach((node) => {
+    const pointer = node.dataset.pointer;
+    const hit = errors.some(
+      (error) => error.pointer && (error.pointer === pointer || error.pointer.startsWith(`${pointer}/`))
+    );
+    node.classList.toggle("has-error", hit);
+  });
+}
+
+function draftEditor(status) {
+  const dirty = onboardDirty();
+  const tabs = el(
+    "div",
+    { class: "onboard-tabs", role: "tablist" },
+    ...[
+      ["form", "Form"],
+      ["yaml", "YAML"],
+    ].map(([tab, label]) =>
+      el("button", {
+        type: "button",
+        role: "tab",
+        "aria-selected": String(onboard.tab === tab),
+        text: label,
+        onclick: () => switchOnboardTab(tab),
+      })
+    )
+  );
+  let body;
+  if (onboard.tab === "yaml") {
+    body = el("textarea", {
+      class: "onboard-yaml",
+      rows: 28,
+      spellcheck: "false",
+      text: onboard.yamlText ?? status.yaml,
+      oninput: (event) => {
+        onboard.yamlText = event.target.value;
+        renderOnboardingActions();
+      },
+    });
+  } else if (!onboard.working) {
+    body = el("p", { class: "empty", text: "The YAML doesn't parse yet; fix it in the YAML tab." });
+  } else {
+    const doc = onboard.working;
+    body = el(
+      "div",
+      { class: "onboard-form", oninput: renderOnboardingActions, onchange: renderOnboardingActions },
+      catalogFields(doc),
+      runtimeFields(doc),
+      buildRows(doc),
+      componentCards(doc),
+      secretsFields(doc),
+      el("p", {
+        class: "onboard-hint onboard-wide",
+        text: "Environment variables, serverless (Lambda) components, Worker Versioning, Nexus endpoints and extra namespaces: edit them in the YAML tab.",
+      })
+    );
+  }
+  return [
+    agentPanel(status),
+    tabs,
+    errorList(status.errors || []),
+    status.ready && !dirty ? onboardAlert("success", "The draft is valid.", "Open the pull request below.") : null,
+    body,
+    el("div", { class: "onboard-actions", "data-onboard-actions": "" }, ...draftActions(dirty)),
+  ];
+}
+
+function draftActions(dirty) {
+  return [
+    el("button", {
+      type: "button",
+      class: "btn btn-primary btn-sm",
+      "aria-disabled": String(!dirty || Boolean(onboard.busy)),
+      text: "Validate draft",
+      onclick: saveDraft,
+    }),
+    dirty
+      ? el("button", { type: "button", class: "btn btn-quiet btn-sm", text: "Discard changes", onclick: discardDraftChanges })
+      : null,
+    el("span", { class: "mono", text: dirty ? "Unsaved changes" : `Revision ${onboard.status.revision}` }),
+  ];
+}
+
+// Refreshes only the action bar while typing, so inputs keep focus.
+function renderOnboardingActions() {
+  const actions = document.querySelector("[data-onboard-actions]");
+  if (actions) actions.replaceChildren(...draftActions(onboardDirty()));
+  const handoff = document.querySelector("[data-onboard-handoff]");
+  if (handoff) handoff.replaceChildren(...handoffBody(onboard.status));
+  const agent = document.querySelector("[data-onboard-agent]");
+  if (agent) agent.replaceChildren(...agentPanelBody(onboard.status));
+}
+
+function repoStep(status) {
+  const repo = status && status.repo;
+  if (repo && !onboard.changingRepo) {
+    return onboardStep(
+      1,
+      "Repo",
+      el(
+        "div",
+        { class: "onboard-repo" },
+        externalLink(repo.url, { class: "onboard-repo-name", text: `${repo.owner}/${repo.name}` }),
+        el("span", { class: "mono", text: `${repo.default_branch} @ ${repo.commit_sha.slice(0, 7)}` }),
+        onboardOpen()
+          ? el("button", {
+              type: "button",
+              class: "btn btn-quiet btn-sm",
+              text: "Use a different repo",
+              onclick: () => {
+                onboard.changingRepo = true;
+                renderOnboarding();
+              },
+            })
+          : null
+      )
+    );
+  }
+  const input = el("input", {
+    type: "url",
+    required: true,
+    placeholder: "https://github.com/temporal-sa/my-demo",
+    "aria-label": "GitHub repo URL",
+  });
+  return onboardStep(
+    1,
+    "Repo",
+    el("p", {
+      class: "onboard-hint",
+      text: "A public repo in temporal-sa, temporalio or temporal-community. The demo must follow the catalog-readiness rules in the demo buildkit.",
+    }),
+    el(
+      "form",
+      {
+        class: "onboard-inline",
+        onsubmit: (event) => {
+          event.preventDefault();
+          chooseRepo(input.value);
+        },
+      },
+      input,
+      el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(onboard.busy)), text: "Check repo" }),
+      onboard.changingRepo
+        ? el("button", {
+            type: "button",
+            class: "btn btn-quiet btn-sm",
+            text: "Cancel",
+            onclick: () => {
+              onboard.changingRepo = false;
+              renderOnboarding();
+            },
+          })
+        : null
+    )
+  );
+}
+
+function handoffBody(status) {
+  if (onboardDirty()) {
+    return [el("p", { class: "onboard-hint", text: "Validate your changes first, so the pull request has them." })];
+  }
+  if (!status.ready || !status.new_file_url) {
+    return [el("p", { class: "onboard-hint", text: "Fix the problems in the draft first." })];
+  }
+  const input = el("input", {
+    type: "url",
+    required: true,
+    placeholder: "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/123",
+    "aria-label": "Pull request URL",
+  });
+  return [
+    el(
+      "ol",
+      { class: "onboard-handoff-steps" },
+      el(
+        "li",
+        {},
+        el("p", {
+          text: `Open the prefilled ${status.project_path} on GitHub. Choose "Create a new branch for this commit and start a pull request", then create the pull request. Don't edit the file there: the hand-off checks it matches this draft.`,
+        }),
+        externalLink(status.new_file_url, { class: "btn btn-secondary btn-sm", text: "Open the file on GitHub" })
+      ),
+      el(
+        "li",
+        {},
+        el("p", { text: "Paste the pull request link." }),
+        el(
+          "form",
+          {
+            class: "onboard-inline",
+            onsubmit: (event) => {
+              event.preventDefault();
+              onboardCall("Checking pull request", [["/api/onboarding/submit", { pull_request_url: input.value }]]);
+            },
+          },
+          input,
+          el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(onboard.busy)), text: "Hand off" })
+        )
+      )
+    ),
+  ];
+}
+
+function closedStep(status) {
+  if (status.phase === "HandedOff") {
+    return onboardStep(
+      3,
+      "Handed off",
+      onboardAlert("success", "A catalog owner will review your pull request.", "Once it merges, the demo builds, deploys and appears in the catalog."),
+      el(
+        "div",
+        { class: "onboard-actions" },
+        externalLink(status.pull_request_url, { class: "btn btn-secondary btn-sm", text: "View pull request" }),
+        el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          text: "Add another demo",
+          onclick: () => onboardCall("Starting", [["/api/onboarding", {}]]),
+        })
+      )
+    );
+  }
+  const reason = status.phase === "Expired" ? "It expired after two weeks without edits." : "It was discarded.";
+  return onboardStep(
+    1,
+    "Your last onboarding ended",
+    el("p", { class: "onboard-hint", text: reason }),
+    el("button", {
+      type: "button",
+      class: "btn btn-primary btn-sm",
+      text: "Start again",
+      onclick: () => onboardCall("Starting", [["/api/onboarding", {}]]),
+    })
+  );
+}
+
+function renderOnboarding() {
+  const root = document.querySelector("[data-onboard]");
+  if (!root) return;
+  if (!onboard.loaded) {
+    root.replaceChildren(el("p", { class: "empty", text: "Loading…" }));
+    return;
+  }
+  if (onboard.signInUrl) {
+    root.replaceChildren(
+      onboardAlert("warn", "Sign in to add a demo."),
+      el("a", { class: "btn btn-primary btn-sm", href: onboard.signInUrl, text: "Sign in" })
+    );
+    return;
+  }
+  const status = onboard.status || { phase: "None" };
+  const children = [];
+  if (onboard.busy) children.push(el("p", { class: "onboard-busy", role: "status", text: `${onboard.busy}…` }));
+  if (onboard.error) children.push(onboardAlert("error", "That didn't work.", onboard.error));
+  if (status.last_error && !onboard.error && onboardOpen()) {
+    children.push(onboardAlert("error", "Last check failed.", status.last_error));
+  }
+  if (ONBOARD_CLOSED.has(status.phase)) {
+    children.push(closedStep(status));
+  } else {
+    children.push(repoStep(status));
+    if (status.repo && !onboard.changingRepo) {
+      children.push(onboardStep(2, "Configure", ...draftEditor(status)));
+      children.push(onboardStep(3, "Open the pull request", el("div", { "data-onboard-handoff": "" }, ...handoffBody(status))));
+      children.push(
+        el("button", {
+          type: "button",
+          class: "btn btn-quiet btn-sm onboard-discard",
+          text: "Discard this onboarding",
+          onclick: () => {
+            if (window.confirm("Discard this onboarding and its draft?")) {
+              onboardCall("Discarding", [["/api/onboarding/abandon", {}]]);
+            }
+          },
+        })
+      );
+    }
+  }
+  root.replaceChildren(...children);
+  root.setAttribute("aria-busy", String(Boolean(onboard.busy)));
+  markErrorFields(root, status.errors || []);
+  scheduleOnboardPoll();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────

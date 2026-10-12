@@ -255,6 +255,23 @@ spec:
       name: registry-operator-watch
       namespace: tmprl-dem-cld-registry-operator
 ---
+# Namespace and quota for catalog onboarding agent Jobs. Separate from the
+# registry-operator Kustomization, which forces its own namespace onto everything.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: onboarding-agents
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./clusters/blue/bootstrap/onboarding-agents
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
 # Operator self-management (P8 phase A). The registry.yaml self-demo (kept at
 # ./projects/operator so sibling colors never co-manage it). The RUNNING operator
 # reconciles it into the self-rendered, versioned, canary-gated operator

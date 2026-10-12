@@ -91,12 +91,14 @@ def test_self_rendered_web_gets_color_derived_queue(monkeypatch):
         "name": "DEMO_REGISTRY_TASK_QUEUE",
         "value": "registry-management-blue",
     } in env
+    assert {"name": "DEMO_REGISTRY_CLUSTER", "value": "blue"} in env
 
 
 def test_self_rendered_web_uncolored_queue(monkeypatch):
     monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
     env = resources.platform_env_vars(_CATALOG_PROJECT, "web", "img", {})
     assert {"name": "DEMO_REGISTRY_TASK_QUEUE", "value": "registry-management"} in env
+    assert not any(e["name"] == "DEMO_REGISTRY_CLUSTER" for e in env)
 
 
 _VERSIONED_WORKER = {"build": "worker", "worker": {"versioning": {"enabled": True}}}
@@ -151,6 +153,15 @@ def test_workflow_ids_colored_are_scoped():
     )
 
 
+def test_catalog_onboarding_workflow_id_is_per_user_and_colored():
+    assert derive.catalog_onboarding_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "catalog-onboarding/blue/ada@temporal.io"
+    )
+    assert derive.catalog_onboarding_workflow_id("ada@temporal.io") == (
+        "catalog-onboarding/ada@temporal.io"
+    )
+
+
 def test_live_swing_host_is_derived_from_base_domain():
     assert derive.LIVE_SWING_HOST == "live.tmprl-demo.cloud"
 
@@ -162,7 +173,8 @@ def test_worker_update_query_uncolored_is_unscoped():
     # query would change. Byte-identical to the pinned form in test_worker.py.
     assert worker.running_entity_workflows_query() == (
         '(WorkflowType = "DemoProjectWorkflow" '
-        'OR WorkflowType = "InstruqtCourseWorkflow") '
+        'OR WorkflowType = "InstruqtCourseWorkflow" '
+        'OR WorkflowType = "CatalogOnboardingWorkflow") '
         'AND ExecutionStatus = "Running"'
     )
 
@@ -173,7 +185,8 @@ def test_worker_update_query_colored_scopes_to_this_color():
     # cannot batch-signal the pet's (or green's) running workflows.
     assert query.endswith(
         ' AND (WorkflowId STARTS_WITH "demo-project/blue/" '
-        'OR WorkflowId STARTS_WITH "instruqt-course/blue/")'
+        'OR WorkflowId STARTS_WITH "instruqt-course/blue/" '
+        'OR WorkflowId STARTS_WITH "catalog-onboarding/blue/")'
     )
     assert query.startswith(worker.running_entity_workflows_query())
 
