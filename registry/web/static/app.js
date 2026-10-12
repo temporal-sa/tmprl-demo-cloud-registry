@@ -679,16 +679,36 @@ function screenshotFrame(demo, art) {
   return frame;
 }
 
+// [full label, short card label, url] for each presenter asset. A null short
+// label keeps the asset off catalog cards: every demo has a repo (the
+// DemoProject points at it), so a Repo chip would say nothing.
+function presenterAssets(demo) {
+  const nt = demo.nonTechnicalAssets;
+  return [
+    ["Speaker notes", "Notes", nt.speakerNotes],
+    ["Slide deck", "Deck", nt.slideDeck],
+    ["Golden path recording", "Golden path", nt.goldenPath],
+    ["External recording", "Recording", nt.externalRecording],
+    ["Runbook", "Runbook", demo.technicalAssets.runbook],
+    ["Repository", null, demo.technicalAssets.repo],
+  ];
+}
+
+// Catalog cards only call out the assets a demo has; the drawer lists the rest.
+function cardAssets(demo) {
+  const present = presenterAssets(demo).filter(([, short, url]) => short && url);
+  if (!present.length) return null;
+  return el(
+    "div",
+    { class: "card-assets", role: "list", "aria-label": "Presenter assets" },
+    ...present.map(([label, short, url]) =>
+      externalLink(url, { role: "listitem", title: label }, short)
+    )
+  );
+}
+
 function renderFeatureCard(demo) {
   const nt = demo.nonTechnicalAssets;
-  const assetChecklist = [
-    ["Speaker notes", nt.speakerNotes],
-    ["Slide deck", nt.slideDeck],
-    ["Golden path recording", nt.goldenPath],
-    ["External recording", nt.externalRecording],
-    ["Runbook", demo.technicalAssets.runbook],
-    ["Repository", demo.technicalAssets.repo],
-  ];
   return el(
     "article",
     {
@@ -733,7 +753,7 @@ function renderFeatureCard(demo) {
       el(
         "div",
         { class: "checklist", role: "list", "aria-label": "Presenter assets" },
-        ...assetChecklist.map(([label, url]) =>
+        ...presenterAssets(demo).map(([label, , url]) =>
           url
             ? externalLink(url, { role: "listitem" }, label)
             : el("span", { role: "listitem", title: "Not provided yet", text: label })
@@ -759,6 +779,7 @@ function renderDemoCard(demo) {
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
+    cardAssets(demo),
     el("div", { class: "card-foot" }, sdkList(demo.sdks), cardActions(demo))
   );
 }
