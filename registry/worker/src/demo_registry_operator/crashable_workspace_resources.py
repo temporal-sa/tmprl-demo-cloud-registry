@@ -94,6 +94,7 @@ def build_workspace_manifests(
     )
     if label_workers:
         _label_crashable_worker_workloads(ordered, cloned)
+    _use_workspace_auth_verifier(ordered)
 
     deployment_names = [
         manifest["metadata"]["name"]
@@ -101,6 +102,23 @@ def build_workspace_manifests(
         if manifest.get("kind") == "Deployment"
     ]
     return ordered, task_queue, host, namespace, deployment_names
+
+
+def _use_workspace_auth_verifier(manifests: list[dict[str, Any]]) -> None:
+    """Point the workspace's forward-auth at the share-link-aware verifier.
+
+    This is the ONLY place that verifier is wired in, so share links can never
+    reach an always-on demo route.
+    """
+
+    for manifest in manifests:
+        if manifest.get("kind") != "Middleware":
+            continue
+        if _dict(manifest.get("metadata")).get("name") != resources.AUTH_MIDDLEWARE_NAME:
+            continue
+        forward_auth = _dict(manifest.get("spec")).get("forwardAuth")
+        if isinstance(forward_auth, dict):
+            forward_auth["address"] = resources.CATALOG_WORKSPACE_AUTH_VERIFY_URL
 
 
 def _label_crashable_worker_workloads(

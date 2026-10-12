@@ -32,6 +32,7 @@ class EnsureWorkspaceRequest:
     carried_task_queue: str | None = None
     carried_workspace_id: str | None = None
     carried_scaled_down: bool = False
+    carried_share_epoch: int = 0
 
 
 @dataclass
@@ -49,6 +50,9 @@ class WorkspaceStatus:
     last_error: str | None = None
     failure: dict[str, Any] = field(default_factory=dict)
     compensation_status: dict[str, Any] = field(default_factory=dict)
+    # Bumped by revoke_share_links; share links and share cookies carry the epoch
+    # they were minted under, so bumping it invalidates every outstanding link.
+    share_epoch: int = 0
 
 
 @dataclass(frozen=True)

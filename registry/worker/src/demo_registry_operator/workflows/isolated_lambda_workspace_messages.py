@@ -41,6 +41,7 @@ class EnsureIsolatedWorkspaceRequest:
     carried_workspace_id: str | None = None
     carried_lambda_workers: tuple[WorkspaceLambdaWorker, ...] = ()
     carried_initial_current: dict[str, str] = field(default_factory=dict)
+    carried_share_epoch: int = 0
 
 
 @dataclass
@@ -61,6 +62,9 @@ class IsolatedWorkspaceStatus:
     compensation_status: dict[str, Any] = field(default_factory=dict)
     lambda_workers: list[dict[str, Any]] = field(default_factory=list)
     initial_current: dict[str, str] = field(default_factory=dict)
+    # Bumped by revoke_share_links; share links and share cookies carry the epoch
+    # they were minted under, so bumping it invalidates every outstanding link.
+    share_epoch: int = 0
 
 
 @dataclass(frozen=True)

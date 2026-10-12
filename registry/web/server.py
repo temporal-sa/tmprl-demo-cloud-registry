@@ -19,7 +19,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
+from urllib.parse import (
+    parse_qs,
+    parse_qsl,
+    quote,
+    unquote,
+    urlencode,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+)
 from urllib.request import Request, urlopen
 
 # Temporal is only needed for the crashable-workspace endpoints. Import it
@@ -58,6 +67,26 @@ TOKEN_TYPE_SESSION = "session"
 TOKEN_TYPE_DOWNSTREAM = "downstream"
 TOKEN_TYPE_OAUTH_STATE = "oauth-state"
 SESSION_AUDIENCE = "tmprl-demo.cloud"
+# Workspace share links are signed with a key derived from (never equal to) the
+# session key, and carry their own typs, so neither key nor typ overlaps with an
+# employee session. Only /_auth/verify-workspace (wired onto crashable/isolated
+# workspace routes alone) ever reads them.
+TOKEN_TYPE_SHARE_LINK = "workspace-share-link"
+TOKEN_TYPE_SHARE_SESSION = "workspace-share-session"
+SHARE_KEY_CONTEXT = b"workspace-share-v1"
+WORKSPACE_SHARE_COOKIE = "temporal_workspace_share"
+WORKSPACE_SHARE_PARAM = "tmprl_share"
+WORKSPACE_HOST_PREFIX = "crash-"
+# Guests get a synthetic, per-browser email on a domain we own (no MX), so demos
+# that expect X-Temporal-Auth-Email keep working and never see a real address.
+GUEST_EMAIL_DOMAIN = "guest.tmprl-demo.cloud"
+WORKSPACE_LIVE_PHASES = frozenset(
+    {"Active", "Crashing", "ScalingDown", "ScaledDown", "ScalingUp"}
+)
+DEFAULT_SHARE_SECONDS = 4 * 60 * 60
+MIN_SHARE_SECONDS = 5 * 60
+MAX_SHARE_SECONDS = 24 * 60 * 60
+SHARE_STATUS_CACHE_SECONDS = 30
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
@@ -427,6 +456,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.crashable_status(parse_query(parsed.query))
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
+            elif path == "/_auth/verify-workspace":
+                self.send_workspace_auth_verification()
             elif path == "/auth/login":
                 self.send_auth_login(parsed.query)
             elif path == "/oauth/google/start":
@@ -470,6 +501,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.crashable_update("scale_up")
             elif path == "/api/crashable-workspace/delete":
                 self.crashable_delete()
+            elif path == "/api/crashable-workspace/share":
+                self.workspace_share_create()
+            elif path == "/api/crashable-workspace/revoke-share-links":
+                self.workspace_share_revoke()
             elif path == "/api/namespace-access":
                 self.namespace_access_grant()
             else:
@@ -506,6 +541,13 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(email, str) or not email:
             raise AuthError("Session is missing an email claim.")
         return email
+
+    def catalog_project(self, demo: str) -> dict[str, Any] | None:
+        registry = load_registry(self.registry_path)
+        for project in registry.get("projects", []):
+            if isinstance(project, dict) and project.get("name") == demo:
+                return project
+        return None
 
     def demo_workspace_mode(self, demo: str) -> str | None:
         """Which private-environment workflow this catalog demo starts.
@@ -545,7 +587,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
             return None
-        demo = self.read_json_body().get("demo")
+        self.request_body = self.read_json_body()
+        demo = self.request_body.get("demo")
         if not isinstance(demo, str) or not demo:
             self.send_json(
                 {"error": "bad_request", "message": "demo is required"},
@@ -639,6 +682,128 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
             return
+        self.send_json(status)
+
+    def workspace_share_create(self) -> None:
+        if not same_origin_request(self):
+            self.send_json(
+                {"error": "forbidden", "message": "Cross-origin request refused."},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        request = self.crashable_request()
+        if request is None:
+            return
+        email, demo = request
+        project = self.catalog_project(demo)
+        if (
+            project is None
+            or self.demo_workspace_mode(demo) is None
+            or not project.get("authRequired")
+        ):
+            self.send_json(
+                {
+                    "error": "not-shareable",
+                    "message": f"{demo} does not have a shareable environment.",
+                },
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            ttl_seconds = int(self.request_body.get("ttl_seconds", DEFAULT_SHARE_SECONDS))
+        except (TypeError, ValueError):
+            ttl_seconds = DEFAULT_SHARE_SECONDS
+        ttl_seconds = min(max(ttl_seconds, MIN_SHARE_SECONDS), MAX_SHARE_SECONDS)
+        try:
+            status = self.temporal_gateway.workspace_status(email, demo)
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        host = status.get("host")
+        if (
+            status.get("phase") not in WORKSPACE_LIVE_PHASES
+            or not isinstance(host, str)
+            or not host.startswith(WORKSPACE_HOST_PREFIX)
+            or not isinstance(status.get("created_at"), str)
+        ):
+            self.send_json(
+                {"error": "not-running", "message": "The environment is not running."},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        if "share_epoch" not in status:
+            # Created before share links existed: its routes still use the
+            # employee-only verifier, so a link would never work.
+            self.send_json(
+                {
+                    "error": "not-shareable",
+                    "message": (
+                        "This environment predates share links. Delete and "
+                        "recreate it to share it."
+                    ),
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        now = int(time.time())
+        jti = secrets.token_urlsafe(12)
+        token = create_jwt(
+            {
+                "iss": auth_issuer(),
+                "aud": host,
+                "sub": f"share:{jti}",
+                "jti": jti,
+                "ws": status.get("workspace_id"),
+                "demo": demo,
+                "owner": email,
+                "gen": status["created_at"],
+                "epoch": int(status.get("share_epoch") or 0),
+                "iat": now,
+                "exp": now + ttl_seconds,
+            },
+            typ=TOKEN_TYPE_SHARE_LINK,
+            key=share_signing_key(),
+        )
+        self.send_json(
+            {
+                "url": f"https://{host}/?{urlencode({WORKSPACE_SHARE_PARAM: token})}",
+                "expires_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + ttl_seconds)
+                ),
+            }
+        )
+
+    def workspace_share_revoke(self) -> None:
+        if not same_origin_request(self):
+            self.send_json(
+                {"error": "forbidden", "message": "Cross-origin request refused."},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        request = self.crashable_request()
+        if request is None:
+            return
+        email, demo = request
+        try:
+            status = self.temporal_gateway.update_workspace(
+                email, demo, "revoke_share_links"
+            )
+        except WorkspaceNotFound:
+            self.send_json(
+                {"error": "not-found", "message": "No active workspace."},
+                status=HTTPStatus.NOT_FOUND,
+            )
+            return
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        SHARE_STATUS_CACHE.invalidate(email, demo)
         self.send_json(status)
 
     def namespace_access_grant(self) -> None:
@@ -787,6 +952,159 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             },
             status=HTTPStatus.SERVICE_UNAVAILABLE,
         )
+
+    def has_employee_session(self) -> bool:
+        try:
+            session_from_request(self)
+        except AuthError:
+            return False
+        return True
+
+    def send_workspace_auth_verification(self) -> None:
+        # Forward-auth for crashable / isolated workspace routes ONLY. Employees
+        # pass exactly as on /_auth/verify; anyone else needs a share link or
+        # share cookie minted for this exact workspace host and incarnation.
+        if os.environ.get("AUTH_MODE", "disabled") not in {"google", "enabled"}:
+            self.send_auth_verification()
+            return
+        host = forwarded_host(self)
+        url = original_request_url(self)
+        link = share_param(url)
+        if link is not None:
+            self.exchange_share_link(host, url, link)
+            return
+        if self.has_employee_session():
+            self.send_auth_verification()
+            return
+        share_cookie = cookie_value(self, WORKSPACE_SHARE_COOKIE)
+        claims = self.verified_share_claims(
+            share_cookie,
+            host,
+            typ=TOKEN_TYPE_SHARE_SESSION,
+        )
+        if claims is None:
+            if share_cookie:
+                # A guest whose access lapsed cannot use Google login anyway.
+                self.send_html(share_link_invalid_page(), status=HTTPStatus.FORBIDDEN)
+            else:
+                self.redirect_to_login()
+            return
+        now = int(time.time())
+        guest_id = claims["gid"]
+        subject = f"share:{claims['jti']}:{guest_id}"
+        email = f"guest-{guest_id}@{GUEST_EMAIL_DOMAIN}"
+        jwt = create_jwt(
+            {
+                "iss": auth_issuer(),
+                "aud": host,
+                "sub": subject,
+                "email": email,
+                "name": "Guest",
+                "guest": True,
+                "project_host": host,
+                "iat": now,
+                "exp": now + downstream_jwt_seconds(),
+            },
+            typ=TOKEN_TYPE_DOWNSTREAM,
+        )
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Temporal-Auth-JWT", jwt)
+        self.send_header("X-Temporal-Auth-Subject", subject)
+        self.send_header("X-Temporal-Auth-Email", email)
+        self.send_header("X-Temporal-Auth-Name", "Guest")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def exchange_share_link(self, host: str, url: str, token: str) -> None:
+        # Trade the link for a host-only cookie, then redirect to the same URL
+        # without the token so it stops travelling in URLs, logs and Referer.
+        clean_url = without_share_param(url)
+        claims = self.verified_share_claims(
+            token, host, typ=TOKEN_TYPE_SHARE_LINK, fresh=True
+        )
+        if claims is None:
+            if self.has_employee_session():
+                self.send_redirect(clean_url)
+                return
+            self.send_html(
+                share_link_invalid_page(),
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        session = create_jwt(
+            {
+                **{key: value for key, value in claims.items() if key != "typ"},
+                # One guest identity per browser that opens the link.
+                "gid": secrets.token_hex(6),
+            },
+            typ=TOKEN_TYPE_SHARE_SESSION,
+            key=share_signing_key(),
+        )
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", clean_url)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_cookie(
+            WORKSPACE_SHARE_COOKIE,
+            session,
+            max_age=max(claims["exp"] - int(time.time()), 0),
+            # Host-only: no Domain attribute, so the browser only ever sends
+            # it back to this one workspace host.
+            domain=None,
+            httponly=True,
+            secure=auth_cookie_secure(),
+            same_site="Lax",
+        )
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def verified_share_claims(
+        self,
+        token: str | None,
+        host: str,
+        *,
+        typ: str,
+        fresh: bool = False,
+    ) -> dict[str, Any] | None:
+        """Claims of a share token valid for this host right now, else None.
+
+        Fails closed: a bad signature, wrong host, torn-down or recreated
+        workspace, bumped share epoch, or unreachable Temporal all deny.
+        """
+
+        if not token or not host.startswith(WORKSPACE_HOST_PREFIX):
+            return None
+        try:
+            claims = decode_jwt(token, typ=typ, key=share_signing_key())
+        except AuthError:
+            return None
+        if claims.get("aud") != host:
+            return None
+        owner, demo = claims.get("owner"), claims.get("demo")
+        if not isinstance(owner, str) or not isinstance(demo, str):
+            return None
+        if not isinstance(claims.get("jti"), str):
+            return None
+        if typ == TOKEN_TYPE_SHARE_SESSION and not isinstance(claims.get("gid"), str):
+            return None
+        if self.temporal_gateway is None:
+            return None
+        try:
+            status = SHARE_STATUS_CACHE.get(
+                self.temporal_gateway, owner, demo, fresh=fresh
+            )
+        except TemporalUnavailable:
+            return None
+        if not (
+            status.get("phase") in WORKSPACE_LIVE_PHASES
+            and status.get("host") == host
+            and status.get("workspace_id") == claims.get("ws")
+            and status.get("created_at") == claims.get("gen")
+            and int(status.get("share_epoch") or 0) == claims.get("epoch")
+        ):
+            return None
+        return claims
 
     def redirect_to_login(self) -> None:
         return_to = sanitize_return_to(original_request_url(self))
@@ -1071,6 +1389,14 @@ def auth_signing_key() -> str:
     )
 
 
+def share_signing_key() -> bytes:
+    return hmac.new(
+        auth_signing_key().encode("utf-8"),
+        SHARE_KEY_CONTEXT,
+        hashlib.sha256,
+    ).digest()
+
+
 def auth_base_url() -> str:
     return os.environ.get("AUTH_BASE_URL", DEFAULT_AUTH_BASE_URL).strip().rstrip("/")
 
@@ -1143,6 +1469,91 @@ def forwarded_host(handler: BaseHTTPRequestHandler) -> str:
         handler.headers.get("X-Forwarded-Host", "").split(",", 1)[0].strip()
         or handler.headers.get("X-Original-Host", "").strip()
     )
+
+
+def share_param(url: str) -> str | None:
+    for key, value in parse_qsl(urlsplit(url).query, keep_blank_values=True):
+        if key == WORKSPACE_SHARE_PARAM:
+            return value
+    return None
+
+
+def without_share_param(url: str) -> str:
+    parts = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key != WORKSPACE_SHARE_PARAM
+    ]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def same_origin_request(handler: BaseHTTPRequestHandler) -> bool:
+    # Every demo host is same-site with the catalog, so SameSite=Lax alone does
+    # not stop a demo page from POSTing here; require the catalog's own origin.
+    fetch_site = handler.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None and fetch_site != "same-origin":
+        return False
+    origin = handler.headers.get("Origin")
+    return origin is None or origin == auth_base_url()
+
+
+def share_link_invalid_page() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Link expired</title>
+</head>
+<body style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem;">
+  <h1>This link no longer works</h1>
+  <p>The shared demo link has expired, was revoked, or the environment it
+  pointed to has been deleted. Ask the person who shared it for a new link.</p>
+</body>
+</html>
+"""
+
+
+class ShareStatusCache:
+    """Short-lived cache of workspace status for share-cookie checks.
+
+    Share cookies are re-checked against the workspace on every request, so
+    this keeps that to one Temporal query per workspace per window. Revocation
+    from this replica invalidates immediately; other replicas within the window.
+    """
+
+    def __init__(self, ttl_seconds: float) -> None:
+        self._ttl = ttl_seconds
+        self._entries: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    def get(
+        self,
+        gateway: "TemporalGateway",
+        owner: str,
+        demo: str,
+        *,
+        fresh: bool = False,
+    ) -> dict[str, Any]:
+        key = (owner, demo)
+        now = time.monotonic()
+        if not fresh:
+            with self._lock:
+                entry = self._entries.get(key)
+            if entry and now - entry[0] < self._ttl:
+                return entry[1]
+        status = gateway.workspace_status(owner, demo)
+        with self._lock:
+            self._entries[key] = (now, status)
+        return status
+
+    def invalidate(self, owner: str, demo: str) -> None:
+        with self._lock:
+            self._entries.pop((owner, demo), None)
+
+
+SHARE_STATUS_CACHE = ShareStatusCache(SHARE_STATUS_CACHE_SECONDS)
 
 
 def sanitize_return_to(value: str) -> str:
@@ -1229,30 +1640,36 @@ def decode_state_token(token: str) -> dict[str, Any]:
     return claims
 
 
-def create_jwt(payload: dict[str, Any], *, typ: str) -> str:
+def jwt_key(key: bytes | None) -> bytes:
     if not auth_signing_key():
         raise AuthError("Auth signing key is not configured.")
+    return key if key is not None else auth_signing_key().encode("utf-8")
+
+
+def create_jwt(
+    payload: dict[str, Any], *, typ: str, key: bytes | None = None
+) -> str:
+    signing_key = jwt_key(key)
     header = {"alg": "HS256", "typ": "JWT"}
     body = {key: value for key, value in payload.items() if value is not None}
     body["typ"] = typ
     signing_input = ".".join([base64url_json(header), base64url_json(body)])
     signature = hmac.new(
-        auth_signing_key().encode("utf-8"),
+        signing_key,
         signing_input.encode("ascii"),
         hashlib.sha256,
     ).digest()
     return f"{signing_input}.{base64url_encode(signature)}"
 
 
-def decode_jwt(token: str, *, typ: str) -> dict[str, Any]:
-    if not auth_signing_key():
-        raise AuthError("Auth signing key is not configured.")
+def decode_jwt(token: str, *, typ: str, key: bytes | None = None) -> dict[str, Any]:
+    signing_key = jwt_key(key)
     parts = token.split(".")
     if len(parts) != 3:
         raise AuthError("Invalid session token.")
     signing_input = f"{parts[0]}.{parts[1]}"
     expected = hmac.new(
-        auth_signing_key().encode("utf-8"),
+        signing_key,
         signing_input.encode("ascii"),
         hashlib.sha256,
     ).digest()

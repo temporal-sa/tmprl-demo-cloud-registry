@@ -581,3 +581,332 @@ def test_namespace_access_workflow_id_matches_the_operator():
         server.namespace_access_workflow_id(" MJones@temporal.io ")
         == "namespace-readers/grant/mjones@temporal.io"
     )
+
+
+# --- workspace share links -----------------------------------------------
+
+SHARE_DEMO = "canonical-ai-demo"
+SHARE_HOST = "crash-0123abcd89.tmprl-demo.cloud"
+
+
+class ShareGateway:
+    def __init__(self, **status):
+        self.status = {
+            "phase": "Active",
+            "demo": SHARE_DEMO,
+            "workspace_id": "0123abcd89",
+            "host": SHARE_HOST,
+            "app_url": f"https://{SHARE_HOST}",
+            "created_at": "2026-10-12T12:00:00+00:00",
+            "share_epoch": 0,
+            **status,
+        }
+        self.status_calls = []
+        self.updates = []
+
+    def workspace_status(self, owner, demo):
+        self.status_calls.append((owner, demo))
+        return dict(self.status)
+
+    def update_workspace(self, owner, demo, update):
+        self.updates.append((owner, demo, update))
+        if update == "revoke_share_links":
+            self.status["share_epoch"] += 1
+        return dict(self.status)
+
+
+@pytest.fixture
+def share_env(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    monkeypatch.setattr(server, "SHARE_STATUS_CACHE", server.ShareStatusCache(30))
+    (tmp_path / "registry.json").write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": SHARE_DEMO,
+                        "crashable": {"enabled": True},
+                        "authRequired": True,
+                    },
+                    {
+                        "name": "public-demo",
+                        "crashable": {"enabled": True},
+                        "authRequired": False,
+                    },
+                ]
+            }
+        )
+    )
+    gateway = ShareGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    yield httpd, gateway
+    httpd.shutdown()
+
+
+def mint_share_link(httpd, *, demo=SHARE_DEMO, cookie=None, headers=None, body=None):
+    return urlopen(
+        Request(
+            f"http://127.0.0.1:{httpd.server_port}/api/crashable-workspace/share",
+            data=json.dumps(body or {"demo": demo}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": cookie or signed_session_cookie(),
+                **(headers or {}),
+            },
+            method="POST",
+        ),
+        timeout=2,
+    )
+
+
+def share_token_from(url):
+    return parse_qs(urlparse(url).query)[server.WORKSPACE_SHARE_PARAM][0]
+
+
+def forward_auth(httpd, path, *, host=SHARE_HOST, uri="/", cookie=None):
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": host,
+        "X-Forwarded-Uri": uri,
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+    request = Request(f"http://127.0.0.1:{httpd.server_port}{path}", headers=headers)
+    try:
+        return urlopen_no_redirect(request)
+    except HTTPError as error:
+        return error
+
+
+def exchange_for_cookie(httpd, token, *, uri_suffix=""):
+    response = forward_auth(
+        httpd,
+        "/_auth/verify-workspace",
+        uri=f"/chat?{server.WORKSPACE_SHARE_PARAM}={token}{uri_suffix}",
+    )
+    assert response.code == 302
+    set_cookie = response.headers["Set-Cookie"]
+    value = set_cookie.split(";", 1)[0]
+    assert value.startswith(f"{server.WORKSPACE_SHARE_COOKIE}=")
+    return response, set_cookie, value
+
+
+def test_share_link_mints_signed_link_for_running_workspace(share_env):
+    httpd, _ = share_env
+    payload = json.loads(mint_share_link(httpd).read())
+
+    assert urlparse(payload["url"]).netloc == SHARE_HOST
+    token = share_token_from(payload["url"])
+    claims = server.decode_jwt(
+        token, typ=server.TOKEN_TYPE_SHARE_LINK, key=server.share_signing_key()
+    )
+    assert claims["aud"] == SHARE_HOST
+    assert claims["owner"] == "mjones@temporal.io"
+    assert claims["epoch"] == 0
+    assert claims["exp"] - claims["iat"] == server.DEFAULT_SHARE_SECONDS
+    # Never valid under the main key or as any other token type.
+    with pytest.raises(server.AuthError):
+        server.decode_jwt(token, typ=server.TOKEN_TYPE_SHARE_LINK)
+    with pytest.raises(server.AuthError):
+        server.decode_jwt(
+            token, typ=server.TOKEN_TYPE_SESSION, key=server.share_signing_key()
+        )
+
+
+def test_share_link_ttl_is_capped(share_env):
+    httpd, _ = share_env
+    payload = json.loads(
+        mint_share_link(httpd, body={"demo": SHARE_DEMO, "ttl_seconds": 10**9}).read()
+    )
+    claims = server.decode_jwt(
+        share_token_from(payload["url"]),
+        typ=server.TOKEN_TYPE_SHARE_LINK,
+        key=server.share_signing_key(),
+    )
+    assert claims["exp"] - claims["iat"] == server.MAX_SHARE_SECONDS
+
+
+def test_share_link_requires_session_auth_gate_and_running_workspace(share_env):
+    httpd, gateway = share_env
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(httpd, cookie="other=1")
+    assert raised.value.code == 401
+
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(httpd, demo="public-demo")
+    assert raised.value.code == 403
+
+    gateway.status["phase"] = "Provisioning"
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(httpd)
+    assert raised.value.code == 409
+
+    gateway.status["phase"] = "Active"
+    del gateway.status["share_epoch"]  # workspace from before share links
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(httpd)
+    assert raised.value.code == 409
+
+
+def test_share_link_refuses_cross_origin_requests(share_env):
+    httpd, _ = share_env
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(
+            httpd, headers={"Origin": "https://canonical-ai-demo.tmprl-demo.cloud"}
+        )
+    assert raised.value.code == 403
+    with pytest.raises(HTTPError) as raised:
+        mint_share_link(httpd, headers={"Sec-Fetch-Site": "same-site"})
+    assert raised.value.code == 403
+
+
+def test_share_link_exchanges_for_host_only_cookie_and_strips_token(share_env):
+    httpd, _ = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+
+    response, set_cookie, _ = exchange_for_cookie(httpd, token, uri_suffix="&x=1")
+
+    assert response.headers["Location"] == f"https://{SHARE_HOST}/chat?x=1"
+    assert "Domain" not in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=Lax" in set_cookie
+
+
+def test_share_cookie_grants_guest_identity_on_its_workspace(share_env):
+    httpd, _ = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+    _, _, cookie = exchange_for_cookie(httpd, token)
+
+    response = forward_auth(httpd, "/_auth/verify-workspace", cookie=cookie)
+
+    assert response.status == 204
+    subject = response.headers["X-Temporal-Auth-Subject"]
+    email = response.headers["X-Temporal-Auth-Email"]
+    assert subject.startswith("share:")
+    assert email.startswith("guest-")
+    assert email.endswith(f"@{server.GUEST_EMAIL_DOMAIN}")
+    assert "mjones" not in email
+    downstream = server.decode_jwt(
+        response.headers["X-Temporal-Auth-JWT"], typ=server.TOKEN_TYPE_DOWNSTREAM
+    )
+    assert downstream["guest"] is True
+    assert downstream["aud"] == SHARE_HOST
+    assert downstream["email"] == email
+
+    # Same browser keeps its identity; another browser on the same link differs.
+    again = forward_auth(httpd, "/_auth/verify-workspace", cookie=cookie)
+    assert again.headers["X-Temporal-Auth-Email"] == email
+    _, _, other_cookie = exchange_for_cookie(httpd, token)
+    other = forward_auth(httpd, "/_auth/verify-workspace", cookie=other_cookie)
+    assert other.headers["X-Temporal-Auth-Email"] != email
+    assert other.headers["X-Temporal-Auth-Subject"] != subject
+
+
+def test_main_verifier_ignores_share_links_and_cookies(share_env):
+    httpd, _ = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+    _, _, cookie = exchange_for_cookie(httpd, token)
+    session_value = cookie.split("=", 1)[1]
+
+    for host in (SHARE_HOST, "canonical-ai-demo.tmprl-demo.cloud"):
+        for request_cookie, uri in (
+            (cookie, "/"),
+            (None, f"/?{server.WORKSPACE_SHARE_PARAM}={token}"),
+            (f"{server.AUTH_SESSION_COOKIE}={token}", "/"),
+            (f"{server.AUTH_SESSION_COOKIE}={session_value}", "/"),
+        ):
+            response = forward_auth(
+                httpd, "/_auth/verify", host=host, uri=uri, cookie=request_cookie
+            )
+            assert response.code == 302
+            assert urlparse(response.headers["Location"]).path == "/auth/login"
+
+
+def test_share_credentials_only_work_on_their_own_workspace_host(share_env):
+    httpd, _ = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+    _, _, cookie = exchange_for_cookie(httpd, token)
+
+    for host in ("crash-ffffffffff.tmprl-demo.cloud", "canonical-ai-demo.tmprl-demo.cloud"):
+        # Browsers never send the host-only cookie elsewhere; if one is
+        # replayed by hand it is still refused.
+        response = forward_auth(
+            httpd, "/_auth/verify-workspace", host=host, cookie=cookie
+        )
+        assert response.code == 403
+        response = forward_auth(
+            httpd,
+            "/_auth/verify-workspace",
+            host=host,
+            uri=f"/?{server.WORKSPACE_SHARE_PARAM}={token}",
+        )
+        assert response.code == 403
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"share_epoch": 1},
+        {"created_at": "2026-10-12T15:00:00+00:00"},
+        {"phase": "Deleting"},
+    ],
+    ids=["revoked", "recreated", "deleting"],
+)
+def test_share_access_ends_when_workspace_changes(share_env, monkeypatch, change):
+    httpd, gateway = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+    _, _, cookie = exchange_for_cookie(httpd, token)
+
+    gateway.status.update(change)
+    monkeypatch.setattr(server, "SHARE_STATUS_CACHE", server.ShareStatusCache(30))
+
+    response = forward_auth(httpd, "/_auth/verify-workspace", cookie=cookie)
+    assert response.code == 403
+    response = forward_auth(
+        httpd,
+        "/_auth/verify-workspace",
+        uri=f"/?{server.WORKSPACE_SHARE_PARAM}={token}",
+    )
+    assert response.code == 403
+
+
+def test_revoke_share_links_bumps_epoch_and_drops_cache(share_env):
+    httpd, gateway = share_env
+    token = share_token_from(json.loads(mint_share_link(httpd).read())["url"])
+    _, _, cookie = exchange_for_cookie(httpd, token)
+    assert forward_auth(httpd, "/_auth/verify-workspace", cookie=cookie).status == 204
+
+    urlopen(
+        Request(
+            f"http://127.0.0.1:{httpd.server_port}"
+            "/api/crashable-workspace/revoke-share-links",
+            data=json.dumps({"demo": SHARE_DEMO}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": signed_session_cookie(),
+            },
+            method="POST",
+        ),
+        timeout=2,
+    )
+
+    assert gateway.updates == [
+        ("mjones@temporal.io", SHARE_DEMO, "revoke_share_links")
+    ]
+    assert forward_auth(httpd, "/_auth/verify-workspace", cookie=cookie).code == 403
+
+
+def test_employee_session_still_passes_workspace_verifier(share_env):
+    httpd, _ = share_env
+    response = forward_auth(
+        httpd, "/_auth/verify-workspace", cookie=signed_session_cookie()
+    )
+    assert response.status == 204
+    assert response.headers["X-Temporal-Auth-Email"] == "mjones@temporal.io"
+
+
+def test_workspace_verifier_redirects_anonymous_visitors_to_login(share_env):
+    httpd, _ = share_env
+    response = forward_auth(httpd, "/_auth/verify-workspace")
+    assert response.code == 302
+    assert urlparse(response.headers["Location"]).path == "/auth/login"

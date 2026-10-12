@@ -1076,6 +1076,39 @@ async function workspaceAction(demo, url) {
   if (node) renderWorkspaceInto(demo, node);
 }
 
+// Mints a guest link for the running workspace (auth-gated demos only). The
+// link works only on this workspace's host and stops working when it expires,
+// links are revoked, or the environment is deleted.
+async function copyWorkspaceShareLink(demo) {
+  try {
+    const { url } = await postJSON("/api/crashable-workspace/share", { demo: demo.id });
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Share link copied — valid for 4 hours");
+    } catch (err) {
+      window.prompt("Copy this share link (valid for 4 hours):", url);
+    }
+  } catch (err) {
+    toast(`Could not create share link: ${err.message}`);
+  }
+  const node = workspaceContainer(demo.id);
+  if (node) renderWorkspaceInto(demo, node);
+}
+
+async function revokeWorkspaceShareLinks(demo) {
+  try {
+    const status = await postJSON("/api/crashable-workspace/revoke-share-links", {
+      demo: demo.id,
+    });
+    workspaceState.set(demo.id, status);
+    toast("All share links revoked");
+  } catch (err) {
+    toast(`Could not revoke share links: ${err.message}`);
+  }
+  const node = workspaceContainer(demo.id);
+  if (node) renderWorkspaceInto(demo, node);
+}
+
 function pollWorkspaceOnce(demo) {
   fetchWorkspaceStatus(demo.id)
     .then((status) => workspaceState.set(demo.id, status))
@@ -1234,6 +1267,20 @@ function renderWorkspaceInto(demo, container) {
     workspaceButton("Delete", "btn-quiet", () =>
       workspaceAction(demo, "/api/crashable-workspace/delete")
     );
+  // Only auth-gated demos need a share link; public ones are already open.
+  const sharing = () =>
+    demo.authRequired
+      ? el(
+          "div",
+          { class: "ws-actions" },
+          workspaceButton("Copy share link", "btn-secondary", () =>
+            copyWorkspaceShareLink(demo)
+          ),
+          workspaceButton("Revoke links", "btn-quiet", () =>
+            revokeWorkspaceShareLinks(demo)
+          )
+        )
+      : null;
 
   if (phase === "Loading") {
     children.push(note("Checking for an existing environment…"));
@@ -1310,6 +1357,7 @@ function renderWorkspaceInto(demo, container) {
         { class: "ws-actions", style: "margin-top:0" },
         ...runningActions
       ),
+      sharing(),
       ...trailer()
     );
     setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));
@@ -1328,6 +1376,7 @@ function renderWorkspaceInto(demo, container) {
         extend(),
         remove()
       ),
+      sharing(),
       ...trailer()
     );
     setWorkspaceTimer(demo.id, armWorkspaceCountdown(demo, expiresAt));

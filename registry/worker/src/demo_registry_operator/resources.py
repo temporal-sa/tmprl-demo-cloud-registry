@@ -87,6 +87,13 @@ DEMO_PROJECT_REVISION_KIND = "DemoProjectRevision"
 CATALOG_AUTH_VERIFY_URL = (
     "http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify"
 )
+# Only crashable / isolated workspace routes point here (rewritten in
+# crashable_workspace_resources). It is the one verifier that honors workspace
+# share links; the always-on demo verifier above never does.
+CATALOG_WORKSPACE_AUTH_VERIFY_URL = (
+    "http://web.tmprl-dem-cld-registry-operator.svc.cluster.local"
+    "/_auth/verify-workspace"
+)
 CATALOG_AUTH_REQUEST_HEADERS = [
     "Cookie",
     "X-Forwarded-Host",

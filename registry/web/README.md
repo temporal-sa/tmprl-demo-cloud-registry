@@ -47,6 +47,22 @@ routes. With `AUTH_MODE=google`, missing or invalid sessions redirect to
 The verifier injects `X-Temporal-Auth-JWT`, `X-Temporal-Auth-Subject`,
 `X-Temporal-Auth-Email`, and `X-Temporal-Auth-Name` for downstream apps.
 
+`/_auth/verify-workspace` is the forward-auth endpoint for crashable and
+isolated workspace routes only; the operator rewrites each workspace's auth
+middleware to point here, and never points an always-on demo at it. Employees
+pass exactly as on `/_auth/verify`. Anyone else needs a share link minted by the
+workspace owner (`POST /api/crashable-workspace/share`, auth-gated demos only,
+default 4h, max 24h). The link carries a `tmprl_share` query param that is exchanged
+for a host-only `temporal_workspace_share` cookie and stripped from the URL.
+Links are signed with a key derived from the session key and bound to the
+workspace host, its incarnation (`created_at`), and its share epoch, so they
+stop working when they expire, when the owner calls
+`POST /api/crashable-workspace/revoke-share-links`, or when the workspace is
+deleted or recreated. Guests get `X-Temporal-Auth-Subject: share:<id>`,
+`X-Temporal-Auth-Name: Guest`, a synthetic per-browser
+`X-Temporal-Auth-Email: guest-<id>@guest.tmprl-demo.cloud`, and a downstream JWT with
+`guest: true`. `/_auth/verify` never reads share links or cookies.
+
 `AUTH_MODE=deny` fails closed with `401 unauthorized`. `AUTH_MODE=bootstrap-allow`
 is an explicit insecure bootstrap bypass and should not be used for protected
 routes.

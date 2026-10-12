@@ -73,6 +73,7 @@ class CrashableWorkspaceWorkflow:
             created_at=None,
             expires_at=None,
             last_error=None,
+            share_epoch=request.carried_share_epoch,
         )
 
     @workflow.run
@@ -287,6 +288,7 @@ class CrashableWorkspaceWorkflow:
                         carried_task_queue=self._status.task_queue,
                         carried_workspace_id=self._workspace_id,
                         carried_scaled_down=self._status.phase == "ScaledDown",
+                        carried_share_epoch=self._status.share_epoch,
                     )
                 )
 
@@ -435,6 +437,13 @@ class CrashableWorkspaceWorkflow:
         self._status.phase = "ScalingUp"
         self._status.step = "Scaling workers to one"
         self._status.last_error = None
+        return self._snapshot()
+
+    @workflow.update
+    def revoke_share_links(self) -> WorkspaceStatus:
+        if self._status.phase not in LIVE_PHASES:
+            return self._snapshot()
+        self._status.share_epoch += 1
         return self._snapshot()
 
     @workflow.update

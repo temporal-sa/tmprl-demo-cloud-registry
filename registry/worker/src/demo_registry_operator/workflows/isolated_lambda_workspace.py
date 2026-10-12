@@ -94,6 +94,7 @@ class IsolatedLambdaWorkspaceWorkflow:
             task_queue=request.carried_task_queue or "",
             lambda_workers=[dataclasses.asdict(worker) for worker in self._workers],
             initial_current=dict(request.carried_initial_current),
+            share_epoch=request.carried_share_epoch,
         )
 
     @workflow.run
@@ -485,6 +486,7 @@ class IsolatedLambdaWorkspaceWorkflow:
                         carried_workspace_id=self._workspace_id,
                         carried_lambda_workers=tuple(self._workers),
                         carried_initial_current=dict(self._status.initial_current),
+                        carried_share_epoch=self._status.share_epoch,
                     )
                 )
             deadline_snapshot = self._deadline_version
@@ -513,6 +515,13 @@ class IsolatedLambdaWorkspaceWorkflow:
         self._expires_at = base + EXTEND_INTERVAL
         self._status.expires_at = self._expires_at.astimezone(UTC).isoformat()
         self._deadline_version += 1
+        return self._snapshot()
+
+    @workflow.update
+    def revoke_share_links(self) -> IsolatedWorkspaceStatus:
+        if self._status.phase not in LIVE_PHASES:
+            return self._snapshot()
+        self._status.share_epoch += 1
         return self._snapshot()
 
     @workflow.update

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from temporalio.api.enums.v1.batch_operation_pb2 import (
     BATCH_OPERATION_STATE_COMPLETED,
     BATCH_OPERATION_STATE_FAILED,
@@ -14,7 +18,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 
-from demo_registry_operator import derive
+from demo_registry_operator import derive, resources
 from demo_registry_operator.activities import (
     crashable_workspace as crashable_activities,
 )
@@ -1255,3 +1259,96 @@ def test_catalog_entry_crashable_requires_task_queue_env():
 def test_catalog_entry_not_crashable_when_block_absent():
     entry = catalog_entry(project("plain", source={"repo": "x"}))
     assert entry["crashable"] == {"enabled": False}
+
+
+# --- workspace share-link auth isolation ----------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _auth_middlewares(manifests):
+    return [
+        manifest
+        for manifest in manifests
+        if manifest.get("kind") == "Middleware"
+        and manifest["metadata"]["name"] == resources.AUTH_MIDDLEWARE_NAME
+    ]
+
+
+def test_workspace_auth_middleware_uses_workspace_verifier():
+    ordered, _, _, _, _ = build_workspace_manifests(
+        _crashable_demo(), {"worker": "i", "app": "i"}, "deadbeef00"
+    )
+
+    middlewares = _auth_middlewares(ordered)
+    assert len(middlewares) == 1
+    assert (
+        middlewares[0]["spec"]["forwardAuth"]["address"]
+        == resources.CATALOG_WORKSPACE_AUTH_VERIFY_URL
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted((REPO_ROOT / "projects").glob("**/*.yaml")),
+    ids=lambda path: path.stem,
+)
+def test_always_on_demo_routes_never_use_workspace_verifier(path, monkeypatch):
+    # Share links are only honored by the workspace verifier, so no always-on
+    # demo render may ever reference it.
+    monkeypatch.setenv("DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE", "proxy-image")
+    demo = yaml.safe_load(path.read_text())
+    if demo.get("kind") != "DemoProject":
+        pytest.skip("not a DemoProject")
+    images = {name: "image" for name in resources.components(demo)}
+    images.update({name: "image" for name in _dict_of(demo["spec"].get("builds"))})
+    rendered = json.dumps(resources.runtime_resources(demo, images))
+
+    assert "verify-workspace" not in rendered
+    if resources.auth_required(demo) and resources.ingress_routes(demo):
+        assert resources.CATALOG_AUTH_VERIFY_URL in rendered
+
+
+def _dict_of(value):
+    return value if isinstance(value, dict) else {}
+
+
+def test_revoke_share_links_bumps_epoch_only_while_live():
+    _, request = _carried_workspace_request()
+    workspace = CrashableWorkspaceWorkflow(request)
+    workspace._status.phase = "Active"
+
+    assert workspace.revoke_share_links().share_epoch == 1
+    assert workspace.revoke_share_links().share_epoch == 2
+
+    workspace._status.phase = "Deleting"
+    assert workspace.revoke_share_links().share_epoch == 2
+
+
+def test_continue_as_new_carries_share_epoch(monkeypatch):
+    now, request = _carried_workspace_request()
+    request = dataclasses.replace(request, carried_share_epoch=3)
+    workspace = CrashableWorkspaceWorkflow(request)
+    assert workspace._status.share_epoch == 3
+    carried = []
+
+    class ContinuedAsNew(Exception):
+        pass
+
+    def continue_as_new(next_request):
+        carried.append(next_request)
+        raise ContinuedAsNew
+
+    monkeypatch.setattr(crashable_workflow.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        crashable_workflow.workflow,
+        "info",
+        lambda: SimpleNamespace(is_continue_as_new_suggested=lambda: True),
+    )
+    monkeypatch.setattr(
+        crashable_workflow.workflow, "continue_as_new", continue_as_new
+    )
+
+    with pytest.raises(ContinuedAsNew):
+        asyncio.run(workspace.run(request))
+    assert carried[0].carried_share_epoch == 3
