@@ -894,6 +894,11 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
         "!/registry/worker/**",
         "!/registry/temporal-cloud-proxy/",
         "!/registry/temporal-cloud-proxy/**",
+        "!/schemas/",
+        "!/schemas/**",
+        "!/scripts/",
+        "/scripts/*",
+        "!/scripts/validate_projects.py",
     ]
     assert source_git_repository(
         demo_project,
@@ -915,6 +920,11 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
                 "!/registry/worker/**",
                 "!/registry/temporal-cloud-proxy/",
                 "!/registry/temporal-cloud-proxy/**",
+                "!/schemas/",
+                "!/schemas/**",
+                "!/scripts/",
+                "/scripts/*",
+                "!/scripts/validate_projects.py",
             ]
         ),
     }
@@ -931,6 +941,11 @@ def test_registry_yaml_renders_operator_as_versioned_worker_without_pinned_gate(
             "!/registry/worker/**\n"
             "!/registry/temporal-cloud-proxy/\n"
             "!/registry/temporal-cloud-proxy/**\n"
+            "!/schemas/\n"
+            "!/schemas/**\n"
+            "!/scripts/\n"
+            "/scripts/*\n"
+            "!/scripts/validate_projects.py\n"
         ),
     }
     assert "registry.tmprl-demo.cloud/image-overrides" not in demo_project["metadata"][

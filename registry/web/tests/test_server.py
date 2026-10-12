@@ -910,3 +910,222 @@ def test_workspace_verifier_redirects_anonymous_visitors_to_login(share_env):
     response = forward_auth(httpd, "/_auth/verify-workspace")
     assert response.code == 302
     assert urlparse(response.headers["Location"]).path == "/auth/login"
+
+
+# --- catalog onboarding --------------------------------------------------
+
+
+class OnboardingGateway:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def _record(self, *call):
+        self.calls.append(call)
+        if self.error:
+            raise self.error
+        return {"phase": "Drafting", "revision": 3}
+
+    def onboarding_status(self, email):
+        return self._record("status", email)
+
+    def onboarding_start(self, email):
+        return self._record("start", email)
+
+    def onboarding_update(self, email, update, arg):
+        return self._record(update, email, arg)
+
+
+def onboarding_request(httpd, path, *, body=None, method="POST", headers=None):
+    return urlopen(
+        Request(
+            f"http://127.0.0.1:{httpd.server_port}{path}",
+            data=None if body is None else json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": signed_session_cookie(),
+                **(headers or {}),
+            },
+            method=method,
+        ),
+        timeout=2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "expected"),
+    [
+        (
+            "/api/onboarding/repo",
+            {"repo_url": " https://github.com/temporalio/demo ", "owner": "x"},
+            ("set_repo", "mjones@temporal.io", {"repo_url": "https://github.com/temporalio/demo"}),
+        ),
+        (
+            "/api/onboarding/draft",
+            {"base_revision": 3, "yaml": "kind: DemoProject\n"},
+            ("update_draft", "mjones@temporal.io", {"base_revision": 3, "yaml": "kind: DemoProject\n"}),
+        ),
+        (
+            "/api/onboarding/draft",
+            {"base_revision": 3, "document": {"kind": "DemoProject"}},
+            ("update_draft", "mjones@temporal.io", {"base_revision": 3, "document": {"kind": "DemoProject"}}),
+        ),
+        (
+            "/api/onboarding/submit",
+            {"pull_request_url": "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/9"},
+            ("submit_pull_request", "mjones@temporal.io", {"pull_request_url": "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/9"}),
+        ),
+        ("/api/onboarding/abandon", {}, ("abandon", "mjones@temporal.io", None)),
+        ("/api/onboarding", {}, ("start", "mjones@temporal.io")),
+    ],
+)
+def test_onboarding_endpoints_forward_only_known_fields_for_the_session_user(
+    tmp_path, monkeypatch, path, body, expected
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, path, body=body)
+        assert response.status == 200
+        assert gateway.calls == [expected]
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/onboarding/repo", {}),
+        ("/api/onboarding/draft", {"yaml": "x"}),
+        ("/api/onboarding/draft", {"base_revision": 1, "yaml": "x", "document": {}}),
+        ("/api/onboarding/draft", {"base_revision": True, "yaml": "x"}),
+        ("/api/onboarding/submit", {"pull_request_url": " "}),
+    ],
+)
+def test_onboarding_rejects_malformed_edits(tmp_path, monkeypatch, path, body):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, path, body=body)
+        assert raised.value.code == 400
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_refuses_cross_origin_writes(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/onboarding/abandon",
+                body={},
+                headers={"Origin": "https://evil.tmprl-demo.cloud"},
+            )
+        assert raised.value.code == 403
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_status_reads_the_session_users_workflow(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, "/api/onboarding", method="GET")
+        assert json.loads(response.read().decode("utf-8"))["phase"] == "Drafting"
+        assert gateway.calls == [("status", "mjones@temporal.io")]
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_rejections_are_conflicts_with_the_workflow_message(
+    tmp_path, monkeypatch
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway(error=server.OnboardingRejected("Pick a repo first."))
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd, "/api/onboarding/draft", body={"base_revision": 0, "yaml": "x"}
+            )
+        assert raised.value.code == 409
+        payload = json.loads(raised.value.read().decode("utf-8"))
+        assert payload == {"error": "rejected", "message": "Pick a repo first."}
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_rejects_oversized_drafts(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/onboarding/draft",
+                body={"base_revision": 0, "yaml": "x" * server.ONBOARDING_MAX_BODY_BYTES},
+            )
+        assert raised.value.code == 413
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_page_is_served_by_the_spa(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path)
+    try:
+        response = urlopen(f"http://127.0.0.1:{httpd.server_port}/onboard", timeout=2)
+        assert response.status == 200
+        assert b"data-view=\"onboard\"" in response.read()
+    finally:
+        httpd.shutdown()
+
+
+def test_onboarding_workflow_id_matches_the_operator():
+    # demo_registry_operator.derive.catalog_onboarding_workflow_id
+    assert server.onboarding_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "catalog-onboarding/blue/ada@temporal.io"
+    )
+    assert server.onboarding_workflow_id("ada@temporal.io", None) == (
+        "catalog-onboarding/ada@temporal.io"
+    )
+
+
+def test_onboarding_status_returns_the_final_status_of_a_completed_run():
+    final = {"phase": "HandedOff", "pull_request_url": "https://github.com/x/pull/1"}
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=server.WorkflowExecutionStatus.COMPLETED
+            )
+        ),
+        result=AsyncMock(return_value=final),
+    )
+    ids = []
+    gateway = SimpleNamespace(
+        cluster="blue",
+        _get_client=AsyncMock(
+            return_value=SimpleNamespace(
+                get_workflow_handle=lambda workflow_id: ids.append(workflow_id)
+                or handle
+            )
+        ),
+    )
+
+    result = asyncio.run(
+        server.TemporalGateway._onboarding_status(gateway, "ada@temporal.io")
+    )
+
+    assert result == final
+    assert ids == ["catalog-onboarding/blue/ada@temporal.io"]

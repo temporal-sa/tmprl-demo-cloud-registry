@@ -36,7 +36,9 @@ NAMESPACE_PREFIX = "tmprl-dem-cld-"
 TEMPORAL_NAMESPACE_PREFIX = "tmprl-dem-cld-"
 # Temporal Cloud namespace names (before the account suffix) cap at 39 chars.
 TEMPORAL_NAMESPACE_MAX_LENGTH = 39
-TEMPORAL_SA_REPO_PATH = re.compile(r"^/temporal-sa/[A-Za-z0-9_.-]+/?$")
+DEMO_SOURCE_REPO_PATH = re.compile(
+    r"^/(temporal-sa|temporalio|temporal-community)/[A-Za-z0-9_.-]+/?$"
+)
 DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 TEMPORAL_AUTH_MODE_API_KEY = "apiKey"
@@ -79,6 +81,9 @@ class ProjectDocument:
 class ProjectError:
     path: Path
     message: str
+    # JSON pointer to the offending field, when known. Schema errors always set
+    # it; semantic errors are mapped from their message by error_pointer().
+    pointer: str | None = None
 
     def render(self) -> str:
         return f"{relative_path(self.path)}: {self.message}"
@@ -141,6 +146,7 @@ def validate_schema(
         ProjectError(
             document.path,
             f"schema error at {format_error_path(error)}: {error.message}",
+            pointer=json_pointer(error.absolute_path),
         )
         for error in schema_errors
     ]
@@ -168,6 +174,79 @@ def validate_document_schema(
             )
         ]
     return validate_schema(validator, document)
+
+
+def json_pointer(parts: Any) -> str:
+    return "".join(
+        "/" + str(part).replace("~", "~0").replace("/", "~1") for part in parts
+    )
+
+
+# Semantic messages lead with the spec-relative field they are about, such as
+# "components.web.build 'x' must match a declared build".
+MESSAGE_FIELD_PATH = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z0-9_-]+|\[\d+\])*")
+MESSAGE_FIELD_PART = re.compile(r"[^.\[\]]+")
+DUPLICATE_MESSAGE_POINTERS = {
+    "duplicate resource name ": "/metadata/name",
+    "duplicate derived namespace ": "/metadata/name",
+    "duplicate derived Temporal namespace ": "/metadata/name",
+    "duplicate ingress subdomain ": "/spec/ingress/subdomain",
+}
+
+
+def error_pointer(error: ProjectError, spec_fields: frozenset[str]) -> str | None:
+    """Best-effort JSON pointer for an error, for UIs that mark fields.
+
+    ``spec_fields`` is the set of top-level spec properties for the document's
+    kind; a message whose leading token is not one of them gets no pointer.
+    """
+
+    if error.pointer is not None:
+        return error.pointer
+    for prefix, pointer in DUPLICATE_MESSAGE_POINTERS.items():
+        if error.message.startswith(prefix):
+            return pointer
+    match = MESSAGE_FIELD_PATH.match(error.message)
+    if not match:
+        return None
+    parts = MESSAGE_FIELD_PART.findall(match.group(0))
+    if not parts or parts[0] not in spec_fields:
+        return None
+    return json_pointer(["spec", *parts])
+
+
+def spec_fields_for_kind(
+    validators: dict[str, Draft202012Validator], kind: Any
+) -> frozenset[str]:
+    validator = validators.get(kind) if isinstance(kind, str) else None
+    if validator is None:
+        return frozenset()
+    spec = validator.schema.get("properties", {}).get("spec", {})
+    return frozenset(spec.get("properties", {}))
+
+
+def validate_candidate(
+    candidate: dict[str, Any],
+    existing: list[ProjectDocument],
+    *,
+    path: Path,
+    validators: dict[str, Draft202012Validator] | None = None,
+) -> list[ProjectError]:
+    """Validate one in-memory document as if it were added at ``path``.
+
+    Cross-file rules (unique names, subdomains, Nexus callers) run against
+    ``existing``; only errors about the candidate are returned. This is the
+    entry point the onboarding workflow uses before a file exists in git.
+    """
+
+    validators = validators or load_default_validators()
+    document = ProjectDocument(path=path, data=candidate)
+    others = [other for other in existing if other.path != path]
+    errors = [
+        *validate_document_schema(validators, document),
+        *validate_semantics([*others, document]),
+    ]
+    return [error for error in errors if error.path == path]
 
 
 def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
@@ -318,7 +397,7 @@ def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
     if (
         parsed.scheme != "https"
         or parsed.netloc != "github.com"
-        or not TEMPORAL_SA_REPO_PATH.match(parsed.path)
+        or not DEMO_SOURCE_REPO_PATH.match(parsed.path)
         or parsed.params
         or parsed.query
         or parsed.fragment
@@ -326,7 +405,8 @@ def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
         return [
             ProjectError(
                 document.path,
-                "source.repo must be an https://github.com/temporal-sa/<repo> URL",
+                "source.repo must be an https://github.com/<org>/<repo> URL in "
+                "temporal-sa, temporalio, or temporal-community",
             )
         ]
 

@@ -23,5 +23,10 @@ COPY registry/worker/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY registry/worker/src /app/src
+# The onboarding workflow validates drafts with the same validator and schemas
+# CI runs, at the operator's own commit. The validator resolves schemas from its
+# parent directory, so it lands in /app/src and the schemas in /app/schemas.
+COPY schemas /app/schemas
+COPY scripts/validate_projects.py /app/src/validate_projects.py
 
 CMD ["python", "-m", "demo_registry_operator.worker"]

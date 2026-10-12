@@ -1242,3 +1242,79 @@ def test_initial_current_is_unique_per_worker_deployment():
 
     spec["components"]["orders-b"]["serverless"]["workerDeployment"]["initialCurrent"] = False
     assert validate_projects.validate_isolated_lambda(project_document(spec)) == []
+
+
+def test_demo_project_accepts_allowed_github_organizations():
+    validators = validate_projects.load_default_validators()
+
+    for organization in ("temporal-sa", "temporal-community", "temporalio"):
+        spec = base_spec()
+        spec["source"]["repo"] = f"https://github.com/{organization}/demo"
+        document = project_document(spec)
+
+        assert validate_projects.validate_document_schema(validators, document) == []
+        assert validate_projects.validate_source_repo(document) == []
+
+
+def test_demo_project_rejects_other_github_organizations():
+    spec = base_spec()
+    spec["source"]["repo"] = "https://github.com/example/demo"
+    document = project_document(spec)
+
+    schema_errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(), document
+    )
+
+    assert [error.pointer for error in schema_errors] == ["/spec/source/repo"]
+    assert len(validate_projects.validate_source_repo(document)) == 1
+
+
+def candidate_errors(candidate: dict, existing=()):
+    validators = validate_projects.load_default_validators()
+    errors = validate_projects.validate_candidate(
+        candidate,
+        list(existing),
+        path=ROOT / "projects/demo/candidate.yaml",
+        validators=validators,
+    )
+    fields = validate_projects.spec_fields_for_kind(validators, candidate.get("kind"))
+    return [
+        (validate_projects.error_pointer(error, fields), error.message)
+        for error in errors
+    ]
+
+
+def test_validate_candidate_maps_semantic_errors_to_pointers():
+    candidate = project_document(base_spec()).data
+    candidate["spec"]["components"]["app"]["build"] = "missing"
+
+    errors = candidate_errors(candidate)
+
+    assert [pointer for pointer, _ in errors] == ["/spec/components/app/build"]
+
+
+def test_validate_candidate_reports_collisions_with_existing_projects():
+    existing = project_document(base_spec())
+    candidate = project_document(base_spec()).data
+
+    pointers = {pointer for pointer, _ in candidate_errors(candidate, [existing])}
+
+    assert pointers == {"/metadata/name", "/spec/ingress/subdomain"}
+
+
+def test_validate_candidate_ignores_errors_in_existing_projects():
+    broken = project_document({"source": {"repo": "not a url"}})
+    candidate = project_document(base_spec()).data
+    candidate["metadata"]["name"] = "fresh"
+    candidate["spec"]["ingress"]["subdomain"] = "fresh"
+
+    assert candidate_errors(candidate, [broken]) == []
+
+
+def test_error_pointer_leaves_unscoped_messages_without_a_pointer():
+    error = validate_projects.ProjectError(
+        ROOT / "projects/demo/candidate.yaml",
+        "service name 'app' is used by multiple components: a, b",
+    )
+
+    assert validate_projects.error_pointer(error, frozenset({"components"})) is None

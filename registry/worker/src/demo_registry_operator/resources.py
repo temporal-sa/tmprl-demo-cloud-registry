@@ -2462,6 +2462,10 @@ def platform_env_vars(
                 "value": derive.registry_task_queue(cluster),
             }
         )
+        # The web builds color-scoped workflow ids (catalog onboarding) the same
+        # way the operator does, so it needs the color itself, not just the queue.
+        if cluster:
+            env.append({"name": "DEMO_REGISTRY_CLUSTER", "value": cluster})
     return env
 
 

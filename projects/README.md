@@ -16,8 +16,9 @@ Files are validated in CI against the matching schema for their `kind`.
 The supported path for newly added demos is the thin `DemoProject` contract
 proven by `banking-money-transfer`:
 
-- The source repo is in the `temporal-sa` GitHub organization and can be built by
-  CodeBuild from one or more Dockerfiles declared under `builds`.
+- The source repo is in the `temporal-sa`, `temporalio`, or `temporal-community`
+  GitHub organization and can be built by CodeBuild from one or more
+  Dockerfiles declared under `builds`.
 - Runtime shape is stateless, long-running components. Components that need
   stable Kubernetes DNS declare `ports`; public ingress points at either the lone
   component serving `servicePort: 80` or explicit `ingress.routes`.

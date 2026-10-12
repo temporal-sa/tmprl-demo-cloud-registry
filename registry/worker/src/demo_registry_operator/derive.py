@@ -100,6 +100,15 @@ def instruqt_course_workflow_id(course_name: str, cluster: str | None = None) ->
     return f"instruqt-course/{course_name}"
 
 
+def catalog_onboarding_workflow_id(owner_email: str, cluster: str | None = None) -> str:
+    """One onboarding per user, scoped to a cluster/color. The catalog web server
+    (registry/web/server.py) builds the same id; keep them identical."""
+    email = owner_email.strip().lower()
+    if cluster:
+        return f"catalog-onboarding/{cluster}/{email}"
+    return f"catalog-onboarding/{email}"
+
+
 def namespace_readers_sync_workflow_id() -> str:
     """Singleton id for the namespace readers sync. Deliberately not cluster-scoped:
     the readers group is account-wide, so blue and green share one run."""

@@ -1,8 +1,9 @@
 // Demo Registry — vanilla JS SPA.
-// Two views over the same catalog JSON:
+// Two views over the same catalog JSON, plus onboarding:
 //   /         → demos (canonical feature cards + a grid of everything else;
 //               each demo opens in a detail drawer, deep-linked as /#<id>)
 //   /courses  → Instruqt workshops (the server routes this path to the SPA)
+//   /onboard  → add a demo to the catalog (the user's onboarding workflow)
 
 const LINK_SOURCES = [
   { pattern: "github.com", label: "GitHub" },
@@ -17,6 +18,7 @@ const LINK_SOURCES = [
 ];
 
 const WORKSHOPS_ROUTE = "/courses";
+const ONBOARD_ROUTE = "/onboard";
 
 const state = {
   demos: [],
@@ -252,6 +254,7 @@ async function loadData() {
 // ─── Routing ───────────────────────────────────────────────────────────────
 
 function currentView() {
+  if (state.route === ONBOARD_ROUTE) return "onboard";
   return state.route === WORKSHOPS_ROUTE ? "workshops" : "demos";
 }
 
@@ -259,7 +262,12 @@ function setRoute(target) {
   if (target === state.route) return;
   closeDrawer({ updateHash: false });
   state.route = target;
-  const search = target === WORKSHOPS_ROUTE ? workshopsQueryString() : demosQueryString();
+  const search =
+    target === WORKSHOPS_ROUTE
+      ? workshopsQueryString()
+      : target === ONBOARD_ROUTE
+        ? ""
+        : demosQueryString();
   window.history.pushState(null, "", target + search);
   render();
   window.scrollTo({ top: 0 });
@@ -289,7 +297,7 @@ function setupKeyboard() {
       return;
     }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-    if (event.key === "/" && !typing && !state.openDemoId) {
+    if (event.key === "/" && !typing && !state.openDemoId && currentView() !== "onboard") {
       event.preventDefault();
       const selector =
         currentView() === "workshops" ? "[data-workshops-search]" : "[data-demos-search]";
@@ -1782,16 +1790,820 @@ function render() {
       link.removeAttribute("aria-current");
     }
   });
-  document.title =
-    view === "workshops" ? "Workshops · Temporal Field Kit" : "Demos · Temporal Field Kit";
+  document.title = {
+    workshops: "Workshops · Temporal Field Kit",
+    onboard: "Add a Demo · Temporal Field Kit",
+  }[view] || "Demos · Temporal Field Kit";
   renderCounts();
-  if (view === "workshops") {
+  if (view === "onboard") {
+    if (!onboard.loaded) loadOnboarding();
+    renderOnboarding();
+  } else if (view === "workshops") {
     renderWorkshopsFilters();
     renderWorkshopsList();
   } else {
     renderDemosFilters();
     renderDemosList();
   }
+}
+
+// ─── Onboarding ────────────────────────────────────────────────────────────
+// /onboard drives the signed-in user's CatalogOnboardingWorkflow: pick a repo,
+// edit the draft DemoProject (form or YAML), then hand off by opening a pull
+// request on GitHub. The workflow validates every edit; this page edits a
+// working copy and shows what the workflow says about it.
+
+const ONBOARD_CLOSED = new Set(["HandedOff", "Abandoned", "Expired"]);
+
+const onboard = {
+  loaded: false,
+  status: null, // last status from the workflow ({phase: "None"} when there is none)
+  working: null, // the form's working copy of status.document
+  yamlText: null, // unsaved YAML tab text
+  tab: "form",
+  busy: null, // label for the request in flight
+  error: null, // last request error, shown above the steps
+  signInUrl: null,
+  changingRepo: false,
+};
+
+function clone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function getIn(obj, path) {
+  return path.reduce((node, key) => (node == null ? undefined : node[key]), obj);
+}
+
+// Sets a nested value, creating parents. An empty value deletes the key and
+// prunes parents it leaves empty, so clearing a field removes it from the YAML.
+function setIn(obj, path, value) {
+  const empty =
+    value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+  const parents = [obj];
+  let node = obj;
+  for (const key of path.slice(0, -1)) {
+    if (node[key] == null || typeof node[key] !== "object") {
+      if (empty) return;
+      node[key] = {};
+    }
+    node = node[key];
+    parents.push(node);
+  }
+  const last = path[path.length - 1];
+  if (empty) delete node[last];
+  else node[last] = value;
+  for (let i = parents.length - 1; i > 0; i -= 1) {
+    if (Object.keys(parents[i]).length > 0) break;
+    delete parents[i - 1][path[i - 1]];
+  }
+}
+
+// Renames an object key in place, keeping key order.
+function renameKey(obj, from, to) {
+  const entries = Object.entries(obj).map(([key, value]) => [key === from ? to : key, value]);
+  Object.keys(obj).forEach((key) => delete obj[key]);
+  entries.forEach(([key, value]) => (obj[key] = value));
+}
+
+function onboardDirty() {
+  const status = onboard.status || {};
+  if (onboard.tab === "yaml") return onboard.yamlText !== null && onboard.yamlText !== status.yaml;
+  return JSON.stringify(onboard.working) !== JSON.stringify(status.document);
+}
+
+function acceptOnboardStatus(status) {
+  onboard.status = status;
+  onboard.working = clone(status.document) || null;
+  onboard.yamlText = null;
+  onboard.changingRepo = false;
+}
+
+async function loadOnboarding() {
+  try {
+    const res = await fetch("/api/onboarding", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      onboard.signInUrl = `/auth/login?return_to=${encodeURIComponent(window.location.href)}`;
+    } else if (!res.ok) {
+      onboard.error = data.message || data.error || `HTTP ${res.status}`;
+    } else {
+      acceptOnboardStatus(data);
+    }
+  } catch (err) {
+    onboard.error = err.message;
+  }
+  onboard.loaded = true;
+  renderOnboarding();
+}
+
+async function onboardCall(label, steps) {
+  if (onboard.busy) return;
+  onboard.busy = label;
+  onboard.error = null;
+  renderOnboarding();
+  try {
+    for (const [url, body] of steps) acceptOnboardStatus(await postJSON(url, body));
+  } catch (err) {
+    onboard.error = err.message;
+  } finally {
+    onboard.busy = null;
+    renderOnboarding();
+  }
+}
+
+function onboardOpen() {
+  const phase = onboard.status && onboard.status.phase;
+  return phase && phase !== "None" && !ONBOARD_CLOSED.has(phase);
+}
+
+function chooseRepo(repoUrl) {
+  if (!repoUrl.trim()) return;
+  if (onboard.status && onboard.status.repo && !window.confirm("Changing the repo replaces the draft. Continue?")) {
+    return;
+  }
+  const steps = onboardOpen() ? [] : [["/api/onboarding", {}]];
+  steps.push(["/api/onboarding/repo", { repo_url: repoUrl }]);
+  onboardCall("Checking repository", steps);
+}
+
+function saveDraft() {
+  const body = { base_revision: onboard.status.revision };
+  if (onboard.tab === "yaml") body.yaml = onboard.yamlText ?? onboard.status.yaml;
+  else body.document = onboard.working;
+  onboardCall("Validating draft", [["/api/onboarding/draft", body]]);
+}
+
+function discardDraftChanges() {
+  acceptOnboardStatus(onboard.status);
+  renderOnboarding();
+}
+
+function switchOnboardTab(tab) {
+  if (tab === onboard.tab) return;
+  if (onboardDirty()) {
+    toast("Validate or discard your changes first");
+    return;
+  }
+  onboard.tab = tab;
+  renderOnboarding();
+}
+
+// ─── Onboarding: rendering ─────────────────────────────────────────────────
+
+function onboardStep(number, title, ...children) {
+  return el(
+    "section",
+    { class: "onboard-step" },
+    el(
+      "header",
+      { class: "onboard-step-head" },
+      el("p", { class: "eyebrow", text: `0${number}` }),
+      el("h2", { text: title })
+    ),
+    ...children
+  );
+}
+
+function onboardAlert(tone, title, body) {
+  return el(
+    "div",
+    { class: `onboard-alert is-${tone}`, role: tone === "error" ? "alert" : "status" },
+    el("strong", { text: title }),
+    body ? el("p", { text: body }) : null
+  );
+}
+
+function field(label, pointer, control, hint) {
+  return el(
+    "label",
+    { class: "onboard-field", dataset: pointer ? { pointer } : null },
+    el("span", { class: "onboard-label", text: label }),
+    control,
+    hint ? el("span", { class: "onboard-hint", text: hint }) : null
+  );
+}
+
+function textControl(value, onInput, attrs = {}) {
+  return el("input", {
+    type: "text",
+    value: value ?? "",
+    spellcheck: "false",
+    oninput: (event) => onInput(event.target.value),
+    ...attrs,
+  });
+}
+
+function checkControl(label, pointer, checked, onChange, { disabled = false, hint } = {}) {
+  return el(
+    "label",
+    { class: "onboard-check", dataset: { pointer } },
+    el("input", {
+      type: "checkbox",
+      checked: Boolean(checked),
+      disabled,
+      onchange: (event) => onChange(event.target.checked),
+    }),
+    el("span", { text: label }),
+    hint ? el("span", { class: "onboard-hint", text: hint }) : null
+  );
+}
+
+function listValue(value) {
+  return Array.isArray(value) ? value.join(", ") : "";
+}
+
+function parseList(text) {
+  return text
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function catalogFields(doc) {
+  const spec = ["spec", "registry"];
+  const set = (path) => (value) => setIn(doc, path, value);
+  return el(
+    "fieldset",
+    { class: "onboard-fields" },
+    el("legend", { text: "Catalog entry" }),
+    field(
+      "Project name",
+      "/metadata/name",
+      textControl(getIn(doc, ["metadata", "name"]), set(["metadata", "name"])),
+      "Lowercase letters, digits and dashes; ideally 25 characters or fewer. Everything else is named after it."
+    ),
+    field("Title", "/spec/registry/title", textControl(getIn(doc, [...spec, "title"]), set([...spec, "title"]))),
+    field(
+      "Summary",
+      "/spec/registry/summary",
+      el("textarea", {
+        rows: 3,
+        oninput: (event) => setIn(doc, [...spec, "summary"], event.target.value),
+        text: getIn(doc, [...spec, "summary"]) ?? "",
+      })
+    ),
+    field(
+      "Tags",
+      "/spec/registry/tags",
+      textControl(listValue(getIn(doc, [...spec, "tags"])), (text) => setIn(doc, [...spec, "tags"], parseList(text))),
+      "Comma separated, e.g. Workflows, Signals."
+    ),
+    field(
+      "Temporal SDKs",
+      "/spec/registry/temporalSdks",
+      textControl(listValue(getIn(doc, [...spec, "temporalSdks"])), (text) =>
+        setIn(doc, [...spec, "temporalSdks"], parseList(text))
+      ),
+      "Comma separated, e.g. Go, Python."
+    ),
+    field(
+      "Runbook URL",
+      "/spec/registry/links/runbook",
+      textControl(getIn(doc, [...spec, "links", "runbook", "url"]), set([...spec, "links", "runbook", "url"]), {
+        type: "url",
+        placeholder: "https://github.com/…#demo-script",
+      })
+    ),
+    field(
+      "Slide deck URL",
+      "/spec/registry/links/slideDeck",
+      textControl(getIn(doc, [...spec, "links", "slideDeck", "url"]), set([...spec, "links", "slideDeck", "url"]), {
+        type: "url",
+        placeholder: "https://docs.google.com/presentation/…",
+      })
+    )
+  );
+}
+
+function buildRows(doc) {
+  const builds = getIn(doc, ["spec", "builds"]) || {};
+  const rows = Object.entries(builds).map(([name, build]) => {
+    const pointer = `/spec/builds/${name}`;
+    return el(
+      "div",
+      { class: "onboard-row", dataset: { pointer } },
+      field(
+        "Build",
+        null, // the row carries the build's pointer
+        textControl(name, () => {}, {
+          onchange: (event) => {
+            const next = event.target.value.trim();
+            if (!next || next === name || builds[next]) return renderOnboarding();
+            renameKey(builds, name, next);
+            Object.values(getIn(doc, ["spec", "components"]) || {}).forEach((component) => {
+              if (component.build === name) component.build = next;
+            });
+            renderOnboarding();
+          },
+        })
+      ),
+      field("Context", `${pointer}/context`, textControl(build.context, (value) => setIn(build, ["context"], value))),
+      field(
+        "Dockerfile",
+        `${pointer}/dockerfile`,
+        textControl(build.dockerfile, (value) => setIn(build, ["dockerfile"], value), { placeholder: "Dockerfile" })
+      ),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove",
+        onclick: () => {
+          delete builds[name];
+          renderOnboarding();
+        },
+      })
+    );
+  });
+  return el(
+    "fieldset",
+    { class: "onboard-fields onboard-wide" },
+    el("legend", { text: "Builds" }),
+    el("p", { class: "onboard-hint", text: "One container image per entry, built by CodeBuild from the repo." }),
+    ...rows,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "+ Add build",
+      onclick: () => {
+        const spec = doc.spec || (doc.spec = {});
+        spec.builds = spec.builds || {};
+        let n = Object.keys(spec.builds).length + 1;
+        while (spec.builds[`build-${n}`]) n += 1;
+        spec.builds[`build-${n}`] = { context: "." };
+        renderOnboarding();
+      },
+    })
+  );
+}
+
+function componentCards(doc) {
+  const components = getIn(doc, ["spec", "components"]) || {};
+  const buildNames = Object.keys(getIn(doc, ["spec", "builds"]) || {});
+  const cards = Object.entries(components).map(([name, component]) => {
+    const pointer = `/spec/components/${name}`;
+    const ports = Array.isArray(component.ports) ? component.ports : [];
+    const port = ports[0] || {};
+    const workerIsObject = component.worker && typeof component.worker === "object";
+    const setPort = (key, value) => {
+      if (value === undefined && Object.keys(port).every((k) => k === key)) {
+        delete component.ports;
+        return;
+      }
+      if (!ports.length) component.ports = [port];
+      setIn(port, [key], value);
+    };
+    return el(
+      "div",
+      { class: "onboard-card", dataset: { pointer } },
+      el(
+        "div",
+        { class: "onboard-card-fields" },
+        field(
+          "Component",
+          null, // the card carries the component's pointer
+          textControl(name, () => {}, {
+            onchange: (event) => {
+              const next = event.target.value.trim();
+              if (!next || next === name || components[next]) return renderOnboarding();
+              renameKey(components, name, next);
+              renderOnboarding();
+            },
+          })
+        ),
+        field(
+          "Build",
+          `${pointer}/build`,
+          el(
+            "select",
+            { onchange: (event) => setIn(component, ["build"], event.target.value) },
+            ...[...new Set([...buildNames, component.build].filter(Boolean))].map((build) =>
+              el("option", { value: build, selected: build === component.build, text: build })
+            )
+          )
+        ),
+        field(
+          "Container port",
+          `${pointer}/ports/0/containerPort`,
+          textControl(port.containerPort, (value) => setPort("containerPort", value === "" ? undefined : Number(value)), {
+            type: "number",
+            min: 1,
+            max: 65535,
+            placeholder: "none",
+          }),
+          ports.length > 1 ? "Only the first port is shown; edit the rest in YAML." : null
+        )
+      ),
+      el(
+        "div",
+        { class: "onboard-checks" },
+        checkControl("Public (serves the demo's ingress on port 80)", `${pointer}/ports/0/servicePort`, port.servicePort === 80, (on) =>
+          setPort("servicePort", on ? 80 : undefined)
+        ),
+        checkControl(
+          "Temporal worker",
+          `${pointer}/worker`,
+          component.worker,
+          (on) => setIn(component, ["worker"], on ? true : undefined),
+          { disabled: workerIsObject, hint: workerIsObject ? "Worker Versioning is configured in YAML." : null }
+        ),
+        checkControl("Starts or queries workflows (not a worker)", `${pointer}/temporalAccess`, component.temporalAccess, (on) =>
+          setIn(component, ["temporalAccess"], on ? true : undefined)
+        ),
+        checkControl("Needs the local Temporal proxy", `${pointer}/temporalProxy`, getIn(component, ["temporalProxy", "enabled"]), (on) =>
+          setIn(component, ["temporalProxy"], on ? { enabled: true } : undefined)
+        )
+      ),
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Remove component",
+        onclick: () => {
+          delete components[name];
+          renderOnboarding();
+        },
+      })
+    );
+  });
+  return el(
+    "fieldset",
+    { class: "onboard-fields onboard-wide" },
+    el("legend", { text: "Components" }),
+    el("p", { class: "onboard-hint", text: "One long-running process each. Exactly one should be public." }),
+    ...cards,
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost btn-sm",
+      text: "+ Add component",
+      onclick: () => {
+        const spec = doc.spec || (doc.spec = {});
+        spec.components = spec.components || {};
+        let n = Object.keys(spec.components).length + 1;
+        while (spec.components[`component-${n}`]) n += 1;
+        spec.components[`component-${n}`] = { build: buildNames[0] || "" };
+        renderOnboarding();
+      },
+    })
+  );
+}
+
+function runtimeFields(doc) {
+  const crashable = ["spec", "registry", "crashable"];
+  return el(
+    "fieldset",
+    { class: "onboard-fields" },
+    el("legend", { text: "Ingress and crashable environments" }),
+    field(
+      "Subdomain",
+      "/spec/ingress/subdomain",
+      textControl(getIn(doc, ["spec", "ingress", "subdomain"]), (value) => setIn(doc, ["spec", "ingress", "subdomain"], value)),
+      "The demo is served at <subdomain>.tmprl-demo.cloud."
+    ),
+    field(
+      "Health check path",
+      "/spec/smokeCheck",
+      textControl(getIn(doc, ["spec", "smokeCheck", "path"]), (value) => setIn(doc, ["spec", "smokeCheck", "path"], value), {
+        placeholder: "/healthz",
+      }),
+      "A cheap GET that returns 200; rollouts wait for it."
+    ),
+    checkControl(
+      "Require Temporal sign-in to open the demo",
+      "/spec/ingress/temporalAuthRequired",
+      getIn(doc, ["spec", "ingress", "temporalAuthRequired"]) !== false,
+      (on) => setIn(doc, ["spec", "ingress", "temporalAuthRequired"], on ? undefined : false)
+    ),
+    checkControl(
+      "Crashable: users can launch a private copy and kill its workers",
+      "/spec/registry/crashable",
+      getIn(doc, [...crashable, "enabled"]),
+      (on) => {
+        setIn(doc, crashable, on ? { ...getIn(doc, crashable), enabled: true } : undefined);
+        renderOnboarding();
+      }
+    ),
+    getIn(doc, [...crashable, "enabled"])
+      ? el(
+          "div",
+          { class: "onboard-subfields" },
+          field(
+            "Task queue env var",
+            "/spec/registry/crashable/taskQueueEnv",
+            textControl(getIn(doc, [...crashable, "taskQueueEnv"]), (value) => setIn(doc, [...crashable, "taskQueueEnv"], value), {
+              placeholder: "TASK_QUEUE",
+            }),
+            "Every process reads its task queue from this variable."
+          ),
+          field(
+            "Base task queue",
+            "/spec/registry/crashable/baseTaskQueue",
+            textControl(getIn(doc, [...crashable, "baseTaskQueue"]), (value) => setIn(doc, [...crashable, "baseTaskQueue"], value))
+          )
+        )
+      : null
+  );
+}
+
+function errorList(errors) {
+  if (!errors.length) return null;
+  return el(
+    "div",
+    { class: "onboard-errors", role: "alert" },
+    el("strong", { text: errors.length === 1 ? "1 problem" : `${errors.length} problems` }),
+    el(
+      "ul",
+      {},
+      ...errors.map((error) =>
+        el(
+          "li",
+          {},
+          error.pointer ? el("code", { text: error.pointer }) : null,
+          el("span", { text: error.message })
+        )
+      )
+    )
+  );
+}
+
+// Marks every field an error points at, or inside of.
+function markErrorFields(root, errors) {
+  root.querySelectorAll("[data-pointer]").forEach((node) => {
+    const pointer = node.dataset.pointer;
+    const hit = errors.some(
+      (error) => error.pointer && (error.pointer === pointer || error.pointer.startsWith(`${pointer}/`))
+    );
+    node.classList.toggle("has-error", hit);
+  });
+}
+
+function draftEditor(status) {
+  const dirty = onboardDirty();
+  const tabs = el(
+    "div",
+    { class: "onboard-tabs", role: "tablist" },
+    ...[
+      ["form", "Form"],
+      ["yaml", "YAML"],
+    ].map(([tab, label]) =>
+      el("button", {
+        type: "button",
+        role: "tab",
+        "aria-selected": String(onboard.tab === tab),
+        text: label,
+        onclick: () => switchOnboardTab(tab),
+      })
+    )
+  );
+  let body;
+  if (onboard.tab === "yaml") {
+    body = el("textarea", {
+      class: "onboard-yaml",
+      rows: 28,
+      spellcheck: "false",
+      text: onboard.yamlText ?? status.yaml,
+      oninput: (event) => {
+        onboard.yamlText = event.target.value;
+        renderOnboardingActions();
+      },
+    });
+  } else if (!onboard.working) {
+    body = el("p", { class: "empty", text: "The YAML doesn't parse yet; fix it in the YAML tab." });
+  } else {
+    const doc = onboard.working;
+    body = el(
+      "div",
+      { class: "onboard-form", oninput: renderOnboardingActions, onchange: renderOnboardingActions },
+      catalogFields(doc),
+      runtimeFields(doc),
+      buildRows(doc),
+      componentCards(doc),
+      el("p", {
+        class: "onboard-hint onboard-wide",
+        text: "Secrets, environment variables, serverless (Lambda) components, Worker Versioning, Nexus endpoints and extra namespaces: edit them in the YAML tab.",
+      })
+    );
+  }
+  return [
+    tabs,
+    errorList(status.errors || []),
+    status.ready && !dirty ? onboardAlert("success", "The draft is valid.", "Open the pull request below.") : null,
+    body,
+    el("div", { class: "onboard-actions", "data-onboard-actions": "" }, ...draftActions(dirty)),
+  ];
+}
+
+function draftActions(dirty) {
+  return [
+    el("button", {
+      type: "button",
+      class: "btn btn-primary btn-sm",
+      "aria-disabled": String(!dirty || Boolean(onboard.busy)),
+      text: "Validate draft",
+      onclick: saveDraft,
+    }),
+    dirty
+      ? el("button", { type: "button", class: "btn btn-quiet btn-sm", text: "Discard changes", onclick: discardDraftChanges })
+      : null,
+    el("span", { class: "mono", text: dirty ? "Unsaved changes" : `Revision ${onboard.status.revision}` }),
+  ];
+}
+
+// Refreshes only the action bar while typing, so inputs keep focus.
+function renderOnboardingActions() {
+  const actions = document.querySelector("[data-onboard-actions]");
+  if (actions) actions.replaceChildren(...draftActions(onboardDirty()));
+  const handoff = document.querySelector("[data-onboard-handoff]");
+  if (handoff) handoff.replaceChildren(...handoffBody(onboard.status));
+}
+
+function repoStep(status) {
+  const repo = status && status.repo;
+  if (repo && !onboard.changingRepo) {
+    return onboardStep(
+      1,
+      "Repo",
+      el(
+        "div",
+        { class: "onboard-repo" },
+        externalLink(repo.url, { class: "onboard-repo-name", text: `${repo.owner}/${repo.name}` }),
+        el("span", { class: "mono", text: `${repo.default_branch} @ ${repo.commit_sha.slice(0, 7)}` }),
+        onboardOpen()
+          ? el("button", {
+              type: "button",
+              class: "btn btn-quiet btn-sm",
+              text: "Use a different repo",
+              onclick: () => {
+                onboard.changingRepo = true;
+                renderOnboarding();
+              },
+            })
+          : null
+      )
+    );
+  }
+  const input = el("input", {
+    type: "url",
+    required: true,
+    placeholder: "https://github.com/temporal-sa/my-demo",
+    "aria-label": "GitHub repo URL",
+  });
+  return onboardStep(
+    1,
+    "Repo",
+    el("p", {
+      class: "onboard-hint",
+      text: "A public repo in temporal-sa, temporalio or temporal-community. The demo must follow the catalog-readiness rules in the demo buildkit.",
+    }),
+    el(
+      "form",
+      {
+        class: "onboard-inline",
+        onsubmit: (event) => {
+          event.preventDefault();
+          chooseRepo(input.value);
+        },
+      },
+      input,
+      el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(onboard.busy)), text: "Check repo" }),
+      onboard.changingRepo
+        ? el("button", {
+            type: "button",
+            class: "btn btn-quiet btn-sm",
+            text: "Cancel",
+            onclick: () => {
+              onboard.changingRepo = false;
+              renderOnboarding();
+            },
+          })
+        : null
+    )
+  );
+}
+
+function handoffBody(status) {
+  if (onboardDirty()) {
+    return [el("p", { class: "onboard-hint", text: "Validate your changes first, so the pull request has them." })];
+  }
+  if (!status.ready || !status.new_file_url) {
+    return [el("p", { class: "onboard-hint", text: "Fix the problems in the draft first." })];
+  }
+  const input = el("input", {
+    type: "url",
+    required: true,
+    placeholder: "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/123",
+    "aria-label": "Pull request URL",
+  });
+  return [
+    el(
+      "ol",
+      { class: "onboard-handoff-steps" },
+      el(
+        "li",
+        {},
+        el("p", {
+          text: `Open the prefilled ${status.project_path} on GitHub. Choose "Create a new branch for this commit and start a pull request", then create the pull request. Don't edit the file there: the hand-off checks it matches this draft.`,
+        }),
+        externalLink(status.new_file_url, { class: "btn btn-secondary btn-sm", text: "Open the file on GitHub" })
+      ),
+      el(
+        "li",
+        {},
+        el("p", { text: "Paste the pull request link." }),
+        el(
+          "form",
+          {
+            class: "onboard-inline",
+            onsubmit: (event) => {
+              event.preventDefault();
+              onboardCall("Checking pull request", [["/api/onboarding/submit", { pull_request_url: input.value }]]);
+            },
+          },
+          input,
+          el("button", { type: "submit", class: "btn btn-primary btn-sm", "aria-disabled": String(Boolean(onboard.busy)), text: "Hand off" })
+        )
+      )
+    ),
+  ];
+}
+
+function closedStep(status) {
+  if (status.phase === "HandedOff") {
+    return onboardStep(
+      3,
+      "Handed off",
+      onboardAlert("success", "A catalog owner will review your pull request.", "Once it merges, the demo builds, deploys and appears in the catalog."),
+      el(
+        "div",
+        { class: "onboard-actions" },
+        externalLink(status.pull_request_url, { class: "btn btn-secondary btn-sm", text: "View pull request" }),
+        el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          text: "Add another demo",
+          onclick: () => onboardCall("Starting", [["/api/onboarding", {}]]),
+        })
+      )
+    );
+  }
+  const reason = status.phase === "Expired" ? "It expired after two weeks without edits." : "It was discarded.";
+  return onboardStep(
+    1,
+    "Your last onboarding ended",
+    el("p", { class: "onboard-hint", text: reason }),
+    el("button", {
+      type: "button",
+      class: "btn btn-primary btn-sm",
+      text: "Start again",
+      onclick: () => onboardCall("Starting", [["/api/onboarding", {}]]),
+    })
+  );
+}
+
+function renderOnboarding() {
+  const root = document.querySelector("[data-onboard]");
+  if (!root) return;
+  if (!onboard.loaded) {
+    root.replaceChildren(el("p", { class: "empty", text: "Loading…" }));
+    return;
+  }
+  if (onboard.signInUrl) {
+    root.replaceChildren(
+      onboardAlert("warn", "Sign in to add a demo."),
+      el("a", { class: "btn btn-primary btn-sm", href: onboard.signInUrl, text: "Sign in" })
+    );
+    return;
+  }
+  const status = onboard.status || { phase: "None" };
+  const children = [];
+  if (onboard.busy) children.push(el("p", { class: "onboard-busy", role: "status", text: `${onboard.busy}…` }));
+  if (onboard.error) children.push(onboardAlert("error", "That didn't work.", onboard.error));
+  if (status.last_error && !onboard.error && onboardOpen()) {
+    children.push(onboardAlert("error", "Last check failed.", status.last_error));
+  }
+  if (ONBOARD_CLOSED.has(status.phase)) {
+    children.push(closedStep(status));
+  } else {
+    children.push(repoStep(status));
+    if (status.repo && !onboard.changingRepo) {
+      children.push(onboardStep(2, "Configure", ...draftEditor(status)));
+      children.push(onboardStep(3, "Open the pull request", el("div", { "data-onboard-handoff": "" }, ...handoffBody(status))));
+      children.push(
+        el("button", {
+          type: "button",
+          class: "btn btn-quiet btn-sm onboard-discard",
+          text: "Discard this onboarding",
+          onclick: () => {
+            if (window.confirm("Discard this onboarding and its draft?")) {
+              onboardCall("Discarding", [["/api/onboarding/abandon", {}]]);
+            }
+          },
+        })
+      );
+    }
+  }
+  root.replaceChildren(...children);
+  root.setAttribute("aria-busy", String(Boolean(onboard.busy)));
+  markErrorFields(root, status.errors || []);
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────

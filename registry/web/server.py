@@ -39,6 +39,7 @@ try:
         Client,
         WithStartWorkflowOperation,
         WorkflowExecutionStatus,
+        WorkflowUpdateFailedError,
     )
     from temporalio.common import WorkflowIDConflictPolicy
     from temporalio.service import RPCError, RPCStatusCode
@@ -104,6 +105,20 @@ NAMESPACE_ACCESS_WORKFLOW_TYPE = "GrantNamespaceReadAccessWorkflow"
 # Usually a few seconds; the very first grant may also create the group and
 # backfill its namespace grants.
 NAMESPACE_ACCESS_RPC_TIMEOUT_SECONDS = 90
+
+# Catalog onboarding: one CatalogOnboardingWorkflow per signed-in user takes a
+# demo repo to a catalog pull request. Edits run validation and GitHub checks
+# as activities, so allow more than a plain RPC.
+ONBOARDING_WORKFLOW_TYPE = "CatalogOnboardingWorkflow"
+ONBOARDING_RPC_TIMEOUT_SECONDS = 90
+# A DemoProject is a few KB; anything near Temporal's payload limit is a mistake.
+ONBOARDING_MAX_BODY_BYTES = 256 * 1024
+ONBOARDING_UPDATES = {
+    "repo": "set_repo",
+    "draft": "update_draft",
+    "submit": "submit_pull_request",
+    "abandon": "abandon",
+}
 
 
 class AuthError(Exception):
@@ -222,12 +237,24 @@ def namespace_access_workflow_id(email: str) -> str:
     return f"namespace-readers/grant/{email.strip().lower()}"
 
 
+def onboarding_workflow_id(email: str, cluster: str | None) -> str:
+    # Must match derive.catalog_onboarding_workflow_id in the operator.
+    email = email.strip().lower()
+    if cluster:
+        return f"catalog-onboarding/{cluster}/{email}"
+    return f"catalog-onboarding/{email}"
+
+
 class TemporalUnavailable(Exception):
     """The Temporal client could not be reached for a crashable-workspace call."""
 
 
 class WorkspaceNotFound(Exception):
     """No crashable-workspace workflow exists for this (user, demo)."""
+
+
+class OnboardingRejected(Exception):
+    """The onboarding workflow refused an edit; the message is for the user."""
 
 
 class TemporalGateway:
@@ -247,12 +274,14 @@ class TemporalGateway:
         api_key: str | None,
         tls: bool,
         task_queue: str,
+        cluster: str | None = None,
     ) -> None:
         self._address = address
         self._namespace = namespace
         self._api_key = api_key
         self._tls = tls
         self.task_queue = task_queue
+        self.cluster = cluster
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any | None = None
         self._connect_lock: asyncio.Lock | None = None
@@ -277,8 +306,8 @@ class TemporalGateway:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         try:
             return future.result(timeout=timeout)
-        except WorkspaceNotFound:
-            # A clean "no workspace" signal, mapped to 404/None by the handlers.
+        except (WorkspaceNotFound, OnboardingRejected):
+            # Clean signals the handlers map to 404s and 4xx responses.
             raise
         except Exception as error:  # noqa: BLE001 - surface as a clean 503
             # Everything else (RPC failures, timeouts, connection issues) becomes
@@ -379,6 +408,82 @@ class TemporalGateway:
         )
         return result if isinstance(result, dict) else {"status": "unknown"}
 
+    def onboarding_status(self, owner_email: str) -> dict[str, Any]:
+        return self._run(self._onboarding_status(owner_email))
+
+    async def _onboarding_status(self, owner_email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            onboarding_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            description = await handle.describe()
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                return {"phase": "None"}
+            raise
+        if description.status == WorkflowExecutionStatus.RUNNING:
+            return await handle.query("status")
+        if description.status == WorkflowExecutionStatus.COMPLETED:
+            # Hand-off, abandon, and expiry all complete with the final status,
+            # so the page can show how the last onboarding ended.
+            result = await handle.result()
+            if isinstance(result, dict):
+                return result
+        return {"phase": "None"}
+
+    def onboarding_start(self, owner_email: str) -> dict[str, Any]:
+        return self._run(
+            self._onboarding_start(owner_email),
+            timeout=ONBOARDING_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _onboarding_start(self, owner_email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        # USE_EXISTING returns the open onboarding; after one completes, the same
+        # id starts a fresh run.
+        operation = WithStartWorkflowOperation(
+            ONBOARDING_WORKFLOW_TYPE,
+            {"owner_email": owner_email},
+            id=onboarding_workflow_id(owner_email, self.cluster),
+            task_queue=self.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        return await client.execute_update_with_start_workflow(
+            "ensure",
+            start_workflow_operation=operation,
+        )
+
+    def onboarding_update(
+        self, owner_email: str, update: str, arg: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return self._run(
+            self._onboarding_update(owner_email, update, arg),
+            timeout=ONBOARDING_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _onboarding_update(
+        self, owner_email: str, update: str, arg: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            onboarding_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            if arg is None:
+                return await handle.execute_update(update)
+            return await handle.execute_update(update, arg)
+        except WorkflowUpdateFailedError as error:
+            cause = error.cause
+            message = getattr(cause, "message", None) or str(cause or error)
+            raise OnboardingRejected(message) from error
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                raise OnboardingRejected(
+                    "No onboarding in progress. Start a new one."
+                ) from error
+            raise
+
     async def _workspace_status(
         self, owner_email: str, demo_name: str
     ) -> dict[str, Any]:
@@ -411,6 +516,36 @@ class TemporalGateway:
         return {"phase": "None", "demo": demo_name}
 
 
+def onboarding_update_arg(action: str, body: dict[str, Any]) -> dict[str, Any] | str | None:
+    """The update argument for an onboarding action, or a message for a 400.
+
+    Only known fields are forwarded; the owner is never taken from the body.
+    """
+
+    if action == "repo":
+        repo_url = body.get("repo_url")
+        if not isinstance(repo_url, str) or not repo_url.strip():
+            return "repo_url is required"
+        return {"repo_url": repo_url.strip()}
+    if action == "draft":
+        revision = body.get("base_revision")
+        document = body.get("document")
+        text = body.get("yaml")
+        if not isinstance(revision, int) or isinstance(revision, bool):
+            return "base_revision is required"
+        if isinstance(document, dict) and text is None:
+            return {"base_revision": revision, "document": document}
+        if isinstance(text, str) and document is None:
+            return {"base_revision": revision, "yaml": text}
+        return "send either document or yaml"
+    if action == "submit":
+        url = body.get("pull_request_url")
+        if not isinstance(url, str) or not url.strip():
+            return "pull_request_url is required"
+        return {"pull_request_url": url.strip()}
+    return None
+
+
 def env_truthy(name: str, *, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -433,6 +568,7 @@ def build_temporal_gateway() -> TemporalGateway | None:
             os.environ.get("DEMO_REGISTRY_TASK_QUEUE", "").strip()
             or DEFAULT_CRASHABLE_TASK_QUEUE
         ),
+        cluster=os.environ.get("DEMO_REGISTRY_CLUSTER", "").strip() or None,
     )
 
 
@@ -454,6 +590,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(catalog_payload(self.registry_path, self.status_dir))
             elif path == "/api/crashable-workspace":
                 self.crashable_status(parse_query(parsed.query))
+            elif path == "/api/onboarding":
+                self.onboarding_status()
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
             elif path == "/_auth/verify-workspace":
@@ -470,7 +608,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_auth_config()
             elif path == "/catalog":
                 self.send_redirect("/")
-            elif path in {"/", "/index.html", "/courses"}:
+            elif path in {"/", "/index.html", "/courses", "/onboard"}:
                 self.send_static("index.html")
             elif path.startswith("/static/"):
                 self.send_static(path.removeprefix("/static/"))
@@ -507,6 +645,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.workspace_share_revoke()
             elif path == "/api/namespace-access":
                 self.namespace_access_grant()
+            elif path == "/api/onboarding":
+                self.onboarding_start()
+            elif path.startswith("/api/onboarding/"):
+                self.onboarding_update(path.removeprefix("/api/onboarding/"))
             else:
                 self.send_json(
                     {"error": "not_found", "path": path},
@@ -825,6 +967,98 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             result = self.temporal_gateway.grant_namespace_access(email)
+        except TemporalUnavailable as error:
+            self.send_json(
+                {"error": "temporal-unavailable", "message": str(error)},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        self.send_json(result)
+
+    def onboarding_request(self, *, mutating: bool) -> str | None:
+        # Shared preamble: auth, CSRF for writes, and the gateway. Returns the
+        # session email, or None after having already sent an error. The email
+        # always comes from the session, so a user only ever edits their own.
+        if mutating and not same_origin_request(self):
+            self.send_json(
+                {"error": "forbidden", "message": "Cross-origin request refused."},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return None
+        try:
+            email = self.authenticated_email()
+        except AuthError as error:
+            self.send_json(
+                {"error": "unauthorized", "message": str(error)},
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return None
+        if self.temporal_gateway is None:
+            self.send_json(
+                {"error": "temporal-unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return None
+        return email
+
+    def onboarding_status(self) -> None:
+        email = self.onboarding_request(mutating=False)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.onboarding_status(email)
+        )
+
+    def onboarding_start(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.onboarding_start(email)
+        )
+
+    def onboarding_update(self, action: str) -> None:
+        update = ONBOARDING_UPDATES.get(action)
+        if update is None:
+            self.send_json(
+                {"error": "not_found", "path": self.path},
+                status=HTTPStatus.NOT_FOUND,
+            )
+            return
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > ONBOARDING_MAX_BODY_BYTES:
+            self.send_json(
+                {"error": "too_large", "message": "The draft is too large."},
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return
+        body = self.read_json_body()
+        arg = onboarding_update_arg(action, body)
+        if isinstance(arg, str):
+            self.send_json(
+                {"error": "bad_request", "message": arg},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.onboarding_update(email, update, arg)
+        )
+
+    def send_onboarding_result(self, call: Any) -> None:
+        try:
+            result = call()
+        except OnboardingRejected as error:
+            self.send_json(
+                {"error": "rejected", "message": str(error)},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         except TemporalUnavailable as error:
             self.send_json(
                 {"error": "temporal-unavailable", "message": str(error)},

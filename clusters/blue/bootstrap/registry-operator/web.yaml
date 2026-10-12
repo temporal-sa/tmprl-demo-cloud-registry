@@ -81,6 +81,9 @@ spec:
             # Colored queue to match blue's operator (registry-management-blue).
             - name: DEMO_REGISTRY_TASK_QUEUE
               value: registry-management-blue
+            # Color for color-scoped workflow ids (catalog onboarding).
+            - name: DEMO_REGISTRY_CLUSTER
+              value: blue
             - name: CATALOG_STATUS_DIR
               value: /app/status
           envFrom:

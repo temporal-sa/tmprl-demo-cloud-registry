@@ -37,7 +37,8 @@ already built, signed, and verified; it does not compile or download it again.
 
 Each `DemoProject` CR specifies only:
 
-- a source repository in the `temporal-sa` GitHub organization;
+- a source repository in the `temporal-sa`, `temporalio`, or
+  `temporal-community` GitHub organization;
 - one or more container build contexts using Dockerfiles or explicit buildpack
   builds;
 - runtime components that reference those builds;

@@ -37,6 +37,11 @@ spec:
         !/registry/worker/**
         !/registry/temporal-cloud-proxy/
         !/registry/temporal-cloud-proxy/**
+        !/schemas/
+        !/schemas/**
+        !/scripts/
+        /scripts/*
+        !/scripts/validate_projects.py
     # branch defaults to main
 
   builds:
