@@ -419,7 +419,9 @@ def test_request_bundle_carries_the_contract_and_live_examples(monkeypatch):
         "list_demo_projects",
         lambda: [
             {"apiVersion": "v", "metadata": {"name": "canonical-ai-demo", "uid": "x"}, "spec": {"source": {"repo": "r"}}},
-            {"apiVersion": "v", "metadata": {"name": "not-an-example"}, "spec": {}},
+            {"apiVersion": "v", "metadata": {"name": "not-an-example"}, "spec": {"ingress": {"subdomain": "money"}}},
+            {"apiVersion": "v", "metadata": {"name": "c-1234", "labels": {"registry.tmprl-demo.cloud/canary": "true"}}, "spec": {}},
+            {"apiVersion": "v", "metadata": {"name": "pv-x", "labels": {"registry.tmprl-demo.cloud/preview": "true"}}, "spec": {}},
         ],
     )
 
@@ -435,3 +437,6 @@ def test_request_bundle_carries_the_contract_and_live_examples(monkeypatch):
     assert "DemoProject" in bundle["context"]["projects_readme"]
     assert list(bundle["context"]["examples"]) == ["canonical-ai-demo"]
     assert "uid" not in bundle["context"]["examples"]["canonical-ai-demo"]
+    # A project without a subdomain is served at its name; canaries and test
+    # deploys come and go and never block a name.
+    assert bundle["context"]["taken_subdomains"] == ["canonical-ai-demo", "money"]

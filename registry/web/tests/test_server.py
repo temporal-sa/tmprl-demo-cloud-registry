@@ -935,6 +935,12 @@ class OnboardingGateway:
     def onboarding_update(self, email, update, arg):
         return self._record(update, email, arg)
 
+    def preview_status(self, email):
+        return self._record("preview_status", email)
+
+    def preview_end(self, email):
+        return self._record("preview_end", email)
+
 
 def onboarding_request(httpd, path, *, body=None, method="POST", headers=None):
     return urlopen(
@@ -976,6 +982,12 @@ def onboarding_request(httpd, path, *, body=None, method="POST", headers=None):
             ("submit_pull_request", "mjones@temporal.io", {"pull_request_url": "https://github.com/temporal-sa/tmprl-demo-cloud-registry/pull/9"}),
         ),
         ("/api/onboarding/abandon", {}, ("abandon", "mjones@temporal.io", None)),
+        (
+            "/api/onboarding/preview",
+            {"document": {"kind": "DemoProject"}},
+            ("deploy_preview", "mjones@temporal.io", None),
+        ),
+        ("/api/onboarding/preview/end", {}, ("preview_end", "mjones@temporal.io")),
         ("/api/onboarding", {}, ("start", "mjones@temporal.io")),
     ],
 )
@@ -1090,6 +1102,70 @@ def test_onboarding_page_is_served_by_the_spa(tmp_path, monkeypatch):
         assert b"data-view=\"onboard\"" in response.read()
     finally:
         httpd.shutdown()
+
+
+def test_preview_status_reads_the_session_users_preview(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, "/api/onboarding/preview", method="GET")
+        assert response.status == 200
+        assert gateway.calls == [("preview_status", "mjones@temporal.io")]
+    finally:
+        httpd.shutdown()
+
+
+def test_ending_a_preview_refuses_cross_origin_requests(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/onboarding/preview/end",
+                body={},
+                headers={"Origin": "https://evil.tmprl-demo.cloud"},
+            )
+        assert raised.value.code == 403
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_preview_workflow_id_matches_the_operator():
+    # demo_registry_operator.derive.onboarding_preview_workflow_id
+    assert server.onboarding_preview_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "onboarding-preview/blue/ada@temporal.io"
+    )
+    assert server.onboarding_preview_workflow_id("ada@temporal.io", None) == (
+        "onboarding-preview/ada@temporal.io"
+    )
+
+
+def test_preview_status_is_none_without_a_preview_and_final_once_ended():
+    async def status(describe):
+        handle = SimpleNamespace(
+            describe=describe, result=AsyncMock(return_value={"phase": "Ended"})
+        )
+        gateway = SimpleNamespace(
+            cluster="blue",
+            _get_client=AsyncMock(
+                return_value=SimpleNamespace(get_workflow_handle=lambda _id: handle)
+            ),
+        )
+        return await server.TemporalGateway._preview_status(gateway, "ada@temporal.io")
+
+    missing = AsyncMock(
+        side_effect=server.RPCError("missing", server.RPCStatusCode.NOT_FOUND, b"")
+    )
+    ended = AsyncMock(
+        return_value=SimpleNamespace(status=server.WorkflowExecutionStatus.COMPLETED)
+    )
+
+    assert asyncio.run(status(missing)) == {"phase": "None"}
+    assert asyncio.run(status(ended)) == {"phase": "Ended"}
 
 
 def test_onboarding_workflow_id_matches_the_operator():

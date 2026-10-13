@@ -68,6 +68,7 @@ def test_context_is_laid_out_like_the_registry_repo(tmp_path):
             "validator": "print('v')",
             "projects_readme": "# Projects",
             "examples": {"canonical-ai-demo": "kind: DemoProject\n"},
+            "taken_subdomains": ["expense-approval", "money-transfer"],
         }
     }
 
@@ -77,3 +78,4 @@ def test_context_is_laid_out_like_the_registry_repo(tmp_path):
     assert (tmp_path / "scripts" / "validate_projects.py").exists()
     assert (tmp_path / "projects" / "demo" / "canonical-ai-demo.yaml").exists()
     assert (tmp_path / "buildkit" / "12-demo-catalog-readiness.md").exists()
+    assert (tmp_path / "taken-subdomains.txt").read_text() == "expense-approval\nmoney-transfer\n"

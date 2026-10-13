@@ -161,6 +161,50 @@ def apply_demo_project(resource: dict[str, Any], *, dry_run: bool) -> str:
     )
 
 
+def replace_demo_project(resource: dict[str, Any]) -> str:
+    """Create a DemoProject, or replace its labels, annotations and spec.
+
+    Unlike apply_demo_project's merge patch, fields missing from ``resource``
+    are removed. The existing finalizers are kept, and the resourceVersion makes
+    a concurrent change fail with 409 instead of being overwritten.
+    """
+
+    metadata = resource.get("metadata", {})
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str):
+        raise ValueError("DemoProject resource is missing metadata.name")
+
+    client = _client_module()
+    load_kubernetes_config()
+    custom = client.CustomObjectsApi()
+    existing = read_demo_project(name)
+    if existing is None:
+        custom.create_cluster_custom_object(
+            DEMO_PROJECT_GROUP,
+            DEMO_PROJECT_VERSION,
+            DEMO_PROJECT_PLURAL,
+            resource,
+        )
+        return "created"
+    current = existing.get("metadata") or {}
+    replacement = {
+        **resource,
+        "metadata": {
+            **metadata,
+            "resourceVersion": current.get("resourceVersion"),
+            "finalizers": demo_project_finalizers(existing),
+        },
+    }
+    custom.replace_cluster_custom_object(
+        DEMO_PROJECT_GROUP,
+        DEMO_PROJECT_VERSION,
+        DEMO_PROJECT_PLURAL,
+        name,
+        replacement,
+    )
+    return "replaced"
+
+
 def delete_demo_project(name: str, *, dry_run: bool = False) -> str:
     if dry_run:
         return "planned"

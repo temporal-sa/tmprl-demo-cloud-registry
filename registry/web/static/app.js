@@ -1901,6 +1901,7 @@ function acceptOnboardStatus(status) {
 }
 
 async function loadOnboarding() {
+  const preview = loadPreview();
   try {
     const res = await fetch("/api/onboarding", { credentials: "same-origin" });
     const data = await res.json().catch(() => ({}));
@@ -1914,6 +1915,7 @@ async function loadOnboarding() {
   } catch (err) {
     onboard.error = err.message;
   }
+  await preview;
   onboard.loaded = true;
   renderOnboarding();
 }
@@ -3010,6 +3012,176 @@ function markErrorFields(root, errors) {
   });
 }
 
+// ─── Onboarding: test deploy ───────────────────────────────────────────────
+// A valid draft can run as a hidden preview (pv-<name>) for 48 hours. The
+// preview is its own per-user workflow that outlives the onboarding, so the
+// page reads and ends it separately, and keeps showing it after hand-off.
+
+const PREVIEW_LIVE = new Set(["Deploying", "Ready", "Failed"]);
+const PREVIEW_POLLING = new Set(["Deploying", "Ending"]);
+const onboardPreview = { status: null };
+let previewPollTimer = null;
+
+function previewLive(preview) {
+  return Boolean(preview && PREVIEW_LIVE.has(preview.phase));
+}
+
+async function loadPreview() {
+  try {
+    const res = await fetch("/api/onboarding/preview", { credentials: "same-origin" });
+    if (res.ok) onboardPreview.status = await res.json();
+  } catch (err) {
+    // Leave the last known state; the next poll or reload tries again.
+  }
+}
+
+function schedulePreviewPoll() {
+  clearTimeout(previewPollTimer);
+  const preview = onboardPreview.status;
+  if (preview && PREVIEW_POLLING.has(preview.phase) && currentView() === "onboard") {
+    previewPollTimer = setTimeout(refreshPreviewPanel, 5000);
+  }
+}
+
+async function refreshPreviewPanel() {
+  await loadPreview();
+  const panel = document.querySelector("[data-onboard-preview]");
+  if (panel) panel.replaceChildren(...previewBody(onboard.status || {}));
+  schedulePreviewPoll();
+}
+
+async function previewCall(label, url) {
+  if (onboard.busy) return;
+  onboard.busy = label;
+  onboard.error = null;
+  renderOnboarding();
+  try {
+    onboardPreview.status = await postJSON(url, {});
+  } catch (err) {
+    onboard.error = err.message;
+  } finally {
+    onboard.busy = null;
+    renderOnboarding();
+  }
+}
+
+function deployPreview() {
+  previewCall("Starting the test deploy", "/api/onboarding/preview");
+}
+
+function endPreview() {
+  if (window.confirm("End the test deploy and delete everything it created?")) {
+    previewCall("Ending the test deploy", "/api/onboarding/preview/end");
+  }
+}
+
+function previewEndsAt(preview) {
+  const ends = preview.expires_at ? new Date(preview.expires_at) : null;
+  return ends ? `Ends ${ends.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : null;
+}
+
+function previewBody(status) {
+  const preview = onboardPreview.status || { phase: "None" };
+  const draftName = getIn(status.document, ["metadata", "name"]);
+  const canDeploy = onboardOpen() && status.ready && !onboardDirty() && !onboard.busy;
+  const deployHint = !onboardOpen()
+    ? null
+    : onboardDirty()
+      ? "Validate your changes first; the test deploy uses the saved draft."
+      : !status.ready
+        ? "Fix the problems in the draft first."
+        : null;
+
+  if (preview.phase === "Ending") {
+    return [el("p", { class: "onboard-busy", role: "status", text: `Ending the test deploy: ${preview.step || "deleting"}…` })];
+  }
+
+  if (!previewLive(preview)) {
+    const parts = [
+      el("p", {
+        class: "onboard-hint",
+        text: "Run the saved draft as a private preview for up to 48 hours before you open the pull request. It builds the latest commit on the source branch and uses the secrets you stored. Anyone signed in to tmprl-demo.cloud can open it, so you can share the link for feedback. It isn't listed in the catalog.",
+      }),
+    ];
+    if (preview.phase === "Ended") {
+      const why = preview.ended_reason === "Expired" ? " after 48 hours" : "";
+      parts.push(el("p", { class: "onboard-hint", text: `Your last test deploy (${preview.project}) ended${why}.` }));
+    }
+    if (onboardOpen()) {
+      parts.push(
+        el(
+          "div",
+          { class: "onboard-actions" },
+          el("button", {
+            type: "button",
+            class: "btn btn-secondary btn-sm",
+            "aria-disabled": String(!canDeploy),
+            title: deployHint,
+            text: "Test deploy",
+            onclick: () => canDeploy && deployPreview(),
+          }),
+          deployHint ? el("span", { class: "onboard-hint", text: deployHint }) : null
+        )
+      );
+    }
+    return parts;
+  }
+
+  const parts = [];
+  if (preview.phase === "Ready") {
+    parts.push(onboardAlert("success", "The test deploy is running.", "Open it below. Redeploy after you change the draft or push to the demo repo."));
+  } else if (preview.phase === "Failed") {
+    parts.push(onboardAlert("error", "The test deploy failed.", preview.last_error));
+  } else {
+    parts.push(el("p", { class: "onboard-busy", role: "status", text: `Deploying: ${preview.step || "starting"}…` }));
+  }
+  parts.push(
+    el(
+      "div",
+      { class: "onboard-repo" },
+      preview.url ? externalLink(preview.url, { class: "onboard-repo-name", text: preview.url.replace("https://", "") }) : null,
+      preview.commit_sha ? el("span", { class: "mono", text: `${preview.commit_sha.slice(0, 7)} · revision ${preview.revision}` }) : null,
+      el("span", { class: "mono", text: previewEndsAt(preview) })
+    )
+  );
+
+  const renamed = draftName && preview.project && draftName !== preview.project;
+  const stale = !renamed && onboardOpen() && preview.revision !== status.revision;
+  if (renamed && onboardOpen()) {
+    parts.push(el("p", { class: "onboard-hint", text: `This test deploy is for ${preview.project}. End it to test deploy ${draftName}.` }));
+  } else if (stale) {
+    parts.push(el("p", { class: "onboard-hint", text: "The draft has changed since this was deployed." }));
+  }
+  parts.push(
+    el(
+      "div",
+      { class: "onboard-actions" },
+      onboardOpen() && !renamed
+        ? el("button", {
+            type: "button",
+            class: "btn btn-secondary btn-sm",
+            "aria-disabled": String(!canDeploy),
+            title: deployHint,
+            text: "Redeploy the saved draft",
+            onclick: () => canDeploy && deployPreview(),
+          })
+        : null,
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        "aria-disabled": String(Boolean(onboard.busy)),
+        text: "End test deploy",
+        onclick: () => !onboard.busy && endPreview(),
+      })
+    )
+  );
+  return parts;
+}
+
+function previewPanel(status) {
+  return el("div", { "data-onboard-preview": "" }, ...previewBody(status));
+}
+
 function draftEditor(status) {
   const dirty = onboardDirty();
   const tabs = el(
@@ -3062,7 +3234,7 @@ function draftEditor(status) {
     agentPanel(status),
     tabs,
     errorList(status.errors || []),
-    status.ready && !dirty ? onboardAlert("success", "The draft is valid.", "Open the pull request below.") : null,
+    status.ready && !dirty ? onboardAlert("success", "The draft is valid.", "Test deploy it or open the pull request below.") : null,
     body,
     el("div", { class: "onboard-actions", "data-onboard-actions": "" }, ...draftActions(dirty)),
   ];
@@ -3092,6 +3264,8 @@ function renderOnboardingActions() {
   if (handoff) handoff.replaceChildren(...handoffBody(onboard.status));
   const agent = document.querySelector("[data-onboard-agent]");
   if (agent) agent.replaceChildren(...agentPanelBody(onboard.status));
+  const preview = document.querySelector("[data-onboard-preview]");
+  if (preview) preview.replaceChildren(...previewBody(onboard.status));
 }
 
 function repoStep(status) {
@@ -3207,7 +3381,7 @@ function handoffBody(status) {
 function closedStep(status) {
   if (status.phase === "HandedOff") {
     return onboardStep(
-      3,
+      4,
       "Handed off",
       onboardAlert("success", "A catalog owner will review your pull request.", "Once it merges, the demo builds, deploys and appears in the catalog."),
       el(
@@ -3259,12 +3433,20 @@ function renderOnboarding() {
     children.push(onboardAlert("error", "Last check failed.", status.last_error));
   }
   if (ONBOARD_CLOSED.has(status.phase)) {
+    // A test deploy outlives the onboarding, so it stays manageable here:
+    // before the hand-off step, or after "Your last onboarding ended".
+    const preview = onboardPreview.status || {};
+    const showPreview = previewLive(preview) || preview.phase === "Ending";
+    const handedOff = status.phase === "HandedOff";
+    if (showPreview && handedOff) children.push(onboardStep(3, "Test deploy", previewPanel(status)));
     children.push(closedStep(status));
+    if (showPreview && !handedOff) children.push(onboardStep(2, "Test deploy", previewPanel(status)));
   } else {
     children.push(repoStep(status));
     if (status.repo && !onboard.changingRepo) {
       children.push(onboardStep(2, "Configure", ...draftEditor(status)));
-      children.push(onboardStep(3, "Open the pull request", el("div", { "data-onboard-handoff": "" }, ...handoffBody(status))));
+      children.push(onboardStep(3, "Test deploy (optional)", previewPanel(status)));
+      children.push(onboardStep(4, "Open the pull request", el("div", { "data-onboard-handoff": "" }, ...handoffBody(status))));
       children.push(
         el("button", {
           type: "button",
@@ -3283,6 +3465,7 @@ function renderOnboarding() {
   root.setAttribute("aria-busy", String(Boolean(onboard.busy)));
   markErrorFields(root, status.errors || []);
   scheduleOnboardPoll();
+  schedulePreviewPoll();
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────

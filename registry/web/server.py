@@ -121,6 +121,7 @@ ONBOARDING_UPDATES = {
     "abandon": "abandon",
     "agent": "request_agent",
     "agent/cancel": "cancel_agent",
+    "preview": "deploy_preview",
 }
 ONBOARDING_AGENT_ACTIVITY = "run_onboarding_agent"
 # Project secrets a user enters while onboarding go straight to Secrets Manager
@@ -256,6 +257,15 @@ def crashable_workflow_id(owner_email: str, demo_name: str) -> str:
 def namespace_access_workflow_id(email: str) -> str:
     # Must match derive.namespace_read_access_workflow_id in the operator.
     return f"namespace-readers/grant/{email.strip().lower()}"
+
+
+def onboarding_preview_workflow_id(email: str, cluster: str | None) -> str:
+    # Must match derive.onboarding_preview_workflow_id in the operator. Keyed by
+    # user, not onboarding: a test deploy outlives the onboarding that started it.
+    email = email.strip().lower()
+    if cluster:
+        return f"onboarding-preview/{cluster}/{email}"
+    return f"onboarding-preview/{email}"
 
 
 def onboarding_workflow_id(email: str, cluster: str | None) -> str:
@@ -682,6 +692,46 @@ class TemporalGateway:
                 ) from error
             raise
 
+    def preview_status(self, owner_email: str) -> dict[str, Any]:
+        return self._run(self._preview_status(owner_email))
+
+    async def _preview_status(self, owner_email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            onboarding_preview_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            description = await handle.describe()
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                return {"phase": "None"}
+            raise
+        if description.status == WorkflowExecutionStatus.RUNNING:
+            return await handle.query("status")
+        if description.status == WorkflowExecutionStatus.COMPLETED:
+            result = await handle.result()
+            if isinstance(result, dict):
+                return result
+        return {"phase": "None"}
+
+    def preview_end(self, owner_email: str) -> dict[str, Any]:
+        return self._run(
+            self._preview_end(owner_email),
+            timeout=ONBOARDING_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _preview_end(self, owner_email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            onboarding_preview_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            return await handle.execute_update("end")
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                raise OnboardingRejected("You have no test deploy running.") from error
+            raise
+
     async def _workspace_status(
         self, owner_email: str, demo_name: str
     ) -> dict[str, Any]:
@@ -821,6 +871,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_status()
             elif path == "/api/onboarding/secrets":
                 self.onboarding_secrets_list()
+            elif path == "/api/onboarding/preview":
+                self.onboarding_preview_status()
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
             elif path == "/_auth/verify-workspace":
@@ -878,6 +930,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_start()
             elif path == "/api/onboarding/secrets":
                 self.onboarding_secret_store()
+            elif path == "/api/onboarding/preview/end":
+                self.onboarding_preview_end()
             elif path.startswith("/api/onboarding/"):
                 self.onboarding_update(path.removeprefix("/api/onboarding/"))
             else:
@@ -1247,6 +1301,20 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         self.send_onboarding_result(
             lambda: self.temporal_gateway.onboarding_start(email)
         )
+
+    def onboarding_preview_status(self) -> None:
+        email = self.onboarding_request(mutating=False)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.preview_status(email)
+        )
+
+    def onboarding_preview_end(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        self.send_onboarding_result(lambda: self.temporal_gateway.preview_end(email))
 
     def onboarding_update(self, action: str) -> None:
         update = ONBOARDING_UPDATES.get(action)

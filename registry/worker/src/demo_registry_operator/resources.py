@@ -65,6 +65,13 @@ BASE_RECONCILE_KEY_STATUS_FIELD = "baseReconcileKey"
 CANARY_LABEL = "registry.tmprl-demo.cloud/canary"
 CANARY_KIND_LABEL = "registry.tmprl-demo.cloud/canary-kind"
 OPERATOR_ROLLOUT_CANARY_KIND = "operator-rollout"
+# Onboarding test deploys (OnboardingPreviewWorkflow). The label hides the
+# project from the catalog; secrets-from points user secret lookup at the
+# not-yet-merged project the preview is for. scripts/validate_projects.py rejects
+# these keys in reviewed projects, so only the preview workflow sets them.
+PREVIEW_LABEL = "registry.tmprl-demo.cloud/preview"
+PREVIEW_OWNER_ANNOTATION = "registry.tmprl-demo.cloud/preview-owner"
+SECRETS_FROM_ANNOTATION = "registry.tmprl-demo.cloud/secrets-from"
 PLATFORM_SOURCE_AUTH_SECRET_NAME = "github-temporal-sa-readonly"
 PLATFORM_SOURCE_AUTH_SECRET_PATH = (
     "tmprl-dem-cld/platform/github-temporal-sa-readonly"
@@ -505,6 +512,26 @@ def metadata_labels(demo_project: dict[str, Any]) -> dict[str, str]:
         for key, value in labels.items()
         if isinstance(key, str) and isinstance(value, str)
     }
+
+
+def is_onboarding_preview(demo_project: dict[str, Any]) -> bool:
+    return metadata_labels(demo_project).get(PREVIEW_LABEL) == "true"
+
+
+def user_secret_prefix(demo_project: dict[str, Any]) -> str:
+    """Where a project's own (user-managed) secrets live.
+
+    A preview reads the secrets the user stored for the real project. Only user
+    secrets follow ``secrets-from``: the operator writes and, at finalize,
+    deletes the Temporal credentials under the project's own prefix, which must
+    never be the real project's.
+    """
+
+    if is_onboarding_preview(demo_project):
+        source = metadata_annotations(demo_project).get(SECRETS_FROM_ANNOTATION)
+        if source:
+            return derive.secret_prefix(source)
+    return project_secret_prefix(demo_project)
 
 
 def is_operator_rollout_canary(demo_project: dict[str, Any]) -> bool:
@@ -4099,6 +4126,7 @@ def catalog_payload(
         "projects": [
             catalog_entry(demo_project)
             for demo_project in sorted(demo_projects, key=project_name)
+            if not is_onboarding_preview(demo_project)
         ],
         "courses": [
             instruqt_catalog_entry(instruqt_course)
@@ -5493,7 +5521,7 @@ def user_secret_remote_path(demo_project: dict[str, Any], secret_name: str) -> s
                 f"secrets.{secret_name}.shared must be a relative path under platform/shared"
             )
         return f"tmprl-dem-cld/platform/shared/{shared}"
-    return f"{project_secret_prefix(demo_project)}/{secret_name}"
+    return f"{user_secret_prefix(demo_project)}/{secret_name}"
 
 
 def user_secret_managed_by(demo_project: dict[str, Any], secret_name: str) -> str:

@@ -1607,6 +1607,7 @@
 
   .onboard-agent .eyebrow { color: var(--bubble-gum); font-size: .75rem; }
   .onboard-agent [data-onboard-agent] { display: grid; gap: .9rem; }
+  [data-onboard-preview] { display: grid; gap: .9rem; }
   .onboard-agent-summary { color: var(--off-white); font-size: .9375rem; font-weight: 300; line-height: 1.6; white-space: pre-line; }
 
   .onboard-findings { display: grid; gap: .6rem; }

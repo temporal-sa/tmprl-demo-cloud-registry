@@ -49,7 +49,8 @@ def test_worker_deployment_info_current_rejects_other_build():
 def test_running_entity_workflows_query_selects_running_entity_workflows():
     assert worker.running_entity_workflows_query() == (
         '(WorkflowType = "DemoProjectWorkflow" OR WorkflowType = "InstruqtCourseWorkflow" '
-        'OR WorkflowType = "CatalogOnboardingWorkflow") '
+        'OR WorkflowType = "CatalogOnboardingWorkflow" '
+        'OR WorkflowType = "OnboardingPreviewWorkflow") '
         'AND ExecutionStatus = "Running"'
     )
 
@@ -70,6 +71,7 @@ def test_workflow_runner_prepares_registered_workflows_in_sandbox():
             worker.IsolatedLambdaWorkspaceWorkflow,
             worker.GrantNamespaceReadAccessWorkflow,
             worker.CatalogOnboardingWorkflow,
+            worker.OnboardingPreviewWorkflow,
             worker.SyncNamespaceReadersWorkflow,
         ):
             workflow_runner.prepare_workflow(

@@ -48,6 +48,18 @@ SERVERLESS_PROVIDER_AWS_LAMBDA = "aws-lambda"
 # tmprl-dem-cld/<project>/temporal-<suffix>, so no namespace may claim them.
 RESERVED_TEMPORAL_NAMESPACE_LABELS = frozenset({"candidate", "ca-candidate"})
 NEXUS_PRIMARY_NAMESPACE_REF = "primary"
+# Onboarding test deploys apply DemoProjects named pv-<name>, served at
+# pv-<name>.tmprl-demo.cloud, and mark them with this label and annotations. The
+# operator trusts them (secrets-from redirects secret lookup to another
+# project), so no reviewed project may claim the prefix or set the keys.
+PREVIEW_NAME_PREFIX = "pv-"
+RESERVED_METADATA_KEYS = frozenset(
+    {
+        "registry.tmprl-demo.cloud/preview",
+        "registry.tmprl-demo.cloud/preview-owner",
+        "registry.tmprl-demo.cloud/secrets-from",
+    }
+)
 NEXUS_ENDPOINT_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]*[a-zA-Z0-9]$")
 SERVERLESS_PACKAGE_TYPE_IMAGE = "image"
 TEMPORAL_API_KEY_INPUT_REFS = {
@@ -191,6 +203,9 @@ DUPLICATE_MESSAGE_POINTERS = {
     "duplicate derived namespace ": "/metadata/name",
     "duplicate derived Temporal namespace ": "/metadata/name",
     "duplicate ingress subdomain ": "/spec/ingress/subdomain",
+    "metadata.name ": "/metadata/name",
+    "metadata.labels ": "/metadata/labels",
+    "metadata.annotations ": "/metadata/annotations",
 }
 
 
@@ -275,6 +290,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
     )
 
     for document in demo_projects:
+        errors.extend(validate_reserved_metadata(document))
         errors.extend(validate_source_repo(document))
         errors.extend(validate_build_references(document))
         errors.extend(validate_component_ports(document))
@@ -386,6 +402,42 @@ def validate_unique_derived_namespaces(
                 )
             )
 
+    return errors
+
+
+def validate_reserved_metadata(document: ProjectDocument) -> list[ProjectError]:
+    errors: list[ProjectError] = []
+    name = get_nested(document.data, ("metadata", "name"))
+    if isinstance(name, str) and name.startswith(PREVIEW_NAME_PREFIX):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"metadata.name {name!r} must not start with {PREVIEW_NAME_PREFIX!r}; "
+                "that prefix is reserved for onboarding test deploys",
+            )
+        )
+    subdomain = get_nested(document.data, ("spec", "ingress", "subdomain"))
+    if isinstance(subdomain, str) and subdomain.startswith(PREVIEW_NAME_PREFIX):
+        errors.append(
+            ProjectError(
+                document.path,
+                f"ingress.subdomain {subdomain!r} must not start with "
+                f"{PREVIEW_NAME_PREFIX!r}; that prefix is reserved for onboarding "
+                "test deploys",
+            )
+        )
+    for field in ("labels", "annotations"):
+        values = get_nested(document.data, ("metadata", field))
+        if not isinstance(values, dict):
+            continue
+        for key in sorted(RESERVED_METADATA_KEYS.intersection(values)):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"metadata.{field} {key!r} is set by the operator for "
+                    "onboarding test deploys and must not be declared",
+                )
+            )
     return errors
 
 

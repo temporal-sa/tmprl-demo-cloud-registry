@@ -186,20 +186,85 @@ nothing else breaks.
 
 ## Test deploy (milestone 4)
 
-`OnboardingPreviewWorkflow` (`onboarding-preview/<name>`) applies a preview
-DemoProject directly to the cluster, the way the operator canary does.
+A valid draft can run as a hidden preview for up to 48 hours before the PR, so
+the user (and anyone signed in they share the link with) can see it working.
 
-- **Separate name.** The preview is named `pv-<name>`, so a merge can't collide
-  with it. A `secrets-from: <name>` annotation points secret lookup at the real
-  project's path.
-- **Hidden.** A `registry.tmprl-demo.cloud/preview` label keeps it out of
-  `catalog_payload`.
-- **Auth.** `ingress.temporalAuthRequired` is forced to `true`. Any signed-in
-  user can open the preview, so it can be shared for feedback.
-- **Gated.** It only runs when the draft validates. One preview per user, plus
-  a global cap.
-- **48 hours.** A durable timer, then delete and wait for the finalizer. Ending
-  early is an Update.
+**Workflows**
+
+- `OnboardingPreviewWorkflow` (`onboarding-preview/<color>/<email>`) runs one
+  per user, separate from the onboarding. It outlives hand-off, so PR
+  reviewers can open the preview, and the page reads and ends it directly.
+- The `deploy_preview` update on the onboarding workflow is the only way in.
+  It needs `ready` (schema, semantic and secrets checks all pass). Its
+  activity resolves the head commit of the draft's `source.branch`, then
+  update-with-starts the preview's `deploy` update.
+- A redeploy replaces the DemoProject in place (`kube.replace_demo_project`,
+  so fields removed from the draft are removed). It never moves the deadline.
+  Renaming the project means ending the preview first.
+- The deadline is a durable timer from the first deploy. When it fires, or on
+  the `end` update, the workflow deletes the DemoProject. It then waits until
+  finalize has removed the namespaces, the source watch, the finalizer and the
+  catalog status, reusing the canary's cleanup check. Teardown is shielded
+  from cancellation.
+- While a deploy rolls out, the workflow polls the DemoProject status every
+  20 seconds (every 5 minutes after a failure). It is Ready once the operator
+  reports the applied commit promoted.
+- It uses the same `check_worker_version` → continue-as-new pattern as the
+  onboarding workflow.
+
+**The DemoProject** (`activities/onboarding_preview.py`)
+
+- The name and subdomain are `pv-<name>`, so a merge can't collide with it.
+- Metadata is rebuilt, not copied, so draft labels and annotations can't steer
+  the operator. It carries:
+  - the `registry.tmprl-demo.cloud/preview` label;
+  - a `preview-owner` annotation;
+  - `source-commit-sha`, which pins the build and skips the Flux source watch;
+  - `secrets-from: <name>`.
+- `ingress.temporalAuthRequired` is forced to `true`, and
+  `temporal.runtimeSecretPath` is dropped.
+- The watcher reconciles it like any other project; there is no pinned start.
+- `secrets-from` redirects only user secrets (`resources.user_secret_prefix`),
+  which is where the onboarding page stored them. The operator writes, and at
+  finalize deletes, the Temporal credentials under the preview's own
+  `tmprl-dem-cld/pv-<name>/` prefix, so they must never follow it. IAM needs no
+  change, because the Lambda policy already lists each user secret path.
+- `secrets-from` is honoured only together with the preview label.
+  `scripts/validate_projects.py` rejects both keys, the `pv-` name prefix and
+  the `pv-` subdomain prefix in reviewed projects and drafts.
+- Hidden: `resources.catalog_payload` skips previews. So does the list of
+  existing projects that onboarding validates against.
+- Apply refuses a `pv-<name>` that another user's preview holds. It retries
+  while an earlier preview of the same name is still finalizing.
+- Not yet supported: drafts with Nexus endpoints. Endpoint names are unique
+  across the account, so a live preview would block the real project after
+  merge.
+
+**Limits.** One preview per user, through the workflow ID. There is no global
+cap.
+
+**Page.** Step 3, "Test deploy (optional)", sits between Configure and the
+pull request. It shows the URL, the commit and draft revision, and when it
+ends, with Redeploy and End buttons. It polls while deploying or ending. After
+hand-off or abandon, a live preview stays manageable on the closed view.
+
+**Web routes**
+
+| Route | What it does |
+|---|---|
+| `POST /api/onboarding/preview` | Calls the `deploy_preview` update on the onboarding workflow |
+| `GET /api/onboarding/preview` | Returns the preview's status |
+| `POST /api/onboarding/preview/end` | Calls the preview workflow's `end` update |
+
+**Deploying it.** Merging rolls the operator and web. The operator's existing
+RBAC (update on `demoprojects`), External Secrets IAM (the whole
+`tmprl-dem-cld/*` prefix) and CodeBuild access cover previews, so there's no
+infra change. No canary covers it. After deploy:
+1. Validate a draft and click Test deploy.
+2. Watch it reach Ready and open the `pv-` URL signed in.
+3. Redeploy it.
+4. End it, and check that the `pv-` namespace, Temporal namespace and ECR
+   repos are gone.
 
 ## Milestones
 
@@ -212,7 +277,7 @@ DemoProject directly to the cluster, the way the operator canary does.
    - The onboarding page: form, YAML tab, hand-off.
 2. **Agent pod.** Done on this branch; see above.
 3. **Secrets.** Done on this branch; see above.
-4. **Test deploys.**
+4. **Test deploys.** Done on this branch; see above.
 5. **Instruqt.**
 6. **Automatic demo-repo PRs**, after the rest works end to end.
 
