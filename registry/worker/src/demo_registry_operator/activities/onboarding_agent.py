@@ -542,7 +542,8 @@ def broker_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
             return json.loads(response.read().decode())
     except HTTPError as error:
         detail = error.read().decode(errors="replace")[:500]
-        if error.code in {400, 401, 403, 409, 422}:
+        # 410: the broker already revoked this participant and never re-issues it.
+        if error.code in {400, 401, 403, 409, 410, 422}:
             raise errors.non_retryable_error(
                 f"The LiteLLM broker refused {path} with HTTP {error.code}: {detail}",
                 error_type=errors.CONFIGURATION_ERROR,
