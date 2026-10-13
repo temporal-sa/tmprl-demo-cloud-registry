@@ -191,7 +191,7 @@ Environment variables:
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_ACCOUNT_ID`, optional status metadata; falls
   back to `TEMPORAL_CLOUD_ACCOUNT_ID`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_REGION`, operator-wide default namespace region
-  (falls back to `TEMPORAL_CLOUD_REGION`, then `gcp-us-central1`); overridden
+  (falls back to `TEMPORAL_CLOUD_REGION`, then `aws-ca-central-1`); overridden
   per project by `spec.temporal.region`
 - `DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`, default `aws-ca-central-1`;
   the default namespace region for projects with serverless (AWS Lambda) workers
@@ -275,7 +275,7 @@ so External Secrets can sync it. Notes:
 - The namespace region is resolved by precedence: `spec.temporal.region` (if
   set) > the serverless AWS default (`DEMO_REGISTRY_TEMPORAL_CLOUD_SERVERLESS_REGION`,
   `aws-ca-central-1`) for projects with AWS Lambda workers > the operator-wide
-  default (`TEMPORAL_CLOUD_REGION`, default `gcp-us-central1`). The operator
+  default (`TEMPORAL_CLOUD_REGION`, default `aws-ca-central-1`). The operator
   queries `GetRegions` and fails fast if the resolved region is not available to
   the account instead of leaving a namespace stuck in `ACTIVATION_FAILED`.
 - A Temporal Cloud namespace's region is immutable, so when the resolved region
