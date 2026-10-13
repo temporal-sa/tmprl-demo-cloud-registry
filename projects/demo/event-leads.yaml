@@ -18,6 +18,7 @@ spec:
   temporal:
     auth:
       mode: apiKey
+    region: aws-ca-central-1
     nexusEndpoints:
       event-leads-participants:
         targetTaskQueue: event-leads-unversioned

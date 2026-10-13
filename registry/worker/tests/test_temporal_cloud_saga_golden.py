@@ -137,8 +137,13 @@ def run_saga(
     owned_suffix: str | None,
     search_attributes: dict[str, Any] | None = None,
     previous_status: dict[str, Any] | None = None,
+    sequenced_results: dict[str, list[Any]] | None = None,
 ):
-    """Drive the real saga with a recording stub, returning (calls, status, workflow)."""
+    """Drive the real saga with a recording stub, returning (calls, status, workflow).
+
+    sequenced_results maps an activity name to the results its successive calls
+    return, for paths where one activity is called more than once.
+    """
     workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
     demo_project = project()
     if search_attributes:
@@ -153,11 +158,14 @@ def run_saga(
         expected_path = MINTED_PATH
 
     results = activity_results(expected_path)
+    sequenced = {name: list(values) for name, values in (sequenced_results or {}).items()}
     calls: list[tuple[str, Any]] = []
 
     async def fake_execute_activity(activity, request, **kwargs):
         name = getattr(activity, "__name__", str(activity))
         calls.append((name, request))
+        if sequenced.get(name):
+            return sequenced[name].pop(0)
         if name not in results:
             raise AssertionError(f"unexpected activity in the saga: {name}")
         return results[name]
@@ -340,6 +348,106 @@ def test_first_provision_moves_the_runtime_secret_path_once(monkeypatch):
 def test_first_provision_status_keys_are_pinned(monkeypatch):
     _calls, status, _workflow = run_saga(monkeypatch, owned_suffix=None)
     assert set(status) == PINNED_STATUS_KEYS
+
+
+def test_marked_for_deletion_runtime_secret_moves_an_owned_path(monkeypatch):
+    # Secrets Manager refuses writes to a secret scheduled for deletion, so an
+    # owned suffix must not pin the saga to it.
+    marked = models.TemporalRuntimeSecretCheckResult(
+        status={"phase": "Ready"},
+        runtime_secret_path=STABLE_PATH,
+        state="MarkedForDeletion",
+        exists=True,
+        rotate=True,
+    )
+    missing = models.TemporalRuntimeSecretCheckResult(
+        status={"phase": "Ready"},
+        runtime_secret_path=MINTED_PATH,
+        state="Missing",
+        exists=False,
+        rotate=True,
+    )
+    calls, _status, workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        sequenced_results={"check_temporal_runtime_secret": [marked, missing]},
+    )
+    checks = [
+        request for name, request in calls if name == "check_temporal_runtime_secret"
+    ]
+    assert [check.project.runtime_secret_path for check in checks] == [
+        STABLE_PATH,
+        MINTED_PATH,
+    ]
+    promote = next(
+        request
+        for name, request in calls
+        if name == "promote_temporal_runtime_credential"
+    )
+    assert promote.project.runtime_secret_path == MINTED_PATH
+    assert workflow._temporal_runtime_secret_suffix == MINTED_SUFFIX
+
+
+# --- region drift ------------------------------------------------------------
+
+
+REGION_DRIFT_TEARDOWN = [
+    "delete_temporal_cloud_api_key",
+    "delete_temporal_cloud_service_account",
+    "disable_temporal_cloud_namespace_delete_protection",
+    "delete_temporal_cloud_namespace",
+    "delete_temporal_cloud_runtime_secret",
+    "delete_temporal_cloud_mtls_ca_secret",
+]
+
+
+def test_region_drift_recreates_credentials_at_a_fresh_secret_path(monkeypatch):
+    drifted = models.TemporalCloudNamespaceResult(
+        status={
+            "phase": "RegionDrift",
+            "namespace": NAMESPACE,
+            "desiredRegion": "aws-ca-central-1",
+        },
+        namespace=NAMESPACE,
+        grpc_address=f"{NAMESPACE}.acct1.tmprl.cloud:7233",
+        auth_mode="apiKey",
+        created=False,
+        region="gcp-us-central1",
+    )
+    recreated = models.TemporalCloudNamespaceResult(
+        status={"phase": "Ready", "namespace": NAMESPACE},
+        namespace=NAMESPACE,
+        grpc_address=f"{NAMESPACE}.acct1.tmprl.cloud:7233",
+        auth_mode="apiKey",
+        created=True,
+        region="aws-ca-central-1",
+    )
+    deleted = models.TemporalCloudStatusResult(status={"phase": "Deleted"})
+    calls, _status, workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        sequenced_results={
+            "create_or_verify_temporal_cloud_namespace": [drifted, recreated],
+            **{name: [deleted] for name in REGION_DRIFT_TEARDOWN},
+        },
+    )
+    paths = {
+        name: request.project.runtime_secret_path
+        for name, request in calls
+        if getattr(request, "project", None) is not None
+    }
+    # The teardown schedules the old path for deletion...
+    assert paths["delete_temporal_cloud_runtime_secret"] == STABLE_PATH
+    # ...so everything after it writes credentials somewhere else.
+    for name in (
+        "check_temporal_runtime_secret",
+        "create_temporal_api_key_candidate_secret",
+        "promote_temporal_runtime_credential",
+        "mirror_temporal_runtime_secret",
+    ):
+        assert paths[name] == MINTED_PATH, name
+    assert workflow._temporal_runtime_secret_suffix == MINTED_SUFFIX
+    assert workflow._tc_plan.temporal_project.runtime_secret_path == MINTED_PATH
 
 
 # --- search attributes -------------------------------------------------------

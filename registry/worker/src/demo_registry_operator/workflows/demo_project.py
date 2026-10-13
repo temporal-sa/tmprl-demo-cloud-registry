@@ -1054,8 +1054,9 @@ class DemoProjectWorkflow:
         self,
         external_plan: Any,
     ) -> Any:
-        if self._temporal_runtime_secret_suffix is None:
-            self._temporal_runtime_secret_suffix = workflow.uuid4().hex[:12]
+        # Always mint: the old path may be scheduled for deletion in Secrets
+        # Manager, which refuses writes until the recovery window expires.
+        self._temporal_runtime_secret_suffix = workflow.uuid4().hex[:12]
         path = resources.temporal_secret_remote_path_with_suffix(
             external_plan.demo_project,
             self._temporal_runtime_secret_suffix,
@@ -1077,7 +1078,9 @@ class DemoProjectWorkflow:
         external_plan: Any,
         runtime_secret: external_resources.TemporalRuntimeSecretCheckResult,
     ) -> bool:
-        if runtime_secret.state not in {"Missing", "MarkedForDeletion"}:
+        if runtime_secret.state == "MarkedForDeletion":
+            return True
+        if runtime_secret.state != "Missing":
             return False
         if self._temporal_runtime_secret_suffix is not None:
             return False
@@ -1282,6 +1285,14 @@ class DemoProjectWorkflow:
                         state,
                         candidate_secret_token,
                     )
+                    # The teardown scheduled the runtime (and mTLS CA) secrets
+                    # for deletion, so the recreated namespace's credentials
+                    # move to a fresh path.
+                    external_plan = self._external_plan_with_new_runtime_secret_path(
+                        external_plan
+                    )
+                    context.plan = external_plan
+                    self._tc_plan = external_plan
                     await self._create_or_verify_temporal_cloud_namespace(
                         external_plan,
                         state,
