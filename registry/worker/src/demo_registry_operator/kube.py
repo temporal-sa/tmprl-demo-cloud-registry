@@ -1700,6 +1700,21 @@ def read_job(namespace: str, name: str) -> dict[str, Any] | None:
     return client.ApiClient().sanitize_for_serialization(job)
 
 
+def list_object_events(namespace: str, kind: str, name: str) -> list[dict[str, Any]]:
+    """Events about one object, oldest first, as event_diagnostic_summary dicts."""
+
+    client = _client_module()
+    load_kubernetes_config()
+    response = client.CoreV1Api().list_namespaced_event(
+        namespace,
+        field_selector=f"involvedObject.kind={kind},involvedObject.name={name}",
+        _request_timeout=(5, 30),
+    )
+    events = [event_diagnostic_summary(item) for item in getattr(response, "items", []) or []]
+    events.sort(key=lambda item: str(item.get("lastObservedAt") or ""))
+    return events
+
+
 def create_job(job: dict[str, Any]) -> dict[str, Any]:
     client = _client_module()
     load_kubernetes_config()

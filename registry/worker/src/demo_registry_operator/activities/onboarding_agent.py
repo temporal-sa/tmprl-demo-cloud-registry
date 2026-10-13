@@ -11,7 +11,9 @@
    (schema, validator, projects/README.md, example projects) from this
    operator's own image and the cluster.
 3. follows the pod's log for ``@@progress`` lines, reports them as heartbeat
-   details, and reads the ``@@result`` lines when the Job succeeds.
+   details, and reads the ``@@result`` lines when the Job succeeds. If the
+   Job still can't create its pod after a minute (a quota or admission
+   rejection), the run fails with the Job's ``FailedCreate`` reason.
 
 The key never leaves this activity except into the Secret, so it is not in
 workflow history. The Job is named after the run, so a retried attempt
@@ -32,7 +34,7 @@ import json
 import os
 import secrets
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -78,6 +80,9 @@ KEY_POLICY = {
 JOB_DEADLINE_SECONDS = 25 * 60
 JOB_TTL_SECONDS = 10 * 60
 POLL_SECONDS = 5
+# The Job controller reports a rejected pod (quota, admission) within seconds
+# and then keeps retrying; give it this long before failing the run on it.
+POD_CREATE_GRACE_SECONDS = 60
 AGENT_CONTAINER = "agent"
 # Deployed projects the agent copies patterns from, one per feature.
 EXAMPLE_PROJECTS = (
@@ -140,7 +145,14 @@ def follow_job(namespace: str, name: str) -> AgentRunResult:
         job = kube.read_job(namespace, name)
         if job is None:
             raise errors.non_retryable_error(f"Agent job {name} disappeared.")
-        log = job_log(namespace, name)
+        pods = kube.list_pods(namespace, label_selector=f"job-name={name}")
+        if not pods and (reason := pod_create_failure(namespace, name, job)):
+            raise errors.non_retryable_error("The agent pod couldn't start: " + reason)
+        log = (
+            kube.read_pod_log(namespace, pods[0]["name"], container=AGENT_CONTAINER)
+            if pods
+            else ""
+        )
         progress = last_progress(log) or progress
         activity.heartbeat({"progress": progress, "job": name})
         status = job.get("status") or {}
@@ -233,6 +245,12 @@ def job_manifest(
                                 "allowPrivilegeEscalation": False,
                                 "readOnlyRootFilesystem": True,
                                 "capabilities": {"drop": ["ALL"], "add": ["NET_ADMIN"]},
+                            },
+                            # The namespace quota rejects pods whose containers
+                            # don't all set requests and limits.
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "32Mi"},
+                                "limits": {"cpu": "200m", "memory": "64Mi"},
                             },
                         }
                     ],
@@ -355,11 +373,19 @@ def request_bundle(request: AgentRunRequest) -> dict[str, Any]:
     }
 
 
-def job_log(namespace: str, name: str) -> str:
-    pods = kube.list_pods(namespace, label_selector=f"job-name={name}")
-    if not pods:
-        return ""
-    return kube.read_pod_log(namespace, pods[0]["name"], container=AGENT_CONTAINER)
+def pod_create_failure(namespace: str, name: str, job: dict[str, Any]) -> str | None:
+    """Why the Job can't create its pod, once it has had time to try."""
+
+    created = (job.get("metadata") or {}).get("creationTimestamp")
+    if not created:
+        return None
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(str(created))
+    if age.total_seconds() < POD_CREATE_GRACE_SECONDS:
+        return None
+    for event in reversed(kube.list_object_events(namespace, "Job", name)):
+        if event.get("type") == "Warning" and event.get("reason") == "FailedCreate":
+            return str(event.get("message") or "FailedCreate")
+    return None
 
 
 def tagged_lines(log: str, tag: str) -> list[str]:
