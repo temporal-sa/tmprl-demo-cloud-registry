@@ -48,6 +48,10 @@ def test_job_runs_without_credentials_behind_the_firewall():
         "add": ["NET_ADMIN"],
     }
     assert "iptables -P OUTPUT DROP" in firewall["command"][-1]
+    # The namespace ResourceQuota rejects any pod with a container missing these.
+    for each in pod["initContainers"] + pod["containers"]:
+        for kind in ("requests", "limits"):
+            assert set(each["resources"][kind]) == {"cpu", "memory"}, each["name"]
     [container] = pod["containers"]
     assert container["securityContext"] == {
         "allowPrivilegeEscalation": False,
@@ -205,9 +209,21 @@ def test_prompt_is_empty_when_nothing_needs_changing():
 class FakeCluster:
     """Just enough of kube for run_onboarding_agent."""
 
-    def __init__(self, *, log: str, status: dict, existing: bool = False):
+    def __init__(
+        self,
+        *,
+        log: str,
+        status: dict,
+        existing: bool = False,
+        pods: list | None = None,
+        created: str = "2026-01-01T00:00:00Z",
+        events: list | None = None,
+    ):
         self.log = log
         self.status = status
+        self.pods = [{"name": "pod-1"}] if pods is None else pods
+        self.created = created
+        self.events = events or []
         self.jobs = {}
         self.secrets = []
         self.deleted = []
@@ -219,7 +235,12 @@ class FakeCluster:
             return None
         if self.jobs:
             return {
-                "metadata": {"name": name, "uid": "uid", "annotations": {agent.PARTICIPANT_ANNOTATION: "run#1/1"}},
+                "metadata": {
+                    "name": name,
+                    "uid": "uid",
+                    "creationTimestamp": self.created,
+                    "annotations": {agent.PARTICIPANT_ANNOTATION: "run#1/1"},
+                },
                 "status": self.status,
             }
         return None
@@ -237,7 +258,10 @@ class FakeCluster:
         return "deleting"
 
     def list_pods(self, namespace, label_selector):
-        return [{"name": "pod-1"}]
+        return self.pods
+
+    def list_object_events(self, namespace, kind, name):
+        return self.events
 
     def read_pod_log(self, namespace, name, container):
         return self.log
@@ -246,7 +270,7 @@ class FakeCluster:
 @pytest.fixture
 def run(monkeypatch):
     def setup(cluster: FakeCluster):
-        for attribute in ("read_job", "create_job", "create_secret", "delete_job", "list_pods", "read_pod_log"):
+        for attribute in ("read_job", "create_job", "create_secret", "delete_job", "list_pods", "read_pod_log", "list_object_events"):
             monkeypatch.setattr(agent.kube, attribute, getattr(cluster, attribute))
         minted, revoked, beats = [], [], []
         monkeypatch.setenv(agent.AGENT_IMAGE_ENV, "img:1")
@@ -310,6 +334,36 @@ def test_failed_agent_is_not_retried_and_reports_its_error(run):
 
     assert raised.value.non_retryable
     assert revoked == ["run#1/1"]
+
+
+QUOTA_EVENT = {
+    "type": "Warning",
+    "reason": "FailedCreate",
+    "message": 'pods "x" is forbidden: failed quota: onboarding-agents: must specify limits.cpu for: firewall',
+}
+
+
+def test_unschedulable_pod_fails_fast_with_the_job_event(run):
+    cluster = FakeCluster(log="", status={}, pods=[], events=[QUOTA_EVENT])
+    _, revoked, _ = run(cluster)
+
+    with pytest.raises(ApplicationError, match="couldn't start: .*failed quota") as raised:
+        agent.run_onboarding_agent(REQUEST)
+
+    assert raised.value.non_retryable
+    assert cluster.deleted == [agent.job_name("run#1")]
+    assert revoked == ["run#1/1"]
+
+
+def test_new_job_gets_a_grace_period_before_failing_on_events(run, monkeypatch):
+    # A Job created just now: the rejection may still clear, so keep polling.
+    now = agent.datetime.now(agent.timezone.utc).isoformat()
+    cluster = FakeCluster(log="", status={}, pods=[], created=now, events=[QUOTA_EVENT])
+    run(cluster)
+    monkeypatch.setattr(agent.activity, "is_cancelled", lambda: True)
+
+    with pytest.raises(CancelledError):
+        agent.run_onboarding_agent(REQUEST)
 
 
 def test_cancel_deletes_the_job(run, monkeypatch):
