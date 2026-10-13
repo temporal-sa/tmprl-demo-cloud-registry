@@ -340,8 +340,15 @@ def request_bundle(request: AgentRunRequest) -> dict[str, Any]:
     root = Path(validator.__file__).resolve().parents[1]
     readme = root / "projects" / "README.md"
     examples = {}
+    subdomains = set()
     for project in kube.list_demo_projects():
         project_name = (project.get("metadata") or {}).get("name")
+        labels = resources.metadata_labels(project)
+        if (
+            labels.get(resources.CANARY_LABEL) != "true"
+            and not resources.is_onboarding_preview(project)
+        ):
+            subdomains.add(resources.project_host(project).split(".", 1)[0])
         if project_name in EXAMPLE_PROJECTS:
             examples[project_name] = yaml.safe_dump(
                 {
@@ -369,6 +376,9 @@ def request_bundle(request: AgentRunRequest) -> dict[str, Any]:
             "validator": Path(validator.__file__).read_text(),
             "projects_readme": readme.read_text() if readme.exists() else "",
             "examples": examples,
+            # The validator in the pod only sees the draft, so the agent needs
+            # these to pick a subdomain no other demo uses.
+            "taken_subdomains": sorted(subdomains),
         },
     }
 

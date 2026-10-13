@@ -100,6 +100,7 @@ catalog is in {context}:
   Temporal code itself.
 - scripts/validate_projects.py is the validator CI runs. Check your draft with:
   python3 {context}/scripts/validate_projects.py {draft}
+- taken-subdomains.txt lists the subdomains other demos already use.
 
 Write the DemoProject to {draft}. Base every field on what the repo actually
 does: which processes it runs, which Dockerfiles build them, which ports they
@@ -112,6 +113,16 @@ their task queue is known: set autoscaling.taskQueue on each Kubernetes worker
 to the queue it polls (unless a literal TEMPORAL_TASK_QUEUE env already names
 it), and only set replicas or other autoscaling fields when the demo needs
 them. Never put a secret value in the YAML. Keep the validator passing.
+
+The demo is served at <ingress.subdomain>.tmprl-demo.cloud, so choose the
+subdomain for that URL rather than copying the repo or project name. Drop words
+the domain already says, like "temporal" and "demo": for the repo
+temporal-demo-expense-approval, use "expense-approval", which serves
+expense-approval.tmprl-demo.cloud. Keep it short and specific
+to what the demo shows, and different from every subdomain in
+taken-subdomains.txt; if the obvious one is taken, add the distinguishing
+detail (the SDK language, the use case) rather than a number. It must be a DNS
+label and must not start with "pv-".
 
 Where the repo itself would need to change to run in the catalog (for example a
 hardcoded task queue, a fixed workflow ID shared by every browser, localhost
@@ -171,6 +182,9 @@ def write_context(request: dict[str, Any], root: Path) -> None:
     }
     for name, text in context.get("examples", {}).items():
         files[f"projects/demo/{name}.yaml"] = text
+    files["taken-subdomains.txt"] = "".join(
+        f"{subdomain}\n" for subdomain in context.get("taken_subdomains", [])
+    )
     for relative, text in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
