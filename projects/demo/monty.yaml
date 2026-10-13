@@ -55,7 +55,11 @@ spec:
         versioning:
           enabled: true
           deploymentName: monty
-      replicas: 1
+      # Scale-to-zero canary for versioned (PINNED) workers. The queue is
+      # TASK_QUEUE in temporal-agent-harness examples/monty/workflow.py.
+      autoscaling:
+        taskQueue: monty-dynamic-agent
+        minReplicas: 0
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
       secrets: [gemini]
       env:

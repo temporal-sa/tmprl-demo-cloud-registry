@@ -138,8 +138,9 @@ spec:
     # an Activity rather than in the ADK web process.
     worker:
       build: app
-      replicas: 1
       worker: true
+      autoscaling:
+        taskQueue: agentic-gateway
       command: [python, worker.py]
       # GOOGLE_API_KEY lands here and nowhere else. TemporalSessionProxyAgent, in
       # the adk-web pod, makes no model call at all: it starts a workflow and
@@ -183,8 +184,9 @@ spec:
     # and Nexus target task queues must be served by unversioned workers anyway.
     security-worker:
       build: app
-      replicas: 1
       worker: true
+      autoscaling:
+        taskQueue: security-tq
       temporalNamespace: security
       command: [python, -m, security_scan.worker]
       env:

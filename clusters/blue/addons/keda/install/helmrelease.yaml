@@ -1,0 +1,52 @@
+# KEDA scales demo workers on Temporal task-queue backlog using its built-in
+# `temporal` scaler, which queries Temporal Cloud directly over gRPC with the
+# demo's runtime API key. No Prometheus is involved. KEDA registers the
+# external.metrics.k8s.io APIService, so prometheus-adapter must never be
+# installed alongside it.
+#
+# 2.21.0 is required: 2.20 added workerDeploymentName/workerDeploymentBuildId
+# (per-version scaling via the worker controller's WorkerResourceTemplate) and
+# 2.21 removed the old buildId/selectAllActive/selectUnversioned fields.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: keda
+  namespace: tmprl-dem-cld-keda
+spec:
+  chart:
+    spec:
+      chart: keda
+      sourceRef:
+        kind: HelmRepository
+        name: keda
+        namespace: flux-system
+      version: 2.21.0
+  interval: 30m
+  releaseName: keda
+  targetNamespace: tmprl-dem-cld-keda
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  driftDetection:
+    mode: enabled
+  values:
+    resources:
+      operator:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 1000Mi
+      metricServer:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 1000Mi
+      webhooks:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 512Mi

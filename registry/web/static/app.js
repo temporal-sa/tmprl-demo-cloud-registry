@@ -2803,7 +2803,11 @@ function componentCards(doc) {
           "Temporal worker",
           `${pointer}/worker`,
           component.worker,
-          (on) => setIn(component, ["worker"], on ? true : undefined),
+          (on) => {
+            setIn(component, ["worker"], on ? true : undefined);
+            if (!on) delete component.autoscaling;
+            renderOnboarding();
+          },
           { disabled: workerIsObject, hint: workerIsObject ? "Worker Versioning is configured in YAML." : null }
         ),
         checkControl("Starts or queries workflows (not a worker)", `${pointer}/temporalAccess`, component.temporalAccess, (on) =>
@@ -2813,6 +2817,7 @@ function componentCards(doc) {
           setIn(component, ["temporalProxy"], on ? { enabled: true } : undefined)
         )
       ),
+      component.worker ? autoscalingFields(component, pointer) : null,
       el("button", {
         type: "button",
         class: "btn btn-quiet btn-sm",
@@ -2844,6 +2849,74 @@ function componentCards(doc) {
         renderOnboarding();
       },
     })
+  );
+}
+
+// Worker autoscaling (KEDA, on task-queue backlog). The common knobs live
+// here; queueTypes, targetQueueSize and cooldownPeriod stay YAML-only.
+function autoscalingFields(component, pointer) {
+  const base = `${pointer}/autoscaling`;
+  const fixed = component.replicas !== undefined;
+  const disabled = getIn(component, ["autoscaling", "enabled"]) === false;
+  const setNumber = (key) => (value) =>
+    setIn(component, ["autoscaling", key], value === "" ? undefined : Number(value));
+  if (fixed) {
+    return el("p", {
+      class: "onboard-hint",
+      dataset: { pointer: `${pointer}/replicas` },
+      text: `Fixed at ${component.replicas} replica(s) in YAML; remove replicas to autoscale.`,
+    });
+  }
+  return el(
+    "div",
+    { class: "onboard-card-fields", dataset: { pointer: base } },
+    checkControl(
+      "Autoscale on task-queue backlog",
+      `${base}/enabled`,
+      !disabled,
+      (on) => {
+        setIn(component, ["autoscaling"], on ? undefined : { enabled: false });
+        renderOnboarding();
+      },
+      { hint: "Off keeps a single fixed replica." }
+    ),
+    disabled
+      ? null
+      : field(
+          "Task queue",
+          `${base}/taskQueue`,
+          textControl(
+            getIn(component, ["autoscaling", "taskQueue"]),
+            (value) => setIn(component, ["autoscaling", "taskQueue"], value.trim() || undefined),
+            { placeholder: "from TEMPORAL_TASK_QUEUE" }
+          ),
+          "The queue this worker polls. Defaults to a literal TEMPORAL_TASK_QUEUE env or the crashable base task queue; with none, the worker stays at 1 replica."
+        ),
+    disabled
+      ? null
+      : field(
+          "Min replicas",
+          `${base}/minReplicas`,
+          textControl(getIn(component, ["autoscaling", "minReplicas"]), setNumber("minReplicas"), {
+            type: "number",
+            min: 0,
+            placeholder: "1",
+          }),
+          "0 scales to zero when idle; the first task then waits for a pod to start."
+        ),
+    disabled
+      ? null
+      : field(
+          "Max replicas",
+          `${base}/maxReplicas`,
+          textControl(getIn(component, ["autoscaling", "maxReplicas"]), setNumber("maxReplicas"), {
+            type: "number",
+            min: 1,
+            max: 20,
+            placeholder: "10",
+          }),
+          "Queue types, target backlog and cooldown are YAML-only."
+        )
   );
 }
 

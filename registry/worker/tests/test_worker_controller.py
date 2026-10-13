@@ -1850,3 +1850,241 @@ def test_canary_cleanup_wait_times_out_on_remaining_resources(monkeypatch):
     assert result["phase"] == "CleanupFailed"
     assert result["ok"] is False
     assert result["waitingOn"] == ["namespace"]
+
+
+def autoscaled(component: dict, **autoscaling) -> dict:
+    component["env"].append({"name": "TEMPORAL_TASK_QUEUE", "value": "money-transfer"})
+    if autoscaling:
+        component["autoscaling"] = autoscaling
+    return component
+
+
+def test_unversioned_worker_defaults_to_keda_scaled_object_without_replicas():
+    demo_project = project(worker=True)
+    autoscaled(demo_project["spec"]["components"]["worker"])
+
+    rendered = deployment_resources(demo_project, images(), namespace="runtime")
+    deployment = next(
+        item for item in rendered
+        if item["kind"] == "Deployment" and item["metadata"]["name"].startswith("worker-")
+    )
+    scaled_object = next(item for item in rendered if item["kind"] == "ScaledObject")
+
+    assert "replicas" not in deployment["spec"]
+    assert deployment["metadata"]["annotations"][
+        "registry.tmprl-demo.cloud/autoscaled"
+    ] == "true"
+    assert scaled_object["apiVersion"] == "keda.sh/v1alpha1"
+    assert scaled_object["metadata"]["name"] == deployment["metadata"]["name"]
+    assert scaled_object["metadata"]["namespace"] == "runtime"
+    assert scaled_object["spec"]["scaleTargetRef"] == {
+        "name": deployment["metadata"]["name"]
+    }
+    assert scaled_object["spec"]["minReplicaCount"] == 1
+    assert scaled_object["spec"]["maxReplicaCount"] == 10
+    trigger = scaled_object["spec"]["triggers"][0]
+    assert trigger["type"] == "temporal"
+    assert trigger["metadata"] == {
+        "endpointFromEnv": "TEMPORAL_ADDRESS",
+        "namespaceFromEnv": "TEMPORAL_NAMESPACE",
+        "apiKeyFromEnv": "TEMPORAL_API_KEY",
+        "taskQueue": "money-transfer",
+        "queueTypes": "workflow,activity",
+        "targetQueueSize": "5",
+        "activationTargetQueueSize": "0",
+    }
+    # Non-worker components keep a fixed count and get no autoscaler.
+    api = next(item for item in rendered if item["metadata"]["name"].startswith("api-"))
+    assert api["spec"]["replicas"] == 1
+    assert sum(item["kind"] == "ScaledObject" for item in rendered) == 1
+
+
+def test_worker_without_known_task_queue_or_with_replicas_stays_fixed():
+    unknown_queue = project(worker=True)
+    pinned = project(worker=True)
+    autoscaled(pinned["spec"]["components"]["worker"])
+    pinned["spec"]["components"]["worker"]["replicas"] = 2
+    disabled = project(worker=True)
+    autoscaled(disabled["spec"]["components"]["worker"], enabled=False)
+
+    for demo_project, replicas in ((unknown_queue, 1), (pinned, 2), (disabled, 1)):
+        rendered = deployment_resources(demo_project, images())
+        worker = next(
+            item for item in rendered if item["metadata"]["name"].startswith("worker-")
+        )
+        assert worker["spec"]["replicas"] == replicas
+        assert not any(item["kind"] == "ScaledObject" for item in rendered)
+
+
+def test_crashable_base_task_queue_resolves_worker_queue_and_allows_scale_to_zero():
+    demo_project = project(worker=True)
+    demo_project["spec"]["registry"] = {
+        "crashable": {
+            "enabled": True,
+            "taskQueueEnv": "TEMPORAL_TASK_QUEUE",
+            "baseTaskQueue": "banking",
+        }
+    }
+    demo_project["spec"]["components"]["worker"]["autoscaling"] = {
+        "minReplicas": 0,
+        "maxReplicas": 3,
+        "cooldownPeriod": 120,
+    }
+
+    rendered = deployment_resources(demo_project, images())
+    scaled_object = next(item for item in rendered if item["kind"] == "ScaledObject")
+
+    assert scaled_object["spec"]["minReplicaCount"] == 0
+    assert scaled_object["spec"]["maxReplicaCount"] == 3
+    assert scaled_object["spec"]["cooldownPeriod"] == 120
+    assert scaled_object["spec"]["triggers"][0]["metadata"]["taskQueue"] == "banking"
+
+
+def test_versioned_worker_renders_worker_resource_template_with_injection_sentinels():
+    demo_project = project(worker=versioned_worker())
+    autoscaled(demo_project["spec"]["components"]["worker"], minReplicas=0)
+
+    rendered = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+    worker_deployment = next(
+        item for item in rendered if item["kind"] == "WorkerDeployment"
+    )
+    template = next(
+        item for item in rendered if item["kind"] == "WorkerResourceTemplate"
+    )
+
+    assert worker_deployment["spec"]["replicas"] is None
+    assert rendered.index(template) > rendered.index(worker_deployment)
+    assert template["apiVersion"] == "temporal.io/v1alpha1"
+    assert template["metadata"]["name"] == "money-transfer"
+    assert (
+        template["metadata"]["namespace"]
+        == worker_deployment["metadata"]["namespace"]
+    )
+    assert template["spec"]["workerDeploymentRef"] == {"name": "money-transfer"}
+    scaled_object = template["spec"]["template"]
+    assert scaled_object["kind"] == "ScaledObject"
+    assert "metadata" not in scaled_object
+    assert scaled_object["spec"]["scaleTargetRef"] == {}
+    assert scaled_object["spec"]["minReplicaCount"] == 0
+    metadata = scaled_object["spec"]["triggers"][0]["metadata"]
+    assert metadata["endpoint"] == (
+        "tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233"
+    )
+    for injected in ("namespace", "workerDeploymentName", "workerDeploymentBuildId"):
+        assert metadata[injected] == ""
+    assert metadata["apiKeyFromEnv"] == "TEMPORAL_API_KEY"
+
+
+def test_fixed_versioned_worker_keeps_replicas_and_no_template():
+    demo_project = project(worker=versioned_worker())
+
+    rendered = runtime_workload_resources(
+        demo_project,
+        images(),
+        include_routes=False,
+        external_resources=external_resources(),
+    )
+
+    worker_deployment = next(
+        item for item in rendered if item["kind"] == "WorkerDeployment"
+    )
+    assert worker_deployment["spec"]["replicas"] == 1
+    assert not any(item["kind"] == "WorkerResourceTemplate" for item in rendered)
+
+
+def test_containers_get_default_resource_requests_and_declared_overrides():
+    demo_project = project(worker=True)
+    demo_project["spec"]["components"]["worker"]["resources"] = {
+        "requests": {"memory": "1Gi"},
+        "limits": {"memory": "2Gi"},
+    }
+
+    rendered = deployment_resources(demo_project, images())
+    containers = {
+        item["metadata"]["name"].split("-")[0]: item["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        for item in rendered
+        if item["kind"] == "Deployment"
+    }
+
+    assert containers["api"]["resources"] == {
+        "requests": {"cpu": "100m", "memory": "256Mi"}
+    }
+    assert containers["worker"]["resources"] == {
+        "requests": {"cpu": "100m", "memory": "1Gi"},
+        "limits": {"memory": "2Gi"},
+    }
+
+
+def test_prune_stale_autoscalers_deletes_only_unrendered_project_autoscalers(
+    monkeypatch,
+):
+    demo_project = project(worker=True)
+    autoscaled(demo_project["spec"]["components"]["worker"])
+    rendered = deployment_resources(demo_project, images(), namespace="runtime")
+    kept = next(item for item in rendered if item["kind"] == "ScaledObject")
+    listed = [
+        {"kind": "ScaledObject", "metadata": {"name": kept["metadata"]["name"]}},
+        {"kind": "ScaledObject", "metadata": {"name": "worker-old"}},
+        {"kind": "WorkerResourceTemplate", "metadata": {"name": "money-transfer"}},
+    ]
+    selectors = []
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube,
+        "list_autoscalers",
+        lambda namespace, label_selector=None: selectors.append(
+            (namespace, label_selector)
+        )
+        or listed,
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete_autoscaler",
+        lambda namespace, kind, name: deleted.append((namespace, kind, name)),
+    )
+
+    reconcile.prune_stale_autoscalers(demo_project, rendered)
+
+    assert selectors == [
+        ("runtime", "platform.temporal.io/project=banking-money-transfer")
+    ]
+    assert deleted == [
+        ("runtime", "ScaledObject", "worker-old"),
+        ("runtime", "WorkerResourceTemplate", "money-transfer"),
+    ]
+
+
+def test_registry_operator_rbac_can_manage_keda_autoscalers():
+    for color in ("blue", "green"):
+        manifests = list(
+            yaml.safe_load_all(
+                (
+                    ROOT / f"clusters/{color}/bootstrap/registry-operator/rbac.yaml"
+                ).read_text()
+            )
+        )
+        cluster_role = next(
+            item
+            for item in manifests
+            if item
+            and item["kind"] == "ClusterRole"
+            and item["metadata"]["name"] == "registry-operator"
+        )
+        keda_rule = next(
+            rule for rule in cluster_role["rules"] if rule["apiGroups"] == ["keda.sh"]
+        )
+        temporal_rule = next(
+            rule
+            for rule in cluster_role["rules"]
+            if rule["apiGroups"] == ["temporal.io"]
+        )
+        assert "scaledobjects" in keda_rule["resources"]
+        assert set(keda_rule["verbs"]) >= {"create", "delete", "get", "list", "patch"}
+        assert "workerresourcetemplates" in temporal_rule["resources"]

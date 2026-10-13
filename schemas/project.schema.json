@@ -233,6 +233,12 @@
         },
         "worker": {
           "$ref": "#/$defs/worker"
+        },
+        "autoscaling": {
+          "$ref": "#/$defs/autoscaling"
+        },
+        "resources": {
+          "$ref": "#/$defs/containerResources"
         }
       },
       "allOf": [{"if": {"properties": {"isolatedExecutor": {"const": true}}, "required": ["isolatedExecutor"]}, "then": {"properties": {"worker": false, "temporalAccess": {"const": false}, "automountServiceAccountToken": {"const": false}, "awsIamRoleArn": false, "temporalProxy": false, "temporalMtls": false, "serverless": false, "secrets": {"maxItems": 0}}}}]
@@ -1031,6 +1037,43 @@
           }
         }
       ]
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "KEDA temporal-scaler autoscaling for a Kubernetes worker. Workers without this block (and without replicas) default to 1..10 when a task queue resolves from env TEMPORAL_TASK_QUEUE; otherwise they stay at a fixed 1 replica. Mutually exclusive with replicas.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true},
+        "minReplicas": {"type": "integer", "minimum": 0, "default": 1, "description": "0 enables scale-to-zero; the first task after idling waits for a pod to start."},
+        "maxReplicas": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+        "taskQueue": {"type": "string", "minLength": 1, "description": "Task queue whose backlog drives scaling. Defaults to the literal value of env TEMPORAL_TASK_QUEUE."},
+        "queueTypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["workflow", "activity"]},
+          "default": ["workflow", "activity"]
+        },
+        "targetQueueSize": {"type": "integer", "minimum": 1, "default": 5, "description": "Backlog per replica."},
+        "cooldownPeriod": {"type": "integer", "minimum": 30, "default": 300, "description": "Seconds of no backlog before scaling to zero (only used when minReplicas is 0)."}
+      }
+    },
+    "containerResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Main-container requests/limits. Requests default to cpu 100m / memory 256Mi so cluster-autoscaler can see replicas KEDA adds.",
+      "properties": {
+        "requests": {"$ref": "#/$defs/resourceQuantities"},
+        "limits": {"$ref": "#/$defs/resourceQuantities"}
+      }
+    },
+    "resourceQuantities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": "string", "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$"},
+        "memory": {"type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi)?$"}
+      }
     },
     "workerVersioning": {
       "type": "object",

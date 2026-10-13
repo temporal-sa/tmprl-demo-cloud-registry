@@ -437,6 +437,50 @@ Rules:
   generic component env when the app needs an env-driven value. mTLS is
   currently blocked with Worker Controller versioning until the Connection CRD
   supports client certificate refs.
+- Kubernetes workers autoscale with KEDA on Temporal task-queue backlog, for
+  both `worker: true` and versioned workers. There is no Prometheus involved;
+  KEDA's `temporal` scaler queries Temporal Cloud with the worker's own API key.
+  - **Default:** a worker with no `autoscaling` block and no `replicas` scales
+    between 1 and 10 replicas, provided its task queue is known. Otherwise it
+    stays at 1 replica.
+  - **Task queue:** the platform takes the first of these that is set:
+    1. `autoscaling.taskQueue`;
+    2. a literal `TEMPORAL_TASK_QUEUE` env value;
+    3. for crashable demos, the literal value of the
+       `registry.crashable.taskQueueEnv` variable;
+    4. `registry.crashable.baseTaskQueue`.
+  - **`replicas`:** pins a fixed count and cannot be combined with
+    `autoscaling`.
+  - **Versioned workers:** each Worker Deployment Version scales on its own
+    backlog. The Worker Controller renders one ScaledObject per version from a
+    WorkerResourceTemplate.
+  - **Not supported:** autoscaling needs API-key auth and cannot be used with
+    `temporalProxy` components.
+  - **Workspaces:** crashable and isolated workspace clones always run fixed
+    replicas.
+
+  ```yaml
+  components:
+    worker:
+      build: app
+      worker: true
+      autoscaling:
+        taskQueue: orders          # or a literal TEMPORAL_TASK_QUEUE env value
+        minReplicas: 0             # default 1; 0 = scale to zero when idle
+        maxReplicas: 5             # default 10, max 20
+        # queueTypes: [workflow, activity]   # default both
+        # targetQueueSize: 5                 # backlog per replica
+        # cooldownPeriod: 300                # idle seconds before scaling to zero
+      resources:                   # optional; requests default to 100m / 256Mi
+        requests: {cpu: 250m, memory: 512Mi}
+  ```
+
+  `minReplicas: 0` saves the idle pod, but the first task after an idle period
+  waits for a pod to start (KEDA polls every 15s, plus image pull and worker
+  startup). Keep the default of 1 for demos that must answer instantly. Every
+  main container gets resource requests (default `cpu: 100m`,
+  `memory: 256Mi`), so cluster-autoscaler can add nodes for the replicas KEDA
+  adds. Override them with `resources` when a worker needs more.
 - For non-versioned workers and API components, the platform injects standard
   Temporal env vars. API-key projects receive `TEMPORAL_ADDRESS`,
   `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, and `TEMPORAL_TLS`. mTLS projects
