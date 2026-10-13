@@ -42,7 +42,6 @@ const ICONS = {
   close: '<path d="m5 5 10 10M15 5 5 15"/>',
   arrow: '<path d="M4 10h12M11 5l5 5-5 5"/>',
   sparkle: '<path d="M10 1c.8 5.2 3.8 8.2 9 9-5.2.8-8.2 3.8-9 9-.8-5.2-3.8-8.2-9-9 5.2-.8 8.2-3.8 9-9Z"/>',
-  terminal: '<rect x="2.5" y="3.5" width="15" height="13"/><path d="m6 8 2.5 2L6 12m4.5 0H14"/>',
 };
 
 const SPARKLE_PATH =
@@ -1598,13 +1597,10 @@ function renderWorkshopCard(members) {
       )
     : el("span", { class: "launch-label", text: "No track published yet" });
 
-  const workshopIcon = icon("terminal");
-  workshopIcon.setAttribute("class", "workshop-icon");
   const resources = courseResources(members);
   return el(
     "article",
     { class: "workshop" },
-    workshopIcon,
     el("p", {
       class: "eyebrow",
       text: launchable.length
