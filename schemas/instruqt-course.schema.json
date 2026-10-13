@@ -222,6 +222,9 @@
         "temporalSdks": {
           "$ref": "#/$defs/catalogLabels"
         },
+        "links": {
+          "$ref": "#/$defs/catalogLinks"
+        },
         "resources": {
           "type": "array",
           "items": {
@@ -229,6 +232,72 @@
           }
         }
       }
+    },
+    "catalogLinks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "speakerNotes": {
+          "$ref": "#/$defs/catalogLink"
+        },
+        "slideDeck": {
+          "$ref": "#/$defs/catalogLink"
+        },
+        "runbook": {
+          "$ref": "#/$defs/catalogLink"
+        },
+        "goldenPath": {
+          "$ref": "#/$defs/catalogLink"
+        },
+        "externalRecording": {
+          "$ref": "#/$defs/catalogLink"
+        },
+        "additional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/catalogAdditionalLink"
+          }
+        }
+      }
+    },
+    "catalogLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "label": {
+          "$ref": "#/$defs/catalogLabel"
+        }
+      }
+    },
+    "catalogAdditionalLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "audience"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/catalogLabel"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "audience": {
+          "type": "string",
+          "enum": ["technical", "nonTechnical"]
+        }
+      }
+    },
+    "catalogLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://[^\\s]+$"
     },
     "catalogLabels": {
       "type": "array",

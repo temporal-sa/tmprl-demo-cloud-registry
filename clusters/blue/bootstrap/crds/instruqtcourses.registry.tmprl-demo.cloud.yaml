@@ -239,6 +239,90 @@ spec:
                         type: string
                         minLength: 1
                         maxLength: 80
+                    links:
+                      type: object
+                      properties:
+                        speakerNotes:
+                          type: object
+                          required:
+                            - url
+                          properties:
+                            url:
+                              type: string
+                              pattern: "^https://[^\\s]+$"
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 80
+                        slideDeck:
+                          type: object
+                          required:
+                            - url
+                          properties:
+                            url:
+                              type: string
+                              pattern: "^https://[^\\s]+$"
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 80
+                        runbook:
+                          type: object
+                          required:
+                            - url
+                          properties:
+                            url:
+                              type: string
+                              pattern: "^https://[^\\s]+$"
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 80
+                        goldenPath:
+                          type: object
+                          required:
+                            - url
+                          properties:
+                            url:
+                              type: string
+                              pattern: "^https://[^\\s]+$"
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 80
+                        externalRecording:
+                          type: object
+                          required:
+                            - url
+                          properties:
+                            url:
+                              type: string
+                              pattern: "^https://[^\\s]+$"
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 80
+                        additional:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - label
+                              - url
+                              - audience
+                            properties:
+                              label:
+                                type: string
+                                minLength: 1
+                                maxLength: 80
+                              url:
+                                type: string
+                                pattern: "^https://[^\\s]+$"
+                              audience:
+                                type: string
+                                enum:
+                                  - technical
+                                  - nonTechnical
                     resources:
                       type: array
                       items:

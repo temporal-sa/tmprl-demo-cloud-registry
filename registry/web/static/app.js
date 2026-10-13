@@ -702,13 +702,13 @@ function presenterAssets(demo) {
   ];
 }
 
-// Catalog cards give every asset a fixed slot so each one sits in the same
-// place on every card; missing assets stay as dimmed placeholders.
-function cardAssets(demo) {
+// Catalog and workshop cards give every asset a fixed slot so each one sits in
+// the same place on every card; missing assets stay as dimmed placeholders.
+function cardAssets(assets) {
   return el(
     "div",
     { class: "card-assets", role: "list", "aria-label": "Presenter assets" },
-    ...presenterAssets(demo)
+    ...assets
       .filter(([, short]) => short)
       .map(([label, short, url]) =>
         url
@@ -790,7 +790,7 @@ function renderDemoCard(demo) {
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
-    el("div", { class: "card-foot" }, cardAssets(demo), sdkList(demo.sdks), cardActions(demo))
+    el("div", { class: "card-foot" }, cardAssets(presenterAssets(demo)), sdkList(demo.sdks), cardActions(demo))
   );
 }
 
@@ -1524,17 +1524,38 @@ function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+// Extra links listed under the launch buttons: catalog.resources plus
+// catalog.links.additional, once per URL across the group's tracks.
 function courseResources(members) {
   const seen = new Set();
   const resources = [];
   for (const course of members) {
-    for (const resource of Array.isArray(course.resources) ? course.resources : []) {
+    const additional = Array.isArray(course.links?.additional) ? course.links.additional : [];
+    for (const resource of [
+      ...(Array.isArray(course.resources) ? course.resources : []),
+      ...additional,
+    ]) {
       if (!resource || !resource.url || seen.has(resource.url)) continue;
       seen.add(resource.url);
       resources.push(resource);
     }
   }
   return resources;
+}
+
+// The same presenter-asset slots as demo cards. Language variants of one
+// workshop usually share a deck or recording, so each slot takes the first
+// track in the group that sets it, starting with the representative.
+function workshopAssets(representative, members) {
+  const ordered = [representative, ...members.filter((course) => course !== representative)];
+  const link = (key) => ordered.map((course) => course.links?.[key]?.url).find(Boolean);
+  return [
+    ["Speaker notes", "Notes", link("speakerNotes")],
+    ["Slide deck", "Deck", link("slideDeck")],
+    ["Golden path recording", "Golden path", link("goldenPath")],
+    ["External recording", "Recording", link("externalRecording")],
+    ["Runbook", "Runbook", link("runbook")],
+  ];
 }
 
 function renderWorkshopCard(members) {
@@ -1597,6 +1618,7 @@ function renderWorkshopCard(members) {
     }),
     sdkList(sdks),
     tagRow(topicTags(tags)),
+    cardAssets(workshopAssets(representative, members)),
     el("div", { class: "workshop-launch" }, launch),
     resources.length
       ? el(
