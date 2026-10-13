@@ -2247,6 +2247,9 @@ const onboardSecrets = {
   project: undefined, // the project the list below was loaded for
   loading: false,
   stored: [], // project secrets in Secrets Manager: {name, properties, owner, onboarding}
+  // Secrets this page stored, by project. ListSecrets is eventually consistent,
+  // so a list right after a store can miss the new secret; these fill the gap.
+  written: {},
   shared: [], // platform shared secrets: {name, properties, description}
   error: null,
   editing: null, // {name, rows: [{key, value}]} while the store form is open
@@ -2265,7 +2268,11 @@ async function loadSecrets() {
     const res = await fetch("/api/onboarding/secrets", { credentials: "same-origin" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
-    onboardSecrets.stored = data.secrets || [];
+    const listed = data.secrets || [];
+    const written = Object.values(onboardSecrets.written[project] || {}).filter(
+      (entry) => !listed.some((item) => item.name === entry.name)
+    );
+    onboardSecrets.stored = [...listed, ...written].sort((a, b) => a.name.localeCompare(b.name));
     onboardSecrets.shared = data.shared || [];
     onboardSecrets.error = null;
   } catch (err) {
@@ -2323,6 +2330,11 @@ async function storeSecret(doc) {
     delete getIn(doc, ["spec", "secrets", result.name]).shared;
     onboardSecrets.editing = null; // drops the typed values
     toast(result.created ? "Secret stored" : "Secret updated");
+    const project = result.project || draftProjectName(onboard.status);
+    onboardSecrets.written[project] = {
+      ...onboardSecrets.written[project],
+      [result.name]: { name: result.name, properties: result.properties, onboarding: true },
+    };
     onboardSecrets.project = undefined;
     await loadSecrets();
   } catch (err) {
