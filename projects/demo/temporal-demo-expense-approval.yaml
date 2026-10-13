@@ -1,0 +1,50 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: temporal-demo-expense-approval
+spec:
+  registry:
+    title: Expense Approval
+    summary: 'Submit an expense, approve it, or let it escalate. Stop the worker at any point: the request,
+      its durable timer, and the decision are kept by Temporal, and the reimbursement retries through
+      a payment outage.'
+    tags:
+      - Human-in-the-Loop
+      - Signals
+      - Durable Timers
+      - Retries
+    temporalSdks:
+      - Go
+    links:
+      runbook:
+        url: https://github.com/temporal-sa/temporal-demo-expense-approval#demo-script
+        label: README (Demo script)
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: expense-approval
+  source:
+    repo: https://github.com/temporal-sa/temporal-demo-expense-approval
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile
+  components:
+    web:
+      build: app
+      ports:
+        - containerPort: 8080
+          servicePort: 80
+      temporalAccess: true
+    worker:
+      build: app
+      command:
+        - /app/worker
+      worker: true
+      autoscaling:
+        taskQueue: expense-approval
+  ingress:
+    subdomain: expense-approvals
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
