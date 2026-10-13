@@ -42,7 +42,7 @@ DEFAULT_NAMESPACE_RETENTION_DAYS = 7
 DEFAULT_OPS_TARGET_HOST = "saas-api.tmprl.cloud:443"
 # Region demo namespaces are created in when the bootstrap credential does not
 # specify one. Must be a region the Temporal Cloud account can provision into.
-DEFAULT_TEMPORAL_CLOUD_REGION = "gcp-us-central1"
+DEFAULT_TEMPORAL_CLOUD_REGION = "aws-ca-central-1"
 # A DELETED namespace frees its name, so it is treated as absent (recreate).
 DELETED_NAMESPACE_STATES = {"RESOURCE_STATE_DELETED"}
 # Reusable as-is.
