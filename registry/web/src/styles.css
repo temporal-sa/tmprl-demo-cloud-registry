@@ -1001,15 +1001,7 @@
 
   .workshop:hover { border-color: var(--indigo-400); }
 
-  .workshop-icon {
-    width: 2rem;
-    height: 2rem;
-    fill: none;
-    stroke: var(--mint);
-    stroke-width: 1.5;
-  }
-
-  .workshop .eyebrow { margin-top: 1.5rem; font-size: .75rem; }
+  .workshop .eyebrow { font-size: .75rem; }
 
   .workshop h3 {
     margin-top: .6rem;
