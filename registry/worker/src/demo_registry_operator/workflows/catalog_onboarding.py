@@ -245,7 +245,11 @@ class CatalogOnboardingWorkflow:
         repo = self._status.repo
         assert repo is not None  # checked by the validator
         self._status.agent_runs += 1
-        run_id = f"{workflow.info().workflow_id}#{self._status.agent_runs}"
+        # The workflow id is per user and reused by every onboarding they start,
+        # and the LiteLLM broker never re-issues a revoked participant. The first
+        # run id keeps this unique per onboarding and survives continue-as-new.
+        info = workflow.info()
+        run_id = f"{info.workflow_id}/{info.first_execution_run_id}#{self._status.agent_runs}"
         name = ((self._status.document or {}).get("metadata") or {}).get("name")
         self._agent_pending = AgentRunRequest(
             run_id=run_id,

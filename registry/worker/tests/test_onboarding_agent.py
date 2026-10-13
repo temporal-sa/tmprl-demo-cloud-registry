@@ -150,6 +150,21 @@ def test_broker_requests_are_signed_the_way_the_broker_verifies(monkeypatch):
     assert key["api_key"] == "sk"
 
 
+def test_revoked_participant_is_not_retried(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise agent.HTTPError(
+            request.full_url, 410, "Gone", {}, io.BytesIO(b'{"detail":"Token was revoked"}')
+        )
+
+    monkeypatch.setattr(agent, "broker_hmac_secret", lambda: "shh")
+    monkeypatch.setattr(agent, "urlopen", fake_urlopen)
+
+    with pytest.raises(ApplicationError, match="HTTP 410.*revoked") as raised:
+        agent.mint_key("run#1/1")
+
+    assert raised.value.non_retryable
+
+
 def test_broker_credential_is_read_from_the_single_property(monkeypatch):
     monkeypatch.setattr(
         agent.kube,

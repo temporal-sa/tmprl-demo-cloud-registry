@@ -617,7 +617,8 @@ def test_agent_runs_propose_without_editing_and_can_be_stopped():
                     cancelled = await wait_for_agent(handle, "Cancelled")
                     assert cancelled["agent"]["stopping"] is False
                     assert cancelled["agent_runs"] == 2
-                    assert seen["agent"][1].run_id == "catalog-onboarding/agent#2"
+                    first_run = (await handle.describe()).raw_description.workflow_execution_info.first_run_id
+                    assert seen["agent"][1].run_id == f"catalog-onboarding/agent/{first_run}#2"
                     assert seen["agent"][1].question == "Which are workers?"
 
                     await handle.execute_update(CatalogOnboardingWorkflow.abandon)
