@@ -153,6 +153,28 @@ spec:
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
+  name: keda
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: node-local-dns
+  interval: 5m
+  path: ./clusters/green/addons/keda/install
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 10m
+  wait: true
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: keda
+      namespace: tmprl-dem-cld-keda
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
   name: temporal-worker-controller
   namespace: flux-system
 spec:
@@ -249,6 +271,7 @@ spec:
     - name: external-secrets-stores
     - name: registry-crds
     - name: temporal-worker-controller
+    - name: keda
   interval: 5m
   path: ./clusters/green/bootstrap/registry-operator
   prune: true

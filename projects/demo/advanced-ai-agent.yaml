@@ -79,7 +79,6 @@ spec:
         versioning:
           enabled: true
           deploymentName: advanced-ai-agent
-      replicas: 1
       terminationGracePeriodSeconds: 1260
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-advanced-ai-agent-data
       secrets: [anthropic, gemini]

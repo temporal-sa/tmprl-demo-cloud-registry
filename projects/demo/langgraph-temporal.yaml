@@ -132,8 +132,9 @@ spec:
 
     temporal-langgraph-worker:
       build: temporal-langgraph
-      replicas: 1
       worker: true
+      autoscaling:
+        taskQueue: support-agent-temporal-langgraph
       command: [python, worker.py]
       env:
         - name: LANGGRAPH_TEMPORAL_TASK_QUEUE

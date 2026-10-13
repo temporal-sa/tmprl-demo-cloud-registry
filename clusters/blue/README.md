@@ -12,7 +12,7 @@ Cluster-specific values include:
 - **Flux paths** are `./clusters/blue/...`.
 - **Versions are explicitly pinned**: Flux 2.9.1, cert-manager v1.21.0,
   external-secrets 2.7.0, Traefik **v3** (chart 41), cluster-autoscaler chart
-  9.58.0 / image v1.36.0, temporal-worker-controller 0.27.0, metrics-server
+  9.58.0 / image v1.36.0, temporal-worker-controller 0.31.0, KEDA 2.21.0, metrics-server
   3.13.1, k8s-dns-node-cache 1.26.8.
 - **cert-manager + the DNS-01 ClusterIssuers** are managed by Flux (role
   `tmprl-dem-cld-cert-manager`).

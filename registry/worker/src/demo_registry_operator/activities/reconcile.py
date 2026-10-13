@@ -222,6 +222,7 @@ def apply_demo_project_resources(
 
     try:
         applied = apply_resources_with_worker_secret_barrier(rendered_resources)
+        prune_stale_autoscalers(demo_project, rendered_resources)
         external_secret_status = external_secret_sync_status(applied)
         worker_deployments_status = worker_deployment_sync_status(applied)
     except ValueError as error:
@@ -274,7 +275,51 @@ def apply_demo_project_resources(
     return DemoProjectStatusResult(status)
 
 
-WORKER_SECRET_DEPENDENT_KINDS = {"Connection", "WorkerDeployment"}
+# WorkerResourceTemplate references its WorkerDeployment, so it applies after.
+WORKER_SECRET_DEPENDENT_KINDS = {"Connection", "WorkerDeployment", "WorkerResourceTemplate"}
+AUTOSCALER_KINDS = {"ScaledObject", "WorkerResourceTemplate"}
+
+
+def prune_stale_autoscalers(
+    demo_project: dict[str, Any],
+    rendered_resources: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Delete autoscalers for workers that no longer autoscale.
+
+    A spec-only change (dropping autoscaling, or pinning replicas) re-applies
+    into the same runtime namespace, so a leftover ScaledObject would keep
+    resizing a Deployment that now declares a fixed count. Only namespaces that
+    received workloads in this render are swept.
+    """
+    workload_namespaces = {
+        resource["metadata"]["namespace"]
+        for resource in rendered_resources
+        if resource.get("kind") in {"Deployment", "WorkerDeployment"}
+        and isinstance(resource.get("metadata", {}).get("namespace"), str)
+    }
+    rendered = {
+        (
+            resource["metadata"].get("namespace"),
+            resource.get("kind"),
+            resource["metadata"].get("name"),
+        )
+        for resource in rendered_resources
+        if resource.get("kind") in AUTOSCALER_KINDS
+    }
+    selector = f"platform.temporal.io/project={resources.project_name(demo_project)}"
+    pruned: list[dict[str, str]] = []
+    for namespace in sorted(workload_namespaces):
+        for item in kube.list_autoscalers(namespace, label_selector=selector):
+            kind = item.get("kind")
+            metadata = item.get("metadata")
+            name = metadata.get("name") if isinstance(metadata, dict) else None
+            if kind not in AUTOSCALER_KINDS or not isinstance(name, str):
+                continue
+            if (namespace, kind, name) in rendered:
+                continue
+            kube.delete_autoscaler(namespace, kind, name)
+            pruned.append({"namespace": namespace, "kind": kind, "name": name})
+    return pruned
 
 
 def apply_resources_with_worker_secret_barrier(

@@ -69,6 +69,7 @@ def build_workspace_manifests(
     # workspace task queue. A crashable clone must never change the always-on
     # demo's current Worker Deployment version.
     _isolate_worker_deployments(cloned, workspace_id)
+    _disable_worker_autoscaling(cloned)
     if isinstance(task_queue_env, str) and task_queue_env:
         _inject_task_queue_env(cloned, task_queue_env, task_queue)
 
@@ -204,6 +205,18 @@ def _isolate_worker_deployments(
         # Ephemeral clones have no previous version to ramp from and must not run
         # a source demo's rollout gate with production-oriented inputs.
         versioning["rollout"] = {"strategy": "AllAtOnce"}
+
+
+def _disable_worker_autoscaling(cloned: dict[str, Any]) -> None:
+    """Pin clone workers to fixed replicas.
+
+    Workspace crash/restore controls drive workers to exactly 0 or 1 replicas,
+    which a KEDA ScaledObject would immediately undo; the clone's rewritten
+    task queue also differs from the one an autoscaling block names.
+    """
+    for component in resources.kubernetes_components(cloned).values():
+        if resources.component_is_worker(component):
+            component["autoscaling"] = {"enabled": False}
 
 
 def _namespace_manifest(

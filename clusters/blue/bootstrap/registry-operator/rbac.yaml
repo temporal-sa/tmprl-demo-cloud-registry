@@ -142,10 +142,24 @@ rules:
     resources:
       - connections
       - workerdeployments
+      - workerresourcetemplates
     verbs:
       - get
       - list
       - create
+      - patch
+      - delete
+  # KEDA autoscaling for demo workers. The WorkerResourceTemplate webhook also
+  # checks that the operator itself may manage the ScaledObjects it embeds.
+  - apiGroups:
+      - keda.sh
+    resources:
+      - scaledobjects
+    verbs:
+      - get
+      - list
+      - create
+      - update
       - patch
       - delete
   - apiGroups:

@@ -107,8 +107,11 @@ listen on, which environment variables they read, which ones are Temporal
 workers. Prefer the platform features the README describes (temporalAccess,
 worker: true, temporalProxy, valueFrom.inputRef) over hand-rolled config. Only
 declare secrets, Nexus endpoints, extra namespaces, Lambda components, or
-Worker Versioning when the code needs them. Never put a secret value in the
-YAML. Keep the validator passing.
+Worker Versioning when the code needs them. Workers autoscale by default once
+their task queue is known: set autoscaling.taskQueue on each Kubernetes worker
+to the queue it polls (unless a literal TEMPORAL_TASK_QUEUE env already names
+it), and only set replicas or other autoscaling fields when the demo needs
+them. Never put a secret value in the YAML. Keep the validator passing.
 
 Where the repo itself would need to change to run in the catalog (for example a
 hardcoded task queue, a fixed workflow ID shared by every browser, localhost

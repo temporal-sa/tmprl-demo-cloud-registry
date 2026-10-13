@@ -23,6 +23,10 @@ TEMPORAL_WORKER_CONTROLLER_GROUP = "temporal.io"
 TEMPORAL_WORKER_CONTROLLER_VERSION = "v1alpha1"
 TEMPORAL_CONNECTION_PLURAL = "connections"
 TEMPORAL_WORKER_DEPLOYMENT_PLURAL = "workerdeployments"
+TEMPORAL_WORKER_RESOURCE_TEMPLATE_PLURAL = "workerresourcetemplates"
+KEDA_GROUP = "keda.sh"
+KEDA_VERSION = "v1alpha1"
+KEDA_SCALED_OBJECT_PLURAL = "scaledobjects"
 
 CUSTOM_RESOURCE_PLURALS = {
     ("cert-manager.io", "v1", "Certificate"): "certificates",
@@ -44,6 +48,12 @@ CUSTOM_RESOURCE_PLURALS = {
         TEMPORAL_WORKER_CONTROLLER_VERSION,
         "WorkerDeployment",
     ): TEMPORAL_WORKER_DEPLOYMENT_PLURAL,
+    (
+        TEMPORAL_WORKER_CONTROLLER_GROUP,
+        TEMPORAL_WORKER_CONTROLLER_VERSION,
+        "WorkerResourceTemplate",
+    ): TEMPORAL_WORKER_RESOURCE_TEMPLATE_PLURAL,
+    (KEDA_GROUP, KEDA_VERSION, "ScaledObject"): KEDA_SCALED_OBJECT_PLURAL,
     # Traefik v2 (traefik.containo.us) is served on the pet; v3 (traefik.io) on the
     # blue/green stack. apply_custom_resource looks up the plural by the emitted
     # (group, version, kind), so BOTH groups must map or a color's applies raise
@@ -481,12 +491,14 @@ def apply_custom_resource(
             plural,
             name,
         ),
+        # None marks a field the merge patch must clear (e.g. a WorkerDeployment's
+        # replicas once KEDA owns scaling); a create simply omits it.
         create=lambda: custom.create_namespaced_custom_object(
             group,
             version,
             namespace,
             plural,
-            resource,
+            _without_none(resource),
         ),
         patch=lambda: custom.patch_namespaced_custom_object(
             group,
@@ -1878,6 +1890,83 @@ def read_worker_deployment_status(namespace: str, name: str) -> dict[str, Any]:
         else None,
         "conditions": worker_deployment_conditions(status),
     }
+
+
+def _without_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_none(item) for key, item in value.items() if item is not None
+        }
+    if isinstance(value, list):
+        return [_without_none(item) for item in value]
+    return value
+
+
+def list_autoscalers(
+    namespace: str,
+    *,
+    label_selector: str | None = None,
+) -> list[dict[str, Any]]:
+    """Operator-rendered autoscaling objects: ScaledObjects and WRTs.
+
+    WRT-rendered ScaledObjects are owned by their WorkerResourceTemplate and
+    carry no project label, so a project label selector skips them.
+    """
+    client = _client_module()
+    load_kubernetes_config()
+    custom = client.CustomObjectsApi()
+    found: list[dict[str, Any]] = []
+    for group, version, plural in (
+        (KEDA_GROUP, KEDA_VERSION, KEDA_SCALED_OBJECT_PLURAL),
+        (
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            TEMPORAL_WORKER_RESOURCE_TEMPLATE_PLURAL,
+        ),
+    ):
+        try:
+            response = custom.list_namespaced_custom_object(
+                group,
+                version,
+                namespace,
+                plural,
+                label_selector=label_selector,
+            )
+        except Exception as error:
+            if _api_status(error) == 404:
+                continue
+            raise
+        items = response.get("items", []) if isinstance(response, dict) else []
+        found.extend(item for item in items if isinstance(item, dict))
+    return found
+
+
+def delete_autoscaler(namespace: str, kind: str, name: str) -> str:
+    plural = {
+        "ScaledObject": (KEDA_GROUP, KEDA_VERSION, KEDA_SCALED_OBJECT_PLURAL),
+        "WorkerResourceTemplate": (
+            TEMPORAL_WORKER_CONTROLLER_GROUP,
+            TEMPORAL_WORKER_CONTROLLER_VERSION,
+            TEMPORAL_WORKER_RESOURCE_TEMPLATE_PLURAL,
+        ),
+    }.get(kind)
+    if plural is None:
+        raise ValueError(f"Unsupported autoscaler kind {kind!r}")
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CustomObjectsApi().delete_namespaced_custom_object(
+            plural[0],
+            plural[1],
+            namespace,
+            plural[2],
+            name,
+        )
+        return "deleting"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
 
 
 def _create_or_patch(read: Any, create: Any, patch: Any) -> str:

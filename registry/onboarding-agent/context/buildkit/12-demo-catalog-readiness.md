@@ -34,7 +34,7 @@ Confirm the current behavior in the registry's `registry.crashable` schema and c
 - Carry that queue through workflow code in a replay-safe way. Start workflows on the configured queue and let activities and child workflows inherit it, or pass the queue in workflow input. Keep queue names out of workflow literals and out of direct environment reads inside workflow code.
 - Derive any additional queue names from the injected value, so a clone's starters and workers remain paired.
 - Include the active task-queue value in Workflow IDs and in keys written to shared external stores. Crashable clones share a Temporal namespace, so listings, links, signals, and queries need to select the current queue's work.
-- Keep the experience correct with one worker replica. A crash deletes worker pods immediately, and scale controls set worker replicas to zero or one.
+- Keep the experience correct with any number of worker replicas, from zero to many. Shared demos autoscale their workers on task-queue backlog (one to ten replicas by default, optionally down to zero). In a crashable clone, a crash deletes worker pods immediately and scale controls set worker replicas to zero or one.
 - Keep the UI and API available while workers are absent. They should accept new work for Temporal to queue and read durable execution state.
 - Serve the workspace correctly from its own hostname. Derive absolute URLs, cookie scope, redirects, and callbacks from the incoming request host.
 - Run crash-relevant work in Kubernetes worker components. The platform's crash and scale controls target those worker pods and Worker Deployments.

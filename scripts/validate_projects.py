@@ -291,6 +291,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_serverless_components(document))
         errors.extend(validate_registry(document))
         errors.extend(validate_isolated_lambda(document))
+        errors.extend(validate_autoscaling(document))
 
     for document in instruqt_courses:
         errors.extend(validate_instruqt_course_source_path(document, "source"))
@@ -911,6 +912,8 @@ def validate_serverless_components(document: ProjectDocument) -> list[ProjectErr
                 "ports",
                 "serviceName",
                 "replicas",
+                "autoscaling",
+                "resources",
                 "automountServiceAccountToken",
                 "awsIamRoleArn",
                 "isolatedExecutor",
@@ -1372,6 +1375,80 @@ def validate_temporal_proxy(document: ProjectDocument) -> list[ProjectError]:
                 )
             )
     return errors
+
+
+def validate_autoscaling(document: ProjectDocument) -> list[ProjectError]:
+    """An explicit autoscaling block must be one the operator can render.
+
+    Workers without the block silently fall back to fixed replicas when these
+    preconditions are unmet; a declared block failing them is an author error.
+    """
+    errors: list[ProjectError] = []
+    for component_name, component in components(document).items():
+        autoscaling = component.get("autoscaling")
+        if not isinstance(autoscaling, dict) or autoscaling.get("enabled") is False:
+            continue
+        if serverless_lambda_enabled(component):
+            continue  # reported by validate_serverless_components
+        prefix = f"components.{component_name}.autoscaling"
+
+        def error(message: str) -> None:
+            errors.append(ProjectError(document.path, f"{prefix} {message}"))
+
+        worker = component.get("worker")
+        if not (worker is True or isinstance(worker, dict)):
+            error("requires worker")
+        if "replicas" in component:
+            error(
+                f"cannot be combined with components.{component_name}.replicas; "
+                "replicas pins a fixed count"
+            )
+        if temporal_proxy_enabled(component):
+            error("cannot be used with temporalProxy")
+        if temporal_auth_mode(document) == TEMPORAL_AUTH_MODE_MTLS:
+            error("requires temporal auth mode apiKey")
+        if component_task_queue(document, component) is None:
+            error(
+                "requires taskQueue (or a literal TEMPORAL_TASK_QUEUE env value, "
+                "or registry.crashable.baseTaskQueue)"
+            )
+        minimum = autoscaling.get("minReplicas", 1)
+        maximum = autoscaling.get("maxReplicas", 10)
+        if isinstance(minimum, int) and isinstance(maximum, int) and minimum > maximum:
+            error(f"minReplicas ({minimum}) cannot exceed maxReplicas ({maximum})")
+    return errors
+
+
+def component_task_queue(
+    document: ProjectDocument,
+    component: dict[str, Any],
+) -> str | None:
+    """Mirror of resources.component_task_queue (the operator's resolution)."""
+    autoscaling = component.get("autoscaling")
+    if isinstance(autoscaling, dict):
+        task_queue = autoscaling.get("taskQueue")
+        if isinstance(task_queue, str) and task_queue.strip():
+            return task_queue.strip()
+    env_items = component.get("env")
+    env = {
+        item.get("name"): item["value"].strip()
+        for item in (env_items if isinstance(env_items, list) else [])
+        if isinstance(item, dict)
+        and isinstance(item.get("value"), str)
+        and item["value"].strip()
+    }
+    if "TEMPORAL_TASK_QUEUE" in env:
+        return env["TEMPORAL_TASK_QUEUE"]
+    crashable = get_nested(document.data, ("spec", "registry", "crashable"))
+    if not isinstance(crashable, dict):
+        return None
+    task_queue_env = crashable.get("taskQueueEnv")
+    if isinstance(task_queue_env, str) and task_queue_env in env:
+        return env[task_queue_env]
+    base_task_queue = crashable.get("baseTaskQueue")
+    if isinstance(base_task_queue, str) and base_task_queue.strip():
+        return base_task_queue.strip()
+    return None
 
 
 def validate_isolated_lambda(document: ProjectDocument) -> list[ProjectError]:

@@ -235,6 +235,21 @@ TEMPORAL_SECRET_NAME = "temporal-credentials"
 PLATFORM_ROLLOUT_VERSION_INPUT_REF = "platform.rolloutVersion"
 TEMPORAL_WORKER_RUNTIME_SECRET_NAME = "temporal-worker-runtime"
 TEMPORAL_CONNECTION_NAME = "temporal"
+KEDA_API_VERSION = "keda.sh/v1alpha1"
+AUTOSCALED_ANNOTATION = "registry.tmprl-demo.cloud/autoscaled"
+TEMPORAL_TASK_QUEUE_ENV = "TEMPORAL_TASK_QUEUE"
+# Workers without an autoscaling block scale 1..10 on task-queue backlog when a
+# task queue is known. minReplicas 0 is opt-in: the first task after idling waits
+# for a pod to start.
+DEFAULT_AUTOSCALING = {
+    "minReplicas": 1,
+    "maxReplicas": 10,
+    "queueTypes": ["workflow", "activity"],
+    "targetQueueSize": 5,
+    "cooldownPeriod": 300,
+}
+KEDA_POLLING_INTERVAL_SECONDS = 15
+DEFAULT_CONTAINER_REQUESTS = {"cpu": "100m", "memory": "256Mi"}
 TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME = "temporal-mtls-certs"
 TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH = "/var/run/secrets/tmprl-demo.cloud/temporal"
 TEMPORAL_MTLS_CERT_FILES = {
@@ -1777,24 +1792,36 @@ def deployment_resources(
             image_overrides[build_name],
             image_overrides=image_overrides,
         )
+        deployment_name = candidate_deployment_name(
+            demo_project,
+            component_name,
+            version,
+        )
+        autoscaling = component_autoscaling(demo_project, component)
+        annotations = {
+            "platform.temporal.io/build": build_name,
+            "platform.temporal.io/component": component_name,
+            "platform.temporal.io/rollout-version": version,
+        }
+        # KEDA owns the replica count of an autoscaled Deployment; rendering
+        # spec.replicas would reset it on every reconcile patch.
+        replicas = (
+            {}
+            if autoscaling
+            else {"replicas": component.get("replicas", 1)}
+        )
+        if autoscaling:
+            annotations[AUTOSCALED_ANNOTATION] = "true"
 
         resources.append(
             {
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
                 "metadata": {
-                    "name": candidate_deployment_name(
-                        demo_project,
-                        component_name,
-                        version,
-                    ),
+                    "name": deployment_name,
                     "namespace": namespace,
                     "labels": rollout_labels(demo_project, component_name, version),
-                    "annotations": {
-                        "platform.temporal.io/build": build_name,
-                        "platform.temporal.io/component": component_name,
-                        "platform.temporal.io/rollout-version": version,
-                    },
+                    "annotations": annotations,
                     **(
                         {"ownerReferences": owner_references}
                         if owner_references
@@ -1802,7 +1829,7 @@ def deployment_resources(
                     ),
                 },
                 "spec": {
-                    "replicas": component.get("replicas", 1),
+                    **replicas,
                     "selector": {
                         "matchLabels": rollout_selector_labels(
                             demo_project,
@@ -1823,6 +1850,18 @@ def deployment_resources(
                 },
             }
         )
+        if autoscaling:
+            resources.append(
+                deployment_scaled_object(
+                    demo_project,
+                    component_name,
+                    autoscaling,
+                    deployment_name=deployment_name,
+                    namespace=namespace,
+                    version=version,
+                    owner_references=owner_references,
+                )
+            )
     return resources
 
 
@@ -1917,18 +1956,30 @@ def worker_controller_resources(
             or not version
         ):
             continue
-        resources.append(
-            worker_deployment_resource(
-                demo_project,
-                component_name,
-                component,
-                image_overrides[build_name],
-                version=version,
-                external_resources=external_resources,
-                image_overrides=image_overrides,
-                namespace=namespace,
-            )
+        worker_deployment = worker_deployment_resource(
+            demo_project,
+            component_name,
+            component,
+            image_overrides[build_name],
+            version=version,
+            external_resources=external_resources,
+            image_overrides=image_overrides,
+            namespace=namespace,
         )
+        resources.append(worker_deployment)
+        autoscaling = component_autoscaling(demo_project, component)
+        if autoscaling:
+            resources.append(
+                worker_resource_template_scaled_object(
+                    demo_project,
+                    component_name,
+                    autoscaling,
+                    worker_deployment=worker_deployment["metadata"]["name"],
+                    namespace=worker_deployment["metadata"]["namespace"],
+                    version=version,
+                    external_resources=external_resources,
+                )
+            )
     return resources
 
 
@@ -2006,6 +2057,14 @@ def worker_deployment_resource(
         image_overrides=image_overrides or {},
     )
     name = worker_deployment_name(demo_project, component_name, component)
+    autoscaled = component_autoscaling(demo_project, component) is not None
+    annotations = {
+        "platform.temporal.io/build": str(component.get("build")),
+        "platform.temporal.io/component": component_name,
+        "platform.temporal.io/rollout-version": version,
+    }
+    if autoscaled:
+        annotations[AUTOSCALED_ANNOTATION] = "true"
     return {
         "apiVersion": TEMPORAL_WORKER_CONTROLLER_API_VERSION,
         "kind": "WorkerDeployment",
@@ -2013,14 +2072,14 @@ def worker_deployment_resource(
             "name": name,
             "namespace": namespace or project_namespace(demo_project),
             "labels": component_labels(demo_project, component_name),
-            "annotations": {
-                "platform.temporal.io/build": str(component.get("build")),
-                "platform.temporal.io/component": component_name,
-                "platform.temporal.io/rollout-version": version,
-            },
+            "annotations": annotations,
         },
         "spec": {
-            "replicas": component.get("replicas", 1),
+            # With replicas set, the Worker Controller enforces it on every
+            # active version and fights KEDA. None (not omitted) so the merge
+            # patch also clears a count left by an earlier fixed-replica spec;
+            # creates drop it (kube.apply_custom_resource).
+            "replicas": None if autoscaled else component.get("replicas", 1),
             "workerOptions": {
                 "connectionRef": {"name": TEMPORAL_CONNECTION_NAME},
                 "temporalNamespace": temporal_worker_namespace(
@@ -2338,7 +2397,30 @@ def container(
         )
     if volume_mounts:
         rendered["volumeMounts"] = volume_mounts
+    rendered["resources"] = container_resources(component)
 
+    return rendered
+
+
+def container_resources(component: dict[str, Any]) -> dict[str, Any]:
+    """Main-container requests/limits; requests always present.
+
+    cluster-autoscaler only adds nodes for Pods the scheduler cannot place, and
+    the scheduler only counts requests. Without a default request, KEDA-added
+    replicas would pack onto existing nodes instead of growing the cluster.
+    """
+    declared = component.get("resources")
+    declared = declared if isinstance(declared, dict) else {}
+    requests = declared.get("requests")
+    rendered: dict[str, Any] = {
+        "requests": {
+            **DEFAULT_CONTAINER_REQUESTS,
+            **(requests if isinstance(requests, dict) else {}),
+        },
+    }
+    limits = declared.get("limits")
+    if isinstance(limits, dict) and limits:
+        rendered["limits"] = dict(limits)
     return rendered
 
 
@@ -4746,6 +4828,235 @@ def worker_versioning(component: dict[str, Any]) -> dict[str, Any] | None:
 def worker_versioning_enabled(component: dict[str, Any]) -> bool:
     versioning = worker_versioning(component)
     return bool(versioning and versioning.get("enabled") is True)
+
+
+def component_is_worker(component: dict[str, Any]) -> bool:
+    worker = component.get("worker")
+    return worker is True or isinstance(worker, dict)
+
+
+def component_task_queue(
+    demo_project: dict[str, Any],
+    component: dict[str, Any],
+) -> str | None:
+    """The task queue whose backlog drives autoscaling, if the spec names one.
+
+    The platform does not otherwise track task queues. In order: an explicit
+    ``autoscaling.taskQueue``; a literal ``TEMPORAL_TASK_QUEUE`` env value; or,
+    for crashable demos, the literal value of ``registry.crashable.taskQueueEnv``
+    on the component, falling back to ``registry.crashable.baseTaskQueue`` (the
+    shared demo's queue, which the crashable contract injects into every
+    worker).
+    """
+    autoscaling = component.get("autoscaling")
+    if isinstance(autoscaling, dict):
+        task_queue = autoscaling.get("taskQueue")
+        if isinstance(task_queue, str) and task_queue.strip():
+            return task_queue.strip()
+    env = {
+        item.get("name"): item.get("value")
+        for item in component_env_items(component)
+        if isinstance(item.get("value"), str) and item["value"].strip()
+    }
+    if TEMPORAL_TASK_QUEUE_ENV in env:
+        return env[TEMPORAL_TASK_QUEUE_ENV].strip()
+    registry = spec_of(demo_project).get("registry")
+    crashable = registry.get("crashable") if isinstance(registry, dict) else None
+    if not isinstance(crashable, dict):
+        return None
+    task_queue_env = crashable.get("taskQueueEnv")
+    if isinstance(task_queue_env, str) and task_queue_env in env:
+        return env[task_queue_env].strip()
+    base_task_queue = crashable.get("baseTaskQueue")
+    if isinstance(base_task_queue, str) and base_task_queue.strip():
+        return base_task_queue.strip()
+    return None
+
+
+def component_autoscaling(
+    demo_project: dict[str, Any],
+    component: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolved KEDA settings for a Kubernetes worker, or None for fixed replicas.
+
+    An explicit ``replicas`` pins the count. Autoscaling also needs API-key
+    auth reachable from the worker's own env (not the Temporal proxy sidecar or
+    mTLS) and a known task queue; the validator rejects an explicit
+    ``autoscaling`` block that cannot meet these, so here they fall back to
+    fixed replicas.
+    """
+    if serverless_lambda_enabled(component) or not component_is_worker(component):
+        return None
+    if "replicas" in component:
+        return None
+    autoscaling = component.get("autoscaling")
+    autoscaling = autoscaling if isinstance(autoscaling, dict) else {}
+    if autoscaling.get("enabled") is False:
+        return None
+    if temporal_proxy_enabled(component):
+        return None
+    if temporal_auth_mode(demo_project) == TEMPORAL_AUTH_MODE_MTLS:
+        return None
+    task_queue = component_task_queue(demo_project, component)
+    if task_queue is None:
+        return None
+    settings = {
+        key: autoscaling.get(key, default)
+        for key, default in DEFAULT_AUTOSCALING.items()
+    }
+    settings["taskQueue"] = task_queue
+    return settings
+
+
+def keda_scaled_object(
+    *,
+    name: str,
+    namespace: str | None,
+    labels: dict[str, str] | None,
+    scale_target_ref: dict[str, Any],
+    settings: dict[str, Any],
+    connection_metadata: dict[str, str],
+) -> dict[str, Any]:
+    """A KEDA ScaledObject driven by the built-in ``temporal`` scaler.
+
+    The API key is read from the scale target's own container env
+    (``apiKeyFromEnv``), so no TriggerAuthentication is needed: the worker pod
+    already carries TEMPORAL_API_KEY from its runtime Secret.
+    """
+    resource: dict[str, Any] = {
+        "apiVersion": KEDA_API_VERSION,
+        "kind": "ScaledObject",
+        "spec": {
+            "scaleTargetRef": scale_target_ref,
+            "minReplicaCount": settings["minReplicas"],
+            "maxReplicaCount": settings["maxReplicas"],
+            "pollingInterval": KEDA_POLLING_INTERVAL_SECONDS,
+            "cooldownPeriod": settings["cooldownPeriod"],
+            "advanced": {
+                "horizontalPodAutoscalerConfig": {
+                    "behavior": {
+                        "scaleDown": {
+                            # Backlog alone cannot tell an idle worker from a
+                            # busy one that keeps its queue empty; hold
+                            # replicas through brief lulls.
+                            "stabilizationWindowSeconds": settings["cooldownPeriod"],
+                            "policies": [
+                                {"type": "Pods", "value": 1, "periodSeconds": 60},
+                            ],
+                        },
+                    },
+                },
+            },
+            "triggers": [
+                {
+                    "type": "temporal",
+                    "useCachedMetrics": True,
+                    "metadata": {
+                        **connection_metadata,
+                        "taskQueue": settings["taskQueue"],
+                        "queueTypes": ",".join(settings["queueTypes"]),
+                        "targetQueueSize": str(settings["targetQueueSize"]),
+                        "activationTargetQueueSize": "0",
+                        "apiKeyFromEnv": STANDARD_TEMPORAL_ENV["api_key"],
+                    },
+                }
+            ],
+        },
+    }
+    if name or namespace or labels:
+        metadata: dict[str, Any] = {}
+        if name:
+            metadata["name"] = name
+        if namespace:
+            metadata["namespace"] = namespace
+        if labels:
+            metadata["labels"] = labels
+        resource["metadata"] = metadata
+    return resource
+
+
+def deployment_scaled_object(
+    demo_project: dict[str, Any],
+    component_name: str,
+    settings: dict[str, Any],
+    *,
+    deployment_name: str,
+    namespace: str,
+    version: str,
+    owner_references: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """ScaledObject for an unversioned worker Deployment.
+
+    Endpoint and namespace come from the worker's own env, so components bound
+    to a secondary Temporal namespace scale against that namespace.
+    """
+    resource = keda_scaled_object(
+        name=deployment_name,
+        namespace=namespace,
+        labels=rollout_labels(demo_project, component_name, version),
+        scale_target_ref={"name": deployment_name},
+        settings=settings,
+        connection_metadata={
+            "endpointFromEnv": STANDARD_TEMPORAL_ENV["endpoint"],
+            "namespaceFromEnv": STANDARD_TEMPORAL_ENV["namespace"],
+        },
+    )
+    resource["metadata"]["annotations"] = {
+        "platform.temporal.io/component": component_name,
+        "platform.temporal.io/rollout-version": version,
+    }
+    if owner_references:
+        resource["metadata"]["ownerReferences"] = owner_references
+    return resource
+
+
+def worker_resource_template_scaled_object(
+    demo_project: dict[str, Any],
+    component_name: str,
+    settings: dict[str, Any],
+    *,
+    worker_deployment: str,
+    namespace: str,
+    version: str,
+    external_resources: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """WorkerResourceTemplate rendering one ScaledObject per worker version.
+
+    The Worker Controller fills the empty ``scaleTargetRef`` with each version's
+    Deployment, and the empty ``namespace`` / ``workerDeploymentName`` /
+    ``workerDeploymentBuildId`` trigger keys with that version's identity, so
+    each version scales on its own backlog.
+    """
+    template = keda_scaled_object(
+        name="",
+        namespace=None,
+        labels=None,
+        scale_target_ref={},
+        settings=settings,
+        connection_metadata={
+            "endpoint": temporal_connection_host_port(demo_project, external_resources),
+            "namespace": "",
+            "workerDeploymentName": "",
+            "workerDeploymentBuildId": "",
+        },
+    )
+    return {
+        "apiVersion": TEMPORAL_WORKER_CONTROLLER_API_VERSION,
+        "kind": "WorkerResourceTemplate",
+        "metadata": {
+            "name": worker_deployment,
+            "namespace": namespace,
+            "labels": component_labels(demo_project, component_name),
+            "annotations": {
+                "platform.temporal.io/component": component_name,
+                "platform.temporal.io/rollout-version": version,
+            },
+        },
+        "spec": {
+            "workerDeploymentRef": {"name": worker_deployment},
+            "template": template,
+        },
+    }
 
 
 def serverless_config(component: dict[str, Any]) -> dict[str, Any]:

@@ -1378,3 +1378,104 @@ def test_instruqt_course_crd_keeps_every_catalog_field():
         crd_catalog = spec["properties"]["catalog"]["properties"]
         assert set(crd_catalog) == set(schema_catalog), color
         assert set(crd_catalog["links"]["properties"]) == set(schema_links), color
+
+
+def autoscaling_spec(**autoscaling) -> dict:
+    spec = base_spec()
+    spec["components"]["worker"] = {
+        "build": "app",
+        "worker": True,
+        "autoscaling": {"taskQueue": "orders", **autoscaling},
+    }
+    return spec
+
+
+def test_schema_accepts_autoscaling_and_resources():
+    spec = autoscaling_spec(minReplicas=0, maxReplicas=5, queueTypes=["activity"])
+    spec["components"]["worker"]["resources"] = {
+        "requests": {"cpu": "250m", "memory": "512Mi"},
+        "limits": {"memory": "1Gi"},
+    }
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(), project_document(spec)
+    )
+
+    assert errors == []
+    assert validate_projects.validate_autoscaling(project_document(spec)) == []
+
+
+def test_schema_rejects_autoscaling_above_cap():
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        project_document(autoscaling_spec(maxReplicas=50)),
+    )
+
+    assert errors
+
+
+def test_autoscaling_semantic_rules():
+    spec = autoscaling_spec(minReplicas=4, maxReplicas=2)
+    spec["components"]["worker"]["replicas"] = 1
+    spec["components"]["app"]["autoscaling"] = {"taskQueue": "orders"}
+    spec["components"]["noqueue"] = {
+        "build": "app",
+        "worker": True,
+        "autoscaling": {"maxReplicas": 3},
+    }
+
+    messages = [
+        error.message
+        for error in validate_projects.validate_autoscaling(project_document(spec))
+    ]
+
+    assert "components.app.autoscaling requires worker" in messages
+    assert any(
+        message.startswith("components.worker.autoscaling cannot be combined")
+        for message in messages
+    )
+    assert (
+        "components.worker.autoscaling minReplicas (4) cannot exceed maxReplicas (2)"
+        in messages
+    )
+    assert any(
+        message.startswith("components.noqueue.autoscaling requires taskQueue")
+        for message in messages
+    )
+
+
+def test_autoscaling_requires_api_key_auth_and_no_proxy():
+    spec = autoscaling_spec()
+    spec["temporal"] = {"auth": {"mode": "mtls"}}
+    spec["components"]["worker"]["temporalProxy"] = {"enabled": True}
+
+    messages = [
+        error.message
+        for error in validate_projects.validate_autoscaling(project_document(spec))
+    ]
+
+    assert messages == [
+        "components.worker.autoscaling cannot be used with temporalProxy",
+        "components.worker.autoscaling requires temporal auth mode apiKey",
+    ]
+
+
+def test_autoscaling_task_queue_falls_back_to_crashable_base_queue():
+    spec = autoscaling_spec()
+    del spec["components"]["worker"]["autoscaling"]["taskQueue"]
+    spec["registry"] = {
+        "crashable": {
+            "enabled": True,
+            "taskQueueEnv": "ORDERS_QUEUE",
+            "baseTaskQueue": "orders",
+        }
+    }
+
+    assert validate_projects.validate_autoscaling(project_document(spec)) == []
+
+
+def test_disabled_autoscaling_needs_no_task_queue():
+    spec = autoscaling_spec(enabled=False)
+    del spec["components"]["worker"]["autoscaling"]["taskQueue"]
+
+    assert validate_projects.validate_autoscaling(project_document(spec)) == []
