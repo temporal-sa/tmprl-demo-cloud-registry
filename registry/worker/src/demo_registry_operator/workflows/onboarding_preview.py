@@ -170,7 +170,10 @@ class OnboardingPreviewWorkflow:
         if self._pending is not None or self._end_requested:
             return  # superseded while reading
         self._status.phase = health.phase
+        self._status.stage = health.stage
         self._status.step = health.step
+        self._status.detail = health.detail
+        self._status.log_url = health.log_url
         self._status.last_error = health.message
 
     async def _tear_down(self) -> None:
@@ -204,7 +207,10 @@ class OnboardingPreviewWorkflow:
             self._status.expires_at = _iso(now + PREVIEW_TTL)
         self._status.deploys += 1
         self._status.phase = "Deploying"
+        self._status.stage = "resources"
         self._status.step = "Queued"
+        self._status.detail = None
+        self._status.log_url = None
         self._status.revision = request.revision
         self._status.commit_sha = request.commit_sha
         self._status.last_error = None

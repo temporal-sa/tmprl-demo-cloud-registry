@@ -369,3 +369,147 @@ def test_preview_deploys_redeploys_and_tears_down_on_end():
     assert seen["applied"] == [SHA, "c" * 40]
     assert seen["deleted"] == ["pv-money-transfer"]
     assert seen["cleaned"] == ["pv-money-transfer"]
+
+
+def test_a_failure_from_an_earlier_deploy_is_not_this_deploys():
+    stale = {"phase": "Error", "buildStatus": {"sourceCommitSha": "c" * 40}}
+    assert activities.preview_health(stale, SHA).phase == "Deploying"
+
+    current = {
+        "phase": "Error",
+        "message": "build failed",
+        "buildStatus": {
+            "sourceCommitSha": SHA,
+            "codebuild": {"logs": {"deepLink": "https://logs.example/build"}},
+        },
+    }
+    health = activities.preview_health(current, SHA)
+    assert (health.phase, health.log_url) == ("Failed", "https://logs.example/build")
+
+
+def test_status_without_a_phase_is_still_deploying():
+    # The runtime child patches only candidateRevision before it applies.
+    health = activities.preview_health({"candidateRevision": {"name": "x"}}, SHA)
+    assert (health.phase, health.stage) == ("Deploying", "resources")
+
+
+def pending_activity(name, heartbeat=None, attempt=1, failure=""):
+    return SimpleNamespace(
+        activity_type=SimpleNamespace(name=name),
+        heartbeat_details=SimpleNamespace(payloads=[heartbeat] if heartbeat else []),
+        attempt=attempt,
+        last_failure=SimpleNamespace(message=failure),
+    )
+
+
+def fake_temporal(monkeypatch, workflows):
+    """workflows: workflow id -> (pending children, pending activities)."""
+
+    seen = []
+
+    class Handle:
+        def __init__(self, workflow_id):
+            self.workflow_id = workflow_id
+
+        async def describe(self):
+            seen.append(self.workflow_id)
+            if self.workflow_id not in workflows:
+                raise activities.RPCError("missing", activities.RPCStatusCode.NOT_FOUND, b"")
+            children, pending = workflows[self.workflow_id]
+            return SimpleNamespace(
+                raw_description=SimpleNamespace(
+                    pending_children=children, pending_activities=pending
+                )
+            )
+
+    async def decode(payloads):
+        return list(payloads)
+
+    client = SimpleNamespace(
+        get_workflow_handle=lambda workflow_id, run_id=None: Handle(workflow_id),
+        data_converter=SimpleNamespace(decode=decode),
+    )
+
+    async def connect(config):
+        return client
+
+    monkeypatch.setattr(activities, "connect", connect)
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    return seen
+
+
+def child(workflow_type, workflow_id):
+    return SimpleNamespace(workflow_type_name=workflow_type, workflow_id=workflow_id, run_id="r")
+
+
+def test_progress_reports_the_build_with_codebuild_phase_and_log(monkeypatch):
+    parent = "demo-project/blue/pv-money-transfer"
+    build = f"{parent}/reconcile-1/artifact-build"
+    fake_temporal(
+        monkeypatch,
+        {
+            parent: ([child("DemoProjectArtifactBuildWorkflow", build)], []),
+            build: (
+                [],
+                [pending_activity("wait_for_project_image_build", {"codebuildBuildId": "cb:1"})],
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        activities,
+        "codebuild_progress",
+        lambda config, build_id: ("CodeBuild phase: Build", f"https://logs.example/{build_id}"),
+    )
+
+    progress = asyncio.run(activities.rollout_progress("pv-money-transfer"))
+
+    assert progress == {
+        "stage": "build",
+        "step": "Building images",
+        "detail": "CodeBuild phase: Build",
+        "log_url": "https://logs.example/cb:1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("workflows", "expected"),
+    [
+        # The watcher hasn't started the project's workflow yet.
+        ({}, {"stage": "resources", "step": "Waiting for the operator"}),
+        (
+            {"P": ([], [pending_activity("create_or_verify_temporal_cloud_namespace")])},
+            {"stage": "resources", "step": "Creating the Temporal namespace", "detail": None, "log_url": None},
+        ),
+        (
+            {"P": ([], [pending_activity("create_temporal_api_key_candidate_secret", attempt=3, failure="429")])},
+            {
+                "stage": "resources",
+                "step": "Setting up Temporal credentials",
+                "detail": "Retrying (attempt 3): 429",
+                "log_url": None,
+            },
+        ),
+        (
+            {
+                "P": ([child("DemoProjectKubernetesRuntimeWorkflow", "K")], []),
+                "K": ([], [pending_activity("run_smoke_check", {"smokeCheck": "u", "attempt": 4, "lastStatus": 502})]),
+            },
+            {"stage": "rollout", "step": "Waiting for the health check", "detail": "Check 4, last response 502", "log_url": None},
+        ),
+        (
+            {
+                "P": ([child("DemoProjectKubernetesRuntimeWorkflow", "K")], []),
+                "K": ([], [pending_activity("apply_demo_project_resources")]),
+            },
+            {"stage": "deploy", "step": "Applying Kubernetes resources", "detail": None, "log_url": None},
+        ),
+        # Between reconciles: nothing to report, so the CR status decides.
+        ({"P": ([], [])}, None),
+    ],
+)
+def test_progress_maps_what_the_reconcile_is_running(monkeypatch, workflows, expected):
+    parent = "demo-project/blue/pv-money-transfer"
+    workflows = {parent if key == "P" else key: value for key, value in workflows.items()}
+    fake_temporal(monkeypatch, workflows)
+
+    assert asyncio.run(activities.rollout_progress("pv-money-transfer")) == expected

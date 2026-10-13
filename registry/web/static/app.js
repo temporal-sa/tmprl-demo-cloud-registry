@@ -2247,6 +2247,9 @@ const onboardSecrets = {
   project: undefined, // the project the list below was loaded for
   loading: false,
   stored: [], // project secrets in Secrets Manager: {name, properties, owner, onboarding}
+  // Secrets this page stored, by project. ListSecrets is eventually consistent,
+  // so a list right after a store can miss the new secret; these fill the gap.
+  written: {},
   shared: [], // platform shared secrets: {name, properties, description}
   error: null,
   editing: null, // {name, rows: [{key, value}]} while the store form is open
@@ -2265,7 +2268,11 @@ async function loadSecrets() {
     const res = await fetch("/api/onboarding/secrets", { credentials: "same-origin" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
-    onboardSecrets.stored = data.secrets || [];
+    const listed = data.secrets || [];
+    const written = Object.values(onboardSecrets.written[project] || {}).filter(
+      (entry) => !listed.some((item) => item.name === entry.name)
+    );
+    onboardSecrets.stored = [...listed, ...written].sort((a, b) => a.name.localeCompare(b.name));
     onboardSecrets.shared = data.shared || [];
     onboardSecrets.error = null;
   } catch (err) {
@@ -2323,6 +2330,11 @@ async function storeSecret(doc) {
     delete getIn(doc, ["spec", "secrets", result.name]).shared;
     onboardSecrets.editing = null; // drops the typed values
     toast(result.created ? "Secret stored" : "Secret updated");
+    const project = result.project || draftProjectName(onboard.status);
+    onboardSecrets.written[project] = {
+      ...onboardSecrets.written[project],
+      [result.name]: { name: result.name, properties: result.properties, onboarding: true },
+    };
     onboardSecrets.project = undefined;
     await loadSecrets();
   } catch (err) {
@@ -3019,6 +3031,13 @@ function markErrorFields(root, errors) {
 
 const PREVIEW_LIVE = new Set(["Deploying", "Ready", "Failed"]);
 const PREVIEW_POLLING = new Set(["Deploying", "Ending"]);
+// The operator's rollout stages, in order (ROLLOUT_STAGES in the operator).
+const PREVIEW_STAGES = [
+  ["resources", "Temporal Cloud and image repositories"],
+  ["build", "Build images"],
+  ["deploy", "Deploy"],
+  ["rollout", "Roll out workers and check health"],
+];
 const onboardPreview = { status: null };
 let previewPollTimer = null;
 
@@ -3073,6 +3092,34 @@ function endPreview() {
   if (window.confirm("End the test deploy and delete everything it created?")) {
     previewCall("Ending the test deploy", "/api/onboarding/preview/end");
   }
+}
+
+// One row per stage: done, the current one with its live step, or still to come.
+function previewProgress(preview) {
+  const current = Math.max(0, PREVIEW_STAGES.findIndex(([stage]) => stage === preview.stage));
+  return el(
+    "ol",
+    { class: "onboard-progress", "aria-label": "Test deploy progress" },
+    ...PREVIEW_STAGES.map(([, label], index) => {
+      const state = index < current ? "done" : index === current ? "current" : "todo";
+      return el(
+        "li",
+        { class: `is-${state}`, "aria-current": state === "current" ? "step" : null },
+        el("span", { class: "onboard-progress-mark", "aria-hidden": "true", text: state === "done" ? "✓" : String(index + 1) }),
+        el(
+          "div",
+          {},
+          el("span", { class: "onboard-progress-label", text: label }),
+          state === "current" && preview.step
+            ? el("span", { class: "onboard-progress-step", role: "status", text: `${preview.step}${preview.detail ? ` · ${preview.detail}` : ""}` })
+            : null,
+          state === "current" && preview.log_url
+            ? externalLink(preview.log_url, { class: "onboard-progress-log", text: "View the build log" })
+            : null
+        )
+      );
+    })
+  );
 }
 
 function previewEndsAt(preview) {
@@ -3132,8 +3179,9 @@ function previewBody(status) {
     parts.push(onboardAlert("success", "The test deploy is running.", "Open it below. Redeploy after you change the draft or push to the demo repo."));
   } else if (preview.phase === "Failed") {
     parts.push(onboardAlert("error", "The test deploy failed.", preview.last_error));
+    if (preview.log_url) parts.push(externalLink(preview.log_url, { class: "onboard-progress-log", text: "View the build log" }));
   } else {
-    parts.push(el("p", { class: "onboard-busy", role: "status", text: `Deploying: ${preview.step || "starting"}…` }));
+    parts.push(previewProgress(preview));
   }
   parts.push(
     el(

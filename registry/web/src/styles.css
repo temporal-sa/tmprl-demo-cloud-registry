@@ -1608,6 +1608,23 @@
   .onboard-agent .eyebrow { color: var(--bubble-gum); font-size: .75rem; }
   .onboard-agent [data-onboard-agent] { display: grid; gap: .9rem; }
   [data-onboard-preview] { display: grid; gap: .9rem; }
+  .onboard-progress { display: grid; gap: .65rem; }
+  .onboard-progress li { display: grid; grid-template-columns: 1.75rem 1fr; gap: .75rem; align-items: start; color: var(--gray-400); }
+  .onboard-progress li > div { display: grid; gap: .2rem; }
+  .onboard-progress-mark {
+    display: grid; place-items: center; width: 1.75rem; height: 1.75rem;
+    border: 1px solid var(--line-strong); font-family: var(--mono); font-size: .75rem;
+  }
+  .onboard-progress-label { font-size: .9375rem; }
+  .onboard-progress li.is-done { color: var(--off-white); }
+  .onboard-progress li.is-done .onboard-progress-mark { border-color: var(--mint); color: var(--mint); }
+  .onboard-progress li.is-current { color: var(--off-white); }
+  .onboard-progress li.is-current .onboard-progress-mark { border-color: var(--bubble-gum); color: var(--bubble-gum); animation: onboard-pulse 1.6s ease-in-out infinite; }
+  .onboard-progress li.is-current .onboard-progress-label { font-weight: 500; }
+  .onboard-progress-step { font-family: var(--mono); font-size: .8125rem; color: var(--gray-400); }
+  .onboard-progress-log { font-size: .8125rem; text-decoration: underline; justify-self: start; }
+  @keyframes onboard-pulse { 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .onboard-progress li.is-current .onboard-progress-mark { animation: none; } }
   .onboard-agent-summary { color: var(--off-white); font-size: .9375rem; font-weight: 300; line-height: 1.6; white-space: pre-line; }
 
   .onboard-findings { display: grid; gap: .6rem; }
