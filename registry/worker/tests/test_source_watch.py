@@ -313,6 +313,32 @@ def test_workflow_signal_payload_is_trimmed_and_can_inject_source_commit():
     assert "managedFields" not in payload["metadata"]
 
 
+def test_workflow_signal_payload_carries_labels():
+    # Regression: the payload dropped labels, so an onboarding preview never read
+    # as a preview in the workflow and looked up user secrets under its own
+    # prefix instead of following secrets-from.
+    from demo_registry_operator.resources import (
+        PREVIEW_LABEL,
+        SECRETS_FROM_ANNOTATION,
+        is_onboarding_preview,
+        user_secret_prefix,
+    )
+
+    preview = project(
+        name="pv-banking-money-transfer",
+        annotations={SECRETS_FROM_ANNOTATION: "banking-money-transfer"},
+    )
+    preview["metadata"]["labels"] = {PREVIEW_LABEL: "true"}
+
+    payload = workflow_signal_payload(preview)
+
+    assert payload["metadata"]["labels"] == {PREVIEW_LABEL: "true"}
+    assert is_onboarding_preview(payload)
+    assert user_secret_prefix(payload) == user_secret_prefix(
+        project(name="banking-money-transfer")
+    )
+
+
 def test_workflow_signal_payload_carries_active_version_status():
     # Regression: the entity saga tells first-time from established projects by the
     # active version in the signal payload. Stripping status entirely (the old

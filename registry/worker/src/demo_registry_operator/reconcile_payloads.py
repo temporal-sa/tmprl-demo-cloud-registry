@@ -40,6 +40,7 @@ from demo_registry_operator.resources import (
     instruqt_course_testing_enabled,
     instruqt_course_testing_source_branch,
     metadata_annotations,
+    metadata_labels,
     project_name,
     source_auth_kubernetes_secret_name,
     source_git_repository_name,
@@ -639,6 +640,12 @@ def workflow_signal_payload(
         deletion_timestamp = metadata.get("deletionTimestamp")
         if isinstance(deletion_timestamp, str) and deletion_timestamp:
             payload_metadata["deletionTimestamp"] = deletion_timestamp
+
+    # Labels steer workflow behavior (onboarding previews, operator rollout
+    # canaries), so they must survive the trim.
+    labels = metadata_labels(demo_project)
+    if labels:
+        payload_metadata["labels"] = labels
 
     annotations = metadata_annotations(demo_project)
     if source_commit_sha:
