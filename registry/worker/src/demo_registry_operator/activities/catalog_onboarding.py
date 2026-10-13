@@ -399,7 +399,8 @@ def existing_project_documents(validator: Any) -> list[Any]:
     """Every project in the cluster, as the validator's ProjectDocument.
 
     This is what Flux applied from main, which is what the draft would be merged
-    next to. Operator canaries are skipped: they come and go and never merge.
+    next to. Operator canaries and onboarding test deploys are skipped: they
+    come and go and never merge.
     """
 
     documents = []
@@ -411,7 +412,11 @@ def existing_project_documents(validator: Any) -> list[Any]:
             metadata = item.get("metadata") or {}
             labels = metadata.get("labels") or {}
             name = metadata.get("name")
-            if not isinstance(name, str) or labels.get(resources.CANARY_LABEL) == "true":
+            if (
+                not isinstance(name, str)
+                or labels.get(resources.CANARY_LABEL) == "true"
+                or labels.get(resources.PREVIEW_LABEL) == "true"
+            ):
                 continue
             documents.append(
                 validator.ProjectDocument(

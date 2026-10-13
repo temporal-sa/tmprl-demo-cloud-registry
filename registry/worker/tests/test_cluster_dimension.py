@@ -162,6 +162,15 @@ def test_catalog_onboarding_workflow_id_is_per_user_and_colored():
     )
 
 
+def test_onboarding_preview_workflow_id_is_per_user_and_colored():
+    assert derive.onboarding_preview_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "onboarding-preview/blue/ada@temporal.io"
+    )
+    assert derive.onboarding_preview_workflow_id("ada@temporal.io") == (
+        "onboarding-preview/ada@temporal.io"
+    )
+
+
 def test_live_swing_host_is_derived_from_base_domain():
     assert derive.LIVE_SWING_HOST == "live.tmprl-demo.cloud"
 
@@ -174,7 +183,8 @@ def test_worker_update_query_uncolored_is_unscoped():
     assert worker.running_entity_workflows_query() == (
         '(WorkflowType = "DemoProjectWorkflow" '
         'OR WorkflowType = "InstruqtCourseWorkflow" '
-        'OR WorkflowType = "CatalogOnboardingWorkflow") '
+        'OR WorkflowType = "CatalogOnboardingWorkflow" '
+        'OR WorkflowType = "OnboardingPreviewWorkflow") '
         'AND ExecutionStatus = "Running"'
     )
 
@@ -186,7 +196,8 @@ def test_worker_update_query_colored_scopes_to_this_color():
     assert query.endswith(
         ' AND (WorkflowId STARTS_WITH "demo-project/blue/" '
         'OR WorkflowId STARTS_WITH "instruqt-course/blue/" '
-        'OR WorkflowId STARTS_WITH "catalog-onboarding/blue/")'
+        'OR WorkflowId STARTS_WITH "catalog-onboarding/blue/" '
+        'OR WorkflowId STARTS_WITH "onboarding-preview/blue/")'
     )
     assert query.startswith(worker.running_entity_workflows_query())
 

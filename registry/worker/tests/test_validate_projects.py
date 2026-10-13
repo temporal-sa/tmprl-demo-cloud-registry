@@ -1479,3 +1479,39 @@ def test_disabled_autoscaling_needs_no_task_queue():
     del spec["components"]["worker"]["autoscaling"]["taskQueue"]
 
     assert validate_projects.validate_autoscaling(project_document(spec)) == []
+
+
+def test_reviewed_projects_cannot_claim_test_deploy_names_or_metadata():
+    document = project_document(base_spec())
+    document.data["metadata"] = {
+        "name": "pv-demo",
+        "labels": {"registry.tmprl-demo.cloud/preview": "true"},
+        "annotations": {
+            "registry.tmprl-demo.cloud/secrets-from": "other-demo",
+            "registry.tmprl-demo.cloud/force-reconcile": "ok",
+        },
+    }
+    document.data["spec"]["ingress"] = {"subdomain": "pv-demo"}
+
+    errors = validate_projects.validate_reserved_metadata(document)
+    pointers = {
+        validate_projects.error_pointer(error, frozenset({"ingress"}))
+        for error in errors
+    }
+
+    assert len(errors) == 4
+    assert pointers == {
+        "/metadata/name",
+        "/metadata/labels",
+        "/metadata/annotations",
+        "/spec/ingress/subdomain",
+    }
+
+
+def test_ordinary_project_metadata_is_not_reserved():
+    document = project_document(base_spec())
+    document.data["metadata"]["annotations"] = {
+        "registry.tmprl-demo.cloud/force-reconcile": "ok"
+    }
+
+    assert validate_projects.validate_reserved_metadata(document) == []

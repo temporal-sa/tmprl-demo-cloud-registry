@@ -12,6 +12,11 @@ section (request_agent). The agent runs as an activity from the main loop, so
 the update returns at once and the page polls status; what it returns is a
 proposal the user applies or ignores, never a change to the draft itself.
 
+A valid draft can be test deployed (deploy_preview). The preview is its own
+per-user workflow (workflows/onboarding_preview.py) that outlives this one, so
+this workflow only hands it the draft; the page reads and ends the preview
+directly.
+
 The run waits on people for days, so it continues-as-new when its pinned worker
 version is superseded (``check_worker_version``) or history grows, carrying the
 whole status. An onboarding with no edits for ``IDLE_TIMEOUT`` expires.
@@ -32,6 +37,7 @@ from temporalio.workflow import ActivityCancellationType
 from demo_registry_operator import errors
 from demo_registry_operator.activities import catalog_onboarding as activities
 from demo_registry_operator.activities import onboarding_agent as agent_activities
+from demo_registry_operator.activities import onboarding_preview as preview_activities
 from demo_registry_operator.workflows import messages
 from demo_registry_operator.workflows.catalog_onboarding_messages import (
     CLOSED_PHASES,
@@ -51,6 +57,10 @@ from demo_registry_operator.workflows.catalog_onboarding_messages import (
     UpdateDraftRequest,
     ValidateDraftRequest,
     VerifyPullRequestRequest,
+)
+from demo_registry_operator.workflows.onboarding_preview_messages import (
+    DeployPreviewRequest,
+    PreviewStatus,
 )
 
 IDLE_TIMEOUT = timedelta(days=14)
@@ -232,6 +242,44 @@ class CatalogOnboardingWorkflow:
         self._reject_if_closed()
         if not request.pull_request_url.strip():
             raise ValueError("Paste the pull request link.")
+
+    @workflow.update
+    async def deploy_preview(self) -> PreviewStatus:
+        """Test deploy the current draft, or redeploy it to the running preview."""
+
+        async with self._lock:
+            self._require_open()
+            if not self._status.ready or self._status.document is None:
+                raise ApplicationError(
+                    "The draft has errors; fix them before deploying it.",
+                    type="DraftNotReady",
+                    non_retryable=True,
+                )
+            self._status.busy = "Starting test deploy"
+            try:
+                preview: PreviewStatus = await workflow.execute_activity(
+                    preview_activities.deploy_onboarding_preview,
+                    DeployPreviewRequest(
+                        owner_email=self._status.owner_email,
+                        document=self._status.document,
+                        revision=self._status.revision,
+                    ),
+                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                    retry_policy=preview_activities.PREVIEW_RETRY_POLICY,
+                )
+            except ActivityError as error:
+                raise self._edit_failed(error) from error
+            finally:
+                self._status.busy = None
+            self._status.last_error = None
+            self._touch()
+            return preview
+
+    @deploy_preview.validator
+    def _validate_deploy_preview(self) -> None:
+        self._reject_if_closed()
+        if not self._status.ready:
+            raise ValueError("The draft has errors; fix them before deploying it.")
 
     @workflow.update
     def abandon(self) -> OnboardingStatus:

@@ -120,6 +120,13 @@ from demo_registry_operator.activities.catalog_onboarding import (
     verify_onboarding_pull_request,
 )
 from demo_registry_operator.activities.onboarding_agent import run_onboarding_agent
+from demo_registry_operator.activities.onboarding_preview import (
+    apply_onboarding_preview,
+    delete_onboarding_preview,
+    deploy_onboarding_preview,
+    read_onboarding_preview,
+    wait_onboarding_preview_cleanup,
+)
 from demo_registry_operator.activities.namespace_readers import (
     grant_user_namespace_read_access,
     sync_namespace_readers_group,
@@ -174,6 +181,7 @@ from demo_registry_operator.activities.rollout_diagnostics import (
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.derive import (
     catalog_onboarding_workflow_id,
+    onboarding_preview_workflow_id,
     demo_project_workflow_id,
     instruqt_course_workflow_id,
 )
@@ -201,6 +209,9 @@ from demo_registry_operator.workflows.catalog_onboarding import (
     CatalogOnboardingWorkflow,
 )
 from demo_registry_operator.workflows.instruqt_course import InstruqtCourseWorkflow
+from demo_registry_operator.workflows.onboarding_preview import (
+    OnboardingPreviewWorkflow,
+)
 from demo_registry_operator.workflows.messages import CheckWorkerVersionSignal
 from demo_registry_operator.workflows.namespace_readers import (
     GrantNamespaceReadAccessWorkflow,
@@ -220,6 +231,7 @@ ENTITY_WORKFLOW_TYPES = (
     "DemoProjectWorkflow",
     "InstruqtCourseWorkflow",
     "CatalogOnboardingWorkflow",
+    "OnboardingPreviewWorkflow",
 )
 CHECK_WORKER_VERSION_SIGNAL = "check_worker_version"
 WORKFLOW_PASSTHROUGH_MODULES = (
@@ -236,6 +248,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.instruqt",
     "demo_registry_operator.activities.namespace_readers",
     "demo_registry_operator.activities.onboarding_agent",
+    "demo_registry_operator.activities.onboarding_preview",
     "demo_registry_operator.activities.reconcile",
     "demo_registry_operator.activities.rollout_diagnostics",
     "demo_registry_operator.derive",
@@ -250,6 +263,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.workflows.demo_project_serverless_lambda",
     "demo_registry_operator.workflows.messages",
     "demo_registry_operator.workflows.namespace_readers_messages",
+    "demo_registry_operator.workflows.onboarding_preview_messages",
     "demo_registry_operator.workflows.operator_auth_canary",
 )
 
@@ -345,6 +359,7 @@ async def main() -> None:
                     GrantNamespaceReadAccessWorkflow,
                     SyncNamespaceReadersWorkflow,
                     CatalogOnboardingWorkflow,
+                    OnboardingPreviewWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -468,6 +483,11 @@ async def main() -> None:
                     validate_onboarding_draft,
                     verify_onboarding_pull_request,
                     run_onboarding_agent,
+                    deploy_onboarding_preview,
+                    apply_onboarding_preview,
+                    read_onboarding_preview,
+                    delete_onboarding_preview,
+                    wait_onboarding_preview_cleanup,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,
@@ -718,10 +738,12 @@ def running_entity_workflows_query(cluster: str | None = None) -> str:
         demo_prefix = demo_project_workflow_id("", cluster)
         course_prefix = instruqt_course_workflow_id("", cluster)
         onboarding_prefix = catalog_onboarding_workflow_id("", cluster)
+        preview_prefix = onboarding_preview_workflow_id("", cluster)
         query += (
             f' AND (WorkflowId STARTS_WITH "{demo_prefix}"'
             f' OR WorkflowId STARTS_WITH "{course_prefix}"'
-            f' OR WorkflowId STARTS_WITH "{onboarding_prefix}")'
+            f' OR WorkflowId STARTS_WITH "{onboarding_prefix}"'
+            f' OR WorkflowId STARTS_WITH "{preview_prefix}")'
         )
     return query
 
