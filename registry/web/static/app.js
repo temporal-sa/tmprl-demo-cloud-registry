@@ -3031,6 +3031,13 @@ function markErrorFields(root, errors) {
 
 const PREVIEW_LIVE = new Set(["Deploying", "Ready", "Failed"]);
 const PREVIEW_POLLING = new Set(["Deploying", "Ending"]);
+// The operator's rollout stages, in order (ROLLOUT_STAGES in the operator).
+const PREVIEW_STAGES = [
+  ["resources", "Temporal Cloud and image repositories"],
+  ["build", "Build images"],
+  ["deploy", "Deploy"],
+  ["rollout", "Roll out workers and check health"],
+];
 const onboardPreview = { status: null };
 let previewPollTimer = null;
 
@@ -3085,6 +3092,34 @@ function endPreview() {
   if (window.confirm("End the test deploy and delete everything it created?")) {
     previewCall("Ending the test deploy", "/api/onboarding/preview/end");
   }
+}
+
+// One row per stage: done, the current one with its live step, or still to come.
+function previewProgress(preview) {
+  const current = Math.max(0, PREVIEW_STAGES.findIndex(([stage]) => stage === preview.stage));
+  return el(
+    "ol",
+    { class: "onboard-progress", "aria-label": "Test deploy progress" },
+    ...PREVIEW_STAGES.map(([, label], index) => {
+      const state = index < current ? "done" : index === current ? "current" : "todo";
+      return el(
+        "li",
+        { class: `is-${state}`, "aria-current": state === "current" ? "step" : null },
+        el("span", { class: "onboard-progress-mark", "aria-hidden": "true", text: state === "done" ? "✓" : String(index + 1) }),
+        el(
+          "div",
+          {},
+          el("span", { class: "onboard-progress-label", text: label }),
+          state === "current" && preview.step
+            ? el("span", { class: "onboard-progress-step", role: "status", text: `${preview.step}${preview.detail ? ` · ${preview.detail}` : ""}` })
+            : null,
+          state === "current" && preview.log_url
+            ? externalLink(preview.log_url, { class: "onboard-progress-log", text: "View the build log" })
+            : null
+        )
+      );
+    })
+  );
 }
 
 function previewEndsAt(preview) {
@@ -3144,8 +3179,9 @@ function previewBody(status) {
     parts.push(onboardAlert("success", "The test deploy is running.", "Open it below. Redeploy after you change the draft or push to the demo repo."));
   } else if (preview.phase === "Failed") {
     parts.push(onboardAlert("error", "The test deploy failed.", preview.last_error));
+    if (preview.log_url) parts.push(externalLink(preview.log_url, { class: "onboard-progress-log", text: "View the build log" }));
   } else {
-    parts.push(el("p", { class: "onboard-busy", role: "status", text: `Deploying: ${preview.step || "starting"}…` }));
+    parts.push(previewProgress(preview));
   }
   parts.push(
     el(

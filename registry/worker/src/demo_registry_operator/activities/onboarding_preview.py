@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +29,7 @@ from urllib.parse import quote
 from temporalio import activity
 from temporalio.client import WithStartWorkflowOperation, WorkflowUpdateFailedError
 from temporalio.common import RetryPolicy, WorkflowIDConflictPolicy
+from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator import derive, errors, kube, resources
 from demo_registry_operator.activities import canary
@@ -237,28 +239,202 @@ def apply_onboarding_preview(request: ApplyPreviewRequest) -> AppliedPreview:
 
 @activity.defn
 def read_onboarding_preview(request: ReadPreviewRequest) -> PreviewHealth:
+    """Where the preview's rollout is, for the page.
+
+    The operator writes the DemoProject status only when a reconcile ends, so
+    it decides Ready and Failed, and the live step comes from what the
+    project's workflows are running right now.
+    """
+
     resource = kube.read_demo_project(request.name)
-    if resource is None:
-        return PreviewHealth(phase="Deploying", step="Waiting for the operator")
-    return preview_health(resource.get("status"), request.commit_sha)
+    health = preview_health(
+        resource.get("status") if resource else None, request.commit_sha
+    )
+    if health.phase != "Deploying":
+        return health
+    try:
+        progress = asyncio.run(rollout_progress(request.name))
+    except Exception as error:  # noqa: BLE001 - progress is best effort
+        activity.logger.warning("test deploy progress read failed: %s", error)
+        return health
+    return dataclasses.replace(health, **progress) if progress else health
 
 
 def preview_health(status: Any, commit_sha: str) -> PreviewHealth:
-    if not isinstance(status, dict) or not status:
-        return PreviewHealth(phase="Deploying", step="Waiting for the operator")
-    phase = status.get("phase")
-    step = phase if isinstance(phase, str) and phase else "Reconciling"
+    waiting = PreviewHealth(
+        phase="Deploying", stage="resources", step="Waiting for the operator"
+    )
+    if not isinstance(status, dict) or not status.get("phase"):
+        return waiting
+    if status_commit(status) not in (None, commit_sha):
+        # What the status describes is an earlier deploy.
+        return waiting
     if canary.canary_failed(status):
         return PreviewHealth(
             phase="Failed",
-            step=step,
+            step=str(status["phase"]),
             message=canary.canary_failure_message(status).replace(
                 "Canary project failed before promotion", "The test deploy failed"
             ),
+            log_url=build_log_url(status),
         )
     if canary.canary_promoted({"expectedSourceCommitSha": commit_sha}, status):
-        return PreviewHealth(phase="Ready", step=step)
-    return PreviewHealth(phase="Deploying", step=step)
+        return PreviewHealth(phase="Ready", step="Ready")
+    return waiting
+
+
+def status_commit(status: dict[str, Any]) -> str | None:
+    for block in ("candidateRolloutStatus", "buildStatus"):
+        value = status.get(block)
+        sha = value.get("sourceCommitSha") if isinstance(value, dict) else None
+        if isinstance(sha, str) and sha:
+            return sha
+    return None
+
+
+def build_log_url(status: dict[str, Any]) -> str | None:
+    build = status.get("buildStatus")
+    codebuild = build.get("codebuild") if isinstance(build, dict) else None
+    logs = codebuild.get("logs") if isinstance(codebuild, dict) else None
+    link = logs.get("deepLink") if isinstance(logs, dict) else None
+    return link if isinstance(link, str) and link else None
+
+
+# What each activity of a DemoProject reconcile means to someone watching, as
+# (stage, step). Activities not listed fall back to their workflow's default.
+PARENT_STEPS = {
+    "load_current_demo_project_for_reconcile": ("resources", "Starting"),
+    "create_or_verify_ecr_repository": ("resources", "Creating image repositories"),
+    "create_or_verify_temporal_cloud_namespace": ("resources", "Creating the Temporal namespace"),
+    "ensure_temporal_cloud_namespace_tags": ("resources", "Creating the Temporal namespace"),
+    "ensure_temporal_cloud_namespace_readers_access": ("resources", "Creating the Temporal namespace"),
+    "reconcile_temporal_cloud_search_attributes": ("resources", "Adding search attributes"),
+    "reconcile_nexus_endpoints": ("resources", "Creating Nexus endpoints"),
+    "verify_secrets_manager_resources": ("resources", "Checking secrets"),
+    "record_demo_project_status": ("rollout", "Finishing up"),
+    "record_catalog_project_status": ("rollout", "Finishing up"),
+}
+BUILD_STEPS = {
+    "resolve_project_image_build_plan": ("build", "Planning image builds"),
+    "start_project_image_build": ("build", "Starting the image build"),
+    "wait_for_project_image_build": ("build", "Building images"),
+}
+RUNTIME_STEPS = {
+    "wait_for_worker_deployment_rollouts": ("rollout", "Rolling out workers"),
+    "wait_for_candidate_readiness": ("rollout", "Waiting for pods to start"),
+    "run_smoke_check": ("rollout", "Waiting for the health check"),
+    "promote_candidate_routes": ("rollout", "Switching traffic to the new version"),
+    "prune_stale_runtime_candidates": ("rollout", "Cleaning up the previous version"),
+    "capture_rollout_diagnostics": ("rollout", "Collecting rollout diagnostics"),
+    "rollback_worker_deployments": ("rollout", "Rolling back a failed rollout"),
+    "restore_active_runtime_routes": ("rollout", "Rolling back a failed rollout"),
+    "delete_runtime_candidate_resources": ("rollout", "Rolling back a failed rollout"),
+}
+CHILD_STEPS = {
+    "DemoProjectArtifactBuildWorkflow": (BUILD_STEPS, ("build", "Building images")),
+    "DemoProjectServerlessLambdaWorkflow": ({}, ("deploy", "Deploying Lambda functions")),
+    "DemoProjectKubernetesRuntimeWorkflow": (
+        RUNTIME_STEPS,
+        ("deploy", "Applying Kubernetes resources"),
+    ),
+}
+
+
+def parent_step(activity_type: str) -> tuple[str, str]:
+    if activity_type in PARENT_STEPS:
+        return PARENT_STEPS[activity_type]
+    if any(word in activity_type for word in ("api_key", "service_account", "mtls", "credential", "runtime_secret", "canary")):
+        return ("resources", "Setting up Temporal credentials")
+    if "temporal" in activity_type:
+        return ("resources", "Setting up Temporal Cloud")
+    return ("resources", "Preparing")
+
+
+async def rollout_progress(name: str) -> dict[str, Any] | None:
+    """The current stage, step and detail of the project's reconcile, or None
+    when its workflow isn't reconciling."""
+
+    config = WorkerConfig.from_env()
+    client = await connect(config)
+    handle = client.get_workflow_handle(
+        derive.demo_project_workflow_id(name, config.cluster)
+    )
+    try:
+        description = await handle.describe()
+    except RPCError as error:
+        if error.status == RPCStatusCode.NOT_FOUND:
+            return {"stage": "resources", "step": "Waiting for the operator"}
+        raise
+    raw = description.raw_description
+    for child in raw.pending_children:
+        steps, default = CHILD_STEPS.get(child.workflow_type_name, ({}, None))
+        if default is None:
+            continue
+        child_description = await client.get_workflow_handle(
+            child.workflow_id, run_id=child.run_id or None
+        ).describe()
+        pending = list(child_description.raw_description.pending_activities)
+        if not pending:
+            return {"stage": default[0], "step": default[1]}
+        stage, step = steps.get(pending[0].activity_type.name, default)
+        return {
+            "stage": stage,
+            "step": step,
+            **await activity_detail(client, config, pending[0]),
+        }
+    pending = list(raw.pending_activities)
+    if not pending:
+        return None
+    stage, step = parent_step(pending[0].activity_type.name)
+    return {"stage": stage, "step": step, **await activity_detail(client, config, pending[0])}
+
+
+async def activity_detail(client: Any, config: WorkerConfig, pending: Any) -> dict[str, Any]:
+    """A detail line, and the build log, from a pending activity's heartbeat
+    and retry state."""
+
+    heartbeat: dict[str, Any] = {}
+    payloads = list(pending.heartbeat_details.payloads)
+    if payloads:
+        decoded = await client.data_converter.decode(payloads)
+        if decoded and isinstance(decoded[-1], dict):
+            heartbeat = decoded[-1]
+    detail = None
+    log_url = None
+    build_id = heartbeat.get("codebuildBuildId")
+    if isinstance(build_id, str) and build_id:
+        detail, log_url = codebuild_progress(config, build_id)
+    elif "attempt" in heartbeat and "smokeCheck" in heartbeat:
+        detail = f"Check {heartbeat['attempt']}, last response {heartbeat.get('lastStatus') or 'none'}"
+    if pending.attempt > 1 and pending.last_failure.message:
+        retry = f"Retrying (attempt {pending.attempt}): {pending.last_failure.message}"
+        detail = f"{detail}. {retry}" if detail else retry
+    return {"detail": detail, "log_url": log_url}
+
+
+def codebuild_progress(config: WorkerConfig, build_id: str) -> tuple[str | None, str | None]:
+    """CodeBuild's current phase ("Build", "Post build") and the log link."""
+
+    import boto3
+
+    builds = (
+        boto3.session.Session(region_name=config.aws_region)
+        .client("codebuild")
+        .batch_get_builds(ids=[build_id])
+        .get("builds")
+        or []
+    )
+    if not builds:
+        return None, None
+    build = builds[0]
+    phase = build.get("currentPhase")
+    detail = (
+        f"CodeBuild phase: {str(phase).replace('_', ' ').capitalize()}"
+        if isinstance(phase, str) and phase and phase != "COMPLETED"
+        else None
+    )
+    link = (build.get("logs") or {}).get("deepLink")
+    return detail, link if isinstance(link, str) and link else None
 
 
 @activity.defn

@@ -16,6 +16,10 @@ from typing import Any
 # "Ending": deleting the DemoProject and waiting for finalize.
 # "Ended": everything is gone; the run completes.
 LIVE_PHASES = frozenset({"Deploying", "Ready", "Failed"})
+# The stages of a rollout, in order, for the page's progress list:
+# Temporal Cloud and image repositories, image builds, Kubernetes resources
+# (and Lambda), then worker rollout and the health check.
+ROLLOUT_STAGES = ("resources", "build", "deploy", "rollout")
 
 
 @dataclass
@@ -29,8 +33,12 @@ class PreviewStatus:
     # What is deployed: the draft revision and the demo repo commit it builds.
     revision: int = 0
     commit_sha: str = ""
-    # What the operator is doing, from the DemoProject status.
+    # What the operator is doing right now: one of ROLLOUT_STAGES, a short
+    # step, an optional detail (a CodeBuild phase, a retry), and the build log.
+    stage: str = ""
     step: str = ""
+    detail: str | None = None
+    log_url: str | None = None
     last_error: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -91,6 +99,9 @@ class PreviewHealth:
     phase: str
     step: str = ""
     message: str | None = None
+    stage: str = ""
+    detail: str | None = None
+    log_url: str | None = None
 
 
 @dataclass(frozen=True)
