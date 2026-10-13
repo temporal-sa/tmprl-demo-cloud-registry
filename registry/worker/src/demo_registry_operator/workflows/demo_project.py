@@ -1608,6 +1608,9 @@ class DemoProjectWorkflow:
             project=external_plan.temporal_project,
             candidate_secret_token=candidate_secret_token,
         )
+        # Temporal Cloud refuses to delete a namespace an endpoint targets. The
+        # reconcile recreates the endpoints once every namespace is Ready again.
+        await self._delete_nexus_endpoints(external_plan)
         await workflow.execute_activity(
             external_resources.delete_temporal_cloud_api_key,
             temporal_delete_request,

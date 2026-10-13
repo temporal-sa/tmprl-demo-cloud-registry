@@ -138,6 +138,7 @@ def run_saga(
     search_attributes: dict[str, Any] | None = None,
     previous_status: dict[str, Any] | None = None,
     sequenced_results: dict[str, list[Any]] | None = None,
+    nexus_endpoint: bool = False,
 ):
     """Drive the real saga with a recording stub, returning (calls, status, workflow).
 
@@ -193,6 +194,16 @@ def run_saga(
         demo_project,
         checked_at=CHECKED_AT,
     )
+    if nexus_endpoint:
+        external_plan = with_nexus_endpoint(external_plan)
+        results["delete_nexus_endpoints"] = models.NexusEndpointResult(
+            status={"phase": "Deleted", "endpoints": []},
+            endpoint_ids={},
+        )
+        results["reconcile_nexus_endpoints"] = models.NexusEndpointResult(
+            status={"phase": "Ready", "endpoints": []},
+            endpoint_ids={"orders": "endpoint-orders"},
+        )
     status = asyncio.run(
         workflow._reconcile_temporal_cloud(
             external_plan, previous_status=previous_status or {}
@@ -401,7 +412,7 @@ REGION_DRIFT_TEARDOWN = [
 ]
 
 
-def test_region_drift_recreates_credentials_at_a_fresh_secret_path(monkeypatch):
+def region_drift_results() -> dict[str, list[Any]]:
     drifted = models.TemporalCloudNamespaceResult(
         status={
             "phase": "RegionDrift",
@@ -423,13 +434,17 @@ def test_region_drift_recreates_credentials_at_a_fresh_secret_path(monkeypatch):
         region="aws-ca-central-1",
     )
     deleted = models.TemporalCloudStatusResult(status={"phase": "Deleted"})
+    return {
+        "create_or_verify_temporal_cloud_namespace": [drifted, recreated],
+        **{name: [deleted] for name in REGION_DRIFT_TEARDOWN},
+    }
+
+
+def test_region_drift_recreates_credentials_at_a_fresh_secret_path(monkeypatch):
     calls, _status, workflow = run_saga(
         monkeypatch,
         owned_suffix=STABLE_SUFFIX,
-        sequenced_results={
-            "create_or_verify_temporal_cloud_namespace": [drifted, recreated],
-            **{name: [deleted] for name in REGION_DRIFT_TEARDOWN},
-        },
+        sequenced_results=region_drift_results(),
     )
     paths = {
         name: request.project.runtime_secret_path
@@ -448,6 +463,23 @@ def test_region_drift_recreates_credentials_at_a_fresh_secret_path(monkeypatch):
         assert paths[name] == MINTED_PATH, name
     assert workflow._temporal_runtime_secret_suffix == MINTED_SUFFIX
     assert workflow._tc_plan.temporal_project.runtime_secret_path == MINTED_PATH
+
+
+def test_region_drift_deletes_nexus_endpoints_before_the_namespace(monkeypatch):
+    # Temporal Cloud refuses to delete a namespace an endpoint targets.
+    calls, status, _workflow = run_saga(
+        monkeypatch,
+        owned_suffix=STABLE_SUFFIX,
+        sequenced_results=region_drift_results(),
+        nexus_endpoint=True,
+    )
+    names = [name for name, _request in calls]
+    assert names.index("delete_nexus_endpoints") < names.index(
+        "delete_temporal_cloud_namespace"
+    )
+    # Recreated once the namespace in the new region is Ready.
+    assert names[-1] == "reconcile_nexus_endpoints"
+    assert status["nexusEndpoints"]["phase"] == "Ready"
 
 
 # --- search attributes -------------------------------------------------------
