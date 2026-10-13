@@ -123,6 +123,11 @@ spec:
     summary: Build a durable advertising campaign application with Temporal and Python.
     tags: [Durable execution, Workshop]
     temporalSdks: [Python]
+    links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/example
+      goldenPath:
+        url: https://drive.google.com/file/d/example
     resources:
       - label: Facilitator guide
         url: https://docs.google.com/document/d/example
@@ -142,12 +147,17 @@ separately run `track validate`, `track test`, or `track deploy`.
 
 `catalog` controls how the course appears in the registry's Courses section.
 `title` and `summary` are required when the block is present. Add searchable
-`tags` and `temporalSdks`, plus any related HTTPS resources such as facilitator
-guides, slide decks, recordings, or source repositories. Courses that are
+`tags` and `temporalSdks`. `links` takes the same presenter assets as a demo's
+`spec.registry.links`: `speakerNotes`, `slideDeck`, `runbook`, `goldenPath`
+(the golden recording), `externalRecording`, and `additional` links. The
+workshop card shows them as the same asset chips demo cards use. `resources`
+lists any other HTTPS links, such as facilitator guides or source
+repositories, under the launch buttons. Courses that are
 language versions of the same lab set the same `parent` and a distinct
 `variant`, such as `Java` or `Python`. The registry shows that parent once and
 uses each variant to open its track. Every course in a parent group must use
-the same title and summary.
+the same title and summary. Set shared presenter assets on any one course in
+the group; the card takes each asset from the first course that sets it.
 
 Testing tracks are branch-driven. `source.branch` is the production source of
 truth and defaults to `main`. `source.testingBranch` enables a separate managed

@@ -364,6 +364,23 @@ def test_instruqt_catalog_entry_exposes_track_and_resources():
     assert entry["variant"] == "Python"
     assert entry["temporalSdks"] == ["Python"]
     assert entry["resources"][0]["label"] == "Slides"
+    assert entry["links"] == {}
+
+
+def test_instruqt_catalog_entry_exposes_presenter_links():
+    links = {
+        "slideDeck": {"url": "https://example.com/deck"},
+        "goldenPath": {"url": "https://example.com/golden"},
+    }
+    entry = instruqt_catalog_entry(
+        project(
+            "durable-lab",
+            source={"repo": "https://github.com/temporal-sa/durable-lab"},
+            track={"organization": "temporal", "slug": "durable-lab"},
+            catalog={"title": "Durable Lab", "summary": "Learn.", "links": links},
+        )
+    )
+    assert entry["links"] == links
 
 
 def test_temporal_region_reads_spec_and_defaults_none():

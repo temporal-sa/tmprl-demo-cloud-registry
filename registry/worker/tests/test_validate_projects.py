@@ -1318,3 +1318,63 @@ def test_error_pointer_leaves_unscoped_messages_without_a_pointer():
     )
 
     assert validate_projects.error_pointer(error, frozenset({"components"})) is None
+
+
+def test_instruqt_schema_accepts_presenter_links():
+    document = instruqt_course_document("https://github.com/temporal-sa/workshop")
+    document.data["spec"]["catalog"] = {
+        "title": "Workshop",
+        "summary": "A workshop.",
+        "links": {
+            "speakerNotes": {"url": "https://docs.google.com/document/d/notes"},
+            "slideDeck": {"url": "https://docs.google.com/presentation/d/deck"},
+            "runbook": {"label": "Facilitator runbook", "url": "https://example.com/run"},
+            "goldenPath": {"url": "https://drive.google.com/file/d/golden"},
+            "externalRecording": {"url": "https://www.youtube.com/watch?v=abc"},
+            "additional": [
+                {
+                    "label": "Customer one-pager",
+                    "url": "https://example.com/one-pager",
+                    "audience": "nonTechnical",
+                }
+            ],
+        },
+    }
+    validators = validate_projects.load_default_validators()
+
+    assert validate_projects.validate_document_schema(validators, document) == []
+
+    links = document.data["spec"]["catalog"]["links"]
+    links["slideDeck"] = {"url": "http://example.com/deck"}
+    links["recording"] = {"url": "https://example.com/recording"}
+    messages = [
+        error.message
+        for error in validate_projects.validate_document_schema(validators, document)
+    ]
+    assert any("spec.catalog.links.slideDeck.url" in message for message in messages)
+    assert any("'recording' was unexpected" in message for message in messages)
+
+
+def test_instruqt_course_crd_keeps_every_catalog_field():
+    # The InstruqtCourse CRD is structural, so the API server drops any catalog
+    # field it doesn't declare even though the validator accepts it.
+    import json
+
+    import yaml
+
+    schema = json.loads((ROOT / "schemas/instruqt-course.schema.json").read_text())
+    catalog = schema["properties"]["spec"]["properties"]["catalog"]
+    schema_catalog = schema["$defs"][catalog["$ref"].rsplit("/", 1)[-1]]["properties"]
+    schema_links = schema["$defs"]["catalogLinks"]["properties"]
+
+    for color in ("blue", "green"):
+        crd = yaml.safe_load(
+            (
+                ROOT
+                / f"clusters/{color}/bootstrap/crds/instruqtcourses.registry.tmprl-demo.cloud.yaml"
+            ).read_text()
+        )
+        spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        crd_catalog = spec["properties"]["catalog"]["properties"]
+        assert set(crd_catalog) == set(schema_catalog), color
+        assert set(crd_catalog["links"]["properties"]) == set(schema_links), color

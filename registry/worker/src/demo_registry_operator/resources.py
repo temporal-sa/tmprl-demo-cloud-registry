@@ -4003,6 +4003,7 @@ def instruqt_catalog_entry(instruqt_course: dict[str, Any]) -> dict[str, Any]:
         "variant": catalog.get("variant", ""),
         "tags": catalog.get("tags", []),
         "temporalSdks": catalog.get("temporalSdks", []),
+        "links": catalog.get("links", {}),
         "resources": catalog.get("resources", []),
     }
 
