@@ -13,7 +13,9 @@ from temporalio.exceptions import ApplicationError, CancelledError
 from demo_registry_operator.activities import onboarding_agent as agent
 from demo_registry_operator.workflows.catalog_onboarding_messages import (
     AgentFinding,
+    AgentMessage,
     AgentRunRequest,
+    DeleteAgentSessionsRequest,
     OnboardingRepo,
 )
 
@@ -242,6 +244,8 @@ class FakeCluster:
         self.jobs = {}
         self.secrets = []
         self.deleted = []
+        self.sessions = {}
+        self.deleted_secrets = []
         if existing:
             self.jobs["existing"] = True
 
@@ -281,11 +285,19 @@ class FakeCluster:
     def read_pod_log(self, namespace, name, container):
         return self.log
 
+    def upsert_secret_data(self, namespace, name, data, *, labels=None):
+        self.sessions[name] = {"data": data, "labels": labels}
+        return "created"
+
+    def delete_secret(self, namespace, name):
+        self.deleted_secrets.append(name)
+        return "not-found"
+
 
 @pytest.fixture
 def run(monkeypatch):
     def setup(cluster: FakeCluster):
-        for attribute in ("read_job", "create_job", "create_secret", "delete_job", "list_pods", "read_pod_log", "list_object_events"):
+        for attribute in ("read_job", "create_job", "create_secret", "delete_job", "list_pods", "read_pod_log", "list_object_events", "upsert_secret_data", "delete_secret"):
             monkeypatch.setattr(agent.kube, attribute, getattr(cluster, attribute))
         minted, revoked, beats = [], [], []
         monkeypatch.setenv(agent.AGENT_IMAGE_ENV, "img:1")
@@ -440,3 +452,86 @@ def test_request_bundle_carries_the_contract_and_live_examples(monkeypatch):
     # A project without a subdomain is served at its name; canaries and test
     # deploys come and go and never block a name.
     assert bundle["context"]["taken_subdomains"] == ["canonical-ai-demo", "money"]
+
+
+CHAT = AgentRunRequest(
+    run_id="run#2",
+    mode="chat",
+    repo=REPO,
+    project_name="demo",
+    question="Use money-transfer.",
+    conversation_id="onboarding/first/c1",
+    onboarding_id="onboarding/first",
+    history=[AgentMessage(role="user", text="Draft it."), AgentMessage(role="agent", text="Done.", outcome="Done", run=1)],
+    patch="diff --git a/x b/x\n",
+)
+
+
+def test_conversation_turns_mount_their_session_optionally():
+    session = agent.session_secret_name("onboarding/first/c1")
+    job = agent.job_manifest("onboarding-agent-x", "agents", "img:1", "run#2", "run#2/1", session_secret=session)
+    pod = job["spec"]["template"]["spec"]
+
+    assert {"name": "session", "secret": {"secretName": session, "optional": True}} in pod["volumes"]
+    assert {"name": "session", "mountPath": "/session", "readOnly": True} in pod["containers"][0]["volumeMounts"]
+    plain = agent.job_manifest("onboarding-agent-x", "agents", "img:1", "run#1", "run#1/1")["spec"]["template"]["spec"]
+    assert all(volume["name"] != "session" for volume in plain["volumes"])
+
+
+def test_turn_saves_its_session_for_the_next_one_but_not_in_the_result(run):
+    cluster = FakeCluster(
+        log=result_lines({"summary": "ok", "questions": ["Which port?"], "resumed": True, "session_id": "abc", "session": "dGFy"}),
+        status={"succeeded": 1},
+    )
+    run(cluster)
+
+    result = agent.run_onboarding_agent(CHAT)
+
+    name = agent.session_secret_name("onboarding/first/c1")
+    assert cluster.sessions[name]["data"] == {"session": "dGFy", "session_id": "abc"}
+    assert cluster.sessions[name]["labels"] == {agent.SESSION_LABEL: agent.onboarding_label("onboarding/first")}
+    assert result.questions == ["Which port?"]
+    assert result.resumed is True
+    assert "dGFy" not in repr(result)
+
+
+def test_oversized_session_is_dropped_so_the_next_turn_starts_fresh(run):
+    big = "x" * (agent.MAX_SESSION_CHARS + 1)
+    cluster = FakeCluster(
+        log=result_lines({"summary": "ok", "session_id": "abc", "session": big}, chunk=100_000),
+        status={"succeeded": 1},
+    )
+    run(cluster)
+
+    agent.run_onboarding_agent(CHAT)
+
+    assert cluster.sessions == {}
+    assert cluster.deleted_secrets == [agent.session_secret_name("onboarding/first/c1")]
+
+
+def test_runs_outside_a_conversation_save_nothing(run):
+    cluster = FakeCluster(log=result_lines({"summary": "ok", "session_id": "abc", "session": "dGFy"}), status={"succeeded": 1})
+    run(cluster)
+
+    agent.run_onboarding_agent(REQUEST)
+
+    assert cluster.sessions == {} and cluster.deleted_secrets == []
+
+
+def test_closing_an_onboarding_deletes_its_sessions_by_label(monkeypatch):
+    calls = []
+    monkeypatch.setattr(agent.kube, "delete_secrets", lambda namespace, label_selector: calls.append((namespace, label_selector)) or 2)
+
+    assert agent.delete_onboarding_agent_sessions(DeleteAgentSessionsRequest(onboarding_id="onboarding/first")) == 2
+    assert calls == [(agent.DEFAULT_AGENT_NAMESPACE, f"{agent.SESSION_LABEL}={agent.onboarding_label('onboarding/first')}")]
+
+
+def test_request_bundle_carries_the_conversation(monkeypatch):
+    monkeypatch.setattr(agent.kube, "list_demo_projects", lambda: [])
+
+    bundle = agent.request_bundle(CHAT)
+
+    assert bundle["question"] == "Use money-transfer."
+    assert bundle["patch"] == "diff --git a/x b/x\n"
+    assert [m["text"] for m in bundle["history"]] == ["Draft it.", "Done."]
+    assert bundle["history"][1]["outcome"] == "Done"

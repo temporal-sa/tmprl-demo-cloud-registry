@@ -7,10 +7,13 @@ scripts/validate_projects.py in an activity, so the draft the user hands off is
 exactly what CI will accept. The run completes at hand-off; a repo owner merging
 the PR is outside onboarding.
 
-Users can ask the onboarding agent to draft the project or help with one
-section (request_agent). The agent runs as an activity from the main loop, so
-the update returns at once and the page polls status; what it returns is a
-proposal the user applies or ignores, never a change to the draft itself.
+Users talk to the onboarding agent in one conversation (request_agent): ask
+it to draft the project, ask about one section, or answer its questions. Each
+message is one agent run, an activity started from the main loop, so the
+update returns at once and the page polls status. Runs resume the agent's
+saved session, so it remembers the conversation and the repo it has read.
+What a run returns is a proposal the user applies or ignores, never a change
+to the draft itself.
 
 A valid draft can be test deployed (deploy_preview). The preview is its own
 per-user workflow (workflows/onboarding_preview.py) that outlives this one, so
@@ -41,11 +44,13 @@ from demo_registry_operator.activities import onboarding_preview as preview_acti
 from demo_registry_operator.workflows import messages
 from demo_registry_operator.workflows.catalog_onboarding_messages import (
     CLOSED_PHASES,
+    AgentMessage,
     AgentProposal,
     AgentRequest,
     AgentRunRequest,
     AgentRunResult,
     AgentState,
+    DeleteAgentSessionsRequest,
     DraftValidation,
     InspectRepoRequest,
     OnboardingRepo,
@@ -70,8 +75,12 @@ AGENT_TIMEOUT = timedelta(minutes=30)
 # heartbeat, which the SDK throttles to 80% of this, so this bounds how long
 # "Stop the agent" takes.
 AGENT_HEARTBEAT_TIMEOUT = timedelta(seconds=30)
-AGENT_MODES = frozenset({"draft", "section"})
+AGENT_MODES = frozenset({"draft", "section", "chat"})
 MAX_AGENT_QUESTION_CHARS = 2000
+# The conversation is carried through continue-as-new; keep it bounded.
+MAX_CONVERSATION_MESSAGES = 60
+MAX_AGENT_MESSAGE_CHARS = 4000
+DRAFT_MESSAGE = "Draft the whole project from the repo."
 
 
 @workflow.defn
@@ -134,6 +143,8 @@ class CatalogOnboardingWorkflow:
         if self._status.agent and self._status.agent.phase == "Running":
             # Closed with a request still queued; it never ran.
             self._status.agent.phase = "Cancelled"
+        if self._status.agent_runs:
+            await self._delete_agent_sessions()
         return self._snapshot()
 
     @workflow.update
@@ -163,6 +174,11 @@ class CatalogOnboardingWorkflow:
             self._status.repo = repo
             if self._status.document is None or current is None or current.url != repo.url:
                 await self._validate(ValidateDraftRequest(document=seed_document(repo)))
+                self._reset_conversation()
+            elif current.commit_sha != repo.commit_sha:
+                # The repo moved on (perhaps with the suggested fixes); the
+                # agent reads the new commit instead of reapplying its edits.
+                self._status.agent_patch = ""
             self._status.phase = "Drafting"
             self._touch()
             return self._snapshot()
@@ -296,8 +312,19 @@ class CatalogOnboardingWorkflow:
         # The workflow id is per user and reused by every onboarding they start,
         # and the LiteLLM broker never re-issues a revoked participant. The first
         # run id keeps this unique per onboarding and survives continue-as-new.
-        info = workflow.info()
-        run_id = f"{info.workflow_id}/{info.first_execution_run_id}#{self._status.agent_runs}"
+        onboarding_id = self._onboarding_id()
+        run_id = f"{onboarding_id}#{self._status.agent_runs}"
+        if self._status.conversation_id is None:
+            self._status.conversation_id = f"{onboarding_id}/c{self._status.agent_runs}"
+        history = list(self._status.conversation)
+        self._add_message(
+            AgentMessage(
+                role="user",
+                text=(request.question or "").strip() or DRAFT_MESSAGE,
+                at=workflow.now().astimezone(UTC).isoformat(),
+                pointer=request.pointer,
+            )
+        )
         name = ((self._status.document or {}).get("metadata") or {}).get("name")
         self._agent_pending = AgentRunRequest(
             run_id=run_id,
@@ -308,6 +335,10 @@ class CatalogOnboardingWorkflow:
             errors=[error.message for error in self._status.errors],
             pointer=request.pointer,
             question=request.question,
+            conversation_id=self._status.conversation_id,
+            onboarding_id=onboarding_id,
+            history=history,
+            patch=self._status.agent_patch,
         )
         self._agent_cancel = False
         self._status.agent = AgentState(
@@ -334,8 +365,26 @@ class CatalogOnboardingWorkflow:
             raise ValueError(f"Unknown agent mode {request.mode!r}.")
         if request.mode == "section" and not (request.question or "").strip():
             raise ValueError("Ask the agent a question about this section.")
+        if request.mode == "chat" and not (request.question or "").strip():
+            raise ValueError("Write a message for the agent.")
         if len(request.question or "") > MAX_AGENT_QUESTION_CHARS:
             raise ValueError("The question is too long.")
+
+    @workflow.update
+    def new_agent_conversation(self) -> OnboardingStatus:
+        """Start over: the next message starts a fresh agent session."""
+
+        self._reset_conversation()
+        self._touch()
+        return self._snapshot()
+
+    @new_agent_conversation.validator
+    def _validate_new_agent_conversation(self) -> None:
+        self._reject_if_closed()
+        if self._agent_pending is not None or (
+            self._status.agent and self._status.agent.phase == "Running"
+        ):
+            raise ValueError("Stop the agent before starting a new conversation.")
 
     @workflow.update
     def cancel_agent(self) -> OnboardingStatus:
@@ -380,6 +429,9 @@ class CatalogOnboardingWorkflow:
                 agent.error = errors.failure_details(error)["message"]
             else:
                 agent.phase = "Cancelled"
+            self._agent_replied(
+                agent.error or "Stopped before answering.", outcome=agent.phase
+            )
             self._finish_agent()
             return
 
@@ -395,6 +447,7 @@ class CatalogOnboardingWorkflow:
             num_turns=result.num_turns,
             pointer=request.pointer,
             question=request.question,
+            questions=list(result.questions),
         )
         if result.document is not None:
             # Same check as any edit, so the page can say whether applying the
@@ -414,7 +467,71 @@ class CatalogOnboardingWorkflow:
                 agent.error = errors.failure_details(error)["message"]
         agent.proposal = proposal
         agent.phase = "Done"
+        self._status.agent_patch = result.patch
+        self._status.agent_cost_usd = round(self._status.agent_cost_usd + result.cost_usd, 4)
+        self._agent_replied(
+            result.summary or "Done.",
+            outcome="Done",
+            questions=list(result.questions),
+            cost_usd=result.cost_usd,
+        )
         self._finish_agent()
+
+    def _agent_replied(
+        self,
+        text: str,
+        *,
+        outcome: str,
+        questions: list[str] | None = None,
+        cost_usd: float = 0.0,
+    ) -> None:
+        self._add_message(
+            AgentMessage(
+                role="agent",
+                text=text,
+                at=workflow.now().astimezone(UTC).isoformat(),
+                run=self._status.agent_runs,
+                outcome=outcome,
+                questions=questions or [],
+                cost_usd=cost_usd,
+            )
+        )
+
+    def _add_message(self, message: AgentMessage) -> None:
+        if len(message.text) > MAX_AGENT_MESSAGE_CHARS:
+            message = dataclasses.replace(
+                message, text=message.text[:MAX_AGENT_MESSAGE_CHARS] + "…"
+            )
+        self._status.conversation = [
+            *self._status.conversation[-(MAX_CONVERSATION_MESSAGES - 1) :],
+            message,
+        ]
+
+    def _reset_conversation(self) -> None:
+        self._status.conversation = []
+        self._status.conversation_id = None
+        self._status.agent_patch = ""
+        self._status.agent = None
+
+    async def _delete_agent_sessions(self) -> None:
+        # Best effort: a session left behind holds only the public repo and
+        # the draft.
+        try:
+            await workflow.execute_activity(
+                agent_activities.delete_onboarding_agent_sessions,
+                DeleteAgentSessionsRequest(onboarding_id=self._onboarding_id()),
+                start_to_close_timeout=ACTIVITY_TIMEOUT,
+                retry_policy=activities.ONBOARDING_RETRY_POLICY,
+            )
+        except ActivityError as error:
+            workflow.logger.warning(
+                "Could not delete agent sessions: %s",
+                errors.failure_details(error)["message"],
+            )
+
+    def _onboarding_id(self) -> str:
+        info = workflow.info()
+        return f"{info.workflow_id}/{info.first_execution_run_id}"
 
     def _finish_agent(self) -> None:
         agent = self._status.agent

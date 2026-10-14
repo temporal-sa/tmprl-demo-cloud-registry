@@ -70,6 +70,26 @@ class AgentProposal:
     num_turns: int = 0
     pointer: str | None = None
     question: str | None = None
+    # What the agent needs the user to answer before it can go further.
+    questions: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AgentMessage:
+    """One message in the conversation with the agent."""
+
+    # "user" | "agent"
+    role: str
+    text: str
+    at: str | None = None
+    # The draft section a user message is about, as a JSON pointer.
+    pointer: str | None = None
+    # Agent messages: the run they came from (agent_runs numbering), how it
+    # ended ("Done" | "Failed" | "Cancelled"), and what it asked the user.
+    run: int = 0
+    outcome: str | None = None
+    questions: list[str] = field(default_factory=list)
+    cost_usd: float = 0.0
 
 
 @dataclass
@@ -111,6 +131,16 @@ class OnboardingStatus:
     # The latest agent run, if any; agent_runs numbers them.
     agent: AgentState | None = None
     agent_runs: int = 0
+    # The conversation with the agent. Each turn resumes the agent's saved
+    # session (activities/onboarding_agent.py), named by conversation_id;
+    # None until the first message, and reset by a new conversation or repo.
+    conversation: list[AgentMessage] = field(default_factory=list)
+    conversation_id: str | None = None
+    # The conversation's suggested repo changes so far, reapplied to the
+    # fresh checkout each turn so the agent sees the files it edited.
+    agent_patch: str = ""
+    # What every finished agent run in this onboarding reported spending.
+    agent_cost_usd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -179,10 +209,16 @@ class PullRequestCheck:
 
 @dataclass(frozen=True)
 class AgentRequest:
-    # "draft": write the whole DemoProject. "section": answer a question about
-    # one part (pointer) and revise only that part.
+    """One user message to the agent.
+
+    "draft": write the whole DemoProject. "section": a message about one part
+    of the draft (pointer). "chat": anything else, e.g. answering the agent's
+    questions. Every mode continues the same conversation.
+    """
+
     mode: str
     pointer: str | None = None
+    # The user's message.
     question: str | None = None
 
 
@@ -197,6 +233,15 @@ class AgentRunRequest:
     errors: list[str] = field(default_factory=list)
     pointer: str | None = None
     question: str | None = None
+    # The conversation this turn belongs to; its saved agent session is named
+    # after it. onboarding_id groups every conversation of one onboarding so
+    # they can be deleted together.
+    conversation_id: str = ""
+    onboarding_id: str = ""
+    # Earlier messages, for when the saved session can't be resumed.
+    history: list[AgentMessage] = field(default_factory=list)
+    # The conversation's repo changes so far, to reapply to the checkout.
+    patch: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,3 +254,12 @@ class AgentRunResult:
     prompt: str = ""
     cost_usd: float = 0.0
     num_turns: int = 0
+    questions: list[str] = field(default_factory=list)
+    # True when the run continued the conversation's saved session; False
+    # when it started fresh from the message history.
+    resumed: bool = False
+
+
+@dataclass(frozen=True)
+class DeleteAgentSessionsRequest:
+    onboarding_id: str

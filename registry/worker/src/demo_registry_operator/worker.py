@@ -119,7 +119,10 @@ from demo_registry_operator.activities.catalog_onboarding import (
     validate_onboarding_draft,
     verify_onboarding_pull_request,
 )
-from demo_registry_operator.activities.onboarding_agent import run_onboarding_agent
+from demo_registry_operator.activities.onboarding_agent import (
+    delete_onboarding_agent_sessions,
+    run_onboarding_agent,
+)
 from demo_registry_operator.activities.onboarding_preview import (
     apply_onboarding_preview,
     delete_onboarding_preview,
@@ -483,6 +486,7 @@ async def main() -> None:
                     validate_onboarding_draft,
                     verify_onboarding_pull_request,
                     run_onboarding_agent,
+                    delete_onboarding_agent_sessions,
                     deploy_onboarding_preview,
                     apply_onboarding_preview,
                     read_onboarding_preview,

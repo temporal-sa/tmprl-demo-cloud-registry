@@ -1810,6 +1810,32 @@ def create_secret(secret: dict[str, Any]) -> str:
         raise
 
 
+def delete_secret(namespace: str, name: str) -> str:
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CoreV1Api().delete_namespaced_secret(name, namespace)
+        return "deleted"
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "not-found"
+        raise
+
+
+def delete_secrets(namespace: str, *, label_selector: str) -> int:
+    """Deletes the Secrets matching a label selector; returns how many."""
+
+    client = _client_module()
+    load_kubernetes_config()
+    core = client.CoreV1Api()
+    secrets = core.list_namespaced_secret(namespace, label_selector=label_selector)
+    deleted = 0
+    for secret in getattr(secrets, "items", None) or []:
+        if delete_secret(namespace, secret.metadata.name) == "deleted":
+            deleted += 1
+    return deleted
+
+
 def read_pod_log(namespace: str, name: str, *, container: str) -> str:
     client = _client_module()
     load_kubernetes_config()

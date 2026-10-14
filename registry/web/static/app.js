@@ -1846,6 +1846,7 @@ const onboard = {
   signInUrl: null,
   changingRepo: false,
   askOpen: null, // pointer of the form section whose "Ask the agent" box is open
+  agentMessage: "", // unsent text in the agent conversation's message box
 };
 
 function clone(value) {
@@ -1973,9 +1974,10 @@ function switchOnboardTab(tab) {
 }
 
 // ─── Onboarding: the agent ─────────────────────────────────────────────────
-// The agent reads the repo and proposes a draft (or answers a question about
-// one section). Its run takes minutes, so the page polls status and refreshes
-// only the agent panel, leaving the form and any unsaved edits alone.
+// A conversation with the agent: the user asks it to draft the project, asks
+// about one section, or answers its questions, and it remembers the earlier
+// turns. Each reply takes minutes, so the page polls status and refreshes only
+// the thread, leaving the form, the message box and unsaved edits alone.
 
 const AGENT_SEVERITY_LABEL = { blocker: "Blocker", warning: "Warning", suggestion: "Suggestion" };
 let onboardPollTimer = null;
@@ -1992,23 +1994,58 @@ function scheduleOnboardPoll() {
 }
 
 async function refreshAgentPanel() {
+  const wasRunning = agentRunning(onboard.status);
   try {
     const res = await fetch("/api/onboarding", { credentials: "same-origin" });
     if (res.ok) {
       const data = await res.json();
       // The agent never edits the draft, so only its own state is new here.
-      onboard.status = { ...onboard.status, agent: data.agent, agent_runs: data.agent_runs };
+      onboard.status = {
+        ...onboard.status,
+        agent: data.agent,
+        agent_runs: data.agent_runs,
+        conversation: data.conversation,
+        agent_cost_usd: data.agent_cost_usd,
+      };
     }
   } catch (err) {
     // Keep polling; a blip shouldn't end the run's display.
   }
-  const panel = document.querySelector("[data-onboard-agent]");
-  if (panel) panel.replaceChildren(...agentPanelBody(onboard.status));
+  refreshAgentThread();
+  if (wasRunning !== agentRunning(onboard.status)) {
+    // The run ended: the message box can send again. Typing happens while the
+    // agent works, so this is the only time the box is rebuilt.
+    const composer = document.querySelector("[data-onboard-agent-composer]");
+    if (composer) composer.replaceChildren(...agentComposerBody(onboard.status));
+    const head = document.querySelector("[data-onboard-agent-head]");
+    if (head) head.replaceChildren(...agentHeadBody(onboard.status));
+  }
   scheduleOnboardPoll();
 }
 
-function askAgent(body) {
-  onboardCall("Starting the agent", [["/api/onboarding/agent", body]]);
+async function askAgent(body) {
+  await onboardCall("Starting the agent", [["/api/onboarding/agent", body]]);
+  if (body.pointer) {
+    // Asked from a form section: show where the answer will appear.
+    const panel = document.querySelector(".onboard-agent");
+    if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function sendAgentMessage() {
+  const message = onboard.agentMessage.trim();
+  if (!message || agentRunning(onboard.status) || onboard.busy) return;
+  if (onboardDirty()) {
+    toast("Validate your changes first; the agent works from the saved draft");
+    return;
+  }
+  onboard.agentMessage = "";
+  askAgent({ mode: "chat", question: message });
+}
+
+function newAgentConversation() {
+  if (!window.confirm("Start a new conversation? The agent forgets this one.")) return;
+  onboardCall("Starting a new conversation", [["/api/onboarding/agent/new", {}]]);
 }
 
 function applyProposal(proposal) {
@@ -2035,15 +2072,17 @@ function copyPrompt(prompt) {
   );
 }
 
-function proposalView(proposal) {
+// What the latest reply proposes. In the thread the reply's text is already
+// shown, so only a proposal without a conversation (an older run) repeats it.
+function proposalView(proposal, { inThread = false } = {}) {
   const errors = proposal.errors || [];
   const changed =
     proposal.document && JSON.stringify(proposal.document) !== JSON.stringify(onboard.status.document);
   const parts = [];
-  if (proposal.question) {
+  if (!inThread && proposal.question) {
     parts.push(el("p", { class: "onboard-hint", text: `You asked about ${proposal.pointer || "the draft"}: ${proposal.question}` }));
   }
-  if (proposal.summary) parts.push(el("p", { class: "onboard-agent-summary", text: proposal.summary }));
+  if (!inThread && proposal.summary) parts.push(el("p", { class: "onboard-agent-summary", text: proposal.summary }));
   if (changed) {
     parts.push(
       el(
@@ -2130,58 +2169,186 @@ function proposalView(proposal) {
   return parts;
 }
 
-function agentPanelBody(status) {
+function userMessageView(message) {
+  return el(
+    "li",
+    { class: "onboard-msg is-user" },
+    el("span", { class: "onboard-msg-who", text: "You" }),
+    message.pointer ? el("code", { class: "onboard-msg-about", text: message.pointer }) : null,
+    el("p", { text: message.text })
+  );
+}
+
+function agentMessageView(message, status) {
   const agent = status.agent;
-  const dirty = onboardDirty();
-  const start = el("button", {
-    type: "button",
-    class: "btn btn-pink btn-sm",
-    "aria-disabled": String(dirty || Boolean(onboard.busy) || agentRunning(status)),
-    title: dirty ? "Validate your changes first; the agent works from the saved draft." : null,
-    text: agent ? "Draft again with the agent" : "Draft with the agent",
-    onclick: () => askAgent({ mode: "draft" }),
-  });
-  const intro = el("p", {
-    class: "onboard-hint",
-    text: "The agent reads the repo, writes the whole project config with a reason for each field, and points out what the repo needs to change to run in the catalog. It takes a few minutes; you can keep editing meanwhile.",
-  });
-  if (!agent) return [intro, el("div", { class: "onboard-actions" }, start)];
-  if (agent.phase === "Running" && agent.stopping) {
-    return [el("p", { class: "onboard-busy", role: "status", text: "Stopping the agent…" })];
+  const parts = [el("span", { class: "onboard-msg-who", text: "Agent" })];
+  if (message.outcome === "Failed") {
+    parts.push(onboardAlert("error", "The agent didn't finish.", message.text));
+  } else if (message.outcome === "Cancelled") {
+    parts.push(el("p", { class: "onboard-hint", text: "Stopped before answering." }));
+  } else {
+    parts.push(el("p", { class: "onboard-agent-summary", text: message.text }));
   }
-  if (agent.phase === "Running") {
-    return [
-      el(
-        "p",
-        { class: "onboard-busy", role: "status" },
-        `${agent.mode === "section" ? "Answering your question" : "Drafting"}: ${agent.progress || "starting"}…`
-      ),
+  const questions = message.questions || [];
+  if (questions.length) {
+    parts.push(
       el(
         "div",
-        { class: "onboard-actions" },
-        el("button", {
-          type: "button",
-          class: "btn btn-quiet btn-sm",
-          text: "Stop the agent",
-          onclick: () => onboardCall("Stopping the agent", [["/api/onboarding/agent/cancel", {}]]),
-        })
-      ),
-    ];
+        { class: "onboard-msg-questions" },
+        el("strong", { text: questions.length === 1 ? "The agent asks" : "The agent asks you" }),
+        el("ul", {}, ...questions.map((question) => el("li", { text: question })))
+      )
+    );
   }
+  // Only the latest reply's proposal is kept; earlier ones were applied or not.
+  const latest = agent && agent.phase === "Done" && agent.proposal && message.run === status.agent_runs;
+  if (latest) parts.push(...proposalView(agent.proposal, { inThread: true }));
+  return el("li", { class: "onboard-msg is-agent" }, ...parts);
+}
+
+function agentRunningView(agent) {
+  if (agent.stopping) return el("p", { class: "onboard-busy", role: "status", text: "Stopping the agent…" });
+  return el(
+    "div",
+    { class: "onboard-msg is-agent is-working" },
+    el("p", { class: "onboard-busy", role: "status", text: `${agent.mode === "draft" ? "Drafting" : "Working"}: ${agent.progress || "starting"}…` }),
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-sm",
+        text: "Stop the agent",
+        onclick: () => onboardCall("Stopping the agent", [["/api/onboarding/agent/cancel", {}]]),
+      })
+    )
+  );
+}
+
+function agentPanelBody(status) {
+  const agent = status.agent;
+  const conversation = status.conversation || [];
   const parts = [];
-  if (agent.phase === "Failed") parts.push(onboardAlert("error", "The agent didn't finish.", agent.error));
-  if (agent.phase === "Cancelled") parts.push(el("p", { class: "onboard-hint", text: "The last agent run was stopped." }));
-  if (agent.phase === "Done" && agent.proposal) parts.push(...proposalView(agent.proposal));
-  parts.push(el("div", { class: "onboard-actions" }, start));
+  if (!conversation.length) {
+    parts.push(
+      el("p", {
+        class: "onboard-hint",
+        text: "The agent reads the repo, writes the whole project config with a reason for each field, and points out what the repo needs to change to run in the catalog. Ask it to draft the project, or ask it anything about the repo; it remembers the conversation. Each reply takes a few minutes, and you can keep editing meanwhile.",
+      })
+    );
+    // An agent run from before conversations existed.
+    if (agent && agent.phase === "Done" && agent.proposal) parts.push(...proposalView(agent.proposal));
+  } else {
+    parts.push(
+      el(
+        "ol",
+        { class: "onboard-thread", "aria-label": "Conversation with the agent" },
+        ...conversation.map((message) =>
+          message.role === "user" ? userMessageView(message) : agentMessageView(message, status)
+        )
+      )
+    );
+  }
+  if (agentRunning(status)) parts.push(agentRunningView(agent));
   return parts;
+}
+
+// Rebuilds the thread in place. A reader scrolled back through it stays where
+// they are; one at the newest message follows new ones.
+function refreshAgentThread() {
+  const panel = document.querySelector("[data-onboard-agent]");
+  if (!panel) return;
+  const old = panel.querySelector(".onboard-thread");
+  const atEnd = !old || old.scrollHeight - old.scrollTop - old.clientHeight < 24;
+  const top = old ? old.scrollTop : 0;
+  panel.replaceChildren(...agentPanelBody(onboard.status));
+  const thread = panel.querySelector(".onboard-thread");
+  if (thread) thread.scrollTop = atEnd ? thread.scrollHeight : top;
+}
+
+function scrollAgentThreadToEnd() {
+  const thread = document.querySelector("[data-onboard-agent] .onboard-thread");
+  if (thread) thread.scrollTop = thread.scrollHeight;
+}
+
+function agentHeadBody(status) {
+  const conversation = status.conversation || [];
+  const spent = Number(status.agent_cost_usd || 0);
+  return [
+    el("p", { class: "eyebrow", text: "Agent" }),
+    spent ? el("span", { class: "mono", title: "What the agent has spent on this onboarding", text: `$${spent.toFixed(2)} spent` }) : null,
+    conversation.length && !agentRunning(status)
+      ? el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          "aria-disabled": String(Boolean(onboard.busy)),
+          text: "New conversation",
+          onclick: newAgentConversation,
+        })
+      : null,
+  ];
+}
+
+function agentComposerBody(status) {
+  const running = agentRunning(status);
+  const blocked = running || Boolean(onboard.busy);
+  const conversation = status.conversation || [];
+  const box = el("textarea", {
+    rows: 2,
+    maxlength: 2000,
+    placeholder: conversation.length ? "Reply to the agent, or ask it something else" : "Ask the agent about the repo",
+    "aria-label": "Message the agent",
+    text: onboard.agentMessage,
+    oninput: (event) => {
+      onboard.agentMessage = event.target.value;
+    },
+    onkeydown: (event) => {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        sendAgentMessage();
+      }
+    },
+  });
+  const dirty = onboardDirty();
+  return [
+    box,
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", {
+        type: "button",
+        class: "btn btn-secondary btn-sm",
+        "aria-disabled": String(blocked),
+        title: running ? "Wait for the agent's reply, or stop it." : null,
+        text: "Send",
+        onclick: sendAgentMessage,
+      }),
+      el("button", {
+        type: "button",
+        class: conversation.length ? "btn btn-quiet btn-sm" : "btn btn-pink btn-sm",
+        "aria-disabled": String(blocked || dirty),
+        title: dirty ? "Validate your changes first; the agent works from the saved draft." : null,
+        text: conversation.length ? "Draft it again" : "Draft with the agent",
+        onclick: () => {
+          if (onboardDirty()) {
+            toast("Validate your changes first; the agent works from the saved draft");
+            return;
+          }
+          askAgent({ mode: "draft" });
+        },
+      }),
+      el("span", { class: "onboard-hint", text: "⌘/Ctrl + Enter to send" })
+    ),
+  ];
 }
 
 function agentPanel(status) {
   return el(
     "div",
     { class: "onboard-agent" },
-    el("p", { class: "eyebrow", text: "Agent" }),
-    el("div", { "data-onboard-agent": "" }, ...agentPanelBody(status))
+    el("div", { class: "onboard-agent-head", "data-onboard-agent-head": "" }, ...agentHeadBody(status)),
+    el("div", { "data-onboard-agent": "" }, ...agentPanelBody(status)),
+    el("form", { class: "onboard-agent-composer", "data-onboard-agent-composer": "", onsubmit: (event) => event.preventDefault() }, ...agentComposerBody(status))
   );
 }
 
@@ -3310,8 +3477,7 @@ function renderOnboardingActions() {
   if (actions) actions.replaceChildren(...draftActions(onboardDirty()));
   const handoff = document.querySelector("[data-onboard-handoff]");
   if (handoff) handoff.replaceChildren(...handoffBody(onboard.status));
-  const agent = document.querySelector("[data-onboard-agent]");
-  if (agent) agent.replaceChildren(...agentPanelBody(onboard.status));
+  refreshAgentThread();
   const preview = document.querySelector("[data-onboard-preview]");
   if (preview) preview.replaceChildren(...previewBody(onboard.status));
 }
@@ -3512,6 +3678,8 @@ function renderOnboarding() {
   root.replaceChildren(...children);
   root.setAttribute("aria-busy", String(Boolean(onboard.busy)));
   markErrorFields(root, status.errors || []);
+  // A full render follows an action (sending a message, applying a draft).
+  scrollAgentThreadToEnd();
   scheduleOnboardPoll();
   schedulePreviewPoll();
 }

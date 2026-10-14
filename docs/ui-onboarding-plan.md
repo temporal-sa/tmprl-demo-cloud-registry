@@ -62,6 +62,20 @@ applies it or ignores it. The agent never edits the draft itself.
 `cancel_agent` stops a run. Cancellation reaches the activity on its next
 heartbeat, so Stop takes up to about 24 seconds.
 
+**Conversation.** The panel is a thread: the user drafts, asks about a section,
+or replies (`mode: chat`), and the agent can end a turn with questions for the
+user. The workflow keeps the thread (at most 60 messages), the conversation's
+cumulative repo patch, and the running spend (shown, not capped) in its status.
+Each turn is still one Job with its own $2 key. The agent remembers earlier
+turns by resuming its Claude Agent SDK session: the pod prints its session
+store (`~/.claude/projects`, a gzipped tar) with the result, the activity saves
+it to a Secret named after the conversation (never in workflow history), and
+the next turn's pod mounts that Secret, restores it, reapplies the repo patch
+and resumes. A session over ~900 KB is dropped, and the next turn starts fresh
+with the thread replayed as text. `new_agent_conversation` and picking another
+repo start a new conversation; the workflow deletes an onboarding's session
+Secrets by label when it closes.
+
 **Job and pod** (`activities/onboarding_agent.py`, `registry/onboarding-agent/`)
 
 - One Kubernetes Job per run in `tmprl-dem-cld-onboarding-agents`, with a

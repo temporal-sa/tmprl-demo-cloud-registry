@@ -1215,6 +1215,10 @@ def test_onboarding_status_returns_the_final_status_of_a_completed_run():
             {"mode": "section", "pointer": "/spec/components", "question": " Workers? ", "owner": "x"},
             {"mode": "section", "pointer": "/spec/components", "question": "Workers?"},
         ),
+        (
+            {"mode": "chat", "question": "No secrets needed.", "pointer": " "},
+            {"mode": "chat", "question": "No secrets needed."},
+        ),
     ],
 )
 def test_onboarding_agent_requests_forward_only_known_fields(
@@ -1226,9 +1230,11 @@ def test_onboarding_agent_requests_forward_only_known_fields(
     try:
         onboarding_request(httpd, "/api/onboarding/agent", body=body)
         onboarding_request(httpd, "/api/onboarding/agent/cancel", body={})
+        onboarding_request(httpd, "/api/onboarding/agent/new", body={})
         assert gateway.calls == [
             ("request_agent", "mjones@temporal.io", expected),
             ("cancel_agent", "mjones@temporal.io", None),
+            ("new_agent_conversation", "mjones@temporal.io", None),
         ]
     finally:
         httpd.shutdown()

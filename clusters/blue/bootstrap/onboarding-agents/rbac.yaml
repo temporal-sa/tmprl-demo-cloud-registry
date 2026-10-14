@@ -1,0 +1,35 @@
+# The operator saves each agent conversation's session in a Secret here
+# (activities/onboarding_agent.py) and deletes an onboarding's sessions when it
+# closes. Its ClusterRole only gets, creates and patches Secrets; listing and
+# deleting them is limited to this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: registry-operator-agent-sessions
+  namespace: tmprl-dem-cld-onboarding-agents
+  labels:
+    app.kubernetes.io/name: onboarding-agent
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - list
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: registry-operator-agent-sessions
+  namespace: tmprl-dem-cld-onboarding-agents
+  labels:
+    app.kubernetes.io/name: onboarding-agent
+subjects:
+  - kind: ServiceAccount
+    name: registry-operator
+    namespace: tmprl-dem-cld-registry-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: registry-operator-agent-sessions
