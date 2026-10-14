@@ -1663,6 +1663,25 @@
 
   .onboard-ask { justify-self: start; margin-top: -.5rem; }
 
+  .onboard-agent-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+  .onboard-agent-head .eyebrow { margin-right: auto; }
+  .onboard-agent-head .mono { color: var(--gray-400); font-size: .75rem; }
+
+  /* The conversation: newest at the bottom, capped so the form stays in reach. */
+  .onboard-thread { display: grid; gap: .9rem; max-height: 36rem; overflow-y: auto; overscroll-behavior: contain; }
+  .onboard-msg { display: grid; gap: .6rem; min-width: 0; }
+  .onboard-msg-who { color: var(--gray-400); font-family: var(--mono); font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase; }
+  .onboard-msg.is-agent .onboard-msg-who { color: var(--bubble-gum); }
+  .onboard-msg.is-user { padding: .65rem .85rem; background: var(--deep-blue); border: 1px solid var(--line); }
+  .onboard-msg.is-user p { color: var(--off-white); font-size: .9375rem; font-weight: 300; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+  .onboard-msg-about { justify-self: start; color: var(--mint); font-family: var(--mono); font-size: .75rem; word-break: break-all; }
+  .onboard-msg-questions { display: grid; gap: .4rem; padding-left: .85rem; border-left: 2px solid var(--mustard); }
+  .onboard-msg-questions strong { color: var(--mustard); font-size: .8125rem; font-weight: 500; }
+  .onboard-msg-questions ul { display: grid; gap: .35rem; padding-left: 1rem; list-style: disc; }
+  .onboard-msg-questions li { color: var(--off-white); font-size: .9375rem; font-weight: 300; line-height: 1.5; }
+
+  .onboard-agent-composer { display: grid; gap: .6rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+
   .onboard-secret-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem 1rem; }
   .onboard-secret-head strong { font-family: var(--mono); font-size: .875rem; font-weight: 500; }
   .onboard-secret-head .is-missing { color: var(--mustard); }

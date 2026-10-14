@@ -29,6 +29,7 @@ from demo_registry_operator.workflows.catalog_onboarding_messages import (
     AgentRequest,
     AgentRunRequest,
     AgentRunResult,
+    DeleteAgentSessionsRequest,
     DraftError,
     DraftValidation,
     InspectRepoRequest,
@@ -546,6 +547,10 @@ def test_agent_runs_propose_without_editing_and_can_be_stopped():
             num_turns=9,
         )
 
+    @activity.defn(name="delete_onboarding_agent_sessions")
+    def delete_sessions(request: DeleteAgentSessionsRequest) -> int:
+        return 0
+
     async def wait_for_agent(handle, phase):
         for _ in range(100):
             status = await handle.query(CatalogOnboardingWorkflow.status)
@@ -563,7 +568,7 @@ def test_agent_runs_propose_without_editing_and_can_be_stopped():
                     env.client,
                     task_queue="catalog-onboarding",
                     workflows=[CatalogOnboardingWorkflow],
-                    activities=[inspect, validate, run_agent],
+                    activities=[inspect, validate, run_agent, delete_sessions],
                     activity_executor=executor,
                     workflow_runner=create_workflow_runner(),
                     # Deliver the cancel on the next heartbeat, not 24s later.
@@ -632,6 +637,122 @@ def test_agent_runs_propose_without_editing_and_can_be_stopped():
 
     asyncio.run(scenario())
     assert release["cancelled"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DEMO_REGISTRY_TEST_TEMPORAL_HISTORY"),
+    reason="Requires an explicitly enabled local Temporal server",
+)
+def test_agent_conversation_continues_until_reset_and_cleans_up():
+    seen: dict[str, list] = {"agent": [], "deleted": []}
+    other_repo = OnboardingRepo(
+        url="https://github.com/temporalio/other", owner="temporalio", name="other",
+        default_branch="main", commit_sha="b" * 40,
+    )
+
+    @activity.defn(name="inspect_onboarding_repo")
+    def inspect(request: InspectRepoRequest) -> OnboardingRepo:
+        return other_repo if request.repo_url == other_repo.url else REPO
+
+    @activity.defn(name="validate_onboarding_draft")
+    def validate(request: ValidateDraftRequest) -> DraftValidation:
+        return DraftValidation(document=request.document, yaml="", project_path="projects/demo/x.yaml")
+
+    @activity.defn(name="run_onboarding_agent")
+    def run_agent(request: AgentRunRequest) -> AgentRunResult:
+        seen["agent"].append(request)
+        if request.question == "fail":
+            raise ApplicationError("Out of budget", non_retryable=True)
+        return AgentRunResult(
+            summary=f"Answer {len(seen['agent'])}",
+            questions=["Does the UI need a secret?"] if len(seen["agent"]) == 1 else [],
+            patch=f"patch {len(seen['agent'])}",
+            cost_usd=0.25,
+        )
+
+    @activity.defn(name="delete_onboarding_agent_sessions")
+    def delete_sessions(request: DeleteAgentSessionsRequest) -> int:
+        seen["deleted"].append(request.onboarding_id)
+        return 1
+
+    async def wait_idle(handle):
+        for _ in range(100):
+            status = await handle.query(CatalogOnboardingWorkflow.status)
+            if status["agent"] and status["agent"]["phase"] != "Running":
+                return status
+            await asyncio.sleep(0.1)
+        raise AssertionError("agent never finished")
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_local(
+            dev_server_existing_path=shutil.which("temporal")
+        ) as env:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                async with Worker(
+                    env.client,
+                    task_queue="catalog-onboarding",
+                    workflows=[CatalogOnboardingWorkflow],
+                    activities=[inspect, validate, run_agent, delete_sessions],
+                    activity_executor=executor,
+                    workflow_runner=create_workflow_runner(),
+                ):
+                    handle = await env.client.start_workflow(
+                        CatalogOnboardingWorkflow.run,
+                        StartOnboardingRequest(owner_email="ada@temporal.io"),
+                        id="catalog-onboarding/conversation",
+                        task_queue="catalog-onboarding",
+                    )
+                    await handle.execute_update(CatalogOnboardingWorkflow.set_repo, SetRepoRequest(repo_url=REPO.url))
+                    with pytest.raises(WorkflowUpdateFailedError):
+                        await handle.execute_update(CatalogOnboardingWorkflow.request_agent, AgentRequest(mode="chat", question=" "))
+
+                    async def say(request):
+                        await handle.execute_update(CatalogOnboardingWorkflow.request_agent, request)
+                        return await wait_idle(handle)
+
+                    await say(AgentRequest(mode="draft"))
+                    await say(AgentRequest(mode="chat", question="No secrets."))
+                    await say(AgentRequest(mode="chat", question="fail"))
+                    status = await say(AgentRequest(mode="section", pointer="/spec/ingress", question="Shorter?"))
+
+                    first_run = (await handle.describe()).raw_description.workflow_execution_info.first_run_id
+                    onboarding = f"catalog-onboarding/conversation/{first_run}"
+                    first, second, failed, fourth = seen["agent"]
+                    assert {r.conversation_id for r in seen["agent"]} == {f"{onboarding}/c1"}
+                    assert first.history == [] and first.patch == ""
+                    assert [m.text for m in second.history] == ["Draft the whole project from the repo.", "Answer 1"]
+                    assert second.history[1].questions == ["Does the UI need a secret?"]
+                    assert second.patch == "patch 1"
+                    # A failed turn leaves the patch alone and still shows in the thread.
+                    assert fourth.patch == "patch 2"
+                    assert fourth.history[-1].outcome == "Failed"
+                    assert [m["role"] for m in status["conversation"]] == ["user", "agent"] * 4
+                    assert status["conversation"][-2]["pointer"] == "/spec/ingress"
+                    assert status["agent"]["proposal"]["questions"] == []
+                    assert status["agent_cost_usd"] == 0.75
+
+                    status = await handle.execute_update(CatalogOnboardingWorkflow.new_agent_conversation)
+                    assert status.conversation == [] and status.conversation_id is None and status.agent is None
+                    await say(AgentRequest(mode="chat", question="Start over."))
+                    assert seen["agent"][-1].conversation_id == f"{onboarding}/c5"
+                    assert seen["agent"][-1].history == [] and seen["agent"][-1].patch == ""
+
+                    # Picking another repo starts another conversation too.
+                    status = await handle.execute_update(CatalogOnboardingWorkflow.set_repo, SetRepoRequest(repo_url=other_repo.url))
+                    assert status.conversation == []
+
+                    await handle.execute_update(CatalogOnboardingWorkflow.abandon)
+                    await handle.result()
+                    history = await handle.fetch_history()
+
+            await Replayer(
+                workflows=[CatalogOnboardingWorkflow],
+                workflow_runner=create_workflow_runner(),
+            ).replay_workflow(history)
+            return onboarding
+
+    onboarding = asyncio.run(scenario())
+    assert seen["deleted"] == [onboarding]
 
 
 def document_with_secrets() -> dict:

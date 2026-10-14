@@ -1,6 +1,6 @@
-"""Runs the catalog onboarding agent as one Kubernetes Job per request.
+"""Runs the catalog onboarding agent as one Kubernetes Job per message.
 
-``run_onboarding_agent`` is the only activity. For a new run it:
+``run_onboarding_agent`` runs one turn of the conversation. For a new run it:
 
 1. mints a LiteLLM key through the Instruqt broker: $2, one hour, Anthropic
    models only. The operator signs with the broker's existing ``v1``
@@ -14,9 +14,14 @@
    details, and reads the ``@@result`` lines when the Job succeeds. If the
    Job still can't create its pod after a minute (a quota or admission
    rejection), the run fails with the Job's ``FailedCreate`` reason.
+4. saves the agent's session (the Claude Agent SDK transcript, as a gzipped
+   tar the pod prints with its result) to a Secret named after the
+   conversation. The next turn's pod mounts it and resumes the session, so the
+   agent remembers what it read and said. A session too big for a Secret is
+   dropped, and the next turn starts fresh from the message history instead.
 
 The key never leaves this activity except into the Secret, so it is not in
-workflow history. The Job is named after the run, so a retried attempt
+workflow history; neither is the session. The Job is named after the run, so a retried attempt
 reattaches to a Job that is still running. Cancelling deletes the Job; the
 Secret goes with it. Keys are revoked when the run ends.
 
@@ -58,6 +63,7 @@ from demo_registry_operator.workflows.catalog_onboarding_messages import (
     AgentFinding,
     AgentRunRequest,
     AgentRunResult,
+    DeleteAgentSessionsRequest,
 )
 
 AGENT_IMAGE_ENV = resources.ONBOARDING_AGENT_IMAGE_ENV
@@ -95,6 +101,13 @@ EXAMPLE_PROJECTS = (
 MAX_PATCH_CHARS = 200_000
 RUN_LABEL = "registry.tmprl-demo.cloud/onboarding-run"
 PARTICIPANT_ANNOTATION = "registry.tmprl-demo.cloud/broker-participant"
+# Saved sessions: one Secret per conversation, labelled with its onboarding so
+# the workflow can delete them all when it closes.
+SESSION_LABEL = "registry.tmprl-demo.cloud/onboarding-session"
+SESSION_KEY = "session"
+SESSION_ID_KEY = "session_id"
+# Secrets hold at most 1 MiB; leave room for the rest of the object.
+MAX_SESSION_CHARS = 900_000
 
 # Agent runs cost money and take minutes; retry only to recover from a lost
 # worker (which reattaches to the running Job), not to rerun a failed agent.
@@ -116,11 +129,17 @@ def run_onboarding_agent(request: AgentRunRequest) -> AgentRunResult:
     namespace = os.environ.get(AGENT_NAMESPACE_ENV, "").strip() or DEFAULT_AGENT_NAMESPACE
     name = job_name(request.run_id)
 
+    session = session_secret_name(request.conversation_id) if request.conversation_id else None
+
     job = kube.read_job(namespace, name)
     if job is None:
         participant = f"{request.run_id}/{activity.info().attempt}"
         key = mint_key(participant)
-        job = kube.create_job(job_manifest(name, namespace, image, request.run_id, participant))
+        job = kube.create_job(
+            job_manifest(
+                name, namespace, image, request.run_id, participant, session_secret=session
+            )
+        )
         kube.create_secret(
             secret_manifest(name, namespace, job, key, request_bundle(request))
         )
@@ -129,17 +148,53 @@ def run_onboarding_agent(request: AgentRunRequest) -> AgentRunResult:
     )
 
     try:
-        result = follow_job(namespace, name)
+        data = follow_job(namespace, name)
+        if session:
+            save_session(namespace, session, request.onboarding_id, data)
     except (CancelledError, ApplicationError):
         finish(namespace, name, participant)
         raise
     # Anything else (a lost API call, worker shutdown) leaves the Job running for
     # the retry to reattach to; its deadline and the key's hour bound it.
     finish(namespace, name, participant)
-    return result
+    return agent_result(data)
 
 
-def follow_job(namespace: str, name: str) -> AgentRunResult:
+@activity.defn
+def delete_onboarding_agent_sessions(request: DeleteAgentSessionsRequest) -> int:
+    """Deletes every saved session of one onboarding; returns how many."""
+
+    namespace = os.environ.get(AGENT_NAMESPACE_ENV, "").strip() or DEFAULT_AGENT_NAMESPACE
+    return kube.delete_secrets(
+        namespace, label_selector=f"{SESSION_LABEL}={onboarding_label(request.onboarding_id)}"
+    )
+
+
+def save_session(namespace: str, name: str, onboarding_id: str, data: dict[str, Any]) -> None:
+    """Keeps the pod's session for the next turn, or drops a stale one.
+
+    A turn that couldn't save its session must not leave the previous one
+    behind: resuming it would forget this turn.
+    """
+
+    session = str(data.get(SESSION_KEY) or "")
+    session_id = str(data.get(SESSION_ID_KEY) or "")
+    if session and session_id and len(session) <= MAX_SESSION_CHARS:
+        kube.upsert_secret_data(
+            namespace,
+            name,
+            {SESSION_KEY: session, SESSION_ID_KEY: session_id},
+            labels={SESSION_LABEL: onboarding_label(onboarding_id)},
+        )
+        return
+    if session:
+        activity.logger.warning(
+            "Agent session %s is %d chars; the next turn starts fresh", name, len(session)
+        )
+    kube.delete_secret(namespace, name)
+
+
+def follow_job(namespace: str, name: str) -> dict[str, Any]:
     progress = "Starting"
     while True:
         job = kube.read_job(namespace, name)
@@ -157,7 +212,7 @@ def follow_job(namespace: str, name: str) -> AgentRunResult:
         activity.heartbeat({"progress": progress, "job": name})
         status = job.get("status") or {}
         if status.get("succeeded"):
-            return parse_result(log)
+            return result_data(log)
         if status.get("failed") or job_failed(status):
             raise errors.non_retryable_error(
                 "The agent failed: " + (last_error(log) or failure_reason(status))
@@ -183,8 +238,22 @@ def job_name(run_id: str) -> str:
     return "onboarding-agent-" + hashlib.sha256(run_id.encode()).hexdigest()[:16]
 
 
+def session_secret_name(conversation_id: str) -> str:
+    return "onboarding-session-" + hashlib.sha256(conversation_id.encode()).hexdigest()[:16]
+
+
+def onboarding_label(onboarding_id: str) -> str:
+    return hashlib.sha256(onboarding_id.encode()).hexdigest()[:16]
+
+
 def job_manifest(
-    name: str, namespace: str, image: str, run_id: str, participant: str
+    name: str,
+    namespace: str,
+    image: str,
+    run_id: str,
+    participant: str,
+    *,
+    session_secret: str | None = None,
 ) -> dict[str, Any]:
     labels = {
         "app.kubernetes.io/name": "onboarding-agent",
@@ -278,6 +347,11 @@ def job_manifest(
                                 {"name": "request", "mountPath": "/request", "readOnly": True},
                                 {"name": "workspace", "mountPath": "/workspace"},
                                 {"name": "tmp", "mountPath": "/tmp"},
+                                *(
+                                    [{"name": "session", "mountPath": "/session", "readOnly": True}]
+                                    if session_secret
+                                    else []
+                                ),
                             ],
                         }
                     ],
@@ -291,6 +365,13 @@ def job_manifest(
                         },
                         {"name": "workspace", "emptyDir": {"sizeLimit": "4Gi"}},
                         {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
+                        *(
+                            # The conversation's saved session; absent on its
+                            # first turn, so optional.
+                            [{"name": "session", "secret": {"secretName": session_secret, "optional": True}}]
+                            if session_secret
+                            else []
+                        ),
                     ],
                 },
             },
@@ -367,6 +448,17 @@ def request_bundle(request: AgentRunRequest) -> dict[str, Any]:
         "errors": request.errors,
         "pointer": request.pointer,
         "question": request.question,
+        "history": [
+            {
+                "role": message.role,
+                "text": message.text,
+                "pointer": message.pointer,
+                "outcome": message.outcome,
+                "questions": list(message.questions),
+            }
+            for message in request.history
+        ],
+        "patch": request.patch,
         "context": {
             # Every schema the validator loads, by file name.
             "schemas": {
@@ -436,6 +528,10 @@ def failure_reason(status: dict[str, Any]) -> str:
 
 
 def parse_result(log: str) -> AgentRunResult:
+    return agent_result(result_data(log))
+
+
+def result_data(log: str) -> dict[str, Any]:
     chunks: dict[int, str] = {}
     count = 0
     for line in tagged_lines(log, "result"):
@@ -446,6 +542,14 @@ def parse_result(log: str) -> AgentRunResult:
     if not count or len(chunks) != count:
         raise errors.non_retryable_error("The agent finished without a complete result.")
     data = json.loads(base64.b64decode("".join(chunks[i] for i in range(count))))
+    if not isinstance(data, dict):
+        raise errors.non_retryable_error("The agent finished without a complete result.")
+    return data
+
+
+def agent_result(data: dict[str, Any]) -> AgentRunResult:
+    """The run's result for the workflow; the session stays out of history."""
+
     patch = str(data.get("patch") or "")
     if len(patch) > MAX_PATCH_CHARS:
         patch = patch[:MAX_PATCH_CHARS] + "\n# … patch truncated\n"
@@ -477,6 +581,8 @@ def parse_result(log: str) -> AgentRunResult:
         prompt=claude_code_prompt(findings, bool(patch)),
         cost_usd=float(data.get("cost_usd") or 0.0),
         num_turns=int(data.get("num_turns") or 0),
+        questions=[str(q) for q in data.get("questions") or [] if str(q).strip()],
+        resumed=bool(data.get("resumed")),
     )
 
 

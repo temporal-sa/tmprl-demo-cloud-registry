@@ -121,6 +121,7 @@ ONBOARDING_UPDATES = {
     "abandon": "abandon",
     "agent": "request_agent",
     "agent/cancel": "cancel_agent",
+    "agent/new": "new_agent_conversation",
     "preview": "deploy_preview",
 }
 ONBOARDING_AGENT_ACTIVITY = "run_onboarding_agent"
@@ -140,7 +141,7 @@ SECRET_NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 SECRET_PROPERTY_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 MAX_SECRET_PROPERTIES = 20
 MAX_SECRET_VALUE_CHARS = 8192
-ONBOARDING_AGENT_MODES = frozenset({"draft", "section"})
+ONBOARDING_AGENT_MODES = frozenset({"draft", "section", "chat"})
 
 
 class AuthError(Exception):
@@ -812,7 +813,7 @@ def onboarding_update_arg(action: str, body: dict[str, Any]) -> dict[str, Any] |
     if action == "agent":
         mode = body.get("mode")
         if mode not in ONBOARDING_AGENT_MODES:
-            return "mode must be draft or section"
+            return "mode must be draft, section, or chat"
         arg: dict[str, Any] = {"mode": mode}
         for key in ("pointer", "question"):
             value = body.get(key)
