@@ -410,9 +410,15 @@ class InstruqtCourseWorkflow:
         }
 
         try:
+            cli_activity = await workflow.execute_activity(
+                instruqt_activities.check_instruqt_cli,
+                start_to_close_timeout=timedelta(minutes=3),
+                retry_policy=COMMON_RETRY_POLICY,
+            )
             self._status = instruqt_activities.reconcile_instruqt_course(
                 instruqt_course,
                 checked_at=workflow.now().isoformat(),
+                cli=cli_activity.status,
             )
             if self._status.get("phase") != "Error":
                 ecr_status = await self._reconcile_instruqt_ecr(instruqt_course)

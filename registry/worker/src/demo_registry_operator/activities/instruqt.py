@@ -210,6 +210,7 @@ def reconcile_instruqt_course(
     instruqt_course: dict[str, Any],
     *,
     checked_at: str | None = None,
+    cli: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     course = instruqt_course_from_request(instruqt_course)
     errors = validate_instruqt_course(course)
@@ -221,7 +222,8 @@ def reconcile_instruqt_course(
         resources.content_source_commit_sha(course) and resources.content_source_artifact_digest(course)
     )
     testing = testing_status(course)
-    cli = instruqt_cli_status()
+    if cli is None:
+        cli = instruqt_cli_status()
     phase = "Error" if errors else "Validated"
     message = (
         "; ".join(errors)
@@ -388,6 +390,12 @@ def prepare_instruqt_course_artifact(
                 channel=channel,
             )
         )
+
+
+@activity.defn
+def check_instruqt_cli() -> InstruqtActivityResult:
+    """Probe the Instruqt CLI, self-updating it when Instruqt requires a newer version."""
+    return InstruqtActivityResult(instruqt_cli_status())
 
 
 @activity.defn

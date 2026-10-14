@@ -519,6 +519,10 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(
         ),
     )
 
+    @activity.defn(name="check_instruqt_cli")
+    async def cli() -> instruqt.InstruqtActivityResult:
+        return instruqt.InstruqtActivityResult({"phase": "Ready", "ready": True})
+
     @activity.defn(name="reconcile_instruqt_course_ecr_repositories")
     async def ecr(
         request: instruqt.InstruqtCourseRequest,
@@ -571,7 +575,7 @@ def test_instruqt_remains_running_after_failure_and_replays_legacy_results(
                     task_queue="instruqt-failure-history",
                     workflows=[instruqt_course.InstruqtCourseWorkflow],
                     workflow_runner=create_workflow_runner(),
-                    activities=[ecr, plan, push, record],
+                    activities=[cli, ecr, plan, push, record],
                     activity_executor=executor,
                 ):
                     for legacy in (True, False):
