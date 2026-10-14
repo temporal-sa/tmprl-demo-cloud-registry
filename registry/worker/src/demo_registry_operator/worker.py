@@ -96,6 +96,7 @@ from demo_registry_operator.activities.force_reconcile import (
     load_current_instruqt_course_for_reconcile,
 )
 from demo_registry_operator.activities.instruqt import (
+    check_instruqt_cli,
     delete_instruqt_course_content_auth_secret,
     delete_instruqt_course_content_repository,
     delete_instruqt_course_ecr_repositories,
@@ -384,6 +385,7 @@ async def main() -> None:
                     start_project_image_build,
                     wait_for_project_image_build,
                     prepare_instruqt_course_artifact,
+                    check_instruqt_cli,
                     reconcile_instruqt_course_ecr_repositories,
                     delete_instruqt_course_ecr_repositories,
                     resolve_instruqt_course_image_build_plan,

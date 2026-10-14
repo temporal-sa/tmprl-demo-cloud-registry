@@ -40,6 +40,9 @@ def workflow_logger(monkeypatch):
     )
 
 
+READY_CLI = {"phase": "Ready", "ready": True}
+
+
 def canary_plan(**overrides):
     return {
         "project": "canary",
@@ -410,7 +413,9 @@ def test_canary_parent_waits_for_other_branches_on_child_failure(monkeypatch):
 def test_instruqt_failure_is_recorded_and_resources_are_retained(monkeypatch):
     recorded = []
 
-    async def execute(fn, request, **kwargs):
+    async def execute(fn, request=None, **kwargs):
+        if fn is instruqt.check_instruqt_cli:
+            return instruqt.InstruqtActivityResult(READY_CLI)
         if fn is instruqt.reconcile_instruqt_course_ecr_repositories:
             raise activity_error(fn.__name__)
         assert fn is instruqt.record_instruqt_course_status
@@ -437,7 +442,9 @@ def test_instruqt_failure_is_recorded_and_resources_are_retained(monkeypatch):
 
 
 def test_instruqt_status_write_failure_preserves_publish_failure(monkeypatch):
-    async def execute(fn, request, **kwargs):
+    async def execute(fn, request=None, **kwargs):
+        if fn is instruqt.check_instruqt_cli:
+            return instruqt.InstruqtActivityResult(READY_CLI)
         raise activity_error(
             fn.__name__,
             "publish denied"
