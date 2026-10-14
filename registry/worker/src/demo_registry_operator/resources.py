@@ -256,6 +256,9 @@ DEFAULT_AUTOSCALING = {
     "cooldownPeriod": 300,
 }
 KEDA_POLLING_INTERVAL_SECONDS = 15
+# KEDA names the HPA it creates "keda-hpa-<ScaledObject name>" and its admission
+# webhook rejects the ScaledObject when that exceeds a DNS label.
+KEDA_HPA_NAME_PREFIX = "keda-hpa-"
 DEFAULT_CONTAINER_REQUESTS = {"cpu": "100m", "memory": "256Mi"}
 TEMPORAL_MTLS_CERT_FILES_VOLUME_NAME = "temporal-mtls-certs"
 TEMPORAL_MTLS_CERT_FILES_MOUNT_PATH = "/var/run/secrets/tmprl-demo.cloud/temporal"
@@ -4991,6 +4994,11 @@ def keda_scaled_object(
             ],
         },
     }
+    hpa_name = f"{KEDA_HPA_NAME_PREFIX}{name}"
+    if name and len(hpa_name) > MAX_DNS_LABEL_LENGTH:
+        resource["spec"]["advanced"]["horizontalPodAutoscalerConfig"]["name"] = (
+            dns_label(hpa_name)
+        )
     if name or namespace or labels:
         metadata: dict[str, Any] = {}
         if name:
@@ -5451,12 +5459,57 @@ def temporal_secret_remote_path_for_label(
 ) -> str:
     """Secrets Manager path for a namespace label; None means the primary one.
 
-    Deliberately reuses temporal_secret_remote_path_with_suffix rather than
-    rebuilding the path, so the two can never drift.
+    A label's runtimeSecretPath is the workflow-minted path, injected the same
+    way as the primary's spec.temporal.runtimeSecretPath. Without one, the path
+    falls back to the legacy fixed temporal-<label>, and deliberately reuses
+    temporal_secret_remote_path_with_suffix rather than rebuilding the path, so
+    the two can never drift.
     """
     if not label:
         return temporal_secret_remote_path(demo_project)
+    declared = temporal_namespace_labels(demo_project).get(label, {})
+    runtime_secret_path = declared.get("runtimeSecretPath")
+    if isinstance(runtime_secret_path, str) and runtime_secret_path.strip():
+        return runtime_secret_path.strip()
     return temporal_secret_remote_path_with_suffix(demo_project, label)
+
+
+def temporal_secret_remote_path_for_label_suffix(
+    demo_project: dict[str, Any],
+    label: str,
+    suffix: str,
+) -> str:
+    """A label's minted path: temporal-<label>-<suffix>, unique per mint."""
+    return temporal_secret_remote_path_with_suffix(demo_project, f"{label}-{suffix}")
+
+
+def temporal_label_secret_suffix_from_remote_path(
+    demo_project: dict[str, Any],
+    label: str,
+    remote_path: Any,
+) -> str | None:
+    """The minted suffix in a label's path, or None for the legacy fixed path."""
+    suffix = temporal_secret_suffix_from_remote_path(demo_project, remote_path)
+    prefix = f"{label}-"
+    if suffix is None or not suffix.startswith(prefix):
+        return None
+    return suffix[len(prefix) :] or None
+
+
+def temporal_namespace_runtime_secret_paths_from_status(
+    status: Any,
+) -> dict[str, str]:
+    """Per-label runtime secret paths the workflow recorded, keyed by label."""
+    if not isinstance(status, dict):
+        return {}
+    paths = status.get("temporalNamespaceRuntimeSecretPaths")
+    if not isinstance(paths, dict):
+        return {}
+    return {
+        label: path.strip()
+        for label, path in paths.items()
+        if isinstance(label, str) and isinstance(path, str) and path.strip()
+    }
 
 
 def temporal_secret_suffix_from_remote_path(

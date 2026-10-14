@@ -222,6 +222,9 @@ def orphaned_temporal_namespace_status(
     orphaned = [label for label in previous_labels if label not in declared_labels]
     if not orphaned:
         return None
+    recorded_paths = resources.temporal_namespace_runtime_secret_paths_from_status(
+        demo_project.get("status")
+    )
     return {
         "phase": "Orphaned",
         "checkedAt": checked_at,
@@ -237,7 +240,8 @@ def orphaned_temporal_namespace_status(
                 "namespace": resources.project_temporal_namespace_for_label(
                     demo_project, label
                 ),
-                "runtimeSecretPath": resources.temporal_secret_remote_path_for_label(
+                "runtimeSecretPath": recorded_paths.get(label)
+                or resources.temporal_secret_remote_path_for_label(
                     demo_project, label
                 ),
             }
@@ -355,12 +359,21 @@ def status_with_temporal_runtime_secret_path(
 ) -> dict[str, Any]:
     if not resources.temporal_components(demo_project):
         return status
-    return {
+    rendered = {
         **status,
         "temporalRuntimeSecretPath": resources.temporal_secret_remote_path(
             demo_project
         ),
     }
+    labels = resources.temporal_namespace_labels(demo_project)
+    if labels:
+        rendered["temporalNamespaceRuntimeSecretPaths"] = {
+            label: resources.temporal_secret_remote_path_for_label(
+                demo_project, label
+            )
+            for label in sorted(labels)
+        }
+    return rendered
 
 
 def previous_reconcile_status(
@@ -456,6 +469,30 @@ def demo_project_with_temporal_runtime_secret_path(
     temporal = rendered_spec.get("temporal")
     rendered_temporal = {**temporal} if isinstance(temporal, dict) else {}
     rendered_temporal["runtimeSecretPath"] = runtime_secret_path
+    rendered_spec["temporal"] = rendered_temporal
+    rendered["spec"] = rendered_spec
+    return rendered
+
+
+def demo_project_with_temporal_namespace_runtime_secret_path(
+    demo_project: dict[str, Any],
+    label: str,
+    runtime_secret_path: str,
+) -> dict[str, Any]:
+    """The label's counterpart of demo_project_with_temporal_runtime_secret_path."""
+    rendered = {**demo_project}
+    spec = demo_project.get("spec")
+    rendered_spec = {**spec} if isinstance(spec, dict) else {}
+    temporal = rendered_spec.get("temporal")
+    rendered_temporal = {**temporal} if isinstance(temporal, dict) else {}
+    namespaces = rendered_temporal.get("namespaces")
+    rendered_namespaces = {**namespaces} if isinstance(namespaces, dict) else {}
+    declared = rendered_namespaces.get(label)
+    rendered_namespaces[label] = {
+        **(declared if isinstance(declared, dict) else {}),
+        "runtimeSecretPath": runtime_secret_path,
+    }
+    rendered_temporal["namespaces"] = rendered_namespaces
     rendered_spec["temporal"] = rendered_temporal
     rendered["spec"] = rendered_spec
     return rendered
@@ -718,6 +755,9 @@ class DemoProjectWorkflow:
         self._temporal_runtime_secret_suffix: str | None = (
             request.carried_temporal_runtime_secret_suffix
         )
+        self._temporal_namespace_secret_suffixes: dict[str, str] = dict(
+            request.carried_temporal_namespace_secret_suffixes or {}
+        )
         # Captured per-reconcile so a failure anywhere in the pass (incl. child
         # workflows) can compensate the Temporal Cloud resources created THIS pass.
         self._tc_state: TemporalCloudReconcileState | None = None
@@ -795,6 +835,10 @@ class DemoProjectWorkflow:
         if request.carried_temporal_runtime_secret_suffix is not None:
             self._temporal_runtime_secret_suffix = (
                 request.carried_temporal_runtime_secret_suffix
+            )
+        if request.carried_temporal_namespace_secret_suffixes is not None:
+            self._temporal_namespace_secret_suffixes = dict(
+                request.carried_temporal_namespace_secret_suffixes
             )
         if request.carried_pending_force_reconcile is not None:
             self._pending_force_reconcile = request.carried_pending_force_reconcile
@@ -996,6 +1040,18 @@ class DemoProjectWorkflow:
         if self._tc_plan is not None:
             external_plan = self._tc_plan
             demo_project = external_plan.demo_project
+        # A sibling namespace that minted a path moved only its own projection;
+        # render it into the project the runtime and secrets checks consume.
+        rendered = self._demo_project_with_known_runtime_secret_path(demo_project)
+        if rendered != demo_project:
+            demo_project = rendered
+            external_plan = external_resources.plan_external_resources(
+                demo_project,
+                checked_at=external_plan.checked_at,
+                force_temporal_auth_rotation=(
+                    external_plan.force_temporal_auth_rotation
+                ),
+            )
         demo_project = demo_project_with_temporal_api_key(
             demo_project,
             temporal_status,
@@ -1022,33 +1078,78 @@ class DemoProjectWorkflow:
         self,
         demo_project: dict[str, Any],
     ) -> dict[str, Any]:
-        if (
-            not self._temporal_runtime_secret_suffix
-            or not resources.temporal_components(demo_project)
-        ):
+        if not resources.temporal_components(demo_project):
             return demo_project
-        path = resources.temporal_secret_remote_path_with_suffix(
-            demo_project,
-            self._temporal_runtime_secret_suffix,
-        )
-        return demo_project_with_temporal_runtime_secret_path(demo_project, path)
+        if self._temporal_runtime_secret_suffix:
+            path = resources.temporal_secret_remote_path_with_suffix(
+                demo_project,
+                self._temporal_runtime_secret_suffix,
+            )
+            demo_project = demo_project_with_temporal_runtime_secret_path(
+                demo_project, path
+            )
+        for label in sorted(resources.temporal_namespace_labels(demo_project)):
+            suffix = self._temporal_namespace_secret_suffixes.get(label)
+            if not suffix:
+                continue
+            demo_project = demo_project_with_temporal_namespace_runtime_secret_path(
+                demo_project,
+                label,
+                resources.temporal_secret_remote_path_for_label_suffix(
+                    demo_project, label, suffix
+                ),
+            )
+        return demo_project
 
     def _recover_temporal_runtime_secret_suffix(
         self,
         demo_project: dict[str, Any],
     ) -> None:
-        if self._temporal_runtime_secret_suffix is not None:
-            return
         status = demo_project.get("status")
-        runtime_secret_path = resources.temporal_runtime_secret_path_from_status(
-            status
+        if self._temporal_runtime_secret_suffix is None:
+            runtime_secret_path = resources.temporal_runtime_secret_path_from_status(
+                status
+            )
+            suffix = resources.temporal_secret_suffix_from_remote_path(
+                demo_project,
+                runtime_secret_path,
+            )
+            if suffix is not None:
+                self._temporal_runtime_secret_suffix = suffix
+        recorded = resources.temporal_namespace_runtime_secret_paths_from_status(status)
+        for label, path in recorded.items():
+            if label in self._temporal_namespace_secret_suffixes:
+                continue
+            suffix = resources.temporal_label_secret_suffix_from_remote_path(
+                demo_project, label, path
+            )
+            if suffix is not None:
+                self._temporal_namespace_secret_suffixes[label] = suffix
+
+    def _target_plan_with_new_namespace_runtime_secret_path(
+        self,
+        target_plan: Any,
+        label: str,
+    ) -> Any:
+        # The label's counterpart of _external_plan_with_new_runtime_secret_path.
+        # Always mint: the old path may be scheduled for deletion in Secrets
+        # Manager, which refuses writes until the recovery window expires.
+        suffix = workflow.uuid4().hex[:12]
+        self._temporal_namespace_secret_suffixes[label] = suffix
+        path = resources.temporal_secret_remote_path_for_label_suffix(
+            target_plan.demo_project, label, suffix
         )
-        suffix = resources.temporal_secret_suffix_from_remote_path(
-            demo_project,
-            runtime_secret_path,
+        return replace(
+            target_plan,
+            demo_project=demo_project_with_temporal_namespace_runtime_secret_path(
+                target_plan.demo_project, label, path
+            ),
+            temporal_project=replace(
+                target_plan.temporal_project,
+                runtime_secret_path=path,
+                mtls_ca_secret_path=f"{path}/ca",
+            ),
         )
-        if suffix is not None:
-            self._temporal_runtime_secret_suffix = suffix
 
     def _external_plan_with_new_runtime_secret_path(
         self,
@@ -1077,19 +1178,23 @@ class DemoProjectWorkflow:
         self,
         external_plan: Any,
         runtime_secret: external_resources.TemporalRuntimeSecretCheckResult,
+        label: str | None = None,
     ) -> bool:
         if runtime_secret.state == "MarkedForDeletion":
             return True
         if runtime_secret.state != "Missing":
             return False
-        if self._temporal_runtime_secret_suffix is not None:
+        if label is None:
+            if self._temporal_runtime_secret_suffix is not None:
+                return False
+        elif label in self._temporal_namespace_secret_suffixes:
             return False
         legacy_project = {
             "metadata": {"name": external_plan.temporal_project.name},
             "spec": {},
         }
         return external_plan.temporal_project.runtime_secret_path == (
-            resources.temporal_secret_remote_path(legacy_project)
+            resources.temporal_secret_remote_path_for_label(legacy_project, label)
         )
 
     async def _reconcile_ecr_repositories(
@@ -1332,7 +1437,7 @@ class DemoProjectWorkflow:
                     external_plan,
                     state,
                     candidate_secret_token,
-                    is_primary=is_primary,
+                    label=target.label,
                 )
                 external_plan = stage_outcome.external_plan
                 context.plan = external_plan
@@ -1726,7 +1831,7 @@ class DemoProjectWorkflow:
         state: TemporalCloudReconcileState,
         candidate_secret_token: str,
         *,
-        is_primary: bool = True,
+        label: str | None = None,
     ) -> TemporalRuntimeStageOutcome:
         project = external_plan.temporal_project
         if state.namespace is None:
@@ -1790,17 +1895,26 @@ class DemoProjectWorkflow:
                 retry_policy=COMMON_RETRY_POLICY,
             )
 
-            # The suffix is a single project-level value carried across
-            # continue-as-new, and it is minted with workflow.uuid4() at a fixed
-            # position in history. Only the primary target may move the path.
-            if is_primary and self._runtime_secret_path_can_move(
-                external_plan, runtime_secret
+            # Each target's suffix is carried across continue-as-new and minted
+            # with workflow.uuid4() at a fixed position in history. The primary
+            # re-plans the whole project; a sibling moves only its own projection,
+            # and _reconcile_external_resources re-renders the project from the
+            # recorded suffixes once every target has settled.
+            if self._runtime_secret_path_can_move(
+                external_plan, runtime_secret, label
             ):
-                external_plan = self._external_plan_with_new_runtime_secret_path(
-                    external_plan
-                )
+                if label is None:
+                    external_plan = self._external_plan_with_new_runtime_secret_path(
+                        external_plan
+                    )
+                    self._tc_plan = external_plan
+                else:
+                    external_plan = (
+                        self._target_plan_with_new_namespace_runtime_secret_path(
+                            external_plan, label
+                        )
+                    )
                 project = external_plan.temporal_project
-                self._tc_plan = external_plan
                 runtime_secret = await workflow.execute_activity(
                     external_resources.check_temporal_runtime_secret,
                     external_resources.CheckTemporalRuntimeSecretRequest(
@@ -2352,6 +2466,9 @@ class DemoProjectWorkflow:
         finalize_checked_at = finalize_plan.get("checkedAt")
         if not isinstance(finalize_checked_at, str) or not finalize_checked_at:
             finalize_checked_at = workflow.now().astimezone(UTC).isoformat()
+        # A run that finalizes before its first reconcile has no suffixes in
+        # memory; recover them so teardown deletes the minted paths.
+        self._recover_temporal_runtime_secret_suffix(demo_project)
         demo_project = self._demo_project_with_known_runtime_secret_path(demo_project)
         return external_resources.plan_external_resources(
             demo_project,
@@ -2531,6 +2648,9 @@ class DemoProjectWorkflow:
                     ),
                     carried_temporal_runtime_secret_suffix=(
                         self._temporal_runtime_secret_suffix
+                    ),
+                    carried_temporal_namespace_secret_suffixes=(
+                        self._temporal_namespace_secret_suffixes or None
                     ),
                     carried_pending_force_reconcile=(
                         self._pending_force_reconcile

@@ -49,6 +49,7 @@ from demo_registry_operator.resources import (
     source_watch_required,
     source_watch_resources,
     spec_of,
+    temporal_namespace_runtime_secret_paths_from_status,
     temporal_runtime_secret_path_from_status,
 )
 
@@ -617,6 +618,9 @@ def active_version_status(demo_project: dict[str, Any]) -> dict[str, Any]:
     runtime_secret_path = temporal_runtime_secret_path_from_status(status)
     if runtime_secret_path is not None:
         active_status["temporalRuntimeSecretPath"] = runtime_secret_path
+    namespace_paths = temporal_namespace_runtime_secret_paths_from_status(status)
+    if namespace_paths:
+        active_status["temporalNamespaceRuntimeSecretPaths"] = namespace_paths
     return active_status
 
 

@@ -330,6 +330,10 @@ spec:
                   type: string
                 temporalRuntimeSecretPath:
                   type: string
+                temporalNamespaceRuntimeSecretPaths:
+                  type: object
+                  additionalProperties:
+                    type: string
                 activeImages:
                   type: object
                   additionalProperties:
