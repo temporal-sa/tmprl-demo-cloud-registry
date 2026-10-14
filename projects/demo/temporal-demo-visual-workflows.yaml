@@ -1,0 +1,95 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: temporal-demo-visual-workflows
+spec:
+  registry:
+    title: Visual Workflows
+    summary: 'A visual workflow builder where every flow you draw runs as a durable Temporal Workflow:
+      retry policies, Signals and Updates, event lanes, races, timers, sagas, Schedules, child flows,
+      and a Claude agent. Kill the flow worker mid-run and every run resumes from its last completed step.'
+    tags:
+      - Workflows
+      - Worker Versioning
+      - Saga
+      - AI - Agents
+      - Human-in-the-Loop
+    temporalSdks:
+      - Go
+    links:
+      runbook:
+        url: https://github.com/temporal-sa/temporal-demo-visual-workflows#readme
+        label: README
+    crashable:
+      enabled: true
+      taskQueueEnv: TASK_QUEUE
+      baseTaskQueue: visual-workflows
+  source:
+    repo: https://github.com/temporal-sa/temporal-demo-visual-workflows
+  builds:
+    app:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    sandbox:
+      context: .
+      dockerfile: docker/sandbox.Dockerfile
+    worker:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+  secrets:
+    anthropic:
+      shared: anthropic
+      requiredProperties:
+        - ANTHROPIC_API_KEY
+    session:
+      requiredProperties:
+        - SESSION_SECRET
+  components:
+    app:
+      build: app
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+      env:
+        - name: TASK_QUEUE
+          value: visual-workflows
+        - name: WORKER_MODE
+          value: long-lived
+        - name: SANDBOX_URL
+          value: http://sandbox:8090
+        - name: CALLBACK_BASE_URL
+          value: http://app
+        - name: TEMPORAL_UI_URL
+          value: https://cloud.temporal.io
+        - name: TRUST_AUTH_HEADERS
+          value: 'true'
+        - name: SESSION_SECRET
+          valueFrom:
+            inputRef: secrets.session.SESSION_SECRET
+      temporalAccess: true
+    sandbox:
+      build: sandbox
+      ports:
+        - containerPort: 8090
+          servicePort: 8090
+    worker:
+      build: worker
+      env:
+        - name: TASK_QUEUE
+          value: visual-workflows
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            inputRef: secrets.anthropic.ANTHROPIC_API_KEY
+      worker:
+        versioning:
+          enabled: true
+      autoscaling:
+        taskQueue: visual-workflows
+  ingress:
+    subdomain: visual-workflows
+    temporalAuthRequired: true
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
+    timeoutSeconds: 10
