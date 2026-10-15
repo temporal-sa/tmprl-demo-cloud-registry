@@ -19,6 +19,7 @@ Three scenarios, because each takes a different path through the saga:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -528,17 +529,20 @@ def test_search_attribute_delta_deletes_only_previously_managed_names(monkeypatc
 # --- the loop over namespace targets -----------------------------------------
 
 
-def with_additional_namespace(external_plan, label="alpha"):
+def with_additional_namespace(
+    external_plan,
+    label="alpha",
+    runtime_secret_path: str | None = None,
+):
     """Attach one declared namespace, the way the planner will once wired."""
-    from dataclasses import replace
-
     project = external_plan.temporal_project
+    runtime_secret_path = runtime_secret_path or f"tmprl-dem-cld/demo/temporal-{label}"
     spec = models.TemporalNamespaceSpec(
         label=label,
         namespace=f"tmprl-dem-cld-demo-{label}",
         auth_mode=project.auth_mode,
-        runtime_secret_path=f"tmprl-dem-cld/demo/temporal-{label}",
-        mtls_ca_secret_path=f"tmprl-dem-cld/demo/temporal-{label}/ca",
+        runtime_secret_path=runtime_secret_path,
+        mtls_ca_secret_path=f"{runtime_secret_path}/ca",
         components={"sidecar": {"build": "app", "worker": True}},
     )
     return replace(
@@ -633,9 +637,22 @@ def test_additional_namespace_status_hangs_off_a_sibling_key():
     }
 
 
-def run_two_namespace_saga(monkeypatch, *, barrier_names: set[str] | None = None):
+ALPHA_LEGACY_PATH = "tmprl-dem-cld/demo/temporal-alpha"
+ALPHA_STABLE_PATH = f"tmprl-dem-cld/demo/temporal-alpha-{STABLE_SUFFIX}"
+ALPHA_MINTED_PATH = f"tmprl-dem-cld/demo/temporal-alpha-{MINTED_SUFFIX}"
+
+
+def run_two_namespace_saga(
+    monkeypatch,
+    *,
+    barrier_names: set[str] | None = None,
+    alpha_suffix: str | None = None,
+    alpha_secret_state: str = "Missing",
+):
     workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
     workflow._temporal_runtime_secret_suffix = STABLE_SUFFIX
+    if alpha_suffix is not None:
+        workflow._temporal_namespace_secret_suffixes = {"alpha": alpha_suffix}
     demo_project = demo_project_with_temporal_runtime_secret_path(
         project(), STABLE_PATH
     )
@@ -669,6 +686,12 @@ def run_two_namespace_saga(monkeypatch, *, barrier_names: set[str] | None = None
                 created=True,
                 region="aws-us-west-2",
             )
+        if (
+            name == "check_temporal_runtime_secret"
+            and target.target_namespace
+            and path != ALPHA_MINTED_PATH
+        ):
+            return replace(results[name], state=alpha_secret_state)
         return results[name]
 
     monkeypatch.setattr(
@@ -682,13 +705,23 @@ def run_two_namespace_saga(monkeypatch, *, barrier_names: set[str] | None = None
         lambda: datetime(2026, 6, 20, tzinfo=UTC),
     )
     monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "uuid4",
+        lambda: SimpleNamespace(hex=MINTED_SUFFIX + "0000000000000000000"),
+    )
+    monkeypatch.setattr(
         demo_project_workflow.workflow, "execute_activity", fake_execute_activity
     )
 
     external_plan = with_additional_namespace(
         demo_project_workflow.external_resources.plan_external_resources(
             demo_project, checked_at=CHECKED_AT
-        )
+        ),
+        runtime_secret_path=(
+            ALPHA_LEGACY_PATH
+            if alpha_suffix is None
+            else f"tmprl-dem-cld/demo/temporal-alpha-{alpha_suffix}"
+        ),
     )
     async def run_reconcile():
         return await asyncio.wait_for(
@@ -717,7 +750,55 @@ def test_each_namespace_stages_against_its_own_secret_path(monkeypatch):
         for name, request in calls
         if name == "create_temporal_api_key_candidate_secret"
     ]
-    assert paths == [STABLE_PATH, "tmprl-dem-cld/demo/temporal-alpha"]
+    assert paths == [STABLE_PATH, ALPHA_MINTED_PATH]
+
+
+def test_sibling_on_the_legacy_path_mints_its_own_suffix(monkeypatch):
+    calls, _status, workflow, _arrivals = run_two_namespace_saga(monkeypatch)
+    checks = [
+        request.project.runtime_secret_path
+        for name, request in calls
+        if name == "check_temporal_runtime_secret"
+        and request.project.target_namespace
+    ]
+    # Checked at the fixed legacy path, then re-checked at the minted one.
+    assert checks == [ALPHA_LEGACY_PATH, ALPHA_MINTED_PATH]
+    assert workflow._temporal_namespace_secret_suffixes == {"alpha": MINTED_SUFFIX}
+    # The primary's suffix and plan are untouched by the sibling's mint.
+    assert workflow._temporal_runtime_secret_suffix == STABLE_SUFFIX
+    assert workflow._tc_plan.temporal_project.runtime_secret_path == STABLE_PATH
+    sibling = workflow._tc_targets[1].plan.temporal_project
+    assert sibling.mtls_ca_secret_path == f"{ALPHA_MINTED_PATH}/ca"
+
+
+def test_sibling_with_an_owned_suffix_keeps_its_path(monkeypatch):
+    calls, _status, workflow, _arrivals = run_two_namespace_saga(
+        monkeypatch, alpha_suffix=STABLE_SUFFIX
+    )
+    paths = [
+        request.project.runtime_secret_path
+        for name, request in calls
+        if name == "create_temporal_api_key_candidate_secret"
+    ]
+    assert paths == [STABLE_PATH, ALPHA_STABLE_PATH]
+    assert workflow._temporal_namespace_secret_suffixes == {"alpha": STABLE_SUFFIX}
+
+
+def test_sibling_path_marked_for_deletion_moves_to_a_new_suffix(monkeypatch):
+    # agent-gateway: the sibling's secret was scheduled for deletion by a
+    # teardown, and Secrets Manager refuses writes to it for the recovery window.
+    calls, _status, workflow, _arrivals = run_two_namespace_saga(
+        monkeypatch,
+        alpha_suffix=STABLE_SUFFIX,
+        alpha_secret_state="MarkedForDeletion",
+    )
+    paths = [
+        request.project.runtime_secret_path
+        for name, request in calls
+        if name == "create_temporal_api_key_candidate_secret"
+    ]
+    assert paths == [STABLE_PATH, ALPHA_MINTED_PATH]
+    assert workflow._temporal_namespace_secret_suffixes == {"alpha": MINTED_SUFFIX}
 
 
 def test_each_namespace_uses_a_distinct_candidate_token(monkeypatch):
@@ -841,6 +922,11 @@ def test_namespace_failure_waits_for_sibling_to_settle_before_raising(monkeypatc
     )
     monkeypatch.setattr(
         demo_project_workflow.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        demo_project_workflow.workflow,
+        "uuid4",
+        lambda: SimpleNamespace(hex=MINTED_SUFFIX + "0000000000000000000"),
     )
     monkeypatch.setattr(
         workflow, "_compensate_temporal_cloud_reconcile", fake_compensate
@@ -1128,3 +1214,68 @@ def test_previous_label_reader_tolerates_missing_status():
         "a",
         "b",
     ]
+
+
+# --- minted sibling paths outlive the run that minted them --------------------
+
+
+def project_with_alpha() -> dict[str, Any]:
+    demo_project = project()
+    demo_project["spec"]["temporal"] = {"namespaces": {"alpha": {}}}
+    return demo_project
+
+
+def test_status_records_each_sibling_runtime_secret_path():
+    demo_project = (
+        demo_project_workflow.demo_project_with_temporal_namespace_runtime_secret_path(
+            project_with_alpha(), "alpha", ALPHA_MINTED_PATH
+        )
+    )
+    status = demo_project_workflow.status_with_temporal_runtime_secret_path(
+        {"phase": "Ready"}, demo_project
+    )
+    assert status["temporalNamespaceRuntimeSecretPaths"] == {
+        "alpha": ALPHA_MINTED_PATH
+    }
+    # Every renderer resolves the label to the minted path, not the legacy one.
+    assert demo_project_workflow.resources.temporal_secret_remote_path_for_label(
+        demo_project, "alpha"
+    ) == ALPHA_MINTED_PATH
+
+
+def test_a_new_run_recovers_sibling_suffixes_from_status():
+    demo_project = project_with_alpha()
+    demo_project["status"] = {
+        "temporalRuntimeSecretPath": STABLE_PATH,
+        "temporalNamespaceRuntimeSecretPaths": {"alpha": ALPHA_MINTED_PATH},
+    }
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    workflow._recover_temporal_runtime_secret_suffix(demo_project)
+
+    assert workflow._temporal_runtime_secret_suffix == STABLE_SUFFIX
+    assert workflow._temporal_namespace_secret_suffixes == {"alpha": MINTED_SUFFIX}
+    rendered = workflow._demo_project_with_known_runtime_secret_path(demo_project)
+    assert demo_project_workflow.resources.temporal_secret_remote_path_for_label(
+        rendered, "alpha"
+    ) == ALPHA_MINTED_PATH
+
+
+def test_a_legacy_sibling_path_in_status_is_not_mistaken_for_a_suffix():
+    demo_project = project_with_alpha()
+    demo_project["status"] = {
+        "temporalNamespaceRuntimeSecretPaths": {"alpha": ALPHA_LEGACY_PATH},
+    }
+    workflow = DemoProjectWorkflow(DemoProjectRunRequest(project_name="demo"))
+    workflow._recover_temporal_runtime_secret_suffix(demo_project)
+    # Left unowned, so the next reconcile may move it off the fixed name.
+    assert workflow._temporal_namespace_secret_suffixes == {}
+
+
+def test_sibling_suffixes_are_carried_across_continue_as_new():
+    workflow = DemoProjectWorkflow(
+        DemoProjectRunRequest(
+            project_name="demo",
+            carried_temporal_namespace_secret_suffixes={"alpha": MINTED_SUFFIX},
+        )
+    )
+    assert workflow._temporal_namespace_secret_suffixes == {"alpha": MINTED_SUFFIX}

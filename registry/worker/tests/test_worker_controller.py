@@ -1882,6 +1882,10 @@ def test_unversioned_worker_defaults_to_keda_scaled_object_without_replicas():
     }
     assert scaled_object["spec"]["minReplicaCount"] == 1
     assert scaled_object["spec"]["maxReplicaCount"] == 10
+    # Short names leave the HPA name to KEDA's default.
+    assert "name" not in (
+        scaled_object["spec"]["advanced"]["horizontalPodAutoscalerConfig"]
+    )
     trigger = scaled_object["spec"]["triggers"][0]
     assert trigger["type"] == "temporal"
     assert trigger["metadata"] == {
@@ -1897,6 +1901,29 @@ def test_unversioned_worker_defaults_to_keda_scaled_object_without_replicas():
     api = next(item for item in rendered if item["metadata"]["name"].startswith("api-"))
     assert api["spec"]["replicas"] == 1
     assert sum(item["kind"] == "ScaledObject" for item in rendered) == 1
+
+
+def test_long_worker_name_gets_a_bounded_keda_hpa_name():
+    # langgraph-temporal's worker: "keda-hpa-" plus its Deployment name was 64
+    # characters, and KEDA's admission webhook rejected the ScaledObject. The
+    # fixture's rollout version is shorter than a live one, so the component
+    # name here is longer to cross the same limit.
+    demo_project = project(worker=True)
+    components = demo_project["spec"]["components"]
+    components["temporal-langgraph-support-agent-worker"] = autoscaled(
+        components.pop("worker")
+    )
+
+    rendered = deployment_resources(demo_project, images(), namespace="runtime")
+    scaled_object = next(item for item in rendered if item["kind"] == "ScaledObject")
+
+    name = scaled_object["metadata"]["name"]
+    assert len(f"keda-hpa-{name}") > 63
+    hpa_name = scaled_object["spec"]["advanced"]["horizontalPodAutoscalerConfig"][
+        "name"
+    ]
+    assert hpa_name.startswith("keda-hpa-temporal-langgraph-support-agent-worker-")
+    assert len(hpa_name) <= 63
 
 
 def test_worker_without_known_task_queue_or_with_replicas_stays_fixed():
