@@ -4115,6 +4115,8 @@ def instruqt_catalog_entry(instruqt_course: dict[str, Any]) -> dict[str, Any]:
         "variant": catalog.get("variant", ""),
         "tags": catalog.get("tags", []),
         "temporalSdks": catalog.get("temporalSdks", []),
+        "aiSdks": catalog.get("aiSdks", []),
+        "duration": catalog.get("duration"),
         "links": catalog.get("links", {}),
         "resources": catalog.get("resources", []),
     }

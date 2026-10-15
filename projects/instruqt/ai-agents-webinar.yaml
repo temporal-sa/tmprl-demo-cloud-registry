@@ -24,10 +24,14 @@ spec:
     slug: ai-agents-webinar
 
   catalog:
-    title: AI Agents Webinar
-    summary: Build durable AI agents with Temporal through a guided, browser-based lab.
-    tags: [AI, Agents, Workshop]
+    title: Durable AI Agents Webinar
+    summary: Build an AI agent loop as a Temporal Workflow, pause it for human input with Signals and Queries, then hand work to specialist agents with child Workflows and Nexus. Three 30-minute Python modules using OpenAI and the OpenAI Agents SDK.
+    tags: [AI, Agents, Human-in-the-loop, Multi-agent, Nexus, Webinar]
     temporalSdks: [Python]
+    aiSdks: [OpenAI Agents SDK]
+    duration:
+      minHours: 1
+      maxHours: 1.5
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/ai-agents-webinar
