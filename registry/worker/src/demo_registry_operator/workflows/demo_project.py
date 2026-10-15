@@ -43,6 +43,14 @@ CHECK_RETRY_POLICY = RetryPolicy(
     maximum_attempts=3,
     non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
 )
+# Unlimited attempts, bounded by TEMPORAL_NAMESPACE_DNS_WAIT_TIMEOUT.
+DNS_WAIT_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    non_retryable_error_types=errors.NON_RETRYABLE_ERROR_TYPES,
+)
+TEMPORAL_NAMESPACE_DNS_WAIT_TIMEOUT = timedelta(minutes=20)
 TEMPORAL_RUNTIME_CANDIDATE_CANARY_START_TO_CLOSE_TIMEOUT = timedelta(minutes=10)
 TEMPORAL_RUNTIME_CANDIDATE_CANARY_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
 FAILED_RECONCILE_PHASES = {
@@ -1308,6 +1316,7 @@ class DemoProjectWorkflow:
                     )
                     return namespace.status
 
+                await self._wait_for_temporal_cloud_namespace_dns(external_plan, state)
                 await self._ensure_temporal_cloud_namespace_tags(external_plan, state)
                 await self._ensure_namespace_readers_access(external_plan, state)
 
@@ -1520,6 +1529,40 @@ class DemoProjectWorkflow:
             heartbeat_timeout=timedelta(minutes=1),
             retry_policy=COMMON_RETRY_POLICY,
         )
+
+    async def _wait_for_temporal_cloud_namespace_dns(
+        self,
+        external_plan: Any,
+        state: TemporalCloudReconcileState,
+    ) -> None:
+        namespace = state.namespace
+        assert namespace is not None
+        # BEST-EFFORT, for the same reason as tags: this runs inside the
+        # reconcile's compensating try, so giving up must not tear down the
+        # namespace. A freshly created namespace can report ACTIVE before its
+        # hostname resolves; the Worker Controller then fails its rollout with
+        # "no children to pick from". Waiting here lets the rollout start once
+        # the host resolves. The window covers tmprl.cloud's 15-minute negative
+        # DNS TTL. If it still fails, the rollout proceeds and reports the
+        # failure the usual way.
+        try:
+            await workflow.execute_activity(
+                external_resources.wait_for_temporal_cloud_namespace_dns,
+                external_resources.WaitForTemporalCloudNamespaceDnsRequest(
+                    checked_at=external_plan.checked_at,
+                    project=external_plan.temporal_project,
+                    namespace=namespace,
+                ),
+                start_to_close_timeout=timedelta(seconds=30),
+                schedule_to_close_timeout=TEMPORAL_NAMESPACE_DNS_WAIT_TIMEOUT,
+                retry_policy=DNS_WAIT_RETRY_POLICY,
+            )
+        except Exception as error:  # noqa: BLE001
+            workflow.logger.warning(
+                "Namespace DNS did not resolve for %s (non-fatal): %s",
+                namespace.namespace,
+                error,
+            )
 
     async def _ensure_temporal_cloud_namespace_tags(
         self,

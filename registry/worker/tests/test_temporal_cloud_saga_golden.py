@@ -67,6 +67,10 @@ def activity_results(runtime_secret_path: str) -> dict[str, Any]:
             created=True,
             region="aws-us-west-2",
         ),
+        "wait_for_temporal_cloud_namespace_dns": models.TemporalCloudNamespaceDnsResult(
+            host=f"{NAMESPACE}.acct1.tmprl.cloud",
+            addresses=("203.0.113.10",),
+        ),
         "ensure_temporal_cloud_namespace_tags": models.TemporalCloudStatusResult(
             status={"phase": "Ready", "action": "updated"},
         ),
@@ -216,6 +220,7 @@ def run_saga(
 # search-attribute activity; the step still emits a NotRequired status block.
 STEADY_STATE_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
+    "wait_for_temporal_cloud_namespace_dns",
     "ensure_temporal_cloud_namespace_tags",
     "ensure_temporal_cloud_namespace_readers_access",
     "create_or_verify_temporal_cloud_service_account",
@@ -230,6 +235,7 @@ STEADY_STATE_SEQUENCE = [
 # First provision re-checks the runtime secret once the path has moved.
 FIRST_PROVISION_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
+    "wait_for_temporal_cloud_namespace_dns",
     "ensure_temporal_cloud_namespace_tags",
     "ensure_temporal_cloud_namespace_readers_access",
     "create_or_verify_temporal_cloud_service_account",
@@ -243,9 +249,10 @@ FIRST_PROVISION_SEQUENCE = [
 ]
 
 # Declaring search attributes inserts exactly one activity, after the
-# namespace metadata steps (tags, readers access).
+# namespace DNS wait and metadata steps (tags, readers access).
 SEARCH_ATTRIBUTE_SEQUENCE = [
     "create_or_verify_temporal_cloud_namespace",
+    "wait_for_temporal_cloud_namespace_dns",
     "ensure_temporal_cloud_namespace_tags",
     "ensure_temporal_cloud_namespace_readers_access",
     "reconcile_temporal_cloud_search_attributes",
@@ -760,6 +767,7 @@ def test_both_targets_are_recorded_for_compensation(monkeypatch):
 def test_namespace_pipelines_run_independent_steps_concurrently(monkeypatch):
     barrier_names = {
         "create_or_verify_temporal_cloud_namespace",
+        "wait_for_temporal_cloud_namespace_dns",
         "ensure_temporal_cloud_namespace_tags",
         "ensure_temporal_cloud_namespace_readers_access",
         "create_or_verify_temporal_cloud_service_account",

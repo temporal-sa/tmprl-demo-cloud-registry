@@ -527,6 +527,19 @@ class EnsureTemporalCloudNamespaceReadersAccessRequest:
 
 
 @dataclass(frozen=True)
+class WaitForTemporalCloudNamespaceDnsRequest:
+    checked_at: str
+    project: TemporalCloudProject
+    namespace: TemporalCloudNamespaceResult
+
+
+@dataclass(frozen=True)
+class TemporalCloudNamespaceDnsResult:
+    host: str | None
+    addresses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class TemporalCloudNamespaceTagsResult:
     status: dict[str, Any]
 
