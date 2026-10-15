@@ -689,16 +689,17 @@
     font-size: .875rem;
   }
 
-  /* Canonical feature (blog "featured" layout) */
+  /* Canonical features: two tiles per row, art banner over the body */
   .canonical-list {
     display: grid;
-    gap: 2rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
   }
 
   .feature {
     --btn-bg: var(--space-black);
-    display: grid;
-    grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+    display: flex;
+    flex-direction: column;
     --feature-bg: var(--space-black);
     background: linear-gradient(var(--feature-bg), var(--feature-bg)) padding-box, var(--grad-uv-edge) border-box;
     border: 2px solid transparent;
@@ -710,43 +711,53 @@
   .feature .card-open::after { content: none; }
   .feature:has(.card-open:focus-visible) { outline: 2px solid var(--indigo-300); outline-offset: 2px; }
 
+  .feature .art { min-height: 0; height: 11rem; }
+  .feature .art-shot { top: 22%; left: 12%; width: 82%; }
+
   .feature-body {
     display: flex;
+    flex: 1;
     flex-direction: column;
-    padding: 2rem 2.5rem 1.75rem;
+    padding: 1.5rem 1.75rem 1.25rem;
   }
 
   .feature h3 {
-    margin-top: .6rem;
-    font-size: clamp(1.875rem, 2.8vw, 2.375rem);
+    margin-top: .5rem;
+    font-size: clamp(1.5rem, 2vw, 1.875rem);
     font-weight: 300;
     line-height: 1.06;
     letter-spacing: -.025em;
   }
 
+  /* Clamped so tiles in a row stay a similar height; the drawer has the full text */
   .feature-summary {
-    margin-top: .75rem;
+    display: -webkit-box;
+    margin-top: .6rem;
+    overflow: hidden;
     color: var(--indigo-100);
-    font-size: 1.0625rem;
+    font-size: .9375rem;
     font-weight: 300;
-    line-height: 1.55;
+    line-height: 1.5;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
   }
 
-  .feature .tags, .feature .sdk-list { margin-top: 1rem; }
+  .feature .tags, .feature .sdk-list { margin-top: .85rem; }
 
   .feature-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: .75rem 1.25rem;
-    margin-top: 1.5rem;
+    margin: 1.25rem 0;
   }
 
+  /* margin-top: auto pins the checklist to the bottom of shorter tiles */
   .checklist {
     display: flex;
     flex-wrap: wrap;
     gap: .5rem 1.4rem;
-    margin-top: 1.5rem;
+    margin-top: auto;
     padding-top: 1rem;
     border-top: 1px solid var(--line);
     font-family: var(--mono);
@@ -1711,8 +1722,6 @@
 
 @media (max-width: 1100px) {
   .demo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .feature { grid-template-columns: 1fr; }
-  .feature .art { min-height: 15rem; aspect-ratio: 2 / 1; }
   .art-shot { left: 6%; width: 100%; }
 }
 
@@ -1733,7 +1742,7 @@
   .menu-panel { right: 0; left: 0; width: auto; grid-template-columns: 1fr; }
   .group-head { grid-template-columns: 1fr; }
   .group-count { grid-column: 1; grid-row: auto; margin-top: .75rem; }
-  .demo-grid, .workshop-grid { grid-template-columns: 1fr; }
+  .canonical-list, .demo-grid, .workshop-grid { grid-template-columns: 1fr; }
   .feature-body { padding: 1.75rem 1.25rem; }
   .drawer-head { padding: .75rem 1rem; }
   .drawer-body { padding: 1.5rem 1rem 2.5rem; }
