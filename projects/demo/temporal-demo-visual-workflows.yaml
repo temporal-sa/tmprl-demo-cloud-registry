@@ -1,7 +1,7 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  name: temporal-demo-visual-workflows
+  name: visual-workflows
 spec:
   registry:
     title: Visual Workflows

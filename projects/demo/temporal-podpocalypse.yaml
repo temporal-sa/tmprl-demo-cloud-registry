@@ -1,7 +1,7 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  name: temporal-podpocalypse
+  name: podpocalypse
 spec:
   source:
     repo: https://github.com/temporal-sa/temporal-demo-podpocalypse

@@ -1,7 +1,7 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  name: temporal-demo-expense-approval
+  name: expense-approval
 spec:
   registry:
     title: Expense Approval
