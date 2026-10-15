@@ -72,7 +72,6 @@ spec:
       # Scale-to-zero canary for versioned (PINNED) workers.
       autoscaling:
         taskQueue: agent-harness
-        minReplicas: 0
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
       secrets: [gemini]
       env:
