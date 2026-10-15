@@ -300,8 +300,8 @@ def test_source_config_uses_shared_pat_for_temporal_sa_https_source():
     }
 
 
-def test_monty_project_resolves_authenticated_codebuild_plan(monkeypatch):
-    project_path = Path(__file__).resolve().parents[3] / "projects/demo/monty.yaml"
+def test_agent_harness_project_resolves_authenticated_codebuild_plan(monkeypatch):
+    project_path = Path(__file__).resolve().parents[3] / "projects/demo/agent-harness.yaml"
     project = yaml.safe_load(project_path.read_text())
     monkeypatch.setenv("DEMO_REGISTRY_CODEBUILD_PROJECT", "tmprl-dem-cld-build")
     monkeypatch.setenv("DEMO_REGISTRY_AWS_ACCOUNT_ID", "429214323166")
@@ -312,8 +312,7 @@ def test_monty_project_resolves_authenticated_codebuild_plan(monkeypatch):
     ).plan
 
     assert plan["action"] == "codebuild"
-    # The catalog repo is the upstream harness; CodeBuild clones the adapter.
-    assert plan["sourceRepo"] == project["spec"]["source"]["gitRepository"]["url"]
+    assert plan["sourceRepo"] == project["spec"]["source"]["repo"]
     assert plan["sourceVersion"] == "main"
     assert plan["sourceAuthSecretPath"] == PLATFORM_SOURCE_AUTH_SECRET_PATH
     assert set(plan["imageTemplates"]) == {"app"}
