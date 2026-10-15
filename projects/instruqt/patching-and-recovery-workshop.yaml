@@ -22,9 +22,13 @@ spec:
     slug: patching-and-recovery-workshop
 
   catalog:
-    title: Patching and Recovery Workshop
-    summary: Practice safe Workflow evolution, patching, and recovery in a hands-on environment.
-    tags: [Patching, Recovery, Workshop]
+    title: Versioning & Recovery on Temporal
+    summary: "Break hundreds of running Workflows with a non-determinism error, then heal them by redeploying. Then work through the Patching API, safe vs. unsafe changes, Workflow-type cutovers, and Worker Deployment Versioning: Pinned vs. Auto-Upgrade, ramping, and draining with Continue-As-New."
+    tags: [Versioning, Patching, Worker Versioning, Recovery]
+    temporalSdks: [Python]
+    duration:
+      minHours: 3
+      maxHours: 4
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery

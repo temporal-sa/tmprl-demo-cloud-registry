@@ -314,6 +314,7 @@ def validate_semantics(documents: list[ProjectDocument]) -> list[ProjectError]:
         errors.extend(validate_instruqt_course_source_path(document, "content"))
         errors.extend(validate_instruqt_course_testing(document))
         errors.extend(validate_instruqt_course_images(document))
+        errors.extend(validate_instruqt_catalog_duration(document))
     errors.extend(validate_instruqt_catalog_groups(instruqt_courses))
 
     return errors
@@ -463,6 +464,29 @@ def validate_source_repo(document: ProjectDocument) -> list[ProjectError]:
             )
         ]
 
+    return []
+
+
+def validate_instruqt_catalog_duration(
+    document: ProjectDocument,
+) -> list[ProjectError]:
+    duration = get_nested(document.data, ("spec", "catalog", "duration"))
+    if not isinstance(duration, dict):
+        return []
+    min_hours = duration.get("minHours")
+    max_hours = duration.get("maxHours")
+    if not all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in (min_hours, max_hours)
+    ):
+        return []
+    if min_hours > max_hours:
+        return [
+            ProjectError(
+                document.path,
+                "catalog.duration.minHours must not be greater than catalog.duration.maxHours",
+            )
+        ]
     return []
 
 

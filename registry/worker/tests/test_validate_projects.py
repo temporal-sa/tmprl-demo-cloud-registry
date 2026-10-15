@@ -1355,6 +1355,52 @@ def test_instruqt_schema_accepts_presenter_links():
     assert any("'recording' was unexpected" in message for message in messages)
 
 
+def test_instruqt_schema_accepts_ai_sdks_and_duration():
+    document = instruqt_course_document("https://github.com/temporal-sa/workshop")
+    document.data["spec"]["catalog"] = {
+        "title": "Workshop",
+        "summary": "A workshop.",
+        "aiSdks": ["OpenAI Agents SDK", "LangGraph"],
+        "duration": {"minHours": 1.5, "maxHours": 4},
+    }
+    validators = validate_projects.load_default_validators()
+
+    assert validate_projects.validate_document_schema(validators, document) == []
+    assert validate_projects.validate_semantics([document]) == []
+
+    catalog = document.data["spec"]["catalog"]
+    catalog["duration"] = {"minHours": 0, "maxHours": 2, "hours": 2}
+    messages = [
+        error.message
+        for error in validate_projects.validate_document_schema(validators, document)
+    ]
+    assert any("spec.catalog.duration.minHours" in message for message in messages)
+    assert any("'hours' was unexpected" in message for message in messages)
+
+    catalog["duration"] = {"minHours": 2}
+    messages = [
+        error.message
+        for error in validate_projects.validate_document_schema(validators, document)
+    ]
+    assert any("'maxHours' is a required property" in message for message in messages)
+
+
+def test_instruqt_catalog_duration_min_must_not_exceed_max():
+    document = instruqt_course_document("https://github.com/temporal-sa/workshop")
+    document.data["spec"]["catalog"] = {
+        "title": "Workshop",
+        "summary": "A workshop.",
+        "duration": {"minHours": 4, "maxHours": 2},
+    }
+    assert any(
+        "minHours must not be greater than" in error.message
+        for error in validate_projects.validate_semantics([document])
+    )
+
+    document.data["spec"]["catalog"]["duration"] = {"minHours": 2, "maxHours": 2}
+    assert validate_projects.validate_semantics([document]) == []
+
+
 def test_instruqt_course_crd_keeps_every_catalog_field():
     # The InstruqtCourse CRD is structural, so the API server drops any catalog
     # field it doesn't declare even though the validator accepts it.
@@ -1366,6 +1412,7 @@ def test_instruqt_course_crd_keeps_every_catalog_field():
     catalog = schema["properties"]["spec"]["properties"]["catalog"]
     schema_catalog = schema["$defs"][catalog["$ref"].rsplit("/", 1)[-1]]["properties"]
     schema_links = schema["$defs"]["catalogLinks"]["properties"]
+    schema_duration = schema["$defs"]["catalogDuration"]["properties"]
 
     for color in ("blue", "green"):
         crd = yaml.safe_load(
@@ -1378,6 +1425,7 @@ def test_instruqt_course_crd_keeps_every_catalog_field():
         crd_catalog = spec["properties"]["catalog"]["properties"]
         assert set(crd_catalog) == set(schema_catalog), color
         assert set(crd_catalog["links"]["properties"]) == set(schema_links), color
+        assert set(crd_catalog["duration"]["properties"]) == set(schema_duration), color
 
 
 def autoscaling_spec(**autoscaling) -> dict:

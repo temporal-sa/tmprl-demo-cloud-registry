@@ -24,10 +24,14 @@ spec:
     slug: temporal-ai-agents-python-v4
 
   catalog:
-    title: AI Agents Workshop
-    summary: Learn how Temporal makes Python AI agents reliable, recoverable, and observable.
-    tags: [AI, Agents, Workshop]
-    temporalSdks: [Python]
+    title: Build AI Agents That Survive Failure
+    summary: Make OpenAI Agents SDK agents durable with Temporal, add human approval with Signals, orchestrate specialist agents with child Workflows and Nexus, then call a Java Spring AI agent from Python across a Nexus boundary.
+    tags: [AI, Agents, Human-in-the-loop, Multi-agent, Nexus]
+    temporalSdks: [Python, Java]
+    aiSdks: [OpenAI Agents SDK, Spring AI]
+    duration:
+      minHours: 2
+      maxHours: 3
     resources:
       - label: Workshop source
         url: https://github.com/temporal-community/ai-agents-workshop-v4

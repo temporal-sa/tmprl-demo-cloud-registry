@@ -29,6 +29,8 @@ const state = {
   selectedSdks: new Set(),
   workshopsSearch: "",
   selectedWorkshopSdks: new Set(),
+  selectedWorkshopAiSdks: new Set(),
+  workshopHours: null,
   openDemoId: null,
 };
 
@@ -316,6 +318,9 @@ function loadFiltersFromUrl() {
   if (currentView() === "workshops") {
     state.workshopsSearch = params.get("q") || "";
     state.selectedWorkshopSdks = splitParam(params, "sdks");
+    state.selectedWorkshopAiSdks = splitParam(params, "ai");
+    const hours = Number(params.get("hours"));
+    state.workshopHours = hours > 0 ? hours : null;
   } else {
     state.demosSearch = params.get("q") || "";
     state.selectedTags = splitParam(params, "tags");
@@ -344,6 +349,8 @@ function workshopsQueryString() {
   return buildQuery([
     ["q", state.workshopsSearch.trim()],
     ["sdks", [...state.selectedWorkshopSdks].join(",")],
+    ["ai", [...state.selectedWorkshopAiSdks].join(",")],
+    ["hours", state.workshopHours ? String(state.workshopHours) : ""],
   ]);
 }
 
@@ -1422,7 +1429,12 @@ function renderWorkspaceInto(demo, container) {
 // ─── Workshops view ────────────────────────────────────────────────────────
 
 function workshopsHaveFilters() {
-  return !!(state.selectedWorkshopSdks.size || state.workshopsSearch.trim());
+  return !!(
+    state.selectedWorkshopSdks.size ||
+    state.selectedWorkshopAiSdks.size ||
+    state.workshopHours ||
+    state.workshopsSearch.trim()
+  );
 }
 
 function onWorkshopsFilterChange() {
@@ -1441,12 +1453,155 @@ function setupWorkshopsFilters() {
   document.querySelector("[data-clear-workshops]").addEventListener("click", () => {
     state.workshopsSearch = "";
     state.selectedWorkshopSdks.clear();
+    state.selectedWorkshopAiSdks.clear();
+    state.workshopHours = null;
     onWorkshopsFilterChange();
+  });
+  // The AI SDK and length panels share a spot under the filter bar, so only
+  // one stays open, and a click anywhere else closes it.
+  const menus = [
+    document.querySelector("[data-ai-sdks-menu]"),
+    document.querySelector("[data-duration-menu]"),
+  ];
+  for (const menu of menus) {
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      for (const other of menus) if (other !== menu) other.open = false;
+    });
+  }
+  document.addEventListener("click", (event) => {
+    for (const menu of menus) {
+      if (menu.open && !menu.contains(event.target)) menu.open = false;
+    }
   });
 }
 
 function courseSdks(course) {
   return Array.isArray(course.temporalSdks) ? course.temporalSdks : [];
+}
+
+function courseAiSdks(course) {
+  return Array.isArray(course.aiSdks) ? course.aiSdks : [];
+}
+
+// A track's supported session length as [minHours, maxHours], or null.
+function courseDuration(course) {
+  const min = Number(course.duration?.minHours);
+  const max = Number(course.duration?.maxHours);
+  return min > 0 && max >= min ? [min, max] : null;
+}
+
+function courseFitsHours(course, hours) {
+  const range = courseDuration(course);
+  return !!range && range[0] <= hours && hours <= range[1];
+}
+
+function formatHours(hours) {
+  return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+}
+
+function durationLabel([min, max]) {
+  return min === max ? formatHours(max) : `${min}–${formatHours(max)}`;
+}
+
+// Session lengths worth offering in the Length menu: every whole hour across
+// the catalog's duration ranges plus each range's own ends, kept only when at
+// least one track fits.
+function sessionLengthOptions() {
+  const ranges = state.courses.map(courseDuration).filter(Boolean);
+  if (!ranges.length) return [];
+  const values = new Set(ranges.flat());
+  const low = Math.max(1, Math.floor(Math.min(...ranges.map(([min]) => min))));
+  const high = Math.ceil(Math.max(...ranges.map(([, max]) => max)));
+  for (let hours = low; hours <= high; hours += 1) values.add(hours);
+  return [...values]
+    .filter((hours) => ranges.some(([min, max]) => min <= hours && hours <= max))
+    .sort((a, b) => a - b);
+}
+
+function groupCount(predicate) {
+  return groupCourses(state.courses).filter((members) => members.some(predicate)).length;
+}
+
+function menuOption(type, name, value, label, count, checked, onChange) {
+  return el(
+    "label",
+    {},
+    el("input", { type, name, value, checked, onchange: onChange }),
+    el("span", { text: label }),
+    count === null ? null : el("small", { text: String(count) })
+  );
+}
+
+function setMenuCount(selector, count) {
+  const badge = document.querySelector(selector);
+  badge.hidden = !count;
+  badge.textContent = String(count);
+}
+
+function renderAiSdkMenu() {
+  const menu = document.querySelector("[data-ai-sdks-menu]");
+  const panel = document.querySelector("[data-ai-sdks-panel]");
+  const aiSdks = [...countBy(state.courses, courseAiSdks).keys()].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  menu.hidden = !aiSdks.length;
+  // Rebuilding the panel mid-click would detach the clicked input and close
+  // the menu, so build it once and sync checkbox state afterwards.
+  if (!panel.childElementCount && aiSdks.length) {
+    panel.replaceChildren(
+      ...aiSdks.map((aiSdk) =>
+        menuOption(
+          "checkbox",
+          "workshop-ai-sdk",
+          aiSdk,
+          aiSdk,
+          groupCount((course) => courseAiSdks(course).includes(aiSdk)),
+          false,
+          (event) => {
+            if (event.target.checked) state.selectedWorkshopAiSdks.add(aiSdk);
+            else state.selectedWorkshopAiSdks.delete(aiSdk);
+            onWorkshopsFilterChange();
+          }
+        )
+      )
+    );
+  }
+  panel.querySelectorAll("input").forEach((input) => {
+    input.checked = state.selectedWorkshopAiSdks.has(input.value);
+  });
+  setMenuCount("[data-ai-sdks-count]", state.selectedWorkshopAiSdks.size);
+}
+
+function renderDurationMenu() {
+  const menu = document.querySelector("[data-duration-menu]");
+  const panel = document.querySelector("[data-duration-panel]");
+  const options = sessionLengthOptions();
+  menu.hidden = !options.length;
+  if (!panel.childElementCount && options.length) {
+    const choose = (hours) => () => {
+      state.workshopHours = hours;
+      onWorkshopsFilterChange();
+    };
+    panel.replaceChildren(
+      menuOption("radio", "workshop-hours", "", "Any length", null, false, choose(null)),
+      ...options.map((hours) =>
+        menuOption(
+          "radio",
+          "workshop-hours",
+          String(hours),
+          `Fits ${formatHours(hours)}`,
+          groupCount((course) => courseFitsHours(course, hours)),
+          false,
+          choose(hours)
+        )
+      )
+    );
+  }
+  panel.querySelectorAll("input").forEach((input) => {
+    input.checked = input.value === (state.workshopHours ? String(state.workshopHours) : "");
+  });
+  setMenuCount("[data-duration-count]", state.workshopHours ? 1 : 0);
 }
 
 function renderWorkshopsFilters() {
@@ -1457,6 +1612,8 @@ function renderWorkshopsFilters() {
     .replaceChildren(
       ...sdks.map((sdk) => sdkChip(sdk, state.selectedWorkshopSdks, onWorkshopsFilterChange))
     );
+  renderAiSdkMenu();
+  renderDurationMenu();
   document.querySelector("[data-clear-workshops]").hidden = !workshopsHaveFilters();
 }
 
@@ -1497,6 +1654,7 @@ function courseHaystack(course) {
     course.variant,
     ...(Array.isArray(course.tags) ? course.tags : []),
     ...courseSdks(course),
+    ...courseAiSdks(course),
   ]
     .filter(Boolean)
     .join(" ")
@@ -1510,12 +1668,23 @@ function courseMatchesSdk(course) {
   );
 }
 
+// SDK, AI SDK and length filters apply per track, so a workshop shows when
+// one of its tracks satisfies all of them at once.
+function courseMatchesFilters(course) {
+  return (
+    (!state.selectedWorkshopSdks.size || courseMatchesSdk(course)) &&
+    (!state.selectedWorkshopAiSdks.size ||
+      courseAiSdks(course).some((aiSdk) => state.selectedWorkshopAiSdks.has(aiSdk))) &&
+    (!state.workshopHours || courseFitsHours(course, state.workshopHours))
+  );
+}
+
 function filteredCourseGroups() {
   const q = state.workshopsSearch.trim().toLowerCase();
   return groupCourses(state.courses).filter(
     (members) =>
       (!q || members.some((course) => courseHaystack(course).includes(q))) &&
-      (!state.selectedWorkshopSdks.size || members.some(courseMatchesSdk))
+      members.some(courseMatchesFilters)
   );
 }
 
@@ -1562,9 +1731,17 @@ function renderWorkshopCard(members) {
     members.find((course) => course.name === course.parent) ||
     members.slice().sort((a, b) => a.name.localeCompare(b.name))[0];
   const sdks = uniqueValues(members.flatMap(courseSdks));
+  const aiSdks = uniqueValues(members.flatMap(courseAiSdks));
   const tags = uniqueValues(members.flatMap((course) => course.tags || [])).filter(
     (tag) => tag.toLowerCase() !== "workshop"
   );
+  const ranges = members.map(courseDuration).filter(Boolean);
+  const duration = ranges.length
+    ? durationLabel([
+        Math.min(...ranges.map(([min]) => min)),
+        Math.max(...ranges.map(([, max]) => max)),
+      ])
+    : null;
   const launchable = members.filter((course) => course.trackUrl);
 
   // Every workshop lists its tracks the same way, even when there is only one,
@@ -1603,9 +1780,13 @@ function renderWorkshopCard(members) {
     { class: "workshop" },
     el("p", {
       class: "eyebrow",
-      text: launchable.length
-        ? `Instruqt workshop · ${plural(launchable.length, "track")}`
-        : "Instruqt workshop",
+      text: [
+        "Instruqt workshop",
+        launchable.length ? plural(launchable.length, "track") : null,
+        duration,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     }),
     el("h3", { text: representative.title || representative.name }),
     el("p", {
@@ -1613,7 +1794,12 @@ function renderWorkshopCard(members) {
       text: representative.summary || "A hands-on Temporal workshop.",
     }),
     sdkList(sdks),
-    tagRow(topicTags(tags)),
+    tagRow([
+      ...aiSdks.map((aiSdk) =>
+        el("span", { class: "tag tag-solid", title: "AI SDK", text: aiSdk })
+      ),
+      ...topicTags(tags),
+    ]),
     cardAssets(workshopAssets(representative, members)),
     el("div", { class: "workshop-launch" }, launch),
     resources.length

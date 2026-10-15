@@ -26,10 +26,13 @@ spec:
   catalog:
     parent: durable-ad-campaign
     variant: Python
-    title: Hands on Temporal Introduction
-    summary: Build a durable advertising campaign application with Temporal.
-    tags: [Durable execution, Workshop]
+    title: "Intro to Temporal: Durable Ad Campaign"
+    summary: "Watch a plain script lose CatNip Cola's ad campaign mid-launch, then rebuild it as a durable Temporal app with Workflows, Activities, retries, and typed errors. The finale kills the Worker mid-launch and the campaign still finishes. Bonus challenges cover human-in-the-loop and Temporal Cloud."
+    tags: [Durable execution, Getting started, Retries, Error handling]
     temporalSdks: [Python]
+    duration:
+      minHours: 2
+      maxHours: 3
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101

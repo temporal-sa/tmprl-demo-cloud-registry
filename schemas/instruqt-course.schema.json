@@ -222,6 +222,12 @@
         "temporalSdks": {
           "$ref": "#/$defs/catalogLabels"
         },
+        "aiSdks": {
+          "$ref": "#/$defs/catalogLabels"
+        },
+        "duration": {
+          "$ref": "#/$defs/catalogDuration"
+        },
         "links": {
           "$ref": "#/$defs/catalogLinks"
         },
@@ -230,6 +236,21 @@
           "items": {
             "$ref": "#/$defs/catalogResource"
           }
+        }
+      }
+    },
+    "catalogDuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minHours", "maxHours"],
+      "properties": {
+        "minHours": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxHours": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },

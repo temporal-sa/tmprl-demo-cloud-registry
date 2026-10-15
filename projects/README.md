@@ -123,6 +123,10 @@ spec:
     summary: Build a durable advertising campaign application with Temporal and Python.
     tags: [Durable execution, Workshop]
     temporalSdks: [Python]
+    aiSdks: [OpenAI Agents SDK]
+    duration:
+      minHours: 2
+      maxHours: 4
     links:
       slideDeck:
         url: https://docs.google.com/presentation/d/example
@@ -147,7 +151,15 @@ separately run `track validate`, `track test`, or `track deploy`.
 
 `catalog` controls how the course appears in the registry's Courses section.
 `title` and `summary` are required when the block is present. Add searchable
-`tags` and `temporalSdks`. `links` takes the same presenter assets as a demo's
+`tags` and `temporalSdks`. `aiSdks` is an optional list of the AI SDKs or AI
+agent SDKs the course uses, such as `OpenAI Agents SDK`, `Google ADK`, or
+`LangGraph`; the Workshops page shows them on the card and offers an AI SDK
+filter. List only the SDKs learners write code against. Leave out LiteLLM: the
+platform's LiteLLM proxy only enforces per-user caps and isn't an SDK. `duration` is optional and gives the session lengths the course
+supports as `minHours` and `maxHours` (decimals such as `1.5` are fine;
+`minHours` must not exceed `maxHours`, and setting both to the same value means
+a fixed length). The card shows the range, and the Length filter keeps courses
+whose range contains the chosen session length. `links` takes the same presenter assets as a demo's
 `spec.registry.links`: `speakerNotes`, `slideDeck`, `runbook`, `goldenPath`
 (the golden recording), `externalRecording`, and `additional` links. The
 workshop card shows them as the same asset chips demo cards use. `resources`

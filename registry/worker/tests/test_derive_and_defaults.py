@@ -365,6 +365,26 @@ def test_instruqt_catalog_entry_exposes_track_and_resources():
     assert entry["temporalSdks"] == ["Python"]
     assert entry["resources"][0]["label"] == "Slides"
     assert entry["links"] == {}
+    assert entry["aiSdks"] == []
+    assert entry["duration"] is None
+
+
+def test_instruqt_catalog_entry_exposes_ai_sdks_and_duration():
+    entry = instruqt_catalog_entry(
+        project(
+            "agents-lab",
+            source={"repo": "https://github.com/temporal-sa/agents-lab"},
+            track={"organization": "temporal", "slug": "agents-lab"},
+            catalog={
+                "title": "Agents Lab",
+                "summary": "Build durable agents.",
+                "aiSdks": ["OpenAI Agents SDK"],
+                "duration": {"minHours": 1.5, "maxHours": 3},
+            },
+        )
+    )
+    assert entry["aiSdks"] == ["OpenAI Agents SDK"]
+    assert entry["duration"] == {"minHours": 1.5, "maxHours": 3}
 
 
 def test_instruqt_catalog_entry_exposes_presenter_links():

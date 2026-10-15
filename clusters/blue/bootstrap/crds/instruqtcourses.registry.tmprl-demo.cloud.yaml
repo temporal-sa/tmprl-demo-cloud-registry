@@ -239,6 +239,26 @@ spec:
                         type: string
                         minLength: 1
                         maxLength: 80
+                    aiSdks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 80
+                    duration:
+                      type: object
+                      required:
+                        - minHours
+                        - maxHours
+                      properties:
+                        minHours:
+                          type: number
+                          exclusiveMinimum: true
+                          minimum: 0
+                        maxHours:
+                          type: number
+                          exclusiveMinimum: true
+                          minimum: 0
                     links:
                       type: object
                       properties:
