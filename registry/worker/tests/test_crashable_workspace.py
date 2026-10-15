@@ -474,6 +474,37 @@ def test_worker_deployment_ready_requires_ready_true_condition(monkeypatch):
     )
 
 
+def test_worker_deployment_ready_ignores_previous_generation(monkeypatch):
+    statuses = iter(
+        [
+            {
+                "generation": 4,
+                "conditions": [
+                    {"type": "Ready", "status": "True", "observedGeneration": 3}
+                ],
+            },
+            {
+                "generation": 4,
+                "conditions": [
+                    {"type": "Ready", "status": "True", "observedGeneration": 4}
+                ],
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        crashable_activities.kube,
+        "read_worker_deployment_status",
+        lambda namespace, name: next(statuses),
+    )
+
+    assert (
+        crashable_activities._worker_deployment_ready("workspace", "worker") is False
+    )
+    assert (
+        crashable_activities._worker_deployment_ready("workspace", "worker") is True
+    )
+
+
 def test_apply_workspace_resource_waits_for_secrets_before_workload(monkeypatch):
     events = []
     monkeypatch.setattr(

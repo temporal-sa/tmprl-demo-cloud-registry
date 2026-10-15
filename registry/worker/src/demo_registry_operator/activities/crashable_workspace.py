@@ -23,6 +23,7 @@ from temporalio.common import RetryPolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from demo_registry_operator import derive, errors, kube, resources
+from demo_registry_operator.activities import reconcile
 from demo_registry_operator.crashable_workspace_resources import (
     CRASHABLE_WORKER_LABEL,
     build_workspace_manifests,
@@ -621,15 +622,7 @@ def _worker_deployment_ready(namespace: str, name: str) -> bool:
         status = kube.read_worker_deployment_status(namespace, name)
     except Exception:  # noqa: BLE001 - not-yet-created / transient -> not ready
         return False
-    conditions = status.get("conditions")
-    if not isinstance(conditions, list):
-        return False
-    return any(
-        isinstance(condition, dict)
-        and condition.get("type") == "Ready"
-        and condition.get("status") == "True"
-        for condition in conditions
-    )
+    return reconcile.worker_deployment_ready(status)
 
 
 def _crashable_enabled(demo_project: dict) -> bool:

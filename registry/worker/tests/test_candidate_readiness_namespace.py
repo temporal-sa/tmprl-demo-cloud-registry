@@ -196,6 +196,57 @@ def test_worker_rollout_status_read_failures_remain_time_bounded(monkeypatch):
     assert status["resources"][0]["message"] == "status read failed"
 
 
+def test_worker_rollout_ignores_ready_condition_from_previous_generation(monkeypatch):
+    reads = 0
+    monkeypatch.setattr(reconcile, "WorkerConfig", _Cfg)
+    monkeypatch.setattr(reconcile, "time", SimpleNamespace(monotonic=lambda: 0, sleep=lambda _: None))
+    monkeypatch.setattr(reconcile.activity, "heartbeat", lambda *args: None)
+
+    def fake_read(namespace, deployments):
+        nonlocal reads
+        reads += 1
+        # First read: spec bumped to 123 but the controller has not observed it, so
+        # the previous rollout's Ready=True is still present.
+        observed = 122 if reads == 1 else 123
+        return {
+            "worker": {
+                "name": "operator-blue",
+                "namespace": namespace,
+                "generation": 123,
+                "conditions": [
+                    {"type": "Ready", "status": "True", "observedGeneration": observed},
+                ],
+            }
+        }
+
+    monkeypatch.setattr(reconcile, "read_worker_deployments", fake_read)
+    result = reconcile.wait_for_worker_deployment_rollouts(
+        reconcile.WorkerDeploymentRolloutRequest(
+            demo_project={"metadata": {"name": "registry-operator"}},
+            worker_deployments={"worker": "operator-blue"},
+            timeout_seconds=2,
+        )
+    )
+
+    assert reads == 2
+    assert result.status["phase"] == "Ready", result.status
+
+
+def test_stale_failure_condition_does_not_fail_new_rollout():
+    status = {
+        "generation": 123,
+        "conditions": [
+            {
+                "type": "Ready",
+                "status": "False",
+                "reason": "InvalidSpec",
+                "observedGeneration": 122,
+            },
+        ],
+    }
+    assert reconcile.worker_deployment_phase(status) == "Waiting"
+
+
 def test_actual_gate_failure_takes_precedence_over_status_read_error():
     aggregate = reconcile.aggregate_worker_deployment_status({
         "unreadable": {"phase": "Error", "message": "client read error"},
