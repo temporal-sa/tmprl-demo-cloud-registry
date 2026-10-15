@@ -17,8 +17,8 @@ spec:
         label: Temporal Harness Pitch Deck
         url: https://docs.google.com/presentation/d/1MdyLY2HI6U4i1crhIpxTqQIExmjMA18p8yyTzzl6La4
       externalRecording:
-        label: Agent harness demo
-        url: https://drive.google.com/file/d/1HEwsBnabhiszNh0ULDwCcnAavfNzDcLK/view
+        label: Temporal Agent Harness explainer
+        url: https://github.com/user-attachments/assets/18a34eb2-fc6d-446d-9507-7fe4c870492f
       additional:
         - label: Agent harness intro (15 min)
           url: https://drive.google.com/file/d/1BD5KHuNLzAXSSVeTFzGiap2CXgnkRUCd/view
