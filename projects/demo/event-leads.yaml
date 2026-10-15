@@ -22,7 +22,7 @@ spec:
       event-leads-participants:
         targetTaskQueue: event-leads-unversioned
         allowedCallerProjects:
-          - temporal-podpocalypse
+          - podpocalypse
   components:
     web:
       build: app

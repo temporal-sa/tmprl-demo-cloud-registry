@@ -1895,41 +1895,47 @@ def patch_catalog_status(
     *,
     raise_errors: bool = False,
 ) -> None:
-    primary = resources.catalog_status_configmap(
-        demo_project,
-        status,
-        namespace=config.catalog_status_namespace,
-        name=config.catalog_status_configmap,
-    )
-    try:
-        kube.apply_resources([primary], dry_run=False)
-    except Exception:
-        activity.logger.exception(
-            "Catalog status patch failed project=%s",
-            resources.project_name(demo_project),
-        )
-        if raise_errors:
-            raise
-
-    if config.catalog_status_mirror_namespace == config.catalog_status_namespace:
+    # Canaries never list in the catalog, and each operator rollout creates a
+    # fresh set: writing their entries grows this single ConfigMap toward the
+    # 1 MiB object limit, after which every project's status write fails.
+    if resources.is_operator_canary(demo_project):
         return
 
-    mirror = resources.catalog_status_configmap(
-        demo_project,
-        status,
-        namespace=config.catalog_status_mirror_namespace,
-        name=config.catalog_status_configmap,
-    )
-    try:
-        kube.apply_resources([mirror], dry_run=False)
-    except Exception:
-        activity.logger.exception(
-            "Catalog status mirror patch failed project=%s namespace=%s",
-            resources.project_name(demo_project),
-            config.catalog_status_mirror_namespace,
-        )
-        if raise_errors:
-            raise
+    project = resources.project_name(demo_project)
+    namespaces = [config.catalog_status_namespace]
+    if config.catalog_status_mirror_namespace != config.catalog_status_namespace:
+        namespaces.append(config.catalog_status_mirror_namespace)
+
+    for namespace in namespaces:
+        try:
+            # A finalized project has left git and the catalog; drop its entry
+            # rather than keep a tombstone in the size-limited ConfigMap.
+            if status.get("phase") == "Finalized":
+                kube.remove_config_map_keys(
+                    namespace,
+                    config.catalog_status_configmap,
+                    [f"{project}.json"],
+                )
+            else:
+                kube.apply_resources(
+                    [
+                        resources.catalog_status_configmap(
+                            demo_project,
+                            status,
+                            namespace=namespace,
+                            name=config.catalog_status_configmap,
+                        )
+                    ],
+                    dry_run=False,
+                )
+        except Exception:
+            activity.logger.exception(
+                "Catalog status patch failed project=%s namespace=%s",
+                project,
+                namespace,
+            )
+            if raise_errors:
+                raise
 
 
 def demo_project_from_request(request: dict[str, Any]) -> dict[str, Any]:

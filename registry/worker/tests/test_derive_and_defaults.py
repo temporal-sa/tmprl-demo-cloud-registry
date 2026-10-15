@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from demo_registry_operator import derive
+from demo_registry_operator.activities import reconcile
 from demo_registry_operator.activities.builds import source_config
 from demo_registry_operator.resources import (
     catalog_entry,
@@ -338,6 +341,53 @@ def test_catalog_payload_sorts_projects_and_sets_base_domain():
     assert [p["name"] for p in payload["projects"]] == ["a", "b"]
     assert [c["name"] for c in payload["courses"]] == ["course-a", "course-b"]
 
+
+
+def test_catalog_payload_skips_operator_canaries():
+    canary = project("operator-canary-api-key-1d248ac0")
+    canary["metadata"]["labels"] = {"registry.tmprl-demo.cloud/canary": "true"}
+    payload = catalog_payload([project("a"), canary])
+    assert [p["name"] for p in payload["projects"]] == ["a"]
+
+
+def test_catalog_status_is_not_written_for_operator_canaries(monkeypatch):
+    applied = []
+    monkeypatch.setattr(reconcile.kube, "apply_resources", lambda r, dry_run: applied.extend(r))
+    config = SimpleNamespace(
+        catalog_status_namespace="ns",
+        catalog_status_mirror_namespace="ns",
+        catalog_status_configmap="registry-catalog-status",
+    )
+    canary = project("operator-canary-api-key-1d248ac0")
+    canary["metadata"]["labels"] = {"registry.tmprl-demo.cloud/canary": "true"}
+
+    reconcile.patch_catalog_status(canary, {"phase": "Finalized"}, config, raise_errors=True)
+    assert applied == []
+
+    reconcile.patch_catalog_status(project("a"), {"phase": "Promoted"}, config, raise_errors=True)
+    assert [list(r["data"]) for r in applied] == [["a.json"]]
+
+
+def test_finalized_catalog_status_removes_the_entry(monkeypatch):
+    applied, removed = [], []
+    monkeypatch.setattr(reconcile.kube, "apply_resources", lambda r, dry_run: applied.extend(r))
+    monkeypatch.setattr(
+        reconcile.kube,
+        "remove_config_map_keys",
+        lambda namespace, name, keys: removed.append((namespace, name, keys)),
+    )
+    config = SimpleNamespace(
+        catalog_status_namespace="ns",
+        catalog_status_mirror_namespace="mirror",
+        catalog_status_configmap="registry-catalog-status",
+    )
+
+    reconcile.patch_catalog_status(project("a"), {"phase": "Finalized"}, config, raise_errors=True)
+    assert applied == []
+    assert removed == [
+        ("ns", "registry-catalog-status", ["a.json"]),
+        ("mirror", "registry-catalog-status", ["a.json"]),
+    ]
 
 def test_instruqt_catalog_entry_exposes_track_and_resources():
     entry = instruqt_catalog_entry(
