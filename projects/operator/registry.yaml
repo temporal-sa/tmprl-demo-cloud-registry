@@ -68,7 +68,7 @@ spec:
   temporal:
     # Pinned to the namespace's current region so moving the operator-wide
     # default to AWS does not recreate (and wipe) the operator's own namespace.
-    region: gcp-us-central1
+    region: aws-ca-central-1
 
   secrets:
     temporal-cloud-bootstrap: {}
