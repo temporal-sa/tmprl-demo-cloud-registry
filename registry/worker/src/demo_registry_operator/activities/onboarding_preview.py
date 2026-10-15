@@ -307,6 +307,7 @@ PARENT_STEPS = {
     "create_or_verify_ecr_repository": ("resources", "Creating image repositories"),
     "create_or_verify_temporal_cloud_namespace": ("resources", "Creating the Temporal namespace"),
     "ensure_temporal_cloud_namespace_tags": ("resources", "Creating the Temporal namespace"),
+    "wait_for_temporal_cloud_namespace_dns": ("resources", "Creating the Temporal namespace"),
     "ensure_temporal_cloud_namespace_readers_access": ("resources", "Creating the Temporal namespace"),
     "reconcile_temporal_cloud_search_attributes": ("resources", "Adding search attributes"),
     "reconcile_nexus_endpoints": ("resources", "Creating Nexus endpoints"),

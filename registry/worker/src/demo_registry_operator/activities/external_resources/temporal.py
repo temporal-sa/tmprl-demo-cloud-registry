@@ -1,4 +1,5 @@
 import asyncio
+import socket
 from typing import Any
 
 from temporalio import activity
@@ -9,6 +10,8 @@ from demo_registry_operator import errors, kube, resources
 from demo_registry_operator.activities import temporal_cloud
 from demo_registry_operator.activities.external_resources import common, models
 from demo_registry_operator.config import WorkerConfig
+
+TEMPORAL_NAMESPACE_DNS_PENDING = "TemporalNamespaceDnsPending"
 
 
 @activity.defn
@@ -159,6 +162,42 @@ def delete_nexus_endpoints(
             error,
             operation="Delete Nexus Endpoints",
         ) from error
+
+
+@activity.defn
+def wait_for_temporal_cloud_namespace_dns(
+    request: models.WaitForTemporalCloudNamespaceDnsRequest,
+) -> models.TemporalCloudNamespaceDnsResult:
+    """Resolve the namespace gRPC host once; raise a retryable error if it fails.
+
+    Temporal Cloud reports a new namespace ACTIVE before its hostname is
+    resolvable everywhere. The Worker Controller dials that hostname as soon as
+    the WorkerDeployment lands and fails with "no children to pick from" until
+    it resolves. The workflow retries this activity on a bounded schedule so
+    the rollout starts only after the operator itself can resolve the host.
+    """
+    grpc_address = request.namespace.grpc_address
+    if not request.project.namespace_required or not grpc_address:
+        return models.TemporalCloudNamespaceDnsResult(host=None)
+
+    host, _, port = grpc_address.rpartition(":")
+    if not host:
+        host, port = grpc_address, "7233"
+    try:
+        infos = socket.getaddrinfo(host, int(port), proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError) as error:
+        raise ApplicationError(
+            f"Temporal Cloud namespace host {host} does not resolve yet: {error}",
+            type=TEMPORAL_NAMESPACE_DNS_PENDING,
+        ) from error
+
+    addresses = tuple(sorted({str(info[4][0]) for info in infos}))
+    if not addresses:
+        raise ApplicationError(
+            f"Temporal Cloud namespace host {host} resolved to no addresses.",
+            type=TEMPORAL_NAMESPACE_DNS_PENDING,
+        )
+    return models.TemporalCloudNamespaceDnsResult(host=host, addresses=addresses)
 
 
 @activity.defn
