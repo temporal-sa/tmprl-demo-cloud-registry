@@ -30,7 +30,6 @@ spec:
   temporal:
     auth:
       mode: apiKey
-    region: aws-ca-central-1
     # The worker upserts these on every order/repair; the operator creates them
     # on the Cloud namespace (the app's own operator_service registration is a
     # no-op on Cloud and is swallowed).

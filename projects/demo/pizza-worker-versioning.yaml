@@ -36,7 +36,6 @@ spec:
     searchAttributes:
       PizzaSessionID:
         type: keyword
-    region: aws-ca-central-1
 
   components:
     # Dashboard and order generator. It talks to Temporal through the platform
