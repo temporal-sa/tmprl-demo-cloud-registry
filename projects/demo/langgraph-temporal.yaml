@@ -4,7 +4,7 @@
 apiVersion: registry.tmprl-demo.cloud/v1alpha1
 kind: DemoProject
 metadata:
-  name: langgraph-temporal
+  name: langgraph
 
 spec:
   registry:
