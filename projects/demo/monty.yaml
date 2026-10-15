@@ -59,7 +59,6 @@ spec:
       # TASK_QUEUE in temporal-agent-harness examples/monty/workflow.py.
       autoscaling:
         taskQueue: monty-dynamic-agent
-        minReplicas: 0
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-monty-payloads
       secrets: [gemini]
       env:
