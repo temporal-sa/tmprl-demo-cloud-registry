@@ -312,7 +312,8 @@ def test_monty_project_resolves_authenticated_codebuild_plan(monkeypatch):
     ).plan
 
     assert plan["action"] == "codebuild"
-    assert plan["sourceRepo"] == project["spec"]["source"]["repo"]
+    # The catalog repo is the upstream harness; CodeBuild clones the adapter.
+    assert plan["sourceRepo"] == project["spec"]["source"]["gitRepository"]["url"]
     assert plan["sourceVersion"] == "main"
     assert plan["sourceAuthSecretPath"] == PLATFORM_SOURCE_AUTH_SECRET_PATH
     assert set(plan["imageTemplates"]) == {"app"}

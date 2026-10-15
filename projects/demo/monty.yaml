@@ -8,15 +8,28 @@ spec:
     summary: >-
       Conversational travel agents run sandboxed Python with durable Temporal
       activities, human approvals, subagents, and an observable trip board.
+    canonical: true
     tags: [AI, AI - Agents, Human-in-the-Loop]
     temporalSdks: [Python]
     links:
+      slideDeck:
+        label: Temporal Harness Pitch Deck
+        url: https://docs.google.com/presentation/d/1MdyLY2HI6U4i1crhIpxTqQIExmjMA18p8yyTzzl6La4
+      externalRecording:
+        label: Agent harness demo
+        url: https://drive.google.com/file/d/1HEwsBnabhiszNh0ULDwCcnAavfNzDcLK/view
+      additional:
+        - label: Agent harness intro (15 min)
+          url: https://drive.google.com/file/d/1BD5KHuNLzAXSSVeTFzGiap2CXgnkRUCd/view
+          audience: technical
       runbook:
         label: Monty README
-        url: https://github.com/temporal-community/temporal-agent-harness/tree/ceb6ef3fdf3f31b32f571c8460d4fd545e117977/examples/monty
+        url: https://github.com/temporal-community/temporal-agent-harness/tree/d594d1ba01f56769959960d586a712e717ca706a/examples/monty
 
   source:
-    repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry
+    # Displayed in the catalog. Builds and source watches use gitRepository.url,
+    # which holds the deployment adapter.
+    repo: https://github.com/temporal-community/temporal-agent-harness
     gitRepository:
       url: https://github.com/temporal-sa/tmprl-demo-cloud-registry
       sparseCheckout:
