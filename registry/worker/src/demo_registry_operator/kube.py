@@ -318,6 +318,24 @@ def read_config_map(namespace: str, name: str) -> dict[str, Any] | None:
     }
 
 
+
+def remove_config_map_keys(namespace: str, name: str, keys: list[str]) -> str:
+    """Drop data keys from a ConfigMap with a merge patch; absent keys and an
+    absent ConfigMap are no-ops."""
+    client = _client_module()
+    load_kubernetes_config()
+    try:
+        client.CoreV1Api().patch_namespaced_config_map(
+            name,
+            namespace,
+            {"data": {key: None for key in keys}},
+        )
+    except Exception as error:
+        if _api_status(error) == 404:
+            return "absent"
+        raise
+    return "patched"
+
 def read_secret_data(namespace: str, name: str) -> dict[str, str] | None:
     client = _client_module()
     load_kubernetes_config()

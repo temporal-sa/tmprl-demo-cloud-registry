@@ -4,7 +4,7 @@ metadata:
   name: monty
 spec:
   registry:
-    title: Monty Travel Agent
+    title: Temporal Agent Harness (Monty)
     summary: >-
       Conversational travel agents run sandboxed Python with durable Temporal
       activities, human approvals, subagents, and an observable trip board.

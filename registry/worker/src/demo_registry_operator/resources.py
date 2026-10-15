@@ -521,6 +521,10 @@ def is_onboarding_preview(demo_project: dict[str, Any]) -> bool:
     return metadata_labels(demo_project).get(PREVIEW_LABEL) == "true"
 
 
+def is_operator_canary(demo_project: dict[str, Any]) -> bool:
+    return metadata_labels(demo_project).get(CANARY_LABEL) == "true"
+
+
 def user_secret_prefix(demo_project: dict[str, Any]) -> str:
     """Where a project's own (user-managed) secrets live.
 
@@ -4132,6 +4136,7 @@ def catalog_payload(
             catalog_entry(demo_project)
             for demo_project in sorted(demo_projects, key=project_name)
             if not is_onboarding_preview(demo_project)
+            and not is_operator_canary(demo_project)
         ],
         "courses": [
             instruqt_catalog_entry(instruqt_course)
