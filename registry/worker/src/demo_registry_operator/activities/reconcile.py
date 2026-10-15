@@ -1715,7 +1715,7 @@ def worker_deployment_condition(
     conditions = status.get("conditions")
     if not isinstance(conditions, list):
         return None
-    return next(
+    condition = next(
         (
             condition
             for condition in conditions
@@ -1723,6 +1723,18 @@ def worker_deployment_condition(
         ),
         None,
     )
+    # Right after an apply, Worker Controller has not yet observed the new spec and
+    # the previous rollout's conditions (e.g. Ready=True) are still present. Treat a
+    # condition from an older generation as absent so callers keep waiting.
+    generation = status.get("generation")
+    observed_generation = condition.get("observedGeneration") if condition else None
+    if (
+        isinstance(generation, int)
+        and isinstance(observed_generation, int)
+        and observed_generation < generation
+    ):
+        return None
+    return condition
 
 
 def target_test_workflows(status: dict[str, Any]) -> list[dict[str, Any]]:
