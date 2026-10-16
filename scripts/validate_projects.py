@@ -1620,6 +1620,14 @@ def validate_registry(document: ProjectDocument) -> list[ProjectError]:
             case_insensitive=True,
         )
     )
+    errors.extend(
+        validate_unique_string_list(
+            document,
+            registry.get("aiSdks"),
+            "registry.aiSdks",
+            case_insensitive=True,
+        )
+    )
 
     readiness = registry.get("readiness")
     if isinstance(readiness, dict):

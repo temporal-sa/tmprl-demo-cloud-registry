@@ -6,9 +6,11 @@ spec:
   registry:
     title: Payout Orchestration
     summary: >-
-      Interactive payout saga with retries, compensation, human approval, and
-      an AI brief that investigates synthetic customer facts with Temporal activities.
-    tags: [AI, Agents, Banking, Workflows, Saga, Human-in-the-Loop]
+      Built with Kotlin, Spring Boot, and a Preact web UI. Demonstrates a payout
+      saga with retries, compensation, and human approval, plus live worker and
+      server metrics. Use case: payout processing that survives failures and bad
+      downstream calls.
+    tags: [Banking, Saga, Retries, Human-in-the-Loop]
     temporalSdks: [Java]
     links:
       runbook:

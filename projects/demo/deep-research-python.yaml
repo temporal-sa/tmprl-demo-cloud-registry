@@ -7,11 +7,13 @@ spec:
   registry:
     title: OpenAI Deep Research — Python
     summary: >-
-      Interactive deep research with Temporal and the OpenAI Responses API:
-      durable planning, parallel web search, partial-failure resilience, and
-      cited report synthesis.
-    tags: [AI, AI - Agents, Research]
+      Built with Python and the OpenAI Responses API in a four-agent workflow.
+      Demonstrates durable planning, parallel web search, partial-failure
+      tolerance, and cited report synthesis. Use case: interactive deep research
+      that produces a cited report on any topic.
+    tags: [AI Agents, Multi-Agent, Research]
     temporalSdks: [Python]
+    aiSdks: [OpenAI SDK]
     links:
       runbook:
         label: README

@@ -6,11 +6,13 @@ spec:
   registry:
     title: OpenAI Deep Research — TypeScript
     summary: >-
-      Interactive deep research with OpenAI Agents SDK and Temporal: clarifying
-      questions, parallel web search, durable retries, a detailed report,
-      generated imagery, and PDF export.
-    tags: [AI, AI - Agents, Research, Human-in-the-Loop]
+      Built with TypeScript, the OpenAI Agents SDK, and a browser UI.
+      Demonstrates durable orchestration with Signals, Queries, Updates, timers,
+      and Activity retries. Use case: human-in-the-loop research that produces a
+      Markdown report with images and PDF export.
+    tags: [AI Agents, Multi-Agent, Human-in-the-Loop, Research]
     temporalSdks: [TypeScript]
+    aiSdks: [OpenAI Agents SDK]
     links:
       runbook:
         label: README

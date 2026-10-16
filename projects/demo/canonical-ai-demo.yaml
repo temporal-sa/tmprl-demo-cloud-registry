@@ -6,9 +6,13 @@ spec:
   registry:
     title: Travel Planner Agent
     summary: >-
-      The canonical 101-level agentic demo. A single-agent ReAct loop on Temporal 
-      that plans a real multi-city trip. LLM and tools as activities, a durable parallel web-research fan-out, 
-      human-in-the-loop booking via signal, crash-recoverable and replay-safe.
+      Built with Python and no agent framework: a hand-written ReAct loop
+      calling Anthropic or OpenAI models. Demonstrates LLM and tool calls as
+      Activities, a parallel web-research fan-out, and human confirmation via
+      Signal. Use case: planning and booking a multi-city trip.
+    tags: [AI Agents, Human-in-the-Loop, Travel]
+    temporalSdks: [Python]
+    aiSdks: [Anthropic SDK, OpenAI SDK]
     canonical: true
     crashable:
       enabled: true
@@ -23,8 +27,6 @@ spec:
         url: https://github.com/temporal-sa/canonical-ai-demo/tree/main#quick-start-local
       goldenPath:
         url: https://drive.google.com/file/d/1kpHgn9OTlB9nUdqz2_OBjtOuUZnUkubV/view?usp=drive_link
-    tags: [AI, AI - Agents, Single-Agent]
-    temporalSdks: [Python]
   source:
     repo: https://github.com/temporal-sa/canonical-ai-demo
 

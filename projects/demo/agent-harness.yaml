@@ -6,12 +6,14 @@ spec:
   registry:
     title: Temporal Agent Harness (Travel Agent)
     summary: >-
-      Chat with Ziggy, a travel agent that writes and runs sandboxed Python whose every
-      booking is a durable Temporal Activity. Approve its tool calls, watch the trip board
-      update, then crash the worker mid-booking and see the conversation pick up where it was.
-    canonical: true
-    tags: [AI, AI - Agents, Human-in-the-Loop]
+      Built with Python on the Temporal Agent Harness, Gemini through Google
+      GenAI, and a pydantic-monty sandbox. Demonstrates each tool call as a
+      durable Activity, approval cards, and crash recovery mid-booking. Use
+      case: a travel agent that books trips with human approval.
+    tags: [AI Agents, Human-in-the-Loop, Travel]
     temporalSdks: [Python]
+    aiSdks: [Google GenAI SDK]
+    canonical: true
     links:
       slideDeck:
         label: Temporal Harness Pitch Deck

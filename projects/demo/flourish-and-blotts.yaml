@@ -6,12 +6,13 @@ spec:
   registry:
     title: Flourish & Blotts — Agentic OMS Repair
     summary: >-
-      A wizarding-bookshop order-management saga where an LLM repair agent
-      diagnoses and fixes failed orders as durable Temporal activities, with
-      customer and ops human-in-the-loop approvals. Saga compensation, agentic
-      repair, and an in-dashboard ops-agent chat in one demo.
-    tags: [AI, Agents, Human-in-the-Loop, Saga, Order Management]
+      Built with Python, the Anthropic SDK, and a Slack ops-agent integration.
+      Demonstrates Saga compensation, an LLM repair agent running as durable
+      Activities, and human approvals by email, page, and Slack. Use case: an
+      order-management system that repairs failed orders.
+    tags: [AI Agents, Human-in-the-Loop, Saga, Order Management]
     temporalSdks: [Python]
+    aiSdks: [Anthropic SDK]
     readiness:
       score: 4
       maxScore: 5

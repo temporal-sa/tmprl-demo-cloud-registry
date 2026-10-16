@@ -24,7 +24,7 @@ spec:
   catalog:
     title: Versioning & Recovery on Temporal
     summary: "Break hundreds of running Workflows with a non-determinism error, then heal them by redeploying. Then work through the Patching API, safe vs. unsafe changes, Workflow-type cutovers, and Worker Deployment Versioning: Pinned vs. Auto-Upgrade, ramping, and draining with Continue-As-New."
-    tags: [Versioning, Patching, Worker Versioning, Recovery]
+    tags: [Worker Versioning, Patching, Recovery]
     temporalSdks: [Python]
     duration:
       minHours: 3

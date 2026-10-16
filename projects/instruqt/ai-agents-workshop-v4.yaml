@@ -26,7 +26,7 @@ spec:
   catalog:
     title: Build AI Agents That Survive Failure
     summary: Make OpenAI Agents SDK agents durable with Temporal, add human approval with Signals, orchestrate specialist agents with child Workflows and Nexus, then call a Java Spring AI agent from Python across a Nexus boundary.
-    tags: [AI, Agents, Human-in-the-loop, Multi-agent, Nexus]
+    tags: [AI Agents, Human-in-the-Loop, Multi-Agent, Nexus]
     temporalSdks: [Python, Java]
     aiSdks: [OpenAI Agents SDK, Spring AI]
     duration:

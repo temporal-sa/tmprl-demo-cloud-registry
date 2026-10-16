@@ -50,9 +50,14 @@ spec:
         port: http
   registry:
     title: Durable Banking Skills
-    summary: A Claude agent chats about money transfers while a deterministic Temporal workflow moves the money — plan, a human approval gate, and a withdraw/deposit saga that refunds on failure.
-    tags: [AI, Agents, Banking, Workflows]
+    summary: >-
+      Built with Python, the Anthropic SDK, and Agent Skills. Demonstrates a
+      deterministic transfer workflow with an approval gate and a refund saga,
+      driven by an agent that cannot move money itself. Use case: a customer
+      chat assistant that starts transfers only with explicit approval.
+    tags: [AI Agents, Banking, Human-in-the-Loop, Saga]
     temporalSdks: [Python]
+    aiSdks: [Anthropic SDK]
     links:
       runbook:
         label: README (What to try)

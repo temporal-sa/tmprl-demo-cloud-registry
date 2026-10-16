@@ -9,16 +9,14 @@ spec:
   registry:
     title: Temporal + Lakebase Underwriting Agent
     summary: >-
-      A durable personal-loan underwriting agent with retry-safe tools,
-      human approval through Temporal signals, and governed operational state
-      in Databricks Lakebase.
-    tags:
-      - AI
-      - Agents
-      - Human in the Loop
-      - Databases
-    temporalSdks:
-      - Python
+      Built with Python, the OpenAI SDK (optional), Databricks Lakebase, and a
+      TypeScript dashboard. Demonstrates retryable credit lookups as Activities,
+      durable waits for underwriter Signals, and recovery from model outages and
+      worker crashes. Use case: personal-loan underwriting with governed
+      operational state.
+    tags: [AI Agents, Human-in-the-Loop, Banking, Databases]
+    temporalSdks: [Python]
+    aiSdks: [OpenAI SDK]
     readiness:
       score: 4
       maxScore: 5

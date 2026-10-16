@@ -6,10 +6,14 @@ spec:
   registry:
     title: Travel Planner — Google ADK
     summary: >-
-      The canonical Temporal travel-planner experience with Google ADK owning
-      the agent loop. Python and Go implementations show durable ADK model and
-      tool calls, human approval, parallel grounded research, crash recovery,
-      and a compensating checkout child workflow.
+      Built with Google ADK in Python and Go, behind a travel-planner web UI.
+      Demonstrates ADK model and tool calls as durable Activities, parallel
+      grounded research, human approval, and a compensating checkout child
+      Workflow. Use case: a multi-city trip planner that survives crashes mid-
+      trip.
+    tags: [AI Agents, Human-in-the-Loop, Travel, Saga]
+    temporalSdks: [Python, Go]
+    aiSdks: [Google ADK]
     crashable:
       enabled: true
       taskQueueEnv: TEMPORAL_TASK_QUEUE
@@ -17,8 +21,6 @@ spec:
     links:
       runbook:
         url: https://github.com/temporal-sa/canonical-adk-demo#quick-start
-    tags: [AI, AI - Agents, Google ADK, Human-in-the-Loop, Single-Agent]
-    temporalSdks: [Python, Go]
 
   source:
     repo: https://github.com/temporal-sa/canonical-adk-demo

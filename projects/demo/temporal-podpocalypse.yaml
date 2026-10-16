@@ -8,7 +8,11 @@ spec:
     branch: main
   registry:
     title: Podpocalypse
-    summary: A booth game where crashing the ship deletes the worker for that flight. Checked-in events start from a flight code instead of asking for the same details again.
+    summary: >-
+      Built with Go, Nexus, and a Kubernetes pod-ship game for a KubeCon booth.
+      Demonstrates an Entity Workflow per flight, Nexus calls, and replay after
+      the worker is deleted. Use case: a live booth game that shows what
+      Temporal recovers after a crash.
     tags: [Entity Workflows, Nexus, Games]
     temporalSdks: [Go]
     links:

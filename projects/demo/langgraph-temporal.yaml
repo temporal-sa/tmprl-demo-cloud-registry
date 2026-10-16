@@ -10,11 +10,13 @@ spec:
   registry:
     title: Temporal and LangGraph Support Agent Comparison
     summary: >-
-      Side-by-side music-store support agents comparing a hand-written
-      Temporal workflow, standalone LangGraph, and Temporal-backed LangGraph,
-      including tool use, human approval, retries, and worker recovery.
-    tags: [AI, Agents, LangGraph, Human-in-the-Loop, Comparison]
+      Built with Python, LangGraph, and Anthropic or OpenAI models. Compares a
+      hand-written Temporal workflow, standalone LangGraph, and Temporal-backed
+      LangGraph. Demonstrates tool use, human approval, retries, and worker
+      recovery. Use case: a music-store customer support agent.
+    tags: [AI Agents, Human-in-the-Loop, Retries]
     temporalSdks: [Python]
+    aiSdks: [LangGraph, Anthropic SDK, OpenAI SDK]
     links:
       runbook:
         label: README (Run the demo)

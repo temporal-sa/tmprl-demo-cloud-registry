@@ -689,6 +689,18 @@
     font-size: .875rem;
   }
 
+  .ai-sdk-mark {
+    color: var(--sdk);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--sdk);
+  }
+
+  .sdk-divider {
+    align-self: stretch;
+    width: 1px;
+    background: var(--gray-500);
+  }
+
   /* Canonical features: two tiles per row, art banner over the body */
   .canonical-list {
     display: grid;

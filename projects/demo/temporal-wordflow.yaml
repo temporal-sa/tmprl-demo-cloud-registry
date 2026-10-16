@@ -11,8 +11,12 @@ spec:
         - SESSION_JWT_SECRET
   registry:
     title: Temporal Wordflow
-    summary: A durable word game with long-lived entity Workflows and hybrid Go workers.
-    tags: [Games, Serverless, Workflows]
+    summary: >-
+      Built with Go and a browser word-crossword game running on hybrid Go
+      workers. Demonstrates long-lived Entity Workflows for players, levels, and
+      leaderboards, with Temporal as the only state store. Use case: a stateful
+      game with no application database.
+    tags: [Games, Entity Workflows]
     temporalSdks: [Go]
     readiness:
       score: 5

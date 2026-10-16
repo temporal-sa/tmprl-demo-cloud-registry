@@ -5,14 +5,13 @@ metadata:
 spec:
   registry:
     title: Pizza Worker Versioning
-    summary: Interactive Temporal Worker Versioning demo that ramps, promotes, rolls back, and recovers pizza-order workflows across v1, v2, and v3 worker builds.
-    tags:
-      - Worker Versioning
-      - Rollouts
-      - Go
-      - Workflows
-    temporalSdks:
-      - Go
+    summary: >-
+      Built with Go workers on Kubernetes and a live pizza-tracker dashboard.
+      Demonstrates Worker Versioning: ramping, promoting, and rolling back v1,
+      v2, and v3 builds with in-flight Workflows pinned. Use case: safe worker
+      deploys for a food-ordering service.
+    tags: [Food Service, Worker Versioning]
+    temporalSdks: [Go]
     links:
       slideDeck:
         url: https://docs.google.com/presentation/d/160Gm9ihtMLM9OmevttsBXLX2iT5SUO-I6giJVukUc4Q

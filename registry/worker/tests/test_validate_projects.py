@@ -770,6 +770,38 @@ def test_schema_accepts_registry_canonical_flag():
     assert errors == []
 
 
+def test_schema_accepts_registry_ai_sdks():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "temporalSdks": ["Python"],
+        "aiSdks": ["Google ADK", "Anthropic SDK"],
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == []
+
+
+def test_registry_ai_sdks_must_be_unique():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "aiSdks": ["Google ADK", "google adk"],
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_registry(document)
+
+    assert any("registry.aiSdks" in error.message for error in errors)
+
+
 def test_schema_rejects_non_boolean_registry_canonical():
     spec = base_spec()
     spec["registry"] = {
