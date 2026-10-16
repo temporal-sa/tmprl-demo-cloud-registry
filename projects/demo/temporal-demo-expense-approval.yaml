@@ -16,6 +16,8 @@ spec:
     temporalSdks:
       - Go
     links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/1VfARW2aSPiy5RUNQtNSg2Ppyk5tUafjcw9z126sKL-A
       runbook:
         url: https://github.com/temporal-sa/temporal-demo-expense-approval#demo-script
         label: README (Demo script)
