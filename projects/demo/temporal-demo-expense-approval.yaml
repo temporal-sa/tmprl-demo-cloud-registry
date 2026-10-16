@@ -5,16 +5,13 @@ metadata:
 spec:
   registry:
     title: Expense Approval
-    summary: 'Submit an expense, approve it, or let it escalate. Stop the worker at any point: the request,
-      its durable timer, and the decision are kept by Temporal, and the reimbursement retries through
-      a payment outage.'
-    tags:
-      - Human-in-the-Loop
-      - Signals
-      - Durable Timers
-      - Retries
-    temporalSdks:
-      - Go
+    summary: >-
+      Built with Go and a web UI driven from Workflow Event History.
+      Demonstrates Signals for approver decisions, durable timers for escalation
+      and expiry, and Retry Policies for a flaky payment provider. Use case:
+      expense approvals that wait through worker outages.
+    tags: [Human-in-the-Loop, Signals, Durable Timers, Retries]
+    temporalSdks: [Go]
     links:
       slideDeck:
         url: https://docs.google.com/presentation/d/1VfARW2aSPiy5RUNQtNSg2Ppyk5tUafjcw9z126sKL-A

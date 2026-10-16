@@ -246,9 +246,32 @@ Rules:
   A project that declares extra namespaces derives each as
   `tmprl-dem-cld-<name>-<label>` under the same truncation rule — see
   "Additional Temporal namespaces" below.
-- `spec.registry` is **optional** catalog metadata (title/summary/tags/links/
-  assets). When omitted, the catalog title falls back to a humanized name. Use
-  it for runbooks, decks, recordings, and canonical docs.
+- `spec.registry` is **optional** catalog metadata (title/summary/tags/
+  temporalSdks/aiSdks/links/assets). When omitted, the catalog title falls back
+  to a humanized name. Use it for runbooks, decks, recordings, and canonical
+  docs.
+  - `summary` is one to three sentences in this order: **Built with** the
+    languages, frameworks, and AI SDKs; **Demonstrates** the Temporal features
+    and patterns; **Use case:** the scenario it shows. Keep it under 320
+    characters.
+  - `temporalSdks` lists the Temporal SDKs the demo's code is written in.
+  - `aiSdks` lists the AI SDKs or agent SDKs the demo's code calls directly,
+    such as `Google ADK`, `OpenAI Agents SDK`, `Anthropic SDK`, `OpenAI SDK`,
+    `Google GenAI SDK`, or `LangGraph`. Leave out LiteLLM and other proxies.
+    The catalog shows them next to the Temporal SDKs and offers an AI SDK filter.
+  - `tags` are topics from the shared vocabulary below. Do not repeat an SDK
+    name, a language, or a generic word like `AI` or `Workflows` as a tag.
+
+  Shared tag vocabulary (demos and workshops):
+  - Scenario: `Banking`, `Food Service`, `Order Management`, `Travel`,
+    `Research`, `Games`, `Forms`, `Databases`
+  - Temporal features and patterns: `Saga`, `Human-in-the-Loop`, `Signals`,
+    `Durable Timers`, `Retries`, `Entity Workflows`, `Workflow Sharding`,
+    `Worker Versioning`, `Multi-Namespace`, `Nexus`, `Serverless`, `Patching`,
+    `Recovery`
+  - AI: `AI Agents`, `Multi-Agent`, `MCP`
+  - Format: `Webinar` (workshops only)
+  - Add a new tag only when no existing one fits; keep the casing above.
 - `builds` declare source build inputs. The platform derives ECR repositories
   and immutable image tags. Dockerfile builds are the default:
   `{ context: ., dockerfile: Dockerfile }`. For repos without Dockerfiles, use

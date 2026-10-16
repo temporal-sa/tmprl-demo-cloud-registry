@@ -5,13 +5,13 @@ metadata:
 spec:
   registry:
     title: Banking Money Transfer
-    summary: Durable money-transfer banking demo — a web UI and API backed by a Temporal worker running the money-transfer saga.
-    tags:
-      - Banking
-      - Workflows
-      - Saga
-    temporalSdks:
-      - Python
+    summary: >-
+      Built with Python and JavaScript: a banking-app UI, an API, and a Temporal
+      worker running the transfer saga. Demonstrates a money-transfer saga with
+      compensation and failure scenarios, with optional payload encryption. Use
+      case: moving money reliably through failures.
+    tags: [Banking, Saga]
+    temporalSdks: [Python]
     links:
       runbook:
         label: README (The Demo)

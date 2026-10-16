@@ -6,13 +6,13 @@ spec:
   registry:
     title: Agent Gateway - Durable Human Approval for Agentic Tool Calls
     summary: >-
-      An MCP server that suspends a protected agentic tool call on a durable
-      Temporal workflow until a named human approves it, then resumes the agent
-      exactly where it stopped. Two teams, two Temporal Cloud namespaces, and a
-      Nexus Endpoint in each direction. Driven from a hosted Claude Code IDE in
-      the browser.
-    tags: [AI, AI - Agents, Human-in-the-Loop, MCP, Nexus, Multi-Namespace]
+      Built with Python, an MCP server, and Google ADK, driven from a hosted
+      Claude Code session. Demonstrates Nexus endpoints across two namespaces,
+      durable suspend and resume of tool calls, and approval deadlines. Use
+      case: gating production deploys behind a named human approver.
+    tags: [AI Agents, Human-in-the-Loop, MCP, Nexus, Multi-Namespace]
     temporalSdks: [Python]
+    aiSdks: [Google ADK]
     readiness:
       score: 4
       maxScore: 5

@@ -330,6 +330,23 @@ def test_catalog_entry_uses_registry_block_when_present():
     assert entry["title"] == "My App"
     assert entry["summary"] == "Does things"
     assert entry["tags"] == ["Demo"]
+    assert entry["aiSdks"] == []
+
+
+def test_catalog_entry_passes_registry_ai_sdks_through():
+    entry = catalog_entry(
+        project(
+            "x",
+            registry={
+                "title": "My App",
+                "summary": "Does things",
+                "temporalSdks": ["Python"],
+                "aiSdks": ["Google ADK"],
+            },
+            source={"repo": "https://github.com/temporal-sa/x"},
+        )
+    )
+    assert entry["aiSdks"] == ["Google ADK"]
 
 
 def test_catalog_payload_sorts_projects_and_sets_base_domain():

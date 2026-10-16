@@ -5,17 +5,14 @@ metadata:
 spec:
   registry:
     title: Visual Workflows
-    summary: 'A visual workflow builder where every flow you draw runs as a durable Temporal Workflow:
-      retry policies, Signals and Updates, event lanes, races, timers, sagas, Schedules, child flows,
-      and a Claude agent. Kill the flow worker mid-run and every run resumes from its last completed step.'
-    tags:
-      - Workflows
-      - Worker Versioning
-      - Saga
-      - AI - Agents
-      - Human-in-the-Loop
-    temporalSdks:
-      - Go
+    summary: >-
+      Built with Go and a browser-based flow builder where every drawn flow runs
+      as a Workflow. Demonstrates retry policies, Signals and Updates, timers,
+      sagas, Schedules, and Worker Versioning, plus a Claude agent step. Use
+      case: a no-code builder for durable business processes.
+    tags: [Worker Versioning, Saga, Signals, Human-in-the-Loop, AI Agents]
+    temporalSdks: [Go]
+    aiSdks: [Anthropic SDK]
     links:
       runbook:
         url: https://github.com/temporal-sa/temporal-demo-visual-workflows#readme

@@ -432,6 +432,10 @@
         "temporalSdks": {
           "$ref": "#/$defs/registryLabels"
         },
+        "aiSdks": {
+          "$ref": "#/$defs/registryLabels",
+          "description": "The AI SDKs or agent SDKs the demo's code calls directly, such as Google ADK or the Anthropic SDK. Leave out LiteLLM and other proxies."
+        },
         "links": {
           "$ref": "#/$defs/registryLinks"
         },

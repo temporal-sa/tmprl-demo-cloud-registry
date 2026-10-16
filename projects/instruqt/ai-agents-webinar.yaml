@@ -26,7 +26,7 @@ spec:
   catalog:
     title: Durable AI Agents Webinar
     summary: Build an AI agent loop as a Temporal Workflow, pause it for human input with Signals and Queries, then hand work to specialist agents with child Workflows and Nexus. Three 30-minute Python modules using OpenAI and the OpenAI Agents SDK.
-    tags: [AI, Agents, Human-in-the-loop, Multi-agent, Nexus, Webinar]
+    tags: [AI Agents, Human-in-the-Loop, Multi-Agent, Nexus, Webinar]
     temporalSdks: [Python]
     aiSdks: [OpenAI Agents SDK]
     duration:

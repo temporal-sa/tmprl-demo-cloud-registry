@@ -8,8 +8,12 @@ spec:
     branch: main
   registry:
     title: Event Lead Tracker
-    summary: Mobile event follow-up forms with employee controls, QR codes, CSV exports, and automatically sharded Temporal entity workflows.
-    tags: [Entity Workflows, Forms, Workflow Sharding]
+    summary: >-
+      Built with Go, mobile-friendly HTML forms, and QR codes. Demonstrates
+      entity Workflows that keep all application state in Temporal, sharded
+      automatically across many Workflows. Use case: capturing and exporting
+      event follow-up leads without a database.
+    tags: [Forms, Entity Workflows, Workflow Sharding]
     temporalSdks: [Go]
   builds:
     app:

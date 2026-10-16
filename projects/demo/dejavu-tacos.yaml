@@ -5,18 +5,13 @@ metadata:
 spec:
   registry:
     title: Deja Vu Tacos
-    summary: Interactive order management demo comparing direct service calls with Temporal workflows, retries, signals, and compensation.
-    tags:
-      - Food Service
-      - Workflows
-      - Saga
-      - Order Management
-    temporalSdks:
-      - Python
-      - Go
-      - TypeScript
-      - Java
-      - .NET
+    summary: >-
+      Built with Python, Go, TypeScript, Java, and .NET workers behind a phone-
+      style ordering app. Demonstrates Saga compensation, Retries, and Signals,
+      compared against direct service calls. Use case: order management that
+      keeps working through a store outage.
+    tags: [Food Service, Order Management, Saga, Retries, Signals]
+    temporalSdks: [Python, Go, TypeScript, Java, .NET]
     links:
       slideDeck:
         url: https://drive.google.com/file/d/1Kk_1i6Dbd_pkqqg4sApXyDUIAYYwIB2B/view

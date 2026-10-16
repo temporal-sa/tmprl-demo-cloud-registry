@@ -27,6 +27,7 @@ const state = {
   demosSearch: "",
   selectedTags: new Set(),
   selectedSdks: new Set(),
+  selectedDemoAiSdks: new Set(),
   workshopsSearch: "",
   selectedWorkshopSdks: new Set(),
   selectedWorkshopAiSdks: new Set(),
@@ -106,12 +107,52 @@ function sdkMark(sdk) {
   });
 }
 
-function sdkList(sdks) {
-  if (!sdks.length) return null;
+// AI SDK accents. Marks are outlined rather than filled so they read apart from
+// the Temporal SDK marks at the same size. Unknown names fall back to initials.
+const AI_SDK_META = {
+  "anthropic sdk": { abbr: "AN", color: "#d97757" },
+  "openai sdk": { abbr: "OA", color: "#10a37f" },
+  "openai agents sdk": { abbr: "OA", color: "#10a37f" },
+  "google adk": { abbr: "AD", color: "#4285f4" },
+  "google genai sdk": { abbr: "GG", color: "#4285f4" },
+  langgraph: { abbr: "LG", color: "#8b5cf6" },
+  "spring ai": { abbr: "SA", color: "#6db33f" },
+  "pydantic ai": { abbr: "PA", color: "#e92063" },
+};
+
+function aiSdkMeta(aiSdk) {
+  const key = String(aiSdk).trim().toLowerCase();
+  return (
+    AI_SDK_META[key] || {
+      abbr: key.replace(/[^a-z0-9]/g, "").slice(0, 2).toUpperCase(),
+      color: "#667ca1",
+    }
+  );
+}
+
+function aiSdkMark(aiSdk) {
+  return el("span", {
+    class: "sdk-mark ai-sdk-mark",
+    style: `--sdk:${aiSdkMeta(aiSdk).color}`,
+    "aria-hidden": "true",
+    text: aiSdkMeta(aiSdk).abbr,
+  });
+}
+
+// Temporal SDKs first, then the AI SDKs after a divider. Workshops pass only
+// their Temporal SDKs.
+function sdkList(sdks, aiSdks = []) {
+  if (!sdks.length && !aiSdks.length) return null;
+  const temporal = sdks.map((sdk) => el("span", { class: "sdk" }, sdkMark(sdk), sdk));
+  const ai = aiSdks.map((aiSdk) =>
+    el("span", { class: "sdk ai-sdk", title: "AI SDK" }, aiSdkMark(aiSdk), aiSdk)
+  );
   return el(
     "div",
     { class: "sdk-list" },
-    ...sdks.map((sdk) => el("span", { class: "sdk" }, sdkMark(sdk), sdk))
+    ...temporal,
+    temporal.length && ai.length ? el("span", { class: "sdk-divider", "aria-hidden": "true" }) : null,
+    ...ai
   );
 }
 
@@ -180,6 +221,7 @@ function normalizeDemo(project) {
     canonical: !!project.canonical,
     tags: Array.isArray(project.tags) ? project.tags : [],
     sdks: Array.isArray(project.temporalSdks) ? project.temporalSdks : [],
+    aiSdks: Array.isArray(project.aiSdks) ? project.aiSdks : [],
     technicalAssets: {
       repo: project.sourceRepo || undefined,
       appUrl: project.appUrl || undefined,
@@ -325,6 +367,7 @@ function loadFiltersFromUrl() {
     state.demosSearch = params.get("q") || "";
     state.selectedTags = splitParam(params, "tags");
     state.selectedSdks = splitParam(params, "sdks");
+    state.selectedDemoAiSdks = splitParam(params, "ai");
   }
 }
 
@@ -342,6 +385,7 @@ function demosQueryString() {
     ["q", state.demosSearch.trim()],
     ["tags", [...state.selectedTags].join(",")],
     ["sdks", [...state.selectedSdks].join(",")],
+    ["ai", [...state.selectedDemoAiSdks].join(",")],
   ]);
 }
 
@@ -393,7 +437,12 @@ function sdkChip(value, selected, onToggle) {
 // ─── Demos view ────────────────────────────────────────────────────────────
 
 function demosHaveFilters() {
-  return !!(state.selectedTags.size || state.selectedSdks.size || state.demosSearch.trim());
+  return !!(
+    state.selectedTags.size ||
+    state.selectedSdks.size ||
+    state.selectedDemoAiSdks.size ||
+    state.demosSearch.trim()
+  );
 }
 
 function onDemosFilterChange() {
@@ -414,11 +463,25 @@ function setupDemosFilters() {
     state.demosSearch = "";
     state.selectedTags.clear();
     state.selectedSdks.clear();
+    state.selectedDemoAiSdks.clear();
     onDemosFilterChange();
   });
-  const menu = document.querySelector("[data-topics-menu]");
+  // The AI SDK and Topics panels share a spot under the filter bar, so only
+  // one stays open, and a click anywhere else closes it.
+  const menus = [
+    document.querySelector("[data-demos-ai-sdks-menu]"),
+    document.querySelector("[data-topics-menu]"),
+  ];
+  for (const menu of menus) {
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      for (const other of menus) if (other !== menu) other.open = false;
+    });
+  }
   document.addEventListener("click", (event) => {
-    if (menu.open && !menu.contains(event.target)) menu.open = false;
+    for (const menu of menus) {
+      if (menu.open && !menu.contains(event.target)) menu.open = false;
+    }
   });
 }
 
@@ -429,6 +492,17 @@ function renderDemosFilters() {
   document
     .querySelector("[data-demos-sdks]")
     .replaceChildren(...sdks.map((sdk) => sdkChip(sdk, state.selectedSdks, onDemosFilterChange)));
+  renderAiSdkMenuFor({
+    menu: "[data-demos-ai-sdks-menu]",
+    panel: "[data-demos-ai-sdks-panel]",
+    count: "[data-demos-ai-sdks-count]",
+    name: "demo-ai-sdk",
+    items: state.demos,
+    aiSdksOf: (demo) => demo.aiSdks,
+    countOf: (aiSdk) => state.demos.filter((demo) => demo.aiSdks.includes(aiSdk)).length,
+    selected: state.selectedDemoAiSdks,
+    onChange: onDemosFilterChange,
+  });
 
   // Rebuilding the panel would lose scroll position mid-interaction, so only
   // build it once and keep checkbox state in sync afterwards.
@@ -474,14 +548,18 @@ function demoMatchesFilters(demo) {
   const matchesSdks =
     state.selectedSdks.size === 0 ||
     [...state.selectedSdks].some((s) => demo.sdks.includes(s));
+  const matchesAiSdks =
+    state.selectedDemoAiSdks.size === 0 ||
+    [...state.selectedDemoAiSdks].some((s) => demo.aiSdks.includes(s));
   const matchesSearch =
     !q ||
     demo.name.toLowerCase().includes(q) ||
     demo.id.toLowerCase().includes(q) ||
     demo.summary.toLowerCase().includes(q) ||
     demo.tags.some((t) => t.toLowerCase().includes(q)) ||
-    demo.sdks.some((s) => s.toLowerCase().includes(q));
-  return matchesTags && matchesSdks && matchesSearch;
+    demo.sdks.some((s) => s.toLowerCase().includes(q)) ||
+    demo.aiSdks.some((s) => s.toLowerCase().includes(q));
+  return matchesTags && matchesSdks && matchesAiSdks && matchesSearch;
 }
 
 function renderDemosList() {
@@ -755,7 +833,7 @@ function renderFeatureCard(demo) {
         })
       ),
       el("p", { class: "feature-summary", text: demo.summary }),
-      sdkList(demo.sdks),
+      sdkList(demo.sdks, demo.aiSdks),
       tagRow([...flagTags(demo), ...topicTags(demo.tags)]),
       el(
         "div",
@@ -796,7 +874,7 @@ function renderDemoCard(demo) {
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
-    el("div", { class: "card-foot" }, cardAssets(presenterAssets(demo)), sdkList(demo.sdks), cardActions(demo))
+    el("div", { class: "card-foot" }, cardAssets(presenterAssets(demo)), sdkList(demo.sdks, demo.aiSdks), cardActions(demo))
   );
 }
 
@@ -936,7 +1014,7 @@ function renderDrawerContent(demo) {
     { class: "drawer-title" },
     el("h2", { id: "drawer-title", text: demo.name }),
     el("p", { text: demo.summary }),
-    sdkList(demo.sdks),
+    sdkList(demo.sdks, demo.aiSdks),
     tagRow(flagTags(demo))
   );
 
@@ -1539,38 +1617,44 @@ function setMenuCount(selector, count) {
   badge.textContent = String(count);
 }
 
-function renderAiSdkMenu() {
-  const menu = document.querySelector("[data-ai-sdks-menu]");
-  const panel = document.querySelector("[data-ai-sdks-panel]");
-  const aiSdks = [...countBy(state.courses, courseAiSdks).keys()].sort((a, b) =>
-    a.localeCompare(b)
-  );
-  menu.hidden = !aiSdks.length;
+// Fills an AI SDK checkbox menu from `items` and keeps its checked state in
+// step with `selected`.
+function renderAiSdkMenuFor({ menu, panel, count, name, items, aiSdksOf, countOf, selected, onChange }) {
+  const menuEl = document.querySelector(menu);
+  const panelEl = document.querySelector(panel);
+  const aiSdks = [...countBy(items, aiSdksOf).keys()].sort((a, b) => a.localeCompare(b));
+  menuEl.hidden = !aiSdks.length;
   // Rebuilding the panel mid-click would detach the clicked input and close
   // the menu, so build it once and sync checkbox state afterwards.
-  if (!panel.childElementCount && aiSdks.length) {
-    panel.replaceChildren(
+  if (!panelEl.childElementCount && aiSdks.length) {
+    panelEl.replaceChildren(
       ...aiSdks.map((aiSdk) =>
-        menuOption(
-          "checkbox",
-          "workshop-ai-sdk",
-          aiSdk,
-          aiSdk,
-          groupCount((course) => courseAiSdks(course).includes(aiSdk)),
-          false,
-          (event) => {
-            if (event.target.checked) state.selectedWorkshopAiSdks.add(aiSdk);
-            else state.selectedWorkshopAiSdks.delete(aiSdk);
-            onWorkshopsFilterChange();
-          }
-        )
+        menuOption("checkbox", name, aiSdk, aiSdk, countOf(aiSdk), false, (event) => {
+          if (event.target.checked) selected.add(aiSdk);
+          else selected.delete(aiSdk);
+          onChange();
+        })
       )
     );
   }
-  panel.querySelectorAll("input").forEach((input) => {
-    input.checked = state.selectedWorkshopAiSdks.has(input.value);
+  panelEl.querySelectorAll("input").forEach((input) => {
+    input.checked = selected.has(input.value);
   });
-  setMenuCount("[data-ai-sdks-count]", state.selectedWorkshopAiSdks.size);
+  setMenuCount(count, selected.size);
+}
+
+function renderAiSdkMenu() {
+  renderAiSdkMenuFor({
+    menu: "[data-ai-sdks-menu]",
+    panel: "[data-ai-sdks-panel]",
+    count: "[data-ai-sdks-count]",
+    name: "workshop-ai-sdk",
+    items: state.courses,
+    aiSdksOf: courseAiSdks,
+    countOf: (aiSdk) => groupCount((course) => courseAiSdks(course).includes(aiSdk)),
+    selected: state.selectedWorkshopAiSdks,
+    onChange: onWorkshopsFilterChange,
+  });
 }
 
 function renderDurationMenu() {

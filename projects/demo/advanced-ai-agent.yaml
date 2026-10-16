@@ -6,10 +6,14 @@ spec:
   registry:
     title: Advanced AI Agent
     summary: >-
-      Durable research agents with streaming, recursive subagents, human tool
-      approvals, sandboxed shell execution, attachments, and HTML reports.
-    tags: [AI, AI - Agents, Human-in-the-Loop]
+      Built with Python and a provider-neutral agent harness over Anthropic,
+      Google GenAI, and OpenAI adapters. Demonstrates durable agent loops,
+      streaming, recursive subagents, human tool approvals, and sandboxed shell
+      execution. Use case: long-running research agents with governed tools and
+      HTML reports.
+    tags: [AI Agents, Multi-Agent, Human-in-the-Loop, MCP]
     temporalSdks: [Python]
+    aiSdks: [Anthropic SDK, Google GenAI SDK, OpenAI SDK]
     crashable:
       enabled: true
       taskQueueEnv: SIMPLE_CHAT_TASK_QUEUE

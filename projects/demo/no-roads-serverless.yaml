@@ -11,8 +11,12 @@ spec:
   registry:
     title: No Roads Serverless
     summary: >-
-      Audience members submit a name and watch Temporal scale Lambda workers
-      against task-queue backlog, concurrency, and sync match rate.
+      Built with Go workers on AWS Lambda and a small web submission UI.
+      Demonstrates Serverless Workers scaling from task-queue backlog,
+      concurrency, and sync-match rate. Use case: a live audience demo of
+      Temporal autoscaling.
+    tags: [Serverless]
+    temporalSdks: [Go]
     # Opt-in. The application reads TEMPORAL_TASK_QUEUE, claims the Worker
     # Deployment from TEMPORAL_WORKER_DEPLOYMENT_NAME / TEMPORAL_WORKER_BUILD_ID,
     # and appends the active queue to workflow IDs. Unset, those stay
