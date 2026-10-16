@@ -6,7 +6,7 @@ spec:
   registry:
     title: Temporal Agent Harness (Travel Agent)
     summary: >-
-      Chat with Monty, a travel agent that writes and runs sandboxed Python whose every
+      Chat with Ziggy, a travel agent that writes and runs sandboxed Python whose every
       booking is a durable Temporal Activity. Approve its tool calls, watch the trip board
       update, then crash the worker mid-booking and see the conversation pick up where it was.
     canonical: true
