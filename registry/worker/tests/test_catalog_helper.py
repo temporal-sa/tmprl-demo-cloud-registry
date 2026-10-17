@@ -83,7 +83,6 @@ def test_turn_filters_and_highlights_then_replies():
             tool_use("t1", "show_demos", ["banking", "agent-harness", "nope", "banking"]),
             tool_use("t2", "highlight_demos", ["banking"]),
         ),
-        response("end_turn", text("Start with Money Transfer.")),
     )
     request = HelperTurnRequest(
         turn_id="t#2",
@@ -98,8 +97,10 @@ def test_turn_filters_and_highlights_then_replies():
 
     assert result.view == HelperView(demo_ids=["banking", "agent-harness"], highlights=["banking"])
     assert result.actions == ["Showing 2 demos", "Highlighted 1"]
-    assert result.reply == "Two fit.\n\nStart with Money Transfer."
-    assert (result.input_tokens, result.output_tokens) == (220, 10)
+    # A reply with tool calls that all worked ends the turn in one round.
+    assert result.reply == "Two fit."
+    assert len(client.requests) == 1
+    assert (result.input_tokens, result.output_tokens) == (110, 5)
 
     first = client.requests[0]
     assert first["model"] == catalog_helper.DEFAULT_MODEL
@@ -116,9 +117,25 @@ def test_turn_filters_and_highlights_then_replies():
     assert note["text"] == "[The demos page currently shows every demo. Highlighted: none.]"
     assert message["text"] == "Something for a bank"
 
+
+def test_failed_tool_call_gets_another_round():
+    client = FakeClient(
+        response("tool_use", text("Here you go."), tool_use("t1", "show_demos", ["nope"])),
+        response(
+            "tool_use",
+            text("Money Transfer fits."),
+            tool_use("t2", "show_demos", ["banking"]),
+            tool_use("t3", "highlight_demos", ["banking"]),
+        ),
+    )
+
+    result = catalog_helper.run_turn(client, HelperTurnRequest(turn_id="t", message="bank"), DEMOS)
+
+    assert len(client.requests) == 2
     results = client.requests[1]["messages"][-1]["content"]
-    assert [r["tool_use_id"] for r in results] == ["t1", "t2"]
-    assert not any(r["is_error"] for r in results)
+    assert [(r["tool_use_id"], r["is_error"]) for r in results] == [("t1", True)]
+    assert result.view == HelperView(demo_ids=["banking"], highlights=["banking"])
+    assert result.reply == "Here you go.\n\nMoney Transfer fits."
 
 
 def test_last_round_cannot_call_tools():
@@ -235,54 +252,66 @@ def test_catalog_demos_match_what_the_catalog_lists(monkeypatch):
 
 
 @pytest.fixture
-def broker(monkeypatch):
-    seen = {"minted": [], "revoked": []}
+def shared_key(monkeypatch):
+    reads = []
 
-    def mint(participant, *, track_id, policy):
-        seen["minted"].append((participant, track_id, policy))
-        return {"api_key": "sk-test", "litellm_base_url": "https://litellm.test"}
+    def read():
+        reads.append(catalog_helper.ANTHROPIC_SECRET)
+        return "sk-ant-test"
 
-    def revoke(participant, *, track_id):
-        seen["revoked"].append((participant, track_id))
-
-    monkeypatch.setattr(catalog_helper.onboarding_agent, "mint_key", mint)
-    monkeypatch.setattr(catalog_helper.onboarding_agent, "revoke_key", revoke)
+    monkeypatch.setattr(catalog_helper, "read_anthropic_key", read)
     monkeypatch.setattr(catalog_helper, "catalog_demos", lambda: DEMOS)
-    return seen
+    catalog_helper.forget_anthropic_client()
+    yield reads
+    catalog_helper.forget_anthropic_client()
 
 
-def test_turn_uses_a_short_lived_key_on_its_own_track(broker, monkeypatch):
+def test_turns_share_one_client_on_the_platform_key(shared_key, monkeypatch):
     clients = []
 
     def make_client(**kwargs):
         clients.append(kwargs)
-        return FakeClient(response("end_turn", text("Hi!")))
+        return FakeClient(response("end_turn", text("Hi!")), response("end_turn", text("Again!")))
 
     monkeypatch.setattr(catalog_helper.anthropic, "Anthropic", make_client)
+    env = ActivityEnvironment()
 
-    result = ActivityEnvironment().run(
-        catalog_helper.run_catalog_helper_turn, HelperTurnRequest(turn_id="chat#1", message="hi")
+    first = env.run(catalog_helper.run_catalog_helper_turn, HelperTurnRequest(turn_id="c#1", message="hi"))
+    second = env.run(catalog_helper.run_catalog_helper_turn, HelperTurnRequest(turn_id="c#2", message="hi"))
+
+    assert (first.reply, second.reply) == ("Hi!", "Again!")
+    assert len(clients) == 1
+    assert clients[0]["api_key"] == "sk-ant-test"
+    assert "base_url" not in clients[0]
+    assert shared_key == ["tmprl-dem-cld/platform/shared/anthropic"]
+
+
+def test_read_anthropic_key_needs_the_property(monkeypatch):
+    import boto3
+
+    values = iter(['{"ANTHROPIC_API_KEY": "sk-ant"}', '{"OTHER": "x"}'])
+    secretsmanager = SimpleNamespace(
+        get_secret_value=lambda SecretId: {"SecretString": next(values)}
+    )
+    monkeypatch.setattr(
+        boto3.session, "Session", lambda **_: SimpleNamespace(client=lambda name: secretsmanager)
     )
 
-    assert result.reply == "Hi!"
-    assert clients[0]["base_url"] == "https://litellm.test"
-    assert clients[0]["auth_token"] == "sk-test"
-    participant, track, policy = broker["minted"][0]
-    assert participant == "chat#1/1"
-    assert track == "registry-catalog-helper"
-    assert policy["max_budget"] <= 0.25
-    assert broker["revoked"] == [("chat#1/1", "registry-catalog-helper")]
+    assert catalog_helper.read_anthropic_key() == "sk-ant"
+    with pytest.raises(ApplicationError) as raised:
+        catalog_helper.read_anthropic_key()
+    assert raised.value.non_retryable
 
 
 def status_error(code):
-    request = httpx2.Request("POST", "https://litellm.test/v1/messages")
+    request = httpx2.Request("POST", "https://api.anthropic.test/v1/messages")
     return anthropic.APIStatusError(
         "nope", response=httpx2.Response(code, request=request), body=None
     )
 
 
 @pytest.mark.parametrize(("code", "retryable"), [(400, False), (401, False), (429, True), (503, True)])
-def test_gateway_errors_retry_only_when_they_can_pass(broker, monkeypatch, code, retryable):
+def test_api_errors_retry_only_when_they_can_pass(shared_key, monkeypatch, code, retryable):
     def failing(**kwargs):
         def create(**_):
             raise status_error(code)
@@ -300,8 +329,8 @@ def test_gateway_errors_retry_only_when_they_can_pass(broker, monkeypatch, code,
         assert isinstance(raised.value, anthropic.APIStatusError)
     else:
         assert isinstance(raised.value, ApplicationError) and raised.value.non_retryable
-    # The key is revoked whatever happened.
-    assert len(broker["revoked"]) == 1
+    # A rejected key is read again on the next turn, in case it was rotated.
+    assert (catalog_helper._client is None) == (code == 401)
 
 
 def test_helper_workflow_id_is_per_user_and_color():

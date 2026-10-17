@@ -6,17 +6,16 @@ demos page. It:
 1. reads the demos the catalog lists, built by the same ``catalog_payload``
    the operator publishes to registry.json, so Ziggy only knows demos the
    page shows.
-2. mints a LiteLLM key through the Instruqt broker, as the onboarding agent
-   does (activities/onboarding_agent.py), on its own track with a budget of
-   cents and a life of minutes.
+2. calls Claude with the platform's shared Anthropic key
+   (tmprl-dem-cld/platform/shared/anthropic, the one demos opt into), read
+   from Secrets Manager once per worker process and kept with its client.
 3. runs a short Messages API tool loop on a small model. Ziggy's tools only
    change what the page shows: filter it to the demos Ziggy names, put a halo
    on some of them, or clear both. Demo ids are an enum of the catalog's names,
    so Ziggy can't name a demo that isn't there. The activity applies the calls
    to the view it was given and returns the new view; the page renders it.
 
-The key never leaves this activity and is revoked when the turn ends. Each
-turn sends the chat so far as plain text (bounded by the workflow), so nothing
+The key never leaves the worker. Each turn sends the chat so far as plain text (bounded by the workflow), so nothing
 is kept on the model side between turns.
 """
 
@@ -24,15 +23,17 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import timedelta
 from typing import Any
 
 import anthropic
 from temporalio import activity
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
-from demo_registry_operator import errors, kube, resources
-from demo_registry_operator.activities import onboarding_agent
+from demo_registry_operator import derive, errors, kube, resources
+from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.workflows.catalog_helper_messages import (
     HelperTurnRequest,
     HelperTurnResult,
@@ -41,13 +42,7 @@ from demo_registry_operator.workflows.catalog_helper_messages import (
 
 MODEL_ENV = "DEMO_REGISTRY_CATALOG_HELPER_MODEL"
 DEFAULT_MODEL = "claude-haiku-5-5"
-BROKER_TRACK_ID = "registry-catalog-helper"
-KEY_POLICY = {
-    "max_budget": 0.25,
-    "duration": "10m",
-    "models": ["claude-*", "anthropic/*"],
-    "max_parallel_requests": 2,
-}
+ANTHROPIC_SECRET = f"{derive.SECRET_PREFIX_ROOT}/platform/shared/anthropic"
 # Thinking counts toward this; a reply is a few sentences.
 MAX_OUTPUT_TOKENS = 4096
 # Model calls per turn. The last one may not call tools, so the turn ends
@@ -61,7 +56,7 @@ PRESENTER_LINKS = {
     "goldenPath": "golden path",
 }
 
-# One quick retry for a lost worker or a gateway blip; a turn the user waits
+# One quick retry for a lost worker or an API blip; a turn the user waits
 # on shouldn't retry for long.
 HELPER_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
@@ -83,6 +78,9 @@ How to help:
 - When you know what they want, call show_demos with the demos that fit, best
   first, and say in a sentence or two why each one fits. Use
   highlight_demos to call out the one or two you'd start with.
+- Write your whole reply and make your tool calls in the same response. The
+  tools always do what they say, so you don't need to see their results
+  before answering, and the user waits on every extra round.
 - When the request is broad ("something with AI"), it's fine to show a first
   set and ask one short question that would narrow it (language, audience,
   feature). Don't ask more than one question at a time.
@@ -95,8 +93,9 @@ How to help:
 - Canonical demos are curated, presenter-ready stories with decks and
   recordings; prefer them when two demos fit equally well.
 
-Keep replies short: a few sentences, plain text, no headings or tables. Refer
-to demos by title. You can only change what the demos page shows; you can't
+Keep replies short: a few sentences. The chat renders light markdown: bold a
+demo's title, and use a short bullet list when you name several demos; no
+headings or tables. Refer to demos by title. You can only change what the demos page shows; you can't
 open, deploy, or crash demos, so point them at the demo's card for that.
 
 The catalog:
@@ -124,23 +123,57 @@ def run_catalog_helper_turn(request: HelperTurnRequest) -> HelperTurnResult:
             reply="The catalog has no demos listed right now, so I can't recommend one.",
             view=HelperView(),
         )
-    participant = f"{request.turn_id}/{activity.info().attempt}"
-    key = onboarding_agent.mint_key(
-        participant, track_id=BROKER_TRACK_ID, policy=KEY_POLICY
-    )
     try:
-        client = anthropic.Anthropic(
-            base_url=key["litellm_base_url"],
-            auth_token=key["api_key"],
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            max_retries=1,
+        return run_turn(anthropic_client(), request, demos)
+    except ApplicationError as error:
+        if getattr(error.__cause__, "status_code", None) in {401, 403}:
+            # The shared key may have been rotated; read it again next turn.
+            forget_anthropic_client()
+        raise
+
+
+_client_lock = threading.Lock()
+_client: anthropic.Anthropic | None = None
+
+
+def anthropic_client() -> anthropic.Anthropic:
+    """One client per worker process, so turns skip the secret read and
+    reuse the client's connections."""
+
+    global _client
+    with _client_lock:
+        if _client is None:
+            _client = anthropic.Anthropic(
+                api_key=read_anthropic_key(),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=1,
+            )
+        return _client
+
+
+def forget_anthropic_client() -> None:
+    global _client
+    with _client_lock:
+        _client = None
+
+
+def read_anthropic_key() -> str:
+    import boto3
+
+    secretsmanager = boto3.session.Session(
+        region_name=WorkerConfig.from_env().aws_region
+    ).client("secretsmanager")
+    secret = secretsmanager.get_secret_value(SecretId=ANTHROPIC_SECRET)
+    try:
+        key = json.loads(secret.get("SecretString") or "{}").get("ANTHROPIC_API_KEY")
+    except (json.JSONDecodeError, AttributeError):
+        key = None
+    if not key:
+        raise errors.non_retryable_error(
+            f"{ANTHROPIC_SECRET} has no ANTHROPIC_API_KEY.",
+            error_type=errors.CONFIGURATION_ERROR,
         )
-        return run_turn(client, request, demos)
-    finally:
-        try:
-            onboarding_agent.revoke_key(participant, track_id=BROKER_TRACK_ID)
-        except Exception:  # noqa: BLE001 - the key expires in minutes anyway
-            activity.logger.warning("Could not revoke helper key %s", participant)
+    return key
 
 
 def run_turn(
@@ -184,7 +217,7 @@ def run_turn(
             if error.status_code in {408, 409, 429} or error.status_code >= 500:
                 raise
             raise errors.non_retryable_error(
-                f"The model gateway refused the request (HTTP {error.status_code}).",
+                f"The Claude API refused the request (HTTP {error.status_code}).",
                 error_type=errors.CONFIGURATION_ERROR,
             ) from error
         usage = response.usage
@@ -203,13 +236,20 @@ def run_turn(
             break
         messages.append({"role": "assistant", "content": response.content})
         results = []
+        failed = False
         for call in calls:
             outcome, action, is_error = apply_tool(view, call.name, call.input, titles)
             if action:
                 actions.append(action)
+            failed = failed or is_error
             results.append(
                 {"type": "tool_result", "tool_use_id": call.id, "content": outcome, "is_error": is_error}
             )
+        # A reply that came with tool calls that all worked is the whole turn:
+        # the results only confirm the view changed, and another round would
+        # make the user wait for the model to say it again.
+        if texts and not failed:
+            break
         messages.append({"role": "user", "content": results})
 
     reply = "\n\n".join(texts) or (

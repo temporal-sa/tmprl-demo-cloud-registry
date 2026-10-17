@@ -1888,6 +1888,18 @@
   .ziggy-msg.is-user { align-self: flex-end; color: #fff; background-image: var(--grad-uv); border-radius: 1rem .25rem 1rem 1rem; }
   .ziggy-msg.is-failed { color: var(--coral); background: transparent; border: 1px solid var(--coral); }
 
+  .ziggy-md { display: flex; flex-direction: column; gap: .5rem; }
+  .ziggy-md p, .ziggy-md ul, .ziggy-md ol { margin: 0; }
+  .ziggy-md ul, .ziggy-md ol { display: flex; flex-direction: column; gap: .25rem; padding-left: 1.25rem; white-space: normal; }
+  .ziggy-md ul { list-style: disc; }
+  .ziggy-md ol { list-style: decimal; }
+  .ziggy-md li::marker { color: var(--gray-300); }
+  .ziggy-md strong { font-weight: 500; color: #fff; }
+  .ziggy-md em { font-style: italic; }
+  .ziggy-md code { padding: .05rem .3rem; font-family: var(--mono); font-size: .8125rem; background: rgb(255 255 255 / .08); border-radius: .25rem; }
+  .ziggy-md a { color: var(--mint); text-decoration: underline; text-underline-offset: 2px; }
+  .ziggy-md .ziggy-actions { margin-top: 0; }
+
   .ziggy-actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem; }
   .ziggy-actions span {
     padding: .1rem .4rem;

@@ -4359,14 +4359,62 @@ async function newZiggyChat() {
   ziggy.nodes.textarea.focus();
 }
 
+// Ziggy's replies are light markdown: paragraphs, bullet or numbered lists,
+// **bold**, *italic*, `code` and [links](https://…). It builds DOM nodes, never
+// HTML, so a reply can't inject markup.
+const ZIGGY_INLINE = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])/g;
+
+function ziggyInline(text) {
+  const nodes = [];
+  let last = 0;
+  for (const match of text.matchAll(ZIGGY_INLINE)) {
+    if (match.index > last) nodes.push(text.slice(last, match.index));
+    const [, bold, code, label, href, italic] = match;
+    if (bold !== undefined) nodes.push(el("strong", {}, ...ziggyInline(bold)));
+    else if (code !== undefined) nodes.push(el("code", { text: code }));
+    else if (label !== undefined) nodes.push(el("a", { href, target: "_blank", rel: "noopener noreferrer", text: label }));
+    else nodes.push(el("em", {}, ...ziggyInline(italic)));
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+function ziggyMarkdown(text) {
+  const blocks = [];
+  let list = null;
+  let paragraph = [];
+  const flush = () => {
+    if (paragraph.length) blocks.push(el("p", {}, ...ziggyInline(paragraph.join("\n"))));
+    paragraph = [];
+  };
+  for (const line of text.split("\n")) {
+    const item = line.match(/^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/);
+    if (item) {
+      flush();
+      const tag = item[1] ? "ul" : "ol";
+      if (!list || list.tagName.toLowerCase() !== tag) blocks.push((list = el(tag)));
+      list.appendChild(el("li", {}, ...ziggyInline(item[3])));
+    } else if (!line.trim()) {
+      flush();
+      list = null;
+    } else {
+      list = null;
+      paragraph.push(line.replace(/^#+\s+/, ""));
+    }
+  }
+  flush();
+  return blocks;
+}
+
 function ziggyMessageView(message) {
   if (message.role === "user") return el("div", { class: "ziggy-msg is-user", text: message.text });
   const failed = message.outcome !== "Done";
   const actions = message.actions || [];
   return el(
     "div",
-    { class: `ziggy-msg is-ziggy${failed ? " is-failed" : ""}` },
-    failed ? `Sorry, I couldn't answer that: ${message.text}` : message.text,
+    { class: `ziggy-msg is-ziggy${failed ? " is-failed" : " ziggy-md"}` },
+    ...(failed ? [`Sorry, I couldn't answer that: ${message.text}`] : ziggyMarkdown(message.text)),
     actions.length
       ? el("div", { class: "ziggy-actions" }, ...actions.map((action) => el("span", { text: action })))
       : null
