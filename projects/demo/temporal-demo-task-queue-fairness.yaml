@@ -1,0 +1,65 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: temporal-demo-task-queue-fairness
+spec:
+  registry:
+    title: Task Queue Fairness for Multi-Tenant Workloads
+    summary: 'Built with Python, FastAPI and temporal-agent-harness (simulated model calls). Demonstrates
+      Task Queue Fairness keys and weights, Update-With-Start, Signal-With-Start and Visibility listing.
+      Use case: one tenant''s 2,000-document bulk upload versus other tenants on a shared AI document
+      pipeline.'
+    tags:
+      - Priority & Fairness
+      - AI Agents
+      - Data Pipelines
+    temporalSdks:
+      - Python
+    aiSdks:
+      - Temporal Agent Harness
+    crashable:
+      enabled: true
+      taskQueueEnv: TASK_QUEUE
+      baseTaskQueue: docs
+  source:
+    repo: https://github.com/temporal-sa/temporal-demo-task-queue-fairness
+  builds:
+    app:
+      context: .
+      dockerfile: Dockerfile
+  temporal:
+    fairness: true
+    searchAttributes:
+      DocSession: {}
+      DocStartedAt:
+        type: datetime
+      DocTenant: {}
+  components:
+    api:
+      build: app
+      ports:
+        - containerPort: 8080
+          servicePort: 80
+      env:
+        - name: TEMPORAL_UI_URL
+          value: https://cloud.temporal.io
+        - name: FORWARDED_ALLOW_IPS
+          value: '*'
+      temporalAccess: true
+    worker:
+      build: app
+      replicas: 1
+      command:
+        - python
+        - -m
+        - fairness_demo.worker
+      worker: true
+      resources:
+        requests:
+          cpu: 250m
+          memory: 1Gi
+  ingress:
+    subdomain: task-queue-fairness
+  smokeCheck:
+    path: /healthz
+    expectedStatus: 200
