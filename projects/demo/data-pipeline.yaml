@@ -43,7 +43,11 @@ spec:
       env:
         UV_PYTHON: "3.12"
       processes:
-        worker: python worker.py
+        # The activities write demodata/working, demodata/output, and
+        # idempotent_keys.txt relative to the cwd, but the run user can't
+        # write to /workspace (Paketo builds it as a different user). Run the
+        # worker from a copy under /tmp.
+        worker: mkdir -p /tmp/data-pipeline && cp -r demodata /tmp/data-pipeline/ && cd /tmp/data-pipeline && exec python /workspace/worker.py
         # ui/app.py only binds 127.0.0.1 under `python ui/app.py`, so start it
         # with `flask run`. It imports client.py from the repo root.
         web: PYTHONPATH="$PWD:$PYTHONPATH" flask --app ui/app run --host 0.0.0.0 --port 8080
