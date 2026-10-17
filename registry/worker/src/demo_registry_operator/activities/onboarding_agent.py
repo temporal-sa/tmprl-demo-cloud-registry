@@ -669,23 +669,18 @@ def broker_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"LiteLLM broker {path} failed: {error}") from error
 
 
-def mint_key(
-    participant: str,
-    *,
-    track_id: str = BROKER_TRACK_ID,
-    policy: dict[str, Any] = KEY_POLICY,
-) -> dict[str, Any]:
+def mint_key(participant: str) -> dict[str, Any]:
     key = broker_post(
         "/v1/token",
-        {"track_id": track_id, "participant_id": participant, **policy},
+        {"track_id": BROKER_TRACK_ID, "participant_id": participant, **KEY_POLICY},
     )
     if not key.get("api_key") or not key.get("litellm_base_url"):
         raise RuntimeError("The LiteLLM broker returned no key.")
     return key
 
 
-def revoke_key(participant: str, *, track_id: str = BROKER_TRACK_ID) -> None:
+def revoke_key(participant: str) -> None:
     broker_post(
         "/v1/token/revoke",
-        {"track_id": track_id, "participant_id": participant},
+        {"track_id": BROKER_TRACK_ID, "participant_id": participant},
     )
