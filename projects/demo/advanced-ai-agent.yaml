@@ -6,14 +6,13 @@ spec:
   registry:
     title: Advanced AI Agent
     summary: >-
-      Built with Python and a provider-neutral agent harness over Anthropic,
-      Google GenAI, and OpenAI adapters. Demonstrates durable agent loops,
-      streaming, recursive subagents, human tool approvals, and sandboxed shell
-      execution. Use case: long-running research agents with governed tools and
-      HTML reports.
+      A coding agent on Temporal's agent harness with Pydantic AI over
+      Anthropic, OpenAI, and Gemini. Demonstrates explorer subagents, judge and
+      human approvals, sandboxed edits and tests, and work kept after a worker
+      crash. Use case: governed coding agents.
     tags: [AI Agents, Multi-Agent, Human-in-the-Loop, MCP]
     temporalSdks: [Python]
-    aiSdks: [Anthropic SDK, Google GenAI SDK, OpenAI SDK]
+    aiSdks: [Pydantic AI]
     crashable:
       enabled: true
       taskQueueEnv: SIMPLE_CHAT_TASK_QUEUE
@@ -21,7 +20,7 @@ spec:
     links:
       runbook:
         label: Advanced AI Agent runbook
-        url: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent/blob/catalog/advanced-ai-agent/docs/catalog.md
+        url: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent/blob/main/docs/catalog.md
   source:
     repo: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent
   builds:
@@ -34,6 +33,7 @@ spec:
   temporal:
     searchAttributes:
       UserEmail: {}
+      CodingAgentOwner: {}
   secrets:
     anthropic:
       shared: anthropic
@@ -41,6 +41,9 @@ spec:
     gemini:
       shared: gemini
       requiredProperties: [GOOGLE_API_KEY]
+    openai:
+      shared: openai
+      requiredProperties: [OPENAI_API_KEY]
     runtime:
       requiredProperties: [SIMPLE_CHAT_STREAM_TOKEN, WORKSPACE_EXECUTOR_TOKEN]
   components:
@@ -50,7 +53,7 @@ spec:
       temporalAccess: true
       replicas: 1
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-advanced-ai-agent-data
-      secrets: [anthropic, gemini]
+      secrets: [anthropic, gemini, openai]
       ports: [{name: http, containerPort: 8000, servicePort: 80}]
       env: &app-env
         - {name: SIMPLE_CHAT_AUTH_MODE, value: catalog}
@@ -58,6 +61,8 @@ spec:
         - {name: SIMPLE_CHAT_CODEC_SERVER_HOST, value: 0.0.0.0}
         - {name: SIMPLE_CHAT_CODEC_AUTH_ENABLED, value: "true"}
         - {name: SIMPLE_CHAT_TASK_QUEUE, value: advanced-ai-agent}
+        # The coding agent polls the same queue; crashable clones override the line above.
+        - {name: CODING_AGENT_TASK_QUEUE, value: "$(SIMPLE_CHAT_TASK_QUEUE)"}
         - {name: SIMPLE_CHAT_USER_EMAIL_SEARCH_ATTR, value: UserEmail}
         - {name: SIMPLE_CHAT_REQUIRE_SHARED_STORAGE, value: "true"}
         - {name: SIMPLE_CHAT_S3_BUCKET, value: tmprl-dem-cld-advanced-ai-agent-data-429214323166-us-west-1}
@@ -84,7 +89,7 @@ spec:
           deploymentName: advanced-ai-agent
       terminationGracePeriodSeconds: 1260
       awsIamRoleArn: arn:aws:iam::429214323166:role/tmprl-dem-cld-advanced-ai-agent-data
-      secrets: [anthropic, gemini]
+      secrets: [anthropic, gemini, openai]
       ports: [{name: codec, containerPort: 8001}]
       env: *app-env
     redis:
