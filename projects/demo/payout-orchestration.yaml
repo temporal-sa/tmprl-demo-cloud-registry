@@ -13,6 +13,9 @@ spec:
     tags: [Banking, Saga, Retries, Human-in-the-Loop]
     temporalSdks: [Java]
     links:
+      slideDeck:
+        label: Payout Orchestration deck
+        url: https://docs.google.com/presentation/d/1cMBcqLhs9R-D3fLjHTeR4jXtnPFxJU9Eeah2F3xSrvE
       runbook:
         label: README
         url: https://github.com/temporal-sa/temporal-demo-payments#readme
