@@ -58,6 +58,9 @@ spec:
 
   temporal:
     searchAttributes:
+      # The workflows upsert ActivitiesCompleted, so starts fail without it.
+      ActivitiesCompleted:
+        type: int
       Priority:
         type: int
       FairnessKey: {}
