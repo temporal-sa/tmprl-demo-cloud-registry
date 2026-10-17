@@ -60,6 +60,8 @@ spec:
         - {name: SIMPLE_CHAT_API_HOST, value: 0.0.0.0}
         - {name: SIMPLE_CHAT_CODEC_SERVER_HOST, value: 0.0.0.0}
         - {name: SIMPLE_CHAT_CODEC_AUTH_ENABLED, value: "true"}
+        # Harness console at /console/ (owner-scoped; the demo script's 5:40 beat).
+        - {name: CONSOLE_ENABLED, value: "true"}
         - {name: SIMPLE_CHAT_TASK_QUEUE, value: advanced-ai-agent}
         # The coding agent polls the same queue; crashable clones override the line above.
         - {name: CODING_AGENT_TASK_QUEUE, value: "$(SIMPLE_CHAT_TASK_QUEUE)"}
