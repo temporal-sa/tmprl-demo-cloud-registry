@@ -24,7 +24,6 @@ spec:
         url: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent/blob/catalog/advanced-ai-agent/docs/catalog.md
   source:
     repo: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent
-    branch: catalog/advanced-ai-agent
   builds:
     app:
       context: .
