@@ -31,16 +31,17 @@ spec:
     repo: https://github.com/temporal-sa/temporal-data-pipeline-demo
     # branch defaults to main
 
-  # The repo has no Dockerfiles and locks with uv, which Paketo can't install
-  # from. Paketo's Poetry path installs the PEP 621 dependencies in
-  # pyproject.toml instead.
+  # The repo has no Dockerfiles. Paketo installs uv.lock with `uv sync`, which
+  # picks its own Python and ignores BP_CPYTHON_VERSION. Unpinned, it takes
+  # the newest CPython, where cffi has no wheel and fails to compile without
+  # libffi headers, so pin uv to 3.12.
   builds:
     app:
       context: .
       strategy: buildpack
       builder: paketobuildpacks/builder-jammy-base
       env:
-        BP_CPYTHON_VERSION: "3.12.*"
+        UV_PYTHON: "3.12"
       processes:
         worker: python worker.py
         # ui/app.py only binds 127.0.0.1 under `python ui/app.py`, so start it
