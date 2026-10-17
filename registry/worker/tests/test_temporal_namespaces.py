@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -490,6 +491,33 @@ def test_scenario_carries_per_namespace_region_and_retention():
     # Never carried per namespace: the schema rejects the key outright.
     assert specs["beta"].search_attributes == ()
     assert specs["alpha"].search_attributes == ()
+
+
+def test_task_queue_fairness_is_planned_per_namespace():
+    from demo_registry_operator.activities.external_resources import planning
+    from demo_registry_operator.workflows import demo_project as demo_project_workflow
+
+    assert scenario_plan().temporal_project.task_queue_fairness is False
+
+    scenario = copy.deepcopy(SCENARIO)
+    scenario["spec"]["temporal"]["fairness"] = True
+    scenario["spec"]["temporal"]["namespaces"]["beta"]["fairness"] = True
+    plan = planning.plan_external_resources(
+        scenario, checked_at="2026-06-20T00:00:00+00:00"
+    )
+
+    project = plan.temporal_project
+    assert project.task_queue_fairness is True
+    specs = {spec.label: spec for spec in project.additional_namespaces}
+    assert specs["alpha"].task_queue_fairness is False
+    assert specs["beta"].task_queue_fairness is True
+    # Each target's projection asks for its own namespace's setting, not the
+    # project's.
+    projected = {
+        target.label: target.external_plan(plan).temporal_project.task_queue_fairness
+        for target in demo_project_workflow.temporal_namespace_targets(plan)
+    }
+    assert projected == {None: True, "alpha": False, "beta": True}
 
 
 def test_scenario_namespaces_inherit_the_project_auth_mode():

@@ -135,6 +135,11 @@ spec:
                             - apiKey
                             - mtls
                           default: apiKey
+                    fairness:
+                      # Temporal Cloud task queue fairness for the project's own
+                      # namespace (a paid Cloud feature). Absent means disabled,
+                      # and the operator turns it off where it is on.
+                      type: boolean
                     searchAttributes:
                       type: object
                       # NOTE: search-attribute key names are intentionally not validated
@@ -183,6 +188,10 @@ spec:
                             type: integer
                             minimum: 1
                             maximum: 90
+                          fairness:
+                            # Task queue fairness for this namespace, set per
+                            # namespace like retentionDays.
+                            type: boolean
                           # No searchAttributes here: the step that manages them
                           # computes its delete set against a single
                           # project-scoped status blob, so it runs for the

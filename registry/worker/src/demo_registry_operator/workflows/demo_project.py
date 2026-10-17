@@ -167,6 +167,7 @@ class TemporalCloudNamespaceTarget:
                 components=self.spec.components,
                 search_attributes=self.spec.search_attributes,
                 region=self.spec.region,
+                task_queue_fairness=self.spec.task_queue_fairness,
                 additional_namespaces=(),
                 nexus_endpoints=(),
             ),

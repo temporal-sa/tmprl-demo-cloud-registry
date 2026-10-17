@@ -744,6 +744,10 @@
         "auth": {
           "$ref": "#/$defs/temporalAuth"
         },
+        "fairness": {
+          "$ref": "#/$defs/temporalFairness",
+          "$comment": "Applies to the project's own namespace. Each spec.temporal.namespaces entry sets its own."
+        },
         "searchAttributes": {
           "type": "object",
           "propertyNames": {
@@ -826,8 +830,16 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 90
+        },
+        "fairness": {
+          "$ref": "#/$defs/temporalFairness"
         }
       }
+    },
+    "temporalFairness": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable Temporal Cloud task queue fairness on the namespace. Fairness is a paid Temporal Cloud feature. Absent or false means disabled: the operator turns it off on a namespace where it is on."
     },
     "nexusEndpointName": {
       "type": "string",

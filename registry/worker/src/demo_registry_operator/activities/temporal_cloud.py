@@ -85,6 +85,9 @@ class NamespaceInfo:
     # current region is known, so an unknown region never triggers a teardown.
     region: str | None = None
     created: bool = False
+    # Whether task queue fairness is on (from the namespace spec). None when
+    # unknown, which never triggers an update.
+    task_queue_fairness: bool | None = None
 
 
 @dataclass
@@ -166,7 +169,14 @@ class TemporalCloudReconciler(Protocol):
         accepted_client_ca: str | None = None,
         certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
+        task_queue_fairness: bool = False,
     ) -> NamespaceInfo: ...
+
+    async def set_namespace_task_queue_fairness(
+        self,
+        qualified_name: str,
+        enabled: bool,
+    ) -> dict[str, str | None]: ...
 
     async def configure_namespace_mtls(
         self,
@@ -813,6 +823,7 @@ async def ensure_temporal_cloud_namespace(
     region: str,
     checked_at: str,
     retention_days: int = DEFAULT_NAMESPACE_RETENTION_DAYS,
+    task_queue_fairness: bool = False,
     enable_delete_protection: bool = True,
     candidate_ca_secret_path: str | None = None,
     candidate_secret_token: str | None = None,
@@ -934,8 +945,19 @@ async def ensure_temporal_cloud_namespace(
             accepted_client_ca=accepted_client_ca,
             certificate_common_name=certificate_common_name,
             enable_delete_protection=enable_delete_protection,
+            task_queue_fairness=task_queue_fairness,
         )
         namespace_created = True
+    elif (
+        namespace.task_queue_fairness is not None
+        and namespace.task_queue_fairness != task_queue_fairness
+    ):
+        # Fairness is a mutable namespace setting, so drift converges in place.
+        # Tasks already backlogged drain in their original order either way.
+        await reconciler.set_namespace_task_queue_fairness(
+            namespace.qualified_name, task_queue_fairness
+        )
+        namespace.task_queue_fairness = task_queue_fairness
 
     return {
         **temporal_cloud_base_status(
@@ -2210,6 +2232,7 @@ def namespace_status(namespace: NamespaceInfo, created: bool) -> dict[str, Any]:
         "state": namespace.state,
         "authMode": namespace.auth_mode,
         "region": namespace.region,
+        "taskQueueFairness": namespace.task_queue_fairness,
     }
 
 
@@ -2224,6 +2247,11 @@ def namespace_info_from_status(status: dict[str, Any]) -> NamespaceInfo:
         auth_mode=string_optional(namespace.get("authMode")),
         region=string_optional(namespace.get("region")),
         created=namespace.get("action") == "created",
+        task_queue_fairness=(
+            fairness
+            if isinstance(fairness := namespace.get("taskQueueFairness"), bool)
+            else None
+        ),
     )
 
 
@@ -2681,6 +2709,7 @@ class CloudApiReconciler:
         accepted_client_ca: str | None = None,
         certificate_common_name: str | None = None,
         enable_delete_protection: bool = True,
+        task_queue_fairness: bool = False,
     ) -> NamespaceInfo:
         from temporalio.api.cloud.cloudservice.v1 import (
             CreateNamespaceRequest,
@@ -2690,6 +2719,7 @@ class CloudApiReconciler:
             ApiKeyAuthSpec,
             CapacitySpec,
             CertificateFilterSpec,
+            FairnessSpec,
             LifecycleSpec,
             MtlsAuthSpec,
             NamespaceSpec,
@@ -2725,6 +2755,7 @@ class CloudApiReconciler:
             # without a capacity spec fails activation ("Error loading capacity
             # information").
             capacity_spec=CapacitySpec(on_demand=CapacitySpec.OnDemand()),
+            fairness=FairnessSpec(task_queue_fairness_enabled=task_queue_fairness),
         )
         response = await self._cs.create_namespace(CreateNamespaceRequest(spec=spec))
         await self._await_operation(response.async_operation, label=f"create-namespace:{name}")
@@ -2884,6 +2915,23 @@ class CloudApiReconciler:
         return await self._update_namespace_spec(
             qualified_name,
             label=f"reconcile-search-attributes:{qualified_name}",
+            mutate=mutate,
+        )
+
+    async def set_namespace_task_queue_fairness(
+        self,
+        qualified_name: str,
+        enabled: bool,
+    ) -> dict[str, str | None]:
+        def mutate(spec: Any) -> tuple[bool, dict[str, str | None]]:
+            if spec.fairness.task_queue_fairness_enabled == enabled:
+                return False, {"action": "verified"}
+            spec.fairness.task_queue_fairness_enabled = enabled
+            return True, {"action": "updated"}
+
+        return await self._update_namespace_spec(
+            qualified_name,
+            label=f"set-task-queue-fairness:{qualified_name}",
             mutate=mutate,
         )
 
@@ -3549,6 +3597,7 @@ class CloudApiReconciler:
             auth_mode=namespace_auth_mode(namespace),
             region=namespace_region(namespace),
             created=created,
+            task_queue_fairness=namespace_task_queue_fairness(namespace),
         )
 
 
@@ -4004,3 +4053,10 @@ def namespace_region(namespace: Any) -> str | None:
         return None
     regions = list(getattr(spec, "regions", None) or [])
     return regions[0] if regions else None
+
+
+def namespace_task_queue_fairness(namespace: Any) -> bool | None:
+    fairness = getattr(getattr(namespace, "spec", None), "fairness", None)
+    if fairness is None:
+        return None
+    return bool(getattr(fairness, "task_queue_fairness_enabled", False))

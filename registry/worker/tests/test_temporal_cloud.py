@@ -99,6 +99,7 @@ class FakeReconciler:
         accepted_client_ca=None,
         certificate_common_name=None,
         enable_delete_protection=True,
+        task_queue_fairness=False,
     ):
         self.calls.append(
             (
@@ -112,6 +113,7 @@ class FakeReconciler:
                 enable_delete_protection,
             )
         )
+        self.created_task_queue_fairness = task_queue_fairness
         return NamespaceInfo(
             qualified_name=f"{name}.acct1",
             grpc_address=f"{name}.acct1.tmprl.cloud:7233",
@@ -120,7 +122,12 @@ class FakeReconciler:
             auth_mode=auth_mode,
             region=region,
             created=True,
+            task_queue_fairness=task_queue_fairness,
         )
+
+    async def set_namespace_task_queue_fairness(self, qualified_name, enabled):
+        self.calls.append(("set_namespace_task_queue_fairness", qualified_name, enabled))
+        return {"action": "updated"}
 
     async def configure_namespace_mtls(
         self,
@@ -1777,6 +1784,179 @@ def test_ensure_namespace_unknown_region_never_signals_drift():
 
     assert status["phase"] == "Ready"
     assert reconciler.called("create_namespace") == []
+
+
+# --- Task queue fairness ----------------------------------------------------
+
+
+def _ensure_namespace(reconciler, **kwargs):
+    return asyncio.run(
+        ensure_temporal_cloud_namespace(
+            PROJECT,
+            reconciler=reconciler,
+            secret_store=FakeSecretStore(),
+            account_id="acct1",
+            region="aws-ca-central-1",
+            checked_at="2026-06-13T00:00:00+00:00",
+            **kwargs,
+        )
+    )
+
+
+def _existing_namespace(task_queue_fairness):
+    return NamespaceInfo(
+        qualified_name="tmprl-dem-cld-banking-money-transfer.acct1",
+        grpc_address="tmprl-dem-cld-banking-money-transfer.acct1.tmprl.cloud:7233",
+        state="active",
+        auth_mode="apiKey",
+        region="aws-ca-central-1",
+        task_queue_fairness=task_queue_fairness,
+    )
+
+
+def test_ensure_namespace_creates_with_task_queue_fairness():
+    reconciler = FakeReconciler()
+
+    status = _ensure_namespace(reconciler, task_queue_fairness=True)
+
+    assert reconciler.created_task_queue_fairness is True
+    assert status["namespace"]["taskQueueFairness"] is True
+    # Set at create time; no follow-up update.
+    assert reconciler.called("set_namespace_task_queue_fairness") == []
+
+
+def test_ensure_namespace_creates_without_task_queue_fairness_by_default():
+    reconciler = FakeReconciler()
+
+    _ensure_namespace(reconciler)
+
+    assert reconciler.created_task_queue_fairness is False
+
+
+@pytest.mark.parametrize("desired", [True, False])
+def test_ensure_namespace_converges_task_queue_fairness_drift(desired):
+    reconciler = FakeReconciler(existing_namespace=_existing_namespace(not desired))
+
+    status = _ensure_namespace(reconciler, task_queue_fairness=desired)
+
+    assert status["phase"] == "Ready"
+    assert reconciler.called("set_namespace_task_queue_fairness") == [
+        (
+            "set_namespace_task_queue_fairness",
+            "tmprl-dem-cld-banking-money-transfer.acct1",
+            desired,
+        )
+    ]
+    assert status["namespace"]["taskQueueFairness"] is desired
+    assert reconciler.called("create_namespace") == []
+
+
+@pytest.mark.parametrize("current", [True, None])
+def test_ensure_namespace_leaves_matching_or_unknown_fairness_alone(current):
+    reconciler = FakeReconciler(existing_namespace=_existing_namespace(current))
+
+    _ensure_namespace(reconciler, task_queue_fairness=True)
+
+    assert reconciler.called("set_namespace_task_queue_fairness") == []
+
+
+def test_namespace_status_round_trips_task_queue_fairness():
+    info = _existing_namespace(True)
+
+    restored = namespace_info_from_status({"namespace": namespace_status(info, False)})
+
+    assert restored.task_queue_fairness is True
+    # Status written before fairness existed has no key: unknown, not False.
+    legacy = namespace_status(info, False)
+    del legacy["taskQueueFairness"]
+    assert namespace_info_from_status({"namespace": legacy}).task_queue_fairness is None
+
+
+def test_cloud_api_create_namespace_sends_fairness_spec():
+    from temporalio.api.cloud.namespace.v1 import NamespaceSpec
+    from temporalio.api.cloud.operation.v1 import AsyncOperation
+
+    class FakeCloudService:
+        def __init__(self):
+            self.spec = None
+
+        async def create_namespace(self, request):
+            self.spec = request.spec
+            return SimpleNamespace(
+                namespace="ns.acct1",
+                async_operation=SimpleNamespace(
+                    id="op-1", state=AsyncOperation.STATE_FULFILLED
+                ),
+            )
+
+        async def get_namespace(self, request):
+            spec = NamespaceSpec()
+            spec.CopyFrom(self.spec)
+            return SimpleNamespace(
+                namespace=SimpleNamespace(
+                    namespace="ns.acct1",
+                    endpoints=SimpleNamespace(web_address=""),
+                    state=0,
+                    spec=spec,
+                )
+            )
+
+    service = FakeCloudService()
+    reconciler = CloudApiReconciler(service, account_id="acct1", poll_seconds=0)
+
+    info = asyncio.run(
+        reconciler.create_namespace(
+            "ns", "aws-ca-central-1", 7, task_queue_fairness=True
+        )
+    )
+
+    assert service.spec.fairness.task_queue_fairness_enabled is True
+    assert info.task_queue_fairness is True
+
+
+@pytest.mark.parametrize(
+    ("current", "desired", "expected_action", "expected_updates"),
+    [
+        (False, True, "updated", 1),
+        (True, False, "updated", 1),
+        (True, True, "verified", 0),
+    ],
+)
+def test_cloud_api_set_namespace_task_queue_fairness(
+    current, desired, expected_action, expected_updates
+):
+    from temporalio.api.cloud.namespace.v1 import FairnessSpec, NamespaceSpec
+    from temporalio.api.cloud.operation.v1 import AsyncOperation
+
+    class FakeCloudService:
+        def __init__(self):
+            self.updates = []
+
+        async def get_namespace(self, request):
+            return SimpleNamespace(
+                namespace=SimpleNamespace(
+                    spec=NamespaceSpec(
+                        fairness=FairnessSpec(task_queue_fairness_enabled=current)
+                    ),
+                    resource_version="v1",
+                )
+            )
+
+        async def update_namespace(self, request):
+            self.updates.append(request.spec.fairness.task_queue_fairness_enabled)
+            return SimpleNamespace(
+                async_operation=SimpleNamespace(
+                    id="op-1", state=AsyncOperation.STATE_FULFILLED
+                )
+            )
+
+    service = FakeCloudService()
+    reconciler = CloudApiReconciler(service, account_id="acct1", poll_seconds=0)
+
+    result = asyncio.run(reconciler.set_namespace_task_queue_fairness("ns.acct1", desired))
+
+    assert result == {"action": expected_action}
+    assert service.updates == [desired] * expected_updates
 
 
 # --- Nexus Endpoints --------------------------------------------------------

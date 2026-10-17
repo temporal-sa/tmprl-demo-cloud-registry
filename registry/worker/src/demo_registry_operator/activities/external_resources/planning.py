@@ -44,6 +44,7 @@ def temporal_cloud_project(demo_project: dict[str, Any]) -> models.TemporalCloud
         mtls_ca_secret_path=resources.temporal_mtls_ca_secret_remote_path(demo_project),
         region=resources.temporal_region(demo_project),
         serverless=resources.has_serverless_lambda_components(demo_project),
+        task_queue_fairness=resources.temporal_task_queue_fairness(demo_project),
         search_attributes=tuple(
             models.TemporalCloudSearchAttribute(name=name, type=attribute_type)
             for name, attribute_type in resources.temporal_search_attributes(
@@ -90,6 +91,7 @@ def temporal_namespace_spec(
         # schema rejects the key here rather than accepting it and ignoring it.
         region=region if isinstance(region, str) and region else None,
         retention_days=retention_days if isinstance(retention_days, int) else None,
+        task_queue_fairness=declared.get("fairness") is True,
     )
 
 
