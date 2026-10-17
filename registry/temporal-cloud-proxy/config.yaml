@@ -1,0 +1,30 @@
+# Temporal Proxy config for the temporalProxy sidecar the operator stamps into
+# demo pods. The app talks plaintext to 127.0.0.1:7233 with namespace
+# "default"; the proxy adds TLS and the API key, and rewrites "default" to the
+# demo's Cloud namespace (nested command namespaces included) and back.
+#
+# ${VAR}s are expanded at startup from the temporal-credentials secret:
+#   TEMPORAL_ADDRESS    per-namespace endpoint, <ns>.<account>.tmprl.cloud:7233
+#   TEMPORAL_NAMESPACE  fully-qualified Cloud namespace, <ns>.<account>
+#   TEMPORAL_API_KEY    namespace-scoped runtime API key
+hostPort: 127.0.0.1:7233
+
+routing:
+  default: cloud
+  system: cloud # namespace-less calls (e.g. GetSystemInfo) hit the same endpoint
+
+upstreams:
+  - name: cloud
+    hostPort: ${TEMPORAL_ADDRESS}
+    namespaces:
+      rules:
+        overrides:
+          - local: default
+            remote: ${TEMPORAL_NAMESPACE}
+    credentials:
+      static:
+        apiKey: ${TEMPORAL_API_KEY}
+
+# Keep /metrics on loopback; the default (:9090) would expose it on the pod IP.
+metrics:
+  hostPort: 127.0.0.1:9090
