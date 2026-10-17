@@ -264,11 +264,11 @@ Rules:
 
   Shared tag vocabulary (demos and workshops):
   - Scenario: `Banking`, `Food Service`, `Order Management`, `Travel`,
-    `Research`, `Games`, `Forms`, `Databases`
+    `Research`, `Games`, `Forms`, `Databases`, `Data Pipelines`
   - Temporal features and patterns: `Saga`, `Human-in-the-Loop`, `Signals`,
     `Durable Timers`, `Retries`, `Entity Workflows`, `Workflow Sharding`,
     `Worker Versioning`, `Multi-Namespace`, `Nexus`, `Serverless`, `Patching`,
-    `Recovery`
+    `Recovery`, `Priority & Fairness`
   - AI: `AI Agents`, `Multi-Agent`, `MCP`
   - Format: `Webinar` (workshops only)
   - Add a new tag only when no existing one fits; keep the casing above.

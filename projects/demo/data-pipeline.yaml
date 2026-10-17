@@ -1,0 +1,83 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: data-pipeline
+spec:
+  registry:
+    title: Data Pipeline
+    summary: >-
+      Built with Python and a Flask web UI. Demonstrates an ETL workflow with
+      heartbeats, retries, idempotent loads, Signal and Update approvals, and a
+      search attribute that tracks each step. Use case: a data pipeline that
+      recovers from failures without starting over.
+    tags: [Data Pipelines, Human-in-the-Loop, Signals, Retries]
+    temporalSdks: [Python]
+    links:
+      runbook:
+        label: README (Demo scenarios)
+        url: https://github.com/temporal-sa/temporal-data-pipeline-demo#demo-scenarios
+      additional:
+        - label: "Slack: is this still the go-to data pipeline demo?"
+          url: https://temporal.enterprise.slack.com/archives/C03HNADRLKY/p1770244309402249
+          audience: technical
+        - label: "Slack: field demo tiers by use case"
+          url: https://temporal.enterprise.slack.com/archives/C052L7LC50U/p1790800118254889
+          audience: technical
+        - label: Notion Demos Database entry
+          url: https://app.notion.com/3858fc56773881c88caaeaa078d6013c
+          audience: technical
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-data-pipeline-demo
+    # branch defaults to main
+
+  # The repo has no Dockerfiles and locks with uv, which Paketo can't install
+  # from. Paketo's Poetry path installs the PEP 621 dependencies in
+  # pyproject.toml instead.
+  builds:
+    app:
+      context: .
+      strategy: buildpack
+      builder: paketobuildpacks/builder-jammy-base
+      env:
+        BP_CPYTHON_VERSION: "3.12.*"
+      processes:
+        worker: python worker.py
+        # ui/app.py only binds 127.0.0.1 under `python ui/app.py`, so start it
+        # with `flask run`. It imports client.py from the repo root.
+        web: PYTHONPATH="$PWD:$PYTHONPATH" flask --app ui/app run --host 0.0.0.0 --port 8080
+
+  temporal:
+    searchAttributes:
+      # Used by the AdvancedVisibility scenario.
+      Step: {}
+
+  components:
+    # Starts, signals, updates, and queries pipeline workflows. The app
+    # connects to localhost:7233 when no mTLS files are set, so it goes
+    # through the platform proxy.
+    web:
+      build: app
+      command: ["web"]
+      temporalAccess: true
+      temporalProxy:
+        enabled: true
+      ports:
+        - containerPort: 8080
+          servicePort: 80
+
+    # Polls the shared distribution queue and a per-host queue; pipeline files
+    # stay on this pod's filesystem, so keep it to one replica.
+    worker:
+      build: app
+      command: ["worker"]
+      worker: true
+      temporalProxy:
+        enabled: true
+
+  ingress:
+    subdomain: data-pipeline
+
+  smokeCheck:
+    path: /
+    expectedStatus: 200
