@@ -1530,3 +1530,164 @@ def test_listing_secrets_for_the_draft(tmp_path, monkeypatch):
         assert payload["shared"] == []
     finally:
         httpd.shutdown()
+
+
+# --- catalog helper (Ziggy) ---------------------------------------------------
+
+
+class HelperGateway:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def _record(self, *call):
+        self.calls.append(call)
+        if self.error:
+            raise self.error
+        return {"phase": "Open", "messages": []}
+
+    def helper_status(self, email):
+        return self._record("status", email)
+
+    def helper_send(self, email, text):
+        return self._record("send", email, text)
+
+    def helper_update(self, email, update):
+        return self._record(update, email)
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "method", "expected"),
+    [
+        ("/api/helper", None, "GET", ("status", "mjones@temporal.io")),
+        (
+            "/api/helper/message",
+            {"text": "  AI demos in Go  ", "owner": "x"},
+            "POST",
+            ("send", "mjones@temporal.io", "AI demos in Go"),
+        ),
+        ("/api/helper/clear-view", {}, "POST", ("clear_view", "mjones@temporal.io")),
+        ("/api/helper/new", {}, "POST", ("end", "mjones@temporal.io")),
+    ],
+)
+def test_helper_endpoints_drive_the_session_users_chat(
+    tmp_path, monkeypatch, path, body, method, expected
+):
+    configure_google_auth(monkeypatch)
+    gateway = HelperGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, path, body=body, method=method)
+        assert response.status == 200
+        assert gateway.calls == [expected]
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "code"),
+    [
+        ("/api/helper/message", {"text": "  "}, 400),
+        ("/api/helper/message", {"text": 7}, 400),
+        ("/api/helper/message", {"text": "x" * server.HELPER_MAX_BODY_BYTES}, 413),
+        ("/api/helper/delete-everything", {}, 404),
+    ],
+)
+def test_helper_rejects_bad_requests(tmp_path, monkeypatch, path, body, code):
+    configure_google_auth(monkeypatch)
+    gateway = HelperGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, path, body=body)
+        assert raised.value.code == code
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_helper_needs_a_session_and_same_origin_writes(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = HelperGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            urlopen(f"http://127.0.0.1:{httpd.server_port}/api/helper", timeout=2)
+        assert raised.value.code == 401
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd,
+                "/api/helper/message",
+                body={"text": "hi"},
+                headers={"Origin": "https://evil.tmprl-demo.cloud"},
+            )
+        assert raised.value.code == 403
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_helper_rejections_are_conflicts_with_the_workflow_message(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    gateway = HelperGateway(error=server.HelperRejected("Ziggy is still answering your last message."))
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/helper/message", body={"text": "hi"})
+        assert raised.value.code == 409
+        assert json.loads(raised.value.read().decode("utf-8"))["message"] == (
+            "Ziggy is still answering your last message."
+        )
+    finally:
+        httpd.shutdown()
+
+
+def test_helper_workflow_id_matches_the_operator():
+    # demo_registry_operator.derive.catalog_helper_workflow_id
+    assert server.helper_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "catalog-helper/blue/ada@temporal.io"
+    )
+    assert server.helper_workflow_id("ada@temporal.io", None) == (
+        "catalog-helper/ada@temporal.io"
+    )
+
+
+@pytest.mark.parametrize(
+    "status", ["COMPLETED", "TERMINATED", "TIMED_OUT"]
+)
+def test_helper_status_forgets_chats_that_ended(status):
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=getattr(server.WorkflowExecutionStatus, status))
+        ),
+        query=AsyncMock(),
+    )
+    gateway = SimpleNamespace(
+        cluster="blue",
+        _get_client=AsyncMock(
+            return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)
+        ),
+    )
+
+    result = asyncio.run(server.TemporalGateway._helper_status(gateway, "ada@temporal.io"))
+
+    assert result == {"phase": "None"}
+    handle.query.assert_not_awaited()
+
+
+def test_helper_send_starts_a_chat_when_none_is_open():
+    client = SimpleNamespace(execute_update_with_start_workflow=AsyncMock(return_value={"phase": "Open"}))
+    gateway = SimpleNamespace(
+        cluster="blue",
+        task_queue="registry-management-blue",
+        _get_client=AsyncMock(return_value=client),
+    )
+
+    result = asyncio.run(server.TemporalGateway._helper_send(gateway, "ada@temporal.io", "hi"))
+
+    assert result == {"phase": "Open"}
+    args, kwargs = client.execute_update_with_start_workflow.await_args
+    assert args == ("send", {"text": "hi"})
+    operation = kwargs["start_workflow_operation"]
+    assert operation._start_workflow_input.id == "catalog-helper/blue/ada@temporal.io"
+    assert operation._start_workflow_input.id_conflict_policy == server.WorkflowIDConflictPolicy.USE_EXISTING

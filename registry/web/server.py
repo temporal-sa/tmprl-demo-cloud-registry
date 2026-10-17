@@ -143,6 +143,14 @@ MAX_SECRET_PROPERTIES = 20
 MAX_SECRET_VALUE_CHARS = 8192
 ONBOARDING_AGENT_MODES = frozenset({"draft", "section", "chat"})
 
+# Ziggy, the demos page's helper: one CatalogHelperWorkflow chat per signed-in
+# user. A message waits for Ziggy's reply (one short model turn, which the
+# workflow bounds at two minutes), so allow longer than a plain RPC.
+HELPER_WORKFLOW_TYPE = "CatalogHelperWorkflow"
+HELPER_RPC_TIMEOUT_SECONDS = 150
+HELPER_MAX_BODY_BYTES = 16 * 1024
+HELPER_UPDATES = {"clear-view": "clear_view", "new": "end"}
+
 
 class AuthError(Exception):
     pass
@@ -277,6 +285,14 @@ def onboarding_workflow_id(email: str, cluster: str | None) -> str:
     return f"catalog-onboarding/{email}"
 
 
+def helper_workflow_id(email: str, cluster: str | None) -> str:
+    # Must match derive.catalog_helper_workflow_id in the operator.
+    email = email.strip().lower()
+    if cluster:
+        return f"catalog-helper/{cluster}/{email}"
+    return f"catalog-helper/{email}"
+
+
 class TemporalUnavailable(Exception):
     """The Temporal client could not be reached for a crashable-workspace call."""
 
@@ -287,6 +303,10 @@ class WorkspaceNotFound(Exception):
 
 class OnboardingRejected(Exception):
     """The onboarding workflow refused an edit; the message is for the user."""
+
+
+class HelperRejected(Exception):
+    """The helper workflow refused a message; the message is for the user."""
 
 
 class SecretsUnavailable(Exception):
@@ -509,7 +529,7 @@ class TemporalGateway:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         try:
             return future.result(timeout=timeout)
-        except (WorkspaceNotFound, OnboardingRejected):
+        except (WorkspaceNotFound, OnboardingRejected, HelperRejected):
             # Clean signals the handlers map to 404s and 4xx responses.
             raise
         except Exception as error:  # noqa: BLE001 - surface as a clean 503
@@ -733,6 +753,74 @@ class TemporalGateway:
                 raise OnboardingRejected("You have no test deploy running.") from error
             raise
 
+    def helper_status(self, owner_email: str) -> dict[str, Any]:
+        return self._run(self._helper_status(owner_email))
+
+    async def _helper_status(self, owner_email: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            helper_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            description = await handle.describe()
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                return {"phase": "None"}
+            raise
+        # An ended or expired chat is gone; the page starts a new one.
+        if description.status == WorkflowExecutionStatus.RUNNING:
+            return await handle.query("status")
+        return {"phase": "None"}
+
+    def helper_send(self, owner_email: str, text: str) -> dict[str, Any]:
+        return self._run(
+            self._helper_send(owner_email, text),
+            timeout=HELPER_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _helper_send(self, owner_email: str, text: str) -> dict[str, Any]:
+        client = await self._get_client()
+        # USE_EXISTING continues the open chat; after one ends or expires, the
+        # same id starts a fresh one.
+        operation = WithStartWorkflowOperation(
+            HELPER_WORKFLOW_TYPE,
+            {"owner_email": owner_email},
+            id=helper_workflow_id(owner_email, self.cluster),
+            task_queue=self.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        try:
+            return await client.execute_update_with_start_workflow(
+                "send",
+                {"text": text},
+                start_workflow_operation=operation,
+            )
+        except WorkflowUpdateFailedError as error:
+            cause = error.cause
+            raise HelperRejected(
+                getattr(cause, "message", None) or str(cause or error)
+            ) from error
+
+    def helper_update(self, owner_email: str, update: str) -> dict[str, Any]:
+        return self._run(self._helper_update(owner_email, update))
+
+    async def _helper_update(self, owner_email: str, update: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(
+            helper_workflow_id(owner_email, self.cluster)
+        )
+        try:
+            return await handle.execute_update(update)
+        except WorkflowUpdateFailedError as error:
+            cause = error.cause
+            raise HelperRejected(
+                getattr(cause, "message", None) or str(cause or error)
+            ) from error
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                return {"phase": "None"}
+            raise
+
     async def _workspace_status(
         self, owner_email: str, demo_name: str
     ) -> dict[str, Any]:
@@ -874,6 +962,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_secrets_list()
             elif path == "/api/onboarding/preview":
                 self.onboarding_preview_status()
+            elif path == "/api/helper":
+                self.helper_status()
             elif path in {"/_auth/verify", "/traefik/verify"}:
                 self.send_auth_verification()
             elif path == "/_auth/verify-workspace":
@@ -935,6 +1025,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_preview_end()
             elif path.startswith("/api/onboarding/"):
                 self.onboarding_update(path.removeprefix("/api/onboarding/"))
+            elif path == "/api/helper/message":
+                self.helper_send()
+            elif path.startswith("/api/helper/"):
+                self.helper_update(path.removeprefix("/api/helper/"))
             else:
                 self.send_json(
                     {"error": "not_found", "path": path},
@@ -1350,6 +1444,53 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             lambda: self.temporal_gateway.onboarding_update(email, update, arg)
         )
 
+    def helper_status(self) -> None:
+        # Same preamble as onboarding: a session, CSRF for writes, Temporal.
+        email = self.onboarding_request(mutating=False)
+        if email is None:
+            return
+        self.send_onboarding_result(lambda: self.temporal_gateway.helper_status(email))
+
+    def helper_send(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > HELPER_MAX_BODY_BYTES:
+            self.send_json(
+                {"error": "too_large", "message": "That message is too long."},
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return
+        text = self.read_json_body().get("text")
+        if not isinstance(text, str) or not text.strip():
+            self.send_json(
+                {"error": "bad_request", "message": "text is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.helper_send(email, text.strip())
+        )
+
+    def helper_update(self, action: str) -> None:
+        update = HELPER_UPDATES.get(action)
+        if update is None:
+            self.send_json(
+                {"error": "not_found", "path": self.path},
+                status=HTTPStatus.NOT_FOUND,
+            )
+            return
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.helper_update(email, update)
+        )
+
     def onboarding_project(self, email: str) -> tuple[str | None, dict[str, Any]]:
         """The project name of the user's open onboarding draft, if it has one."""
 
@@ -1426,7 +1567,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
     def send_onboarding_result(self, call: Any) -> None:
         try:
             result = call()
-        except OnboardingRejected as error:
+        except (OnboardingRejected, HelperRejected) as error:
             self.send_json(
                 {"error": "rejected", "message": str(error)},
                 status=HTTPStatus.CONFLICT,
