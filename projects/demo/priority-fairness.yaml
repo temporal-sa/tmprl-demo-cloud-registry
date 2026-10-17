@@ -1,0 +1,102 @@
+apiVersion: registry.tmprl-demo.cloud/v1alpha1
+kind: DemoProject
+metadata:
+  name: priority-fairness
+spec:
+  registry:
+    title: Task Queue Priority & Fairness
+    summary: >-
+      Built with Java Spring Boot and a React UI. Demonstrates Task Queue
+      Priority and Fairness: priority levels move urgent work ahead, and
+      weighted fairness keys stop one large tenant from starving the rest. Use
+      case: multi-tenant SaaS processing.
+    tags: [Priority & Fairness]
+    temporalSdks: [Java]
+    links:
+      runbook:
+        label: README
+        url: https://github.com/temporal-sa/temporal-priority-fairness-demo#readme
+      externalRecording:
+        label: Fairness walkthrough (6 min)
+        url: https://www.youtube.com/watch?v=Cf6_PBoyxbk
+      additional:
+        - label: Priority walkthrough (6 min)
+          url: https://www.youtube.com/watch?v=Nc8d8cNlEwc
+          audience: nonTechnical
+        - label: "Slack: demo announcement"
+          url: https://temporal.enterprise.slack.com/archives/C03HNADRLKY/p1754494297841259
+          audience: technical
+        - label: Notion Demos Database entry
+          url: https://app.notion.com/3858fc5677388107a085e06be031f5ee
+          audience: technical
+        - label: "Related: Replay 2026 multi-tenant fairness demo (Python, Grafana)"
+          url: https://github.com/temporal-community/replay26_priority_fairness
+          audience: technical
+
+  source:
+    repo: https://github.com/temporal-sa/temporal-priority-fairness-demo
+    # branch defaults to main
+
+  # The repo has no Dockerfiles. Paketo builds the Spring Boot jar with mvnw,
+  # and builds the Vite UI into static files served by nginx.
+  builds:
+    backend:
+      context: .
+      strategy: buildpack
+      builder: paketobuildpacks/builder-jammy-base
+      env:
+        BP_JVM_VERSION: "21"
+    ui:
+      context: ui
+      strategy: buildpack
+      builder: paketobuildpacks/builder-jammy-base
+      env:
+        BP_NODE_RUN_SCRIPTS: build
+        BP_WEB_SERVER: nginx
+        BP_WEB_SERVER_ROOT: dist
+        BP_WEB_SERVER_ENABLE_PUSH_STATE: "true"
+
+  temporal:
+    searchAttributes:
+      Priority:
+        type: int
+      FairnessKey: {}
+      FairnessWeight:
+        type: int
+
+  components:
+    # One Spring Boot process runs the REST API and the workers. The UI calls
+    # /api/*, which the Vite dev proxy strips locally; here the context path
+    # serves the same routes under /api instead.
+    backend:
+      build: backend
+      worker: true
+      temporalProxy:
+        enabled: true
+      env:
+        - name: SERVER_SERVLET_CONTEXT_PATH
+          value: /api
+      ports:
+        - containerPort: 7080
+      resources:
+        requests:
+          memory: 768Mi
+        limits:
+          memory: 1Gi
+
+    # nginx listens on $PORT, which defaults to 8080.
+    ui:
+      build: ui
+      ports:
+        - containerPort: 8080
+          servicePort: 80
+
+  ingress:
+    subdomain: priority-fairness
+    routes:
+      - pathPrefix: /api
+        component: backend
+        port: http
+      - pathPrefix: /
+        component: ui
+        port: http
