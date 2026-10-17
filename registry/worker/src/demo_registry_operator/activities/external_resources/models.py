@@ -34,6 +34,7 @@ class TemporalNamespaceSpec:
     # None leaves the namespace-creation request's own default in place, which is
     # what the project's original namespace uses.
     retention_days: int | None = None
+    task_queue_fairness: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,10 @@ class TemporalCloudProject:
     target_namespace: str | None = None
     additional_namespaces: tuple[TemporalNamespaceSpec, ...] = ()
     nexus_endpoints: tuple[NexusEndpointSpec, ...] = ()
+    # Desired task queue fairness for the namespace this model resolves to. Like
+    # target_namespace, the per-target projection overrides it for a declared
+    # namespace.
+    task_queue_fairness: bool = False
 
     @property
     def component_names(self) -> tuple[str, ...]:

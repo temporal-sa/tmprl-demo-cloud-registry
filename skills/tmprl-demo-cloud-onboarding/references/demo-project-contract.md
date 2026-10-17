@@ -314,6 +314,7 @@ spec:
       alpha:
         region: aws-us-west-2       # optional; defaults like the project's
         retentionDays: 7            # optional
+        fairness: true              # optional; task queue fairness, off by default
         searchAttributes: {}        # optional
   components:
     alpha-worker:
@@ -345,6 +346,11 @@ Constraints worth knowing before you author one:
   validation error rather than a silent no-op: the step that manages them
   computes its delete set against one project-scoped status blob, so it cannot
   run per namespace without risking one namespace deleting another's attributes.
+- Task queue fairness is set per namespace: `spec.temporal.fairness` for the
+  project's own namespace, and `fairness` on each namespace entry. It is off by
+  default, a namespace entry does not inherit the project's value, and removing
+  the key turns fairness off on the next reconcile. Fairness is a paid Temporal
+  Cloud feature, so enable it only for demos that set fairness keys.
 
 ## Nexus Endpoints
 

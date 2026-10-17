@@ -380,6 +380,24 @@ Rules:
   error, not a silent no-op: the reconcile step that manages them computes its
   delete set against one project-scoped status blob, so running it per namespace
   would let one namespace delete another's attributes.
+- Projects can turn on Temporal Cloud
+  [task queue fairness](https://docs.temporal.io/develop/task-queue-priority-fairness#task-queue-fairness)
+  for their namespace with `spec.temporal.fairness: true`. Fairness is off
+  unless declared, and it is a paid Temporal Cloud feature. Workflows still
+  need to set fairness keys (and optionally weights) for it to change dispatch
+  order.
+
+  ```yaml
+  temporal:
+    fairness: true
+  ```
+
+  The setting is declarative: the operator sets it when it creates the
+  namespace, and on later reconciles it turns fairness on or off to match the
+  spec. Removing the key turns fairness off. Toggling it does not lose tasks:
+  Temporal Cloud dispatches the existing backlog in its original order first.
+  Additional namespaces under `spec.temporal.namespaces` each set their own
+  `fairness`; they do not inherit the project's.
 - Projects can declare **additional Temporal Cloud namespaces** with
   `spec.temporal.namespaces`, keyed by a label. Each label becomes a real
   namespace `tmprl-dem-cld-<name>-<label>` with its own service account, API
@@ -393,6 +411,7 @@ Rules:
       beta:
         region: aws-us-west-2     # optional; defaults like the project's own
         retentionDays: 14         # optional; defaults to 7
+        fairness: true            # optional; defaults to false
   ```
 
   Labels are DNS labels. `candidate` and `ca-candidate` are reserved — they

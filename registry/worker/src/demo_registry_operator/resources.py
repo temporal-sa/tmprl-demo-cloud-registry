@@ -4707,6 +4707,12 @@ def temporal_region(demo_project: dict[str, Any]) -> str | None:
     return None
 
 
+def temporal_task_queue_fairness(demo_project: dict[str, Any]) -> bool:
+    """Whether spec.temporal.fairness enables task queue fairness on the project's
+    own namespace. Absent means disabled."""
+    return temporal_config(demo_project).get("fairness") is True
+
+
 def resolve_temporal_cloud_region(
     *,
     explicit_region: str | None,
