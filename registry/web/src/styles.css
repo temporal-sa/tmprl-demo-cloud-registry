@@ -1721,6 +1721,255 @@
     font-size: .875rem;
   }
   .onboard-ask-form { display: grid; gap: .6rem; }
+
+  /* Ziggy: the floating demo picker on the demos page */
+  .ziggy {
+    position: fixed;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 44;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: .85rem;
+    pointer-events: none;
+  }
+
+  .ziggy > * { pointer-events: auto; }
+  body.drawer-open .ziggy { display: none; }
+
+  .ziggy-dock { display: flex; align-items: flex-start; gap: .25rem; }
+
+  /* Ziggy floats in the corner; a soft glow behind it stands in for a shadow. */
+  .ziggy-launcher {
+    position: relative;
+    flex: none;
+    width: 6.5rem;
+    height: 6.5rem;
+    cursor: pointer;
+    /* Movement and both eye frames share one ten-second cycle (brand guide). */
+    animation: ziggy-float 10s ease-in-out infinite;
+    transition: transform .2s;
+  }
+
+  .ziggy-launcher::before {
+    content: "";
+    position: absolute;
+    inset: 18%;
+    z-index: -1;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgb(182 100 255 / .45), transparent 70%);
+    filter: blur(10px);
+  }
+
+  .ziggy-launcher:hover { transform: translateY(-3px) rotate(-3deg); }
+  .ziggy-launcher:hover::before { background: radial-gradient(circle, rgb(89 253 160 / .45), transparent 70%); }
+  .ziggy-launcher[aria-expanded="true"] { animation: none; }
+  .ziggy-launcher:focus-visible { outline-offset: -4px; border-radius: 50%; }
+
+  .ziggy-figure { position: relative; display: block; width: 100%; height: 100%; }
+  .ziggy-figure img { display: block; width: 100%; height: 100%; }
+  .ziggy-figure .ziggy-open { animation: ziggy-eyes-open 10s steps(1, end) infinite; }
+  .ziggy-figure .ziggy-blink { position: absolute; inset: 0; opacity: 0; animation: ziggy-eyes-closed 10s steps(1, end) infinite; }
+
+  .ziggy-launcher-badge {
+    position: absolute;
+    top: .4rem;
+    right: .4rem;
+    min-width: 1.35rem;
+    padding: 0 .3rem;
+    color: var(--space-black);
+    background: var(--mint);
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: .6875rem;
+    font-weight: 500;
+    line-height: 1.35rem;
+    text-align: center;
+  }
+
+  /* The brand speech bubble: white, dark mono text, tail pointing at Ziggy's head. */
+  .ziggy-bubble {
+    position: relative;
+    max-width: 14rem;
+    margin-top: .1rem;
+    padding: .7rem 2rem .8rem .9rem;
+    color: var(--space-black);
+    background: #fff;
+    box-shadow: 0 10px 30px rgb(0 0 0 / .4);
+    font-family: var(--mono);
+    font-size: .8125rem;
+    line-height: 1.45;
+    text-align: left;
+    cursor: pointer;
+    animation: ziggy-pop .35s cubic-bezier(.2, 1.4, .4, 1);
+  }
+
+  .ziggy-bubble.is-leaving { animation: ziggy-bubble-out .4s ease-in forwards; }
+
+  .ziggy-bubble::after {
+    content: "";
+    position: absolute;
+    top: 1.4rem;
+    right: -.7rem;
+    width: .8rem;
+    height: 1rem;
+    background: #fff;
+    clip-path: polygon(0 0, 100% 100%, 0 70%);
+  }
+
+  .ziggy-bubble strong { display: block; color: var(--ultraviolet); font-weight: 500; }
+
+  .ziggy-bubble-close {
+    position: absolute;
+    top: .3rem;
+    right: .3rem;
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    color: var(--gray-500);
+    cursor: pointer;
+  }
+
+  .ziggy-bubble-close:hover { color: var(--space-black); }
+  .ziggy-bubble-close svg { width: .8rem; height: .8rem; fill: none; stroke: currentColor; stroke-width: 2; }
+
+  .ziggy-panel {
+    display: flex;
+    flex-direction: column;
+    width: min(24rem, calc(100vw - 2rem));
+    height: min(36rem, calc(100vh - 9rem));
+    overflow: hidden;
+    background: var(--slab);
+    border: 1px solid var(--line-strong);
+    border-radius: 1rem;
+    box-shadow: 0 24px 60px rgb(0 0 0 / .55);
+    animation: ziggy-pop .25s ease-out;
+  }
+
+  .ziggy-head {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .85rem 1rem;
+    background: var(--deepest-blue);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .ziggy-head .ziggy-face { flex: none; width: 2.5rem; height: auto; }
+  .ziggy-head-title { flex: 1; min-width: 0; }
+  .ziggy-head-title strong { display: block; font-size: 1rem; font-weight: 500; }
+  .ziggy-head-title span { color: var(--gray-300); font-size: .8125rem; font-weight: 300; }
+  .ziggy-head .btn { flex: none; }
+
+  .ziggy-thread {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: .75rem;
+    padding: 1rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ziggy-msg {
+    max-width: 88%;
+    padding: .6rem .85rem;
+    font-size: .9375rem;
+    font-weight: 300;
+    line-height: 1.5;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    animation: fade-in .2s ease-out;
+  }
+
+  .ziggy-msg.is-ziggy { align-self: flex-start; color: var(--off-white); background: var(--deep-blue); border-radius: .25rem 1rem 1rem 1rem; }
+  .ziggy-msg.is-user { align-self: flex-end; color: #fff; background-image: var(--grad-uv); border-radius: 1rem .25rem 1rem 1rem; }
+  .ziggy-msg.is-failed { color: var(--coral); background: transparent; border: 1px solid var(--coral); }
+
+  .ziggy-actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem; }
+  .ziggy-actions span {
+    padding: .1rem .4rem;
+    color: var(--mint);
+    border: 1px solid rgb(89 253 160 / .5);
+    font-family: var(--mono);
+    font-size: .625rem;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+  }
+
+  .ziggy-typing { display: inline-flex; gap: .3rem; padding-block: .85rem; }
+  .ziggy-typing i { width: .4rem; height: .4rem; background: var(--indigo-200); border-radius: 50%; animation: pulse 1s ease-in-out infinite; }
+  .ziggy-typing i:nth-child(2) { animation-delay: .15s; }
+  .ziggy-typing i:nth-child(3) { animation-delay: .3s; }
+
+  .ziggy-suggestions { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .ziggy-suggestions button {
+    padding: .35rem .7rem;
+    color: var(--indigo-100);
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-size: .8125rem;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+
+  .ziggy-suggestions button:hover { color: #fff; border-color: var(--indigo-300); }
+
+  .ziggy-note { color: var(--gray-400); font-family: var(--mono); font-size: .6875rem; letter-spacing: .02em; text-transform: uppercase; }
+  .ziggy-error { color: var(--coral); font-size: .8125rem; }
+
+  .ziggy-composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: .5rem;
+    padding: .75rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .ziggy-composer textarea {
+    min-height: 2.6rem;
+    max-height: 8rem;
+    padding: .6rem .75rem;
+    color: var(--off-white);
+    background: var(--space-black);
+    border: 1px solid var(--line-strong);
+    border-radius: .6rem;
+    font: inherit;
+    font-size: .9375rem;
+    resize: none;
+  }
+
+  .ziggy-composer textarea:focus { outline: none; border-color: var(--indigo-300); }
+  .ziggy-composer .ziggy-note { grid-column: 1 / -1; }
+
+  .ziggy-signin { display: grid; gap: .75rem; justify-items: start; padding: 1rem; border-top: 1px solid var(--line); }
+  .ziggy-signin p { color: var(--gray-200); font-size: .9375rem; font-weight: 300; }
+
+  /* Ziggy's filter in the toolbar, and the halo on demos it calls out */
+  .ziggy-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .2rem .6rem;
+    color: var(--space-black);
+    background: var(--mint);
+    font-family: var(--mono);
+    font-size: .75rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .ziggy-chip:hover { background: var(--off-white); }
+  .ziggy-chip svg { width: .7rem; height: .7rem; fill: none; stroke: currentColor; stroke-width: 2.4; }
+
+  .feature.is-ziggy-pick, .card.is-ziggy-pick { position: relative; animation: ziggy-halo 2.6s ease-in-out infinite; }
+  .tag-ziggy { color: var(--space-black); background: var(--mint); border-color: var(--mint); }
+  .tag-ziggy svg { fill: currentColor; stroke: none; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1729,6 +1978,23 @@
 @keyframes slide-in { from { opacity: .4; transform: translateX(2.5rem); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, .5rem); } }
 @keyframes notice-in { from { opacity: 0; transform: translateY(-.5rem); } }
+/* Ziggy holds still around each blink, so the eyes never close mid-move. */
+@keyframes ziggy-float {
+  0%, 14%, 100% { transform: translateY(0) rotate(0deg); }
+  32% { transform: translateY(-7px) rotate(-3deg); }
+  50% { transform: translateY(-2px) rotate(1deg); }
+  68%, 84% { transform: translateY(-6px) rotate(-2deg); }
+}
+@keyframes ziggy-bubble-out { to { opacity: 0; transform: translateY(.35rem); } }
+@keyframes ziggy-pop { from { opacity: 0; transform: translateY(.5rem) scale(.96); } }
+/* A short blink at ~9%, then a double blink at ~76% and ~80% (brand guide).
+   The two sets mirror each other; edit them together. */
+@keyframes ziggy-eyes-open { 0%, 10.4%, 77.4%, 81.4%, 100% { opacity: 1; } 9%, 76%, 80% { opacity: 0; } }
+@keyframes ziggy-eyes-closed { 0%, 10.4%, 77.4%, 81.4%, 100% { opacity: 0; } 9%, 76%, 80% { opacity: 1; } }
+@keyframes ziggy-halo {
+  0%, 100% { box-shadow: 0 0 0 2px var(--mint), 0 0 18px 2px rgb(89 253 160 / .35); }
+  50% { box-shadow: 0 0 0 2px var(--mint), 0 0 34px 8px rgb(182 100 255 / .45); }
+}
 
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 
@@ -1766,6 +2032,8 @@
   .onboard-findings li { grid-template-columns: 1fr; }
   .onboard-secret-row { grid-template-columns: 1fr; }
   .onboard-findings code { grid-column: 1; }
+  .ziggy { right: 1rem; bottom: 1rem; }
+  .ziggy-panel { height: min(34rem, calc(100vh - 7.5rem)); }
 }
 
 @media (max-width: 420px) {
@@ -1775,6 +2043,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+  .ziggy-launcher, .ziggy-figure img { animation: none !important; }
   *, *::before, *::after {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;

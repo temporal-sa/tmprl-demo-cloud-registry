@@ -109,6 +109,15 @@ def catalog_onboarding_workflow_id(owner_email: str, cluster: str | None = None)
     return f"catalog-onboarding/{email}"
 
 
+def catalog_helper_workflow_id(owner_email: str, cluster: str | None = None) -> str:
+    """One Ziggy chat per user, scoped to a cluster/color. The catalog web server
+    (registry/web/server.py) builds the same id; keep them identical."""
+    email = owner_email.strip().lower()
+    if cluster:
+        return f"catalog-helper/{cluster}/{email}"
+    return f"catalog-helper/{email}"
+
+
 def onboarding_preview_workflow_id(owner_email: str, cluster: str | None = None) -> str:
     """One test deploy per user, scoped to a cluster/color. The catalog web server
     (registry/web/server.py) builds the same id; keep them identical."""

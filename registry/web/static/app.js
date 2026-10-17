@@ -33,6 +33,10 @@ const state = {
   selectedWorkshopAiSdks: new Set(),
   workshopHours: null,
   openDemoId: null,
+  // Ziggy's view of the demos page: the demos it filtered to (null: no
+  // filter) and the ones it put a halo on. Not in the URL; the chat owns it.
+  ziggyPicks: null,
+  ziggyHighlights: new Set(),
 };
 
 const ICONS = {
@@ -438,6 +442,7 @@ function sdkChip(value, selected, onToggle) {
 
 function demosHaveFilters() {
   return !!(
+    state.ziggyPicks ||
     state.selectedTags.size ||
     state.selectedSdks.size ||
     state.selectedDemoAiSdks.size ||
@@ -464,6 +469,7 @@ function setupDemosFilters() {
     state.selectedTags.clear();
     state.selectedSdks.clear();
     state.selectedDemoAiSdks.clear();
+    clearZiggyView();
     onDemosFilterChange();
   });
   // The AI SDK and Topics panels share a spot under the filter bar, so only
@@ -538,9 +544,11 @@ function renderDemosFilters() {
   topicsCount.textContent = String(state.selectedTags.size);
 
   document.querySelector("[data-clear-demos]").hidden = !demosHaveFilters();
+  renderZiggyChip();
 }
 
 function demoMatchesFilters(demo) {
+  if (state.ziggyPicks && !state.ziggyPicks.includes(demo.id)) return false;
   const q = state.demosSearch.trim().toLowerCase();
   const matchesTags =
     state.selectedTags.size === 0 ||
@@ -565,8 +573,11 @@ function demoMatchesFilters(demo) {
 function renderDemosList() {
   const canonical = state.demos.filter((demo) => demo.canonical);
   const others = state.demos.filter((demo) => !demo.canonical);
-  const visibleCanonical = canonical.filter(demoMatchesFilters);
-  const visibleOthers = others.filter(demoMatchesFilters);
+  // Ziggy lists its picks best first; keep that order within each section.
+  const byPick = (a, b) =>
+    state.ziggyPicks ? state.ziggyPicks.indexOf(a.id) - state.ziggyPicks.indexOf(b.id) : 0;
+  const visibleCanonical = canonical.filter(demoMatchesFilters).sort(byPick);
+  const visibleOthers = others.filter(demoMatchesFilters).sort(byPick);
 
   document.querySelector("[data-canonical-total]").textContent = plural(canonical.length, "demo");
   document.querySelector("[data-other-total]").textContent = plural(others.length, "demo");
@@ -807,7 +818,7 @@ function renderFeatureCard(demo) {
   return el(
     "article",
     {
-      class: "feature",
+      class: ziggyPickClass("feature", demo),
       id: `demo-${demo.id}`,
       // The whole tile opens the drawer, like the catalog cards. Links and
       // buttons inside it (actions, checklist, screenshot) keep their own target.
@@ -834,7 +845,7 @@ function renderFeatureCard(demo) {
       ),
       el("p", { class: "feature-summary", text: demo.summary }),
       sdkList(demo.sdks, demo.aiSdks),
-      tagRow([...flagTags(demo), ...topicTags(demo.tags)]),
+      tagRow([...ziggyTag(demo), ...flagTags(demo), ...topicTags(demo.tags)]),
       el(
         "div",
         { class: "feature-actions" },
@@ -861,7 +872,7 @@ function renderFeatureCard(demo) {
 function renderDemoCard(demo) {
   return el(
     "article",
-    { class: "card", id: `demo-${demo.id}`, style: `--sdk-bar:${sdkBar(demo.sdks)}` },
+    { class: ziggyPickClass("card", demo), id: `demo-${demo.id}`, style: `--sdk-bar:${sdkBar(demo.sdks)}` },
     el(
       "h3",
       {},
@@ -873,7 +884,7 @@ function renderDemoCard(demo) {
       })
     ),
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
-    tagRow([...flagTags(demo), ...topicTags(demo.tags, 3)]),
+    tagRow([...ziggyTag(demo), ...flagTags(demo), ...topicTags(demo.tags, 3)]),
     el("div", { class: "card-foot" }, cardAssets(presenterAssets(demo)), sdkList(demo.sdks, demo.aiSdks), cardActions(demo))
   );
 }
@@ -2085,6 +2096,7 @@ function render() {
     onboard: "Add a Demo · Temporal Field Kit",
   }[view] || "Demos · Temporal Field Kit";
   renderCounts();
+  renderZiggyLauncher();
   if (view === "onboard") {
     if (!onboard.loaded) loadOnboarding();
     renderOnboarding();
@@ -3954,6 +3966,466 @@ function renderOnboarding() {
   schedulePreviewPoll();
 }
 
+// ─── Ziggy ─────────────────────────────────────────────────────────────────
+// A floating helper on the demos page. Each message is one turn of the
+// signed-in user's CatalogHelperWorkflow (POST /api/helper/message), which
+// answers with Ziggy's reply and its view of the page: the demos to show and
+// the ones to put a halo on. The view belongs to the chat, so it survives a
+// reload, ends with the chat (30 idle minutes or "New chat"), and the user can
+// clear it from the toolbar chip.
+
+const ZIGGY_GREETING =
+  "Hi, I'm Ziggy! Tell me who you're presenting to or what you want to show, and I'll pick demos from the catalog.";
+const ZIGGY_SUGGESTIONS = [
+  "An AI agent demo in Python",
+  "Something for a bank or fintech",
+  "Show off crash recovery",
+  "Which demos have a slide deck?",
+];
+// Ziggy introduces himself once per browser session, shortly after the page
+// loads, then the bubble fades on its own (or waits while it's hovered).
+const ZIGGY_BUBBLE_KEY = "ziggy-bubble-seen";
+const ZIGGY_BUBBLE_DELAY_MS = 800;
+const ZIGGY_BUBBLE_MS = 7000;
+const ZIGGY_BUBBLE_LINGER_MS = 2500;
+const ZIGGY_MAX_CHARS = 1000;
+
+const ziggy = {
+  status: null, // the open chat's HelperStatus, or null
+  open: false,
+  sending: null, // the message waiting on Ziggy's reply
+  error: null,
+  notice: null, // why the last chat went away, shown once
+  signInUrl: null,
+  bubble: false,
+  bubbleTimer: null,
+  expiryTimer: null,
+  nodes: {},
+};
+
+// Temporal's Ziggy (the official illustration, from the demo buildkit's brand
+// assets). The open- and closed-eye frames share one canvas, so swapping their
+// opacity reads as a blink.
+function ziggyFigure() {
+  return el(
+    "span",
+    { class: "ziggy-figure", "aria-hidden": "true" },
+    el("img", { class: "ziggy-open", src: "/static/brand/ziggy-peek.png", alt: "", width: "256", height: "256" }),
+    el("img", { class: "ziggy-blink", src: "/static/brand/ziggy-blink.png", alt: "", width: "256", height: "256" })
+  );
+}
+
+function ziggyFace() {
+  return el("img", { class: "ziggy-face", src: "/static/brand/ziggy-face.png", alt: "", width: "119", height: "128" });
+}
+
+function ziggyBubbleSeen() {
+  try {
+    return sessionStorage.getItem(ZIGGY_BUBBLE_KEY) === "1";
+  } catch (err) {
+    return false;
+  }
+}
+
+function dismissZiggyBubble() {
+  ziggy.bubble = false;
+  clearTimeout(ziggy.bubbleTimer);
+  try {
+    sessionStorage.setItem(ZIGGY_BUBBLE_KEY, "1");
+  } catch (err) {
+    // Private windows may refuse storage; the bubble just comes back next load.
+  }
+}
+
+function showZiggyBubble() {
+  if (ziggy.open || ziggyBubbleSeen() || currentView() !== "demos") return;
+  // Seen once it's shown: a reload in the same session doesn't repeat it.
+  dismissZiggyBubble();
+  ziggy.bubble = true;
+  renderZiggy();
+  fadeZiggyBubble(ZIGGY_BUBBLE_MS);
+}
+
+function fadeZiggyBubble(afterMs) {
+  clearTimeout(ziggy.bubbleTimer);
+  ziggy.bubbleTimer = setTimeout(() => {
+    const bubble = ziggy.nodes.bubble;
+    bubble.classList.add("is-leaving");
+    bubble.addEventListener(
+      "animationend",
+      () => {
+        bubble.classList.remove("is-leaving");
+        ziggy.bubble = false;
+        renderZiggy();
+      },
+      { once: true }
+    );
+  }, afterMs);
+}
+
+function holdZiggyBubble() {
+  clearTimeout(ziggy.bubbleTimer);
+  ziggy.nodes.bubble.classList.remove("is-leaving");
+}
+
+function setupZiggy() {
+  const root = document.querySelector("[data-ziggy]");
+  const textarea = el("textarea", {
+    rows: "1",
+    maxlength: String(ZIGGY_MAX_CHARS),
+    placeholder: "Describe your audience or use case…",
+    "aria-label": "Message Ziggy",
+    oninput: () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    },
+    onkeydown: (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        sendZiggy(textarea.value);
+      }
+    },
+  });
+  const send = el("button", { type: "submit", class: "btn btn-primary btn-sm", text: "Send" });
+  const composer = el(
+    "form",
+    {
+      class: "ziggy-composer",
+      onsubmit: (event) => {
+        event.preventDefault();
+        sendZiggy(textarea.value);
+      },
+    },
+    textarea,
+    send,
+    el("p", { class: "ziggy-note", text: "Chats clear after 30 minutes without a message." })
+  );
+  const thread = el("div", { class: "ziggy-thread", role: "log", "aria-live": "polite" });
+  const signin = el("div", { class: "ziggy-signin" });
+  const newChat = el("button", {
+    type: "button",
+    class: "btn btn-quiet btn-sm",
+    text: "New chat",
+    onclick: newZiggyChat,
+  });
+  const panel = el(
+    "section",
+    {
+      class: "ziggy-panel",
+      role: "dialog",
+      "aria-label": "Chat with Ziggy",
+      onkeydown: (event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          closeZiggy();
+        }
+      },
+    },
+    el(
+      "header",
+      { class: "ziggy-head" },
+      ziggyFace(),
+      el(
+        "div",
+        { class: "ziggy-head-title" },
+        el("strong", { text: "Ziggy" }),
+        el("span", { text: "Helps you pick a demo" })
+      ),
+      newChat,
+      el("button", { type: "button", class: "icon-btn", "aria-label": "Close chat", onclick: closeZiggy }, icon("close"))
+    ),
+    thread,
+    signin,
+    composer
+  );
+  const bubble = el(
+    "div",
+    {
+      class: "ziggy-bubble",
+      role: "button",
+      tabindex: "0",
+      onclick: openZiggy,
+      // Reading it keeps it up; it fades a moment after the pointer leaves.
+      onmouseenter: holdZiggyBubble,
+      onfocusin: holdZiggyBubble,
+      onmouseleave: () => ziggy.bubble && fadeZiggyBubble(ZIGGY_BUBBLE_LINGER_MS),
+      onfocusout: () => ziggy.bubble && fadeZiggyBubble(ZIGGY_BUBBLE_LINGER_MS),
+      onkeydown: (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openZiggy();
+        }
+      },
+    },
+    "Hi, I'm Ziggy! Need help picking a demo?",
+    el("strong", { text: "Talk to me!" }),
+    el(
+      "button",
+      {
+        type: "button",
+        class: "ziggy-bubble-close",
+        "aria-label": "Dismiss",
+        onclick: (event) => {
+          event.stopPropagation();
+          dismissZiggyBubble();
+          renderZiggy();
+        },
+      },
+      icon("close")
+    )
+  );
+  const badge = el("span", { class: "ziggy-launcher-badge", "aria-hidden": "true" });
+  const launcher = el(
+    "button",
+    {
+      type: "button",
+      class: "ziggy-launcher",
+      "aria-label": "Chat with Ziggy, the demo picker",
+      "aria-expanded": "false",
+      onclick: () => (ziggy.open ? closeZiggy() : openZiggy()),
+    },
+    ziggyFigure(),
+    badge
+  );
+  root.replaceChildren(panel, el("div", { class: "ziggy-dock" }, bubble, launcher));
+  ziggy.nodes = { root, panel, thread, signin, composer, textarea, send, newChat, bubble, badge, launcher };
+
+  document.querySelector("[data-ziggy-chip]").addEventListener("click", () => {
+    clearZiggyView();
+    onDemosFilterChange();
+  });
+  setTimeout(showZiggyBubble, ZIGGY_BUBBLE_DELAY_MS);
+  renderZiggy();
+}
+
+function ziggySignInUrl() {
+  return `/auth/login?return_to=${encodeURIComponent(window.location.href)}`;
+}
+
+async function loadZiggy() {
+  try {
+    const res = await fetch("/api/helper", { credentials: "same-origin" });
+    if (res.status === 401) ziggy.signInUrl = ziggySignInUrl();
+    else if (res.ok) acceptZiggyStatus(await res.json());
+  } catch (err) {
+    // Ziggy stays clickable; sending a message reports what's wrong.
+  }
+  renderZiggy();
+}
+
+function acceptZiggyStatus(status) {
+  clearTimeout(ziggy.expiryTimer);
+  if (!status || status.phase !== "Open") {
+    ziggy.status = null;
+    applyZiggyView(null);
+    return;
+  }
+  ziggy.status = status;
+  applyZiggyView(status.view);
+  // The workflow ends the chat after 30 idle minutes; drop it here too, so a
+  // page left open doesn't keep showing a filter from a chat that's gone.
+  const remaining = Date.parse(status.expires_at) - Date.now();
+  if (remaining > 0) ziggy.expiryTimer = setTimeout(expireZiggy, remaining + 1000);
+}
+
+function expireZiggy() {
+  if (ziggy.sending) return;
+  ziggy.notice = "Our last chat timed out after 30 minutes, so I cleared it. Ask me anything to start again.";
+  acceptZiggyStatus(null);
+  renderZiggy();
+}
+
+function sameList(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function applyZiggyView(view) {
+  const known = new Set(state.demos.map((demo) => demo.id));
+  const ids = view && Array.isArray(view.demo_ids) ? view.demo_ids.filter((id) => known.has(id)) : [];
+  const picks = ids.length ? ids : null;
+  const highlights = ((view && view.highlights) || []).filter((id) => known.has(id));
+  const picksChanged = !sameList(picks, state.ziggyPicks);
+  if (!picksChanged && sameList(highlights, [...state.ziggyHighlights])) return;
+  state.ziggyPicks = picks;
+  state.ziggyHighlights = new Set(highlights);
+  if (picksChanged && picks) {
+    // Show exactly what Ziggy picked; the user's own filters would hide some.
+    state.demosSearch = "";
+    state.selectedTags.clear();
+    state.selectedSdks.clear();
+    state.selectedDemoAiSdks.clear();
+  }
+  if (currentView() === "demos") onDemosFilterChange();
+  renderZiggyLauncher();
+}
+
+function clearZiggyView() {
+  if (!state.ziggyPicks && !state.ziggyHighlights.size) return;
+  state.ziggyPicks = null;
+  state.ziggyHighlights = new Set();
+  renderZiggyLauncher();
+  if (!ziggy.status) return;
+  ziggy.status.view = { demo_ids: null, highlights: [] };
+  // Tell the chat, so a reload doesn't bring the filter back and Ziggy knows.
+  postJSON("/api/helper/clear-view", {})
+    .then((status) => {
+      if (!ziggy.sending) acceptZiggyStatus(status);
+    })
+    .catch(() => {});
+}
+
+function ziggyPickClass(base, demo) {
+  return state.ziggyHighlights.has(demo.id) ? `${base} is-ziggy-pick` : base;
+}
+
+function ziggyTag(demo) {
+  if (!state.ziggyHighlights.has(demo.id)) return [];
+  return [el("span", { class: "tag tag-ziggy", title: "Ziggy suggests starting here" }, icon("sparkle"), "Ziggy's pick")];
+}
+
+function renderZiggyChip() {
+  const chip = document.querySelector("[data-ziggy-chip]");
+  const picks = state.ziggyPicks;
+  const highlighted = state.ziggyHighlights.size;
+  chip.hidden = !picks && !highlighted;
+  if (chip.hidden) return;
+  const label = picks ? `Ziggy's picks · ${picks.length}` : `Ziggy highlighted ${highlighted}`;
+  chip.replaceChildren(document.createTextNode(label), icon("close"));
+  chip.title = picks ? "Showing only the demos Ziggy picked. Click to show every demo." : "Click to remove Ziggy's highlights.";
+  chip.setAttribute("aria-label", `${label}. Clear`);
+}
+
+function renderZiggyLauncher() {
+  const { root, badge } = ziggy.nodes;
+  if (!root) return;
+  root.hidden = currentView() !== "demos";
+  const picks = state.ziggyPicks ? state.ziggyPicks.length : 0;
+  badge.hidden = ziggy.open || !picks;
+  badge.textContent = String(picks);
+}
+
+function openZiggy() {
+  ziggy.open = true;
+  dismissZiggyBubble();
+  renderZiggy();
+  if (!ziggy.signInUrl) ziggy.nodes.textarea.focus();
+}
+
+function closeZiggy() {
+  ziggy.open = false;
+  renderZiggy();
+  ziggy.nodes.launcher.focus();
+}
+
+async function sendZiggy(raw) {
+  const text = raw.trim();
+  if (!text || ziggy.sending) return;
+  ziggy.sending = text;
+  ziggy.error = null;
+  ziggy.notice = null;
+  ziggy.nodes.textarea.value = "";
+  ziggy.nodes.textarea.style.height = "auto";
+  renderZiggy();
+  try {
+    acceptZiggyStatus(await postJSON("/api/helper/message", { text }));
+  } catch (err) {
+    if (err.status === 401) {
+      ziggy.signInUrl = ziggySignInUrl();
+    } else {
+      ziggy.error = err.message;
+      if (!ziggy.nodes.textarea.value) ziggy.nodes.textarea.value = text;
+    }
+  } finally {
+    ziggy.sending = null;
+    renderZiggy();
+  }
+}
+
+async function newZiggyChat() {
+  if (ziggy.sending) return;
+  ziggy.error = null;
+  ziggy.notice = null;
+  if (ziggy.status) {
+    try {
+      await postJSON("/api/helper/new", {});
+    } catch (err) {
+      ziggy.error = err.message;
+      renderZiggy();
+      return;
+    }
+  }
+  acceptZiggyStatus(null);
+  renderZiggy();
+  ziggy.nodes.textarea.focus();
+}
+
+function ziggyMessageView(message) {
+  if (message.role === "user") return el("div", { class: "ziggy-msg is-user", text: message.text });
+  const failed = message.outcome !== "Done";
+  const actions = message.actions || [];
+  return el(
+    "div",
+    { class: `ziggy-msg is-ziggy${failed ? " is-failed" : ""}` },
+    failed ? `Sorry, I couldn't answer that: ${message.text}` : message.text,
+    actions.length
+      ? el("div", { class: "ziggy-actions" }, ...actions.map((action) => el("span", { text: action })))
+      : null
+  );
+}
+
+function renderZiggyThread() {
+  const messages = (ziggy.status && ziggy.status.messages) || [];
+  const items = [el("div", { class: "ziggy-msg is-ziggy", text: ZIGGY_GREETING })];
+  if (ziggy.notice) items.push(el("p", { class: "ziggy-note", text: ziggy.notice }));
+  items.push(...messages.map(ziggyMessageView));
+  if (ziggy.sending) {
+    items.push(
+      el("div", { class: "ziggy-msg is-user", text: ziggy.sending }),
+      el(
+        "div",
+        { class: "ziggy-msg is-ziggy ziggy-typing", role: "status", "aria-label": "Ziggy is typing" },
+        el("i"),
+        el("i"),
+        el("i")
+      )
+    );
+  } else if (!messages.length && !ziggy.signInUrl) {
+    items.push(
+      el(
+        "div",
+        { class: "ziggy-suggestions" },
+        ...ZIGGY_SUGGESTIONS.map((text) =>
+          el("button", { type: "button", text, onclick: () => sendZiggy(text) })
+        )
+      )
+    );
+  }
+  if (ziggy.error) items.push(el("p", { class: "ziggy-error", role: "alert", text: ziggy.error }));
+  ziggy.nodes.thread.replaceChildren(...items);
+  ziggy.nodes.thread.scrollTop = ziggy.nodes.thread.scrollHeight;
+}
+
+function renderZiggy() {
+  const n = ziggy.nodes;
+  if (!n.root) return;
+  renderZiggyLauncher();
+  n.panel.hidden = !ziggy.open;
+  n.bubble.hidden = ziggy.open || !ziggy.bubble;
+  n.launcher.setAttribute("aria-expanded", ziggy.open ? "true" : "false");
+  if (!ziggy.open) return;
+  renderZiggyThread();
+  n.composer.hidden = !!ziggy.signInUrl;
+  n.signin.hidden = !ziggy.signInUrl;
+  if (ziggy.signInUrl) {
+    n.signin.replaceChildren(
+      el("p", { text: "Sign in with your Temporal Google account to chat with me." }),
+      el("a", { class: "btn btn-primary btn-sm", href: ziggy.signInUrl, text: "Sign in" })
+    );
+  }
+  n.send.setAttribute("aria-disabled", ziggy.sending ? "true" : "false");
+  n.newChat.hidden = !ziggy.status || !!ziggy.sending;
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -3964,9 +4436,11 @@ async function init() {
   setupDemosFilters();
   setupWorkshopsFilters();
   setupNamespaceAccess();
+  setupZiggy();
   await loadData();
   render();
   syncDrawerToHash();
+  loadZiggy();
 }
 
 if (document.readyState === "loading") {

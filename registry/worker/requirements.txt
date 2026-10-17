@@ -4,3 +4,5 @@ boto3>=1.34,<2
 PyYAML>=6.0.1,<7
 cryptography>=42,<46
 jsonschema>=4.22,<5
+# Ziggy, the catalog's demo picker, calls Claude through the LiteLLM gateway.
+anthropic>=1,<2

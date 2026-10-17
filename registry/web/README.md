@@ -11,6 +11,8 @@ The image serves the catalog from `REGISTRY_DATA_PATH`
 - `/api/catalog`
 - `/_auth/verify`
 - `POST /api/namespace-access`
+- `GET /api/helper`, `POST /api/helper/message`, `POST /api/helper/clear-view`,
+  `POST /api/helper/new`
 - `/auth/login`
 - `/oauth/google/start`
 - `/oauth/google/callback`
@@ -39,6 +41,17 @@ It requires a signed-in session and runs the operator's
 from the request body), which adds that Temporal Cloud user to the group that
 can read every demo namespace. It returns the workflow's result, e.g.
 `{"status": "added" | "already-member" | "user-not-found", ...}`.
+
+The `/api/helper` endpoints back Ziggy, the floating demo picker on the demos
+page. They require a signed-in session and drive that user's
+`CatalogHelperWorkflow` (operator `workflows/catalog_helper.py`). A message
+(`{"text": ...}`) starts the chat if none is open and returns once Ziggy has
+answered: one short turn on Claude Haiku through the LiteLLM broker, with tools
+that only change what the page shows. The status carries the chat and Ziggy's
+`view`: `demo_ids` (the demos to filter to, or `null`) and `highlights` (the
+demos to put a halo on). `clear-view` drops both when the user clears Ziggy's
+filter, and `new` ends the chat. A chat with no messages for 30 minutes ends on
+its own, and `GET` then returns `{"phase": "None"}`.
 
 `/_auth/verify` is the Traefik forward-auth endpoint used by protected demo
 routes. With `AUTH_MODE=google`, missing or invalid sessions redirect to

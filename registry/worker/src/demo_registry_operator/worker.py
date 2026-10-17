@@ -121,6 +121,9 @@ from demo_registry_operator.activities.catalog_onboarding import (
     validate_onboarding_draft,
     verify_onboarding_pull_request,
 )
+from demo_registry_operator.activities.catalog_helper import (
+    run_catalog_helper_turn,
+)
 from demo_registry_operator.activities.onboarding_agent import (
     delete_onboarding_agent_sessions,
     run_onboarding_agent,
@@ -210,6 +213,9 @@ from demo_registry_operator.workflows.isolated_lambda_workspace import (
     IsolatedLambdaWorkspaceWorkflow,
 )
 from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
+from demo_registry_operator.workflows.catalog_helper import (
+    CatalogHelperWorkflow,
+)
 from demo_registry_operator.workflows.catalog_onboarding import (
     CatalogOnboardingWorkflow,
 )
@@ -244,6 +250,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.activities.builds.planning",
     "demo_registry_operator.activities.builds.status",
     "demo_registry_operator.activities.canary",
+    "demo_registry_operator.activities.catalog_helper",
     "demo_registry_operator.activities.catalog_onboarding",
     "demo_registry_operator.activities.crashable_workspace",
     "demo_registry_operator.activities.isolated_lambda_workspace",
@@ -259,6 +266,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.derive",
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
+    "demo_registry_operator.workflows.catalog_helper_messages",
     "demo_registry_operator.workflows.catalog_onboarding_messages",
     "demo_registry_operator.workflows.crashable_workspace_messages",
     "demo_registry_operator.workflows.isolated_lambda_workspace_messages",
@@ -365,6 +373,7 @@ async def main() -> None:
                     SyncNamespaceReadersWorkflow,
                     CatalogOnboardingWorkflow,
                     OnboardingPreviewWorkflow,
+                    CatalogHelperWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -496,6 +505,7 @@ async def main() -> None:
                     read_onboarding_preview,
                     delete_onboarding_preview,
                     wait_onboarding_preview_cleanup,
+                    run_catalog_helper_turn,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,
