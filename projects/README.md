@@ -585,6 +585,10 @@ Rules:
   `TEMPORAL_ADDRESS=127.0.0.1:7233`, `TEMPORAL_HOST=127.0.0.1:7233`,
   `TEMPORAL_NAMESPACE=default`, and `TEMPORAL_TLS=false` by default. Use
   `temporalProxy.addressEnv` when the app uses different host env var names.
+  The sidecar is the official
+  [Temporal Proxy](https://github.com/temporalio/temporal-proxy) with the
+  config in `registry/temporal-cloud-proxy/config.yaml`; upgrade it by bumping
+  the `FROM` tag in that directory's Dockerfile.
 - The proxy path supports demos with SDK setup like
   `Client.connect(TEMPORAL_HOST, namespace=TEMPORAL_NAMESPACE)`, where the app
   defaults to `localhost:7233` and namespace `default` for local development.

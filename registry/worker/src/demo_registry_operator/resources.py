@@ -2471,17 +2471,11 @@ def temporal_proxy_container(
         "name": TEMPORAL_PROXY_CONTAINER_NAME,
         "image": temporal_proxy_image(demo_project, image_overrides),
         "imagePullPolicy": "IfNotPresent",
+        # The image bakes in the proxy config (registry/temporal-cloud-proxy/
+        # config.yaml): it listens on TEMPORAL_PROXY_LOCAL_ADDRESS, maps the
+        # local "default" namespace to TEMPORAL_NAMESPACE, and reads the Cloud
+        # endpoint and API key from this secret.
         "envFrom": [{"secretRef": {"name": TEMPORAL_SECRET_NAME}}],
-        "env": [
-            {
-                "name": "TEMPORAL_PROXY_LISTEN_ADDRESS",
-                "value": TEMPORAL_PROXY_LOCAL_ADDRESS,
-            },
-            {
-                "name": "TEMPORAL_PROXY_NAMESPACE_ALIASES",
-                "value": temporal_proxy_namespace_aliases(demo_project),
-            },
-        ],
         "resources": {
             "requests": {"cpu": "25m", "memory": "32Mi"},
             "limits": {"cpu": "100m", "memory": "128Mi"},
@@ -2615,12 +2609,6 @@ def temporal_proxy_address_env_names(component: dict[str, Any]) -> list[str]:
         if name not in deduped:
             deduped.append(name)
     return deduped
-
-
-def temporal_proxy_namespace_aliases(demo_project: dict[str, Any]) -> str:
-    # The first compatibility target is local dev samples that use the SDK's
-    # default namespace. The platform namespace is always injected separately.
-    return "default"
 
 
 def env_with_overrides(

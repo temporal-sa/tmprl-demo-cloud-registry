@@ -38,12 +38,10 @@ configMapGenerator:
       - DEMO_REGISTRY_SOURCE_WATCH_NAMESPACE=tmprl-dem-cld-registry-operator
       - DEMO_REGISTRY_SOURCE_WATCH_INTERVAL=1m
       - DEMO_REGISTRY_ACTIVITY_WORKERS=20
-      # temporalProxy sidecar image (Temporal Cloud gRPC proxy) stamped into demos
-      # that enable temporalProxy (durable-banking-skills, pizza-worker-versioning).
-      # Required for those demos or reconcile fails with
-      # "DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE is required when temporalProxy is enabled".
-      # Latest proxy build (== the pet's proven tag).
-      - DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE=429214323166.dkr.ecr.us-west-1.amazonaws.com/tmprl-dem-cld/registry-operator/temporal-cloud-proxy:git-bb9b9839e384
+      # DEMO_REGISTRY_TEMPORAL_PROXY_IMAGE is intentionally NOT set here. This pod is
+      # watch-only and never renders demo pods; the self-rendered operator that does
+      # gets the temporalProxy sidecar image from its own temporal-cloud-proxy build
+      # at the same commit (resources.platform_env_vars).
   # P8 phase B self-managing split: the bootstrap pod is WATCH-ONLY (no in-process
   # worker). In WATCH_MODE=bootstrap it reconciles the registry.yaml self-demo, which
   # self-renders the REAL operator as the versioned WorkerDeployment named in

@@ -237,10 +237,7 @@ def test_temporal_proxy_worker_renders_sidecar_and_local_app_env(monkeypatch):
     proxy = containers[1]
     assert proxy["image"] == "example.com/temporal-cloud-proxy:git-e12b0ed9d450"
     assert proxy["envFrom"] == [{"secretRef": {"name": "temporal-credentials"}}]
-    assert {
-        "name": "TEMPORAL_PROXY_LISTEN_ADDRESS",
-        "value": "127.0.0.1:7233",
-    } in proxy["env"]
+    assert "env" not in proxy
 
 
 def test_component_env_can_map_temporal_and_user_secret_inputs():

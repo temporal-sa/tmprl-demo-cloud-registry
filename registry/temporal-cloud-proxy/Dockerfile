@@ -1,16 +1,10 @@
-FROM golang:1.25-alpine AS build
+# Official Temporal Proxy (https://github.com/temporalio/temporal-proxy) with
+# the sidecar config baked in. Upgrade by bumping the tag below.
+FROM temporalio/temporal-proxy:v1.0.0
 
-WORKDIR /src
+COPY registry/temporal-cloud-proxy/config.yaml /etc/proxy/config.yaml
 
-COPY registry/temporal-cloud-proxy/go.mod registry/temporal-cloud-proxy/go.sum ./
-RUN go mod download
+# Upstream runs as the named user "proxy"; a numeric UID lets runAsNonRoot verify it.
+USER 1000:1000
 
-COPY registry/temporal-cloud-proxy/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/temporal-cloud-proxy ./cmd/temporal-cloud-proxy
-
-FROM gcr.io/distroless/static-debian12:nonroot
-
-COPY --from=build /out/temporal-cloud-proxy /temporal-cloud-proxy
-
-USER nonroot:nonroot
-ENTRYPOINT ["/temporal-cloud-proxy"]
+CMD ["serve", "--config", "/etc/proxy/config.yaml"]
