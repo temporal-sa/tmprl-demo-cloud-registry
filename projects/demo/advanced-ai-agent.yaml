@@ -18,6 +18,9 @@ spec:
       taskQueueEnv: SIMPLE_CHAT_TASK_QUEUE
       baseTaskQueue: advanced-ai-agent
     links:
+      slideDeck:
+        label: Advanced AI Agent deck
+        url: https://docs.google.com/presentation/d/1ayDc1YkMAaSggqxwFHTEpTJac6r4UucYEnny7Mdi10c
       runbook:
         label: Advanced AI Agent runbook
         url: https://github.com/temporal-sa/temporal-demo-advanced-ai-agent/blob/main/docs/catalog.md

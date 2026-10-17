@@ -13,6 +13,9 @@ spec:
     tags: [Banking, Saga]
     temporalSdks: [Python]
     links:
+      slideDeck:
+        label: "Intro to Temporal: Money Transfer"
+        url: https://docs.google.com/presentation/d/1UtFAJvgJuvtxy07REUmFISvlmXzvC97Y49Wu_yNK57c
       runbook:
         label: README (The Demo)
         url: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer#the-demo

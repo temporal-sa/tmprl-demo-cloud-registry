@@ -20,6 +20,9 @@ spec:
         First project to use multi-namespace and Nexus Endpoints; expect
         first-use issues in the reconcile path.
     links:
+      slideDeck:
+        label: Agent Gateways in Temporal
+        url: https://docs.google.com/presentation/d/18uBKzBt2d3cvzDyEn7P7UFKO73AqBhvRNLapgMimLlU
       runbook:
         label: Walkthrough
         url: https://github.com/temporal-sa/agent-gateway-demo/blob/main/WALKTHROUGH.md
