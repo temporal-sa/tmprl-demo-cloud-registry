@@ -31,7 +31,7 @@ spec:
     aiSdks: [OpenAI Agents SDK]
     duration:
       minHours: 1
-      maxHours: 1.5
+      maxHours: 2
     links:
       slideDeck:
         url: https://docs.google.com/presentation/d/1clb2-Xf1TtHzdUeYtnzOggHwrCfV2X8Eu0ph2k2JzeM/edit
