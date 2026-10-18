@@ -4092,7 +4092,7 @@ def instruqt_catalog_entry(instruqt_course: dict[str, Any]) -> dict[str, Any]:
     organization = track.get("organization", "")
     slug = track.get("slug", "")
     track_url = (
-        f"https://play.instruqt.com/{organization}/tracks/{slug}"
+        f"https://play.instruqt.com/manage/{organization}/tracks/{slug}"
         if organization and slug
         else ""
     )

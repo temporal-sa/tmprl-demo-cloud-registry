@@ -1926,14 +1926,14 @@ function trackTile(course, info) {
     {
       class: `launch${primary ? " is-primary" : ""}`,
       "aria-label": label
-        ? `Launch the ${label} track on Instruqt`
-        : `Launch ${info.title} on Instruqt`,
+        ? `Open the ${label} track in Instruqt`
+        : `Open ${info.title} in Instruqt`,
     },
     el("small", { text: range ? durationLabel(range) : "Instruqt track" }),
     el(
       "strong",
       {},
-      el("span", { class: "launch-track" }, sdk ? sdkMark(sdk) : null, label || "Launch track"),
+      el("span", { class: "launch-track" }, sdk ? sdkMark(sdk) : null, label || "Open in Instruqt"),
       icon("external")
     )
   );
