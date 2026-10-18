@@ -425,7 +425,7 @@ def test_instruqt_catalog_entry_exposes_track_and_resources():
         )
     )
     assert entry["trackUrl"] == (
-        "https://play.instruqt.com/temporal/tracks/durable-lab"
+        "https://play.instruqt.com/manage/temporal/tracks/durable-lab"
     )
     assert entry["parent"] == "durable-lab"
     assert entry["variant"] == "Python"

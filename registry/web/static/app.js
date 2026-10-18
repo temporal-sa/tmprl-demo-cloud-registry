@@ -1857,11 +1857,11 @@ function renderWorkshopCard(members) {
               {
                 class: courseMatchesSdk(course) ? "is-match" : null,
                 "aria-label": label
-                  ? `Launch the ${label} track on Instruqt`
-                  : `Launch ${representative.title || course.name} on Instruqt`,
+                  ? `Open the ${label} track in Instruqt`
+                  : `Open ${representative.title || course.name} in Instruqt`,
               },
               sdk ? sdkMark(sdk) : null,
-              label || "Launch track",
+              label || "Open in Instruqt",
               icon("arrow")
             );
           })
