@@ -1734,10 +1734,11 @@ function renderWorkshopsFilters() {
   document.querySelector("[data-clear-workshops]").hidden = !workshopsHaveFilters();
 }
 
-// A track's row label: its catalog variant, else its SDK; null when it has neither.
+// A track's row label: its catalog variant, else its SDKs (a single track can
+// cover several, e.g. "Python + Java"); null when it has neither.
 function trackLabel(course) {
   if (typeof course.variant === "string" && course.variant.trim()) return course.variant.trim();
-  return courseSdks(course)[0] || null;
+  return courseSdks(course).join(" + ") || null;
 }
 
 function courseVariantLabel(course) {
@@ -1918,7 +1919,7 @@ function renderWorkshopCard(members) {
 // only track) get the primary treatment.
 function trackTile(course, info) {
   const label = trackLabel(course);
-  const sdk = courseSdks(course)[0];
+  const sdks = courseSdks(course);
   const range = courseDuration(course);
   const primary = info.launchable.length === 1 || courseMatchesSdk(course);
   return externalLink(
@@ -1933,7 +1934,12 @@ function trackTile(course, info) {
     el(
       "strong",
       {},
-      el("span", { class: "launch-track" }, sdk ? sdkMark(sdk) : null, label || "Open in Instruqt"),
+      el(
+        "span",
+        { class: "launch-track" },
+        sdks.length ? el("span", { class: "launch-marks" }, ...sdks.map(sdkMark)) : null,
+        label || "Open in Instruqt"
+      ),
       icon("external")
     )
   );
