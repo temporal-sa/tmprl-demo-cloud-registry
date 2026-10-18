@@ -25,8 +25,9 @@
           <a href="/courses" data-route="/courses">Workshops <span class="tab-count" data-tab-count="workshops"></span></a>
         </nav>
         <div class="header-actions">
-          <button type="button" class="btn btn-secondary btn-sm" data-grant-access title="Can't open the demos' Temporal Cloud namespaces? This gives you read access to all of them."><span>Request Namespace Access</span></button>
-          <a class="btn btn-secondary btn-sm" data-namespaces-link href="https://cloud.temporal.io/namespaces?tags=owner%3Atmprl-demo.cloud" target="_blank" rel="noopener noreferrer" title="Temporal Cloud namespaces tagged owner:tmprl-demo.cloud">See All Namespaces<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4h9v9"/><path d="M16 4 5 15"/></svg></a>
+          <button type="button" class="btn btn-secondary btn-sm" data-grant-access data-header-for="demos" title="Can't open the demos' Temporal Cloud namespaces? This gives you read access to all of them."><span>Request Namespace Access</span></button>
+          <a class="btn btn-secondary btn-sm" data-namespaces-link data-header-for="demos" href="https://cloud.temporal.io/namespaces?tags=owner%3Atmprl-demo.cloud" target="_blank" rel="noopener noreferrer" title="Temporal Cloud namespaces tagged owner:tmprl-demo.cloud">See All Namespaces<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4h9v9"/><path d="M16 4 5 15"/></svg></a>
+          <a class="btn btn-secondary btn-sm" data-header-for="workshops" href="https://app.serval.com/catalog?request=access-catalog&amp;appId=019f4bef-e156-742c-bbac-f363c6cc2937" target="_blank" rel="noopener noreferrer" title="Can't launch the workshops? Request Instruqt access in Serval, our internal onboarding tool." hidden>Request Instruqt Access<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4h9v9"/><path d="M16 4 5 15"/></svg></a>
         </div>
       </div>
     </header>

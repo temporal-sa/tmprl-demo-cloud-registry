@@ -32,6 +32,15 @@ spec:
     duration:
       minHours: 1
       maxHours: 1.5
+    links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/1clb2-Xf1TtHzdUeYtnzOggHwrCfV2X8Eu0ph2k2JzeM/edit
+      runbook:
+        url: https://docs.google.com/document/d/180aI7629_bzRbkJTQtmvfq3YpHdygey0f9dUsawfobE/edit
+        label: TA runbook and breakout question bank
+      externalRecording:
+        url: https://temporal-io.zoom.us/rec/share/g6t5_YI9ij86WLIpVYbZCL4pAzm-fFzHmsMSrPJ8VBR5_45lz9UmILqDplglndLm.1a6eZp2Eg7ejJFOM
+        label: Aug 12, 2026 session (Zoom, passcode required)
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/ai-agents-webinar
