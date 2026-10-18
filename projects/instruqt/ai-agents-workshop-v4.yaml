@@ -32,6 +32,12 @@ spec:
     duration:
       minHours: 1
       maxHours: 3
+    links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/19cvHVC-nuBBLlkn4IZr8UIqmQ8nxkO-W-i3wv68gI_k/edit
+      externalRecording:
+        url: https://youtu.be/QjVpE6-G18U
+        label: Agentic AI Summit 2026 session
     resources:
       - label: Workshop source
         url: https://github.com/temporal-community/ai-agents-workshop-v4

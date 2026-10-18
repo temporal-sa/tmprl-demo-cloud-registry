@@ -19,6 +19,9 @@ const LINK_SOURCES = [
 
 const WORKSHOPS_ROUTE = "/courses";
 const ONBOARD_ROUTE = "/onboard";
+// Instruqt access is granted through Serval, our internal onboarding tool.
+const INSTRUQT_ACCESS_URL =
+  "https://app.serval.com/catalog?request=access-catalog&appId=019f4bef-e156-742c-bbac-f363c6cc2937";
 
 const state = {
   demos: [],
@@ -32,7 +35,7 @@ const state = {
   selectedWorkshopSdks: new Set(),
   selectedWorkshopAiSdks: new Set(),
   workshopHours: null,
-  openDemoId: null,
+  openDrawerId: null,
   // Ziggy's view of the demos page: the demos it filtered to (null: no
   // filter) and the ones it put a halo on. Not in the URL; the chat owns it.
   ziggyPicks: null,
@@ -339,12 +342,12 @@ function setupTabs() {
 
 function setupKeyboard() {
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.openDemoId) {
+    if (event.key === "Escape" && state.openDrawerId) {
       closeDrawer();
       return;
     }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-    if (event.key === "/" && !typing && !state.openDemoId && currentView() !== "onboard") {
+    if (event.key === "/" && !typing && !state.openDrawerId && currentView() !== "onboard") {
       event.preventDefault();
       const selector =
         currentView() === "workshops" ? "[data-workshops-search]" : "[data-demos-search]";
@@ -894,7 +897,9 @@ function cardActions(demo) {
   return actions.length ? el("div", { class: "card-actions" }, ...actions) : null;
 }
 
-// ─── Demo drawer ───────────────────────────────────────────────────────────
+// ─── Detail drawer ─────────────────────────────────────────────────────────
+// Demos and workshops share one drawer, deep-linked by hash on their own page
+// (/#<demo id>, /courses#<workshop key>).
 
 let drawerReturnFocus = null;
 
@@ -902,18 +907,34 @@ function findDemo(id) {
   return state.demos.find((demo) => demo.id === id) || null;
 }
 
-function openDrawer(id, { updateHash = true } = {}) {
+// The drawer content for `id` on the current page, or null if there is none.
+function drawerContentFor(id) {
+  if (currentView() === "workshops") {
+    const members = findWorkshop(id);
+    return members ? renderWorkshopDrawerContent(id, members) : null;
+  }
+  if (currentView() !== "demos") return null;
   const demo = findDemo(id);
-  if (!demo) return;
-  if (!state.openDemoId) drawerReturnFocus = document.activeElement;
-  state.openDemoId = id;
+  return demo ? renderDrawerContent(demo) : null;
+}
+
+function drawerTargetExists(id) {
+  if (currentView() === "workshops") return Boolean(findWorkshop(id));
+  return currentView() === "demos" && Boolean(findDemo(id));
+}
+
+function openDrawer(id, { updateHash = true } = {}) {
+  const content = drawerContentFor(id);
+  if (!content) return;
+  if (!state.openDrawerId) drawerReturnFocus = document.activeElement;
+  state.openDrawerId = id;
   if (updateHash && window.location.hash !== `#${id}`) {
     window.history.pushState(null, "", `${window.location.pathname}${window.location.search}#${id}`);
   }
   const drawer = document.querySelector("[data-drawer]");
   const panel = document.querySelector("[data-drawer-panel]");
   clearAllWorkspaceTimers();
-  panel.replaceChildren(...renderDrawerContent(demo));
+  panel.replaceChildren(...content);
   panel.scrollTop = 0;
   drawer.hidden = false;
   document.body.classList.add("drawer-open");
@@ -921,8 +942,8 @@ function openDrawer(id, { updateHash = true } = {}) {
 }
 
 function closeDrawer({ updateHash = true } = {}) {
-  if (!state.openDemoId) return;
-  state.openDemoId = null;
+  if (!state.openDrawerId) return;
+  state.openDrawerId = null;
   clearAllWorkspaceTimers();
   document.querySelector("[data-drawer]").hidden = true;
   document.querySelector("[data-drawer-panel]").replaceChildren();
@@ -936,8 +957,8 @@ function closeDrawer({ updateHash = true } = {}) {
 
 function syncDrawerToHash() {
   const id = window.location.hash.slice(1);
-  if (id && currentView() === "demos" && findDemo(id)) {
-    if (state.openDemoId !== id) openDrawer(id, { updateHash: false });
+  if (id && drawerTargetExists(id)) {
+    if (state.openDrawerId !== id) openDrawer(id, { updateHash: false });
   } else {
     closeDrawer({ updateHash: false });
   }
@@ -948,7 +969,8 @@ function setupDrawer() {
 }
 
 function copyLink(id) {
-  const url = `${window.location.origin}/#${id}`;
+  const path = currentView() === "workshops" ? WORKSHOPS_ROUTE : "/";
+  const url = `${window.location.origin}${path}#${id}`;
   if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
   toast("Link copied");
 }
@@ -1725,7 +1747,7 @@ function courseVariantLabel(course) {
 }
 
 // Tracks sharing a catalog `parent` (e.g. one workshop per SDK) collapse into
-// a single card with one launch button per variant.
+// a single card whose drawer has one launch tile per variant.
 function groupCourses(courses) {
   const groups = new Map();
   for (const course of courses) {
@@ -1787,7 +1809,7 @@ function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-// Extra links listed under the launch buttons: catalog.resources plus
+// Extra links listed in the workshop drawer: catalog.resources plus
 // catalog.links.additional, once per URL across the group's tracks.
 function courseResources(members) {
   const seen = new Set();
@@ -1821,96 +1843,188 @@ function workshopAssets(representative, members) {
   ];
 }
 
-function renderWorkshopCard(members) {
+// A workshop group's key: the catalog `parent` its tracks share, else the lone
+// track's name. It is also the workshop's deep link (/courses#<key>).
+function workshopKey(members) {
+  return members[0].parent || members[0].name;
+}
+
+function findWorkshop(key) {
+  return groupCourses(state.courses).find((members) => workshopKey(members) === key) || null;
+}
+
+// What the card and drawer show for a workshop, merged across its tracks.
+function workshopInfo(members) {
   const representative =
     members.find((course) => course.name === course.parent) ||
     members.slice().sort((a, b) => a.name.localeCompare(b.name))[0];
-  const sdks = uniqueValues(members.flatMap(courseSdks));
-  const aiSdks = uniqueValues(members.flatMap(courseAiSdks));
-  const tags = uniqueValues(members.flatMap((course) => course.tags || [])).filter(
-    (tag) => tag.toLowerCase() !== "workshop"
-  );
   const ranges = members.map(courseDuration).filter(Boolean);
-  const duration = ranges.length
-    ? durationLabel([
-        Math.min(...ranges.map(([min]) => min)),
-        Math.max(...ranges.map(([, max]) => max)),
-      ])
-    : null;
-  const launchable = members.filter((course) => course.trackUrl);
+  return {
+    key: workshopKey(members),
+    representative,
+    title: representative.title || representative.name,
+    summary: representative.summary || "A hands-on Temporal workshop.",
+    sdks: uniqueValues(members.flatMap(courseSdks)),
+    aiSdks: uniqueValues(members.flatMap(courseAiSdks)),
+    tags: uniqueValues(members.flatMap((course) => course.tags || [])).filter(
+      (tag) => tag.toLowerCase() !== "workshop"
+    ),
+    duration: ranges.length
+      ? durationLabel([
+          Math.min(...ranges.map(([min]) => min)),
+          Math.max(...ranges.map(([, max]) => max)),
+        ])
+      : null,
+    launchable: members.filter((course) => course.trackUrl),
+  };
+}
 
-  // Every workshop lists its tracks the same way, even when there is only one,
-  // so a newly added language variant simply shows up as another row.
-  const launch = launchable.length
-    ? el(
-        "div",
-        {},
-        el("span", { class: "launch-label", text: "Choose a track" }),
-        el(
-          "div",
-          { class: "track-list" },
-          ...launchable.map((course) => {
-            const label = trackLabel(course);
-            const sdk = courseSdks(course)[0];
-            return externalLink(
-              course.trackUrl,
-              {
-                class: courseMatchesSdk(course) ? "is-match" : null,
-                "aria-label": label
-                  ? `Open the ${label} track in Instruqt`
-                  : `Open ${representative.title || course.name} in Instruqt`,
-              },
-              sdk ? sdkMark(sdk) : null,
-              label || "Open in Instruqt",
-              icon("arrow")
-            );
-          })
-        )
-      )
-    : el("span", { class: "launch-label", text: "No track published yet" });
+function workshopEyebrow(info) {
+  return [
+    "Instruqt workshop",
+    info.launchable.length ? plural(info.launchable.length, "track") : null,
+    info.duration,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
-  const resources = courseResources(members);
+// Cards stay compact like the demo cards: languages show inline, and the
+// tracks themselves are launched from the drawer.
+function renderWorkshopCard(members) {
+  const info = workshopInfo(members);
   return el(
     "article",
-    { class: "workshop" },
-    el("p", {
-      class: "eyebrow",
-      text: [
-        "Instruqt workshop",
-        launchable.length ? plural(launchable.length, "track") : null,
-        duration,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    }),
-    el("h3", { text: representative.title || representative.name }),
-    el("p", {
-      class: "workshop-summary",
-      text: representative.summary || "A hands-on Temporal workshop.",
-    }),
-    sdkList(sdks),
-    tagRow([
-      ...aiSdks.map((aiSdk) =>
-        el("span", { class: "tag tag-solid", title: "AI SDK", text: aiSdk })
-      ),
-      ...topicTags(tags),
-    ]),
-    cardAssets(workshopAssets(representative, members)),
-    el("div", { class: "workshop-launch" }, launch),
-    resources.length
-      ? el(
-          "div",
-          { class: "workshop-resources" },
-          ...resources.map((resource) =>
-            externalLink(
-              resource.url,
-              { title: resource.kind || resource.label },
-              `${resource.label} ↗`
-            )
-          )
-        )
-      : null
+    { class: "workshop", id: `workshop-${info.key}` },
+    el("p", { class: "eyebrow", text: workshopEyebrow(info) }),
+    el(
+      "h3",
+      {},
+      el("button", {
+        type: "button",
+        class: "card-open",
+        text: info.title,
+        onclick: () => openDrawer(info.key),
+      })
+    ),
+    el("p", { class: "workshop-summary", text: info.summary }),
+    sdkList(info.sdks, info.aiSdks),
+    tagRow(topicTags(info.tags, 3)),
+    el("div", { class: "card-foot" }, cardAssets(workshopAssets(info.representative, members)))
   );
+}
+
+// One launch tile per published track. Tracks matching the SDK filter (or the
+// only track) get the primary treatment.
+function trackTile(course, info) {
+  const label = trackLabel(course);
+  const sdk = courseSdks(course)[0];
+  const range = courseDuration(course);
+  const primary = info.launchable.length === 1 || courseMatchesSdk(course);
+  return externalLink(
+    course.trackUrl,
+    {
+      class: `launch${primary ? " is-primary" : ""}`,
+      "aria-label": label
+        ? `Open the ${label} track in Instruqt`
+        : `Open ${info.title} in Instruqt`,
+    },
+    el("small", { text: range ? durationLabel(range) : "Instruqt track" }),
+    el(
+      "strong",
+      {},
+      el("span", { class: "launch-track" }, sdk ? sdkMark(sdk) : null, label || "Open in Instruqt"),
+      icon("external")
+    )
+  );
+}
+
+function renderWorkshopDrawerContent(key, members) {
+  const info = workshopInfo(members);
+  const assets = workshopAssets(info.representative, members);
+  const assetUrl = (label) => assets.find(([full]) => full === label)?.[2];
+
+  const head = el(
+    "div",
+    { class: "drawer-head" },
+    el("p", { class: "eyebrow", text: workshopEyebrow(info) }),
+    el(
+      "div",
+      { class: "drawer-head-actions" },
+      el(
+        "button",
+        { type: "button", class: "btn btn-sm btn-quiet", onclick: () => copyLink(key) },
+        icon("link"),
+        "Copy link"
+      ),
+      el(
+        "button",
+        { type: "button", class: "icon-btn", "aria-label": "Close", onclick: () => closeDrawer() },
+        icon("close")
+      )
+    )
+  );
+
+  const title = el(
+    "div",
+    { class: "drawer-title" },
+    el("h2", { id: "drawer-title", text: info.title }),
+    el("p", { text: info.summary }),
+    sdkList(info.sdks, info.aiSdks)
+  );
+
+  const tracks = el(
+    "div",
+    { class: "panel" },
+    el("h3", { class: "panel-title", text: "Tracks" }),
+    info.launchable.length
+      ? el("div", { class: "launch-grid" }, ...info.launchable.map((course) => trackTile(course, info)))
+      : el("p", { class: "ws-note", text: "No track published yet." }),
+    el(
+      "p",
+      { class: "ws-note track-access" },
+      "No Instruqt access yet? ",
+      externalLink(INSTRUQT_ACCESS_URL, {}, "Request it in Serval ↗")
+    )
+  );
+
+  const assetCols = el(
+    "div",
+    { class: "asset-cols" },
+    el(
+      "div",
+      { class: "panel" },
+      el("h3", { class: "panel-title", text: "Presenting" }),
+      el(
+        "div",
+        { class: "asset-list" },
+        assetRow("Speaker notes", assetUrl("Speaker notes")),
+        assetRow("Slide deck", assetUrl("Slide deck")),
+        assetRow("Golden path recording", assetUrl("Golden path recording")),
+        assetRow("External recording", assetUrl("External recording"))
+      )
+    ),
+    el(
+      "div",
+      { class: "panel" },
+      el("h3", { class: "panel-title", text: "Resources" }),
+      el(
+        "div",
+        { class: "asset-list" },
+        assetRow("Runbook", assetUrl("Runbook")),
+        ...courseResources(members).map((resource) => assetRow(resource.label, resource.url))
+      )
+    )
+  );
+
+  const topics = el(
+    "div",
+    { class: "panel" },
+    el("h3", { class: "panel-title", text: "Topics" }),
+    tagRow(topicTags(info.tags)) || el("p", { class: "ws-note", text: "No topics tagged." })
+  );
+
+  return [head, el("div", { class: "drawer-body" }, title, tracks, assetCols, topics)];
 }
 
 function renderWorkshopsList() {
@@ -2090,6 +2204,12 @@ function render() {
     } else {
       link.removeAttribute("aria-current");
     }
+  });
+  // The header's access buttons follow the page: Temporal Cloud namespaces for
+  // demos, Instruqt for workshops.
+  document.querySelectorAll("[data-header-for]").forEach((node) => {
+    const forWorkshops = node.getAttribute("data-header-for") === "workshops";
+    node.hidden = forWorkshops !== (view === "workshops");
   });
   document.title = {
     workshops: "Workshops · Temporal Field Kit",

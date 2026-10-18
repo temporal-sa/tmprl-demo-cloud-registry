@@ -33,6 +33,15 @@ spec:
     duration:
       minHours: 1
       maxHours: 1.5
+    links:
+      slideDeck:
+        url: https://docs.google.com/presentation/d/1wCWVkuSei-OXPWHci1epYXw0qiBljLKvJ7zbNQcym3c/edit
+      speakerNotes:
+        url: https://docs.google.com/presentation/d/1rehj4C5UgTmnrMnaU8vnG--PN_a-utDHldrZHSDQkEM/edit
+        label: Deck with presenter notes
+      externalRecording:
+        url: https://www.youtube.com/watch?v=tZRtLbKXtqg
+        label: Sep 16, 2026 session (Python track)
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101
