@@ -31,8 +31,8 @@ spec:
     tags: [Durable execution, Getting started, Retries, Error handling]
     temporalSdks: [Python]
     duration:
-      minHours: 2
-      maxHours: 3
+      minHours: 1
+      maxHours: 1.5
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/instruqt-workshop-ad-agency-101
