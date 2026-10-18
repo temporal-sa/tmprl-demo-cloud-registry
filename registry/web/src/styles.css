@@ -1053,6 +1053,7 @@
 
   /* Workshop drawer: one launch tile per track */
   .launch-track { display: inline-flex; align-items: center; gap: .6rem; }
+  .launch-marks { display: inline-flex; gap: .25rem; }
   .track-access { margin-top: 1rem; font-size: .9375rem; }
   .track-access a { color: var(--off-white); text-decoration: underline; text-underline-offset: 3px; }
   .track-access a:hover { color: var(--mint); }
