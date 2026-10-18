@@ -27,8 +27,8 @@ spec:
     tags: [Worker Versioning, Patching, Recovery]
     temporalSdks: [Python]
     duration:
-      minHours: 3
-      maxHours: 4
+      minHours: 1
+      maxHours: 1.5
     resources:
       - label: Workshop source
         url: https://github.com/temporal-sa/temporal-workshop-patching-and-recovery

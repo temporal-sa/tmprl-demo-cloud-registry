@@ -30,7 +30,7 @@ spec:
     temporalSdks: [Python, Java]
     aiSdks: [OpenAI Agents SDK, Spring AI]
     duration:
-      minHours: 2
+      minHours: 1
       maxHours: 3
     resources:
       - label: Workshop source
