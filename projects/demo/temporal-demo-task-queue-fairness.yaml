@@ -21,6 +21,10 @@ spec:
       enabled: true
       taskQueueEnv: TASK_QUEUE
       baseTaskQueue: docs
+    links:
+      runbook:
+        label: Demo Guide
+        url: https://github.com/mikeacjones/temporal-demo-task-queue-fairness/blob/main/RUNBOOK.md
   source:
     repo: https://github.com/temporal-sa/temporal-demo-task-queue-fairness
   builds:
