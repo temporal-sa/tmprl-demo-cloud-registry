@@ -35,6 +35,9 @@ spec:
     links:
       slideDeck:
         url: https://docs.google.com/presentation/d/19cvHVC-nuBBLlkn4IZr8UIqmQ8nxkO-W-i3wv68gI_k/edit
+      runbook:
+        url: https://docs.google.com/document/d/180aI7629_bzRbkJTQtmvfq3YpHdygey0f9dUsawfobE/edit
+        label: TA runbook and breakout question bank
       externalRecording:
         url: https://youtu.be/QjVpE6-G18U
         label: Agentic AI Summit 2026 session
