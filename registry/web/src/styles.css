@@ -1006,6 +1006,96 @@
 
   .card-actions .btn { position: relative; z-index: 1; padding-inline: 0; }
 
+  /* Star toggle: pinned to a card's corner, above the card-open overlay */
+  .star-btn {
+    position: absolute;
+    top: .75rem;
+    right: .75rem;
+    z-index: 2;
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    color: var(--gray-500);
+    cursor: pointer;
+    transition: color .15s;
+  }
+
+  .star-btn svg, .drawer-star svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+  .card:hover .star-btn, .feature:hover .star-btn, .star-btn:hover { color: var(--off-white); }
+  .star-btn.is-starred, .drawer-star.is-starred { color: var(--mint); }
+  .star-btn.is-starred svg, .drawer-star.is-starred svg { fill: currentColor; }
+  .feature { position: relative; }
+  .feature .star-btn { color: var(--gray-300); background: rgb(0 0 0 / .35); }
+  .feature .star-btn.is-starred { color: var(--mint); }
+
+  /* Starred: compact launcher chips above the canonical demos */
+  .starred { margin-bottom: 3rem; }
+  .starred .eyebrow { font-size: .75rem; }
+
+  .starred-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: .6rem;
+    margin-top: .75rem;
+  }
+
+  .starred-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    min-width: 0;
+    padding: .45rem .35rem .45rem 1rem;
+    background: var(--deep-blue);
+    transition: background-color .15s, box-shadow .15s;
+  }
+
+  .starred-chip::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 3px;
+    background: var(--sdk-bar, var(--gray-500));
+  }
+
+  .starred-chip:hover { background: var(--deep-blue-hover); box-shadow: inset 0 0 0 1px var(--indigo-400); }
+
+  /* Long names wrap to a second line, then clamp; the title has the full name */
+  .starred-name {
+    display: -webkit-box;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: .9375rem;
+    line-height: 1.3;
+    text-align: left;
+    cursor: pointer;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .starred-name:hover { color: var(--mint); }
+
+  .starred-link {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    color: var(--mint);
+    font-family: var(--mono);
+    font-size: .6875rem;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .starred-link:hover { color: var(--off-white); }
+  .starred-link svg { width: .7rem; height: .7rem; fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .star-btn.is-inline { position: static; width: 1.75rem; height: 1.75rem; }
+  .card h3 { padding-right: 1.75rem; }
+
   /* Workshop cards (Resources "New to Temporal?" style) */
   .workshop-grid {
     display: grid;
