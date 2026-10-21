@@ -17,8 +17,8 @@ spec:
     temporalSdks: [Go]
     links:
       runbook:
-        label: README
-        url: https://github.com/temporal-sa/temporal-demo-podpocalypse#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-podpocalypse/blob/main/RUNBOOK.md
   builds:
     app:
       context: .

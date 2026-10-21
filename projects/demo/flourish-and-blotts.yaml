@@ -21,8 +21,8 @@ spec:
       slideDeck:
         url: https://docs.google.com/presentation/d/1mxn2Gb68o5jLTEGUKekFuajcc5GrWOOr
       runbook:
-        label: Quick start
-        url: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-flourish-and-blotts

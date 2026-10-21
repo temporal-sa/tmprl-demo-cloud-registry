@@ -15,6 +15,10 @@ spec:
       event follow-up leads without a database.
     tags: [Forms, Entity Workflows, Workflow Sharding]
     temporalSdks: [Go]
+    links:
+      runbook:
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-lead-follow-up-event-tracker/blob/main/RUNBOOK.md
   builds:
     app:
       context: .

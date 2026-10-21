@@ -16,8 +16,8 @@ spec:
       slideDeck:
         url: https://drive.google.com/file/d/1Kk_1i6Dbd_pkqqg4sApXyDUIAYYwIB2B/view
       runbook:
-        label: README (The Demo)
-        url: https://github.com/temporal-sa/temporal-demo-dejavu-tacos#the-demo
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-dejavu-tacos/blob/main/RUNBOOK.md
     crashable:
       enabled: true
       taskQueueEnv: TEMPORAL_TASK_QUEUE

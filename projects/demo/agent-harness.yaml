@@ -26,8 +26,8 @@ spec:
           url: https://drive.google.com/file/d/1BD5KHuNLzAXSSVeTFzGiap2CXgnkRUCd/view
           audience: technical
       runbook:
-        label: README
-        url: https://github.com/temporal-sa/temporal-demo-agent-harness#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-agent-harness/blob/main/RUNBOOK.md
     crashable:
       enabled: true
       taskQueueEnv: TEMPORAL_TASK_QUEUE

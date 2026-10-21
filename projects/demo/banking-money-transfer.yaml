@@ -17,8 +17,8 @@ spec:
         label: "Intro to Temporal: Money Transfer"
         url: https://docs.google.com/presentation/d/1UtFAJvgJuvtxy07REUmFISvlmXzvC97Y49Wu_yNK57c
       runbook:
-        label: README (The Demo)
-        url: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer#the-demo
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer

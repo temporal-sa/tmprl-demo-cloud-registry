@@ -27,8 +27,8 @@ spec:
       baseTaskQueue: lakebase-agent-task-queue
     links:
       runbook:
-        label: Deployment and demo guide
-        url: https://github.com/temporal-sa/temporal-lakebase-agent#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-lakebase-agent/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/temporal-lakebase-agent

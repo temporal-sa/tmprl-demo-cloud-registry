@@ -17,8 +17,8 @@ spec:
         label: Payout Orchestration deck
         url: https://docs.google.com/presentation/d/1cMBcqLhs9R-D3fLjHTeR4jXtnPFxJU9Eeah2F3xSrvE
       runbook:
-        label: README
-        url: https://github.com/temporal-sa/temporal-demo-payments#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-payments/blob/codex/cloud-registry-adapter/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-payments

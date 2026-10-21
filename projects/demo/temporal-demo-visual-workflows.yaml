@@ -15,8 +15,8 @@ spec:
     aiSdks: [Anthropic SDK]
     links:
       runbook:
-        url: https://github.com/temporal-sa/temporal-demo-visual-workflows#readme
-        label: README
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-visual-workflows/blob/main/RUNBOOK.md
     crashable:
       enabled: true
       taskQueueEnv: TASK_QUEUE
