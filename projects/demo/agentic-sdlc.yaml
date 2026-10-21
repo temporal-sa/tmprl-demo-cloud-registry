@@ -96,69 +96,13 @@ spec:
       build: app
       command: [python, -m, agentic_sdlc.worker]
       worker: true
+      # An in-flight model call can run for minutes; let it finish on shutdown.
       terminationGracePeriodSeconds: 600
       secrets: [anthropic, openai, gemini, github]
       env:
         - {name: TEMPORAL_TASK_QUEUE, value: agentic-sdlc}
         - {name: TEMPORAL_WORKER_BUILD_ID, value: v2}
         - {name: PIPELINE_VERSION, value: v2}
-        - name: REDIS_PASSWORD
-          valueFrom: {inputRef: secrets.runtime.REDIS_PASSWORD}
-        - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"}
-        - {name: WEB_INTERNAL_URL, value: "http://web"}
-        - {name: GITHUB_SANDBOX_REPO, value: temporal-sa/agentic-sdlc-storefront}
-        - {name: RUN_BUDGET_USD, value: "3.00"}
-    redis:
-      context: .
-      dockerfile: docker/redis.Dockerfile
-  secrets:
-    anthropic:
-      shared: anthropic
-      requiredProperties: [ANTHROPIC_API_KEY]
-    openai:
-      shared: openai
-      requiredProperties: [OPENAI_API_KEY]
-    gemini:
-      shared: gemini
-      requiredProperties: [GEMINI_API_KEY]
-    # Fine-grained PAT scoped to temporal-sa/agentic-sdlc-storefront (contents, pull requests,
-    # issues: read/write). Expires 2027-10-22; see RUNBOOK "Rotate the GitHub token".
-    github:
-      requiredProperties: [GITHUB_TOKEN]
-    runtime:
-      requiredProperties: [REDIS_PASSWORD, SESSION_SECRET]
-  components:
-    web:
-      build: app
-      command: [uvicorn, agentic_sdlc.web.app:app, --host, 0.0.0.0, --port, "8000"]
-      temporalAccess: true
-      replicas: 1
-      ports: [{name: http, containerPort: 8000, servicePort: 80}]
-      env:
-        - {name: TEMPORAL_TASK_QUEUE, value: agentic-sdlc}
-        - {name: TRUST_AUTH_HEADERS, value: "true"}
-        # The web server holds no LLM keys; this is the list its model pickers offer.
-        - {name: ENABLED_PROVIDERS, value: "anthropic,openai,google"}
-        - name: REDIS_PASSWORD
-          valueFrom: {inputRef: secrets.runtime.REDIS_PASSWORD}
-        - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"}
-        - name: SESSION_SECRET
-          valueFrom: {inputRef: secrets.runtime.SESSION_SECRET}
-        - {name: GITHUB_SANDBOX_REPO, value: temporal-sa/agentic-sdlc-storefront}
-    worker:
-      build: app
-      command: [python, -m, agentic_sdlc.worker]
-      worker:
-        versioning:
-          enabled: true
-          deploymentName: agentic-sdlc
-      # An in-flight model call can run for minutes; let it finish on shutdown.
-      terminationGracePeriodSeconds: 600
-      secrets: [anthropic, openai, gemini, github]
-      env:
-        - {name: TEMPORAL_TASK_QUEUE, value: agentic-sdlc}
-        # Bump to v2 (a new Worker Deployment Version) to show the security-review stage.
-        - {name: PIPELINE_VERSION, value: v1}
         - name: REDIS_PASSWORD
           valueFrom: {inputRef: secrets.runtime.REDIS_PASSWORD}
         - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"}
