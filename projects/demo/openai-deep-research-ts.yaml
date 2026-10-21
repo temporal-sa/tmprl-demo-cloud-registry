@@ -15,8 +15,8 @@ spec:
     aiSdks: [OpenAI Agents SDK]
     links:
       runbook:
-        label: README
-        url: https://github.com/temporal-sa/openai-agents-sdk-deep-research-demo-typescript#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/openai-agents-sdk-deep-research-demo-typescript/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/openai-agents-sdk-deep-research-demo-typescript

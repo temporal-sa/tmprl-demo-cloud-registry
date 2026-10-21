@@ -60,8 +60,8 @@ spec:
     aiSdks: [Anthropic SDK]
     links:
       runbook:
-        label: README (What to try)
-        url: https://github.com/temporal-sa/durable-claude-skills#what-to-try
+        label: Runbook
+        url: https://github.com/temporal-sa/durable-agent-skills/blob/main/RUNBOOK.md
     readiness:
       score: 4
       maxScore: 5

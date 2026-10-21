@@ -19,8 +19,8 @@ spec:
     aiSdks: [LangGraph, Anthropic SDK, OpenAI SDK]
     links:
       runbook:
-        label: README (Run the demo)
-        url: https://github.com/temporal-sa/langgraph-temporal-demo#run-the-demo
+        label: Runbook
+        url: https://github.com/temporal-sa/langgraph-temporal-demo/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/langgraph-temporal-demo

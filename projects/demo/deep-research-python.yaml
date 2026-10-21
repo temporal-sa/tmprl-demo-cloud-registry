@@ -16,8 +16,8 @@ spec:
     aiSdks: [OpenAI SDK]
     links:
       runbook:
-        label: README
-        url: https://github.com/temporal-sa/openai-deep-research-py#readme
+        label: Runbook
+        url: https://github.com/temporal-sa/openai-deep-research-py/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/openai-deep-research-py

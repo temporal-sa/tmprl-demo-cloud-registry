@@ -14,8 +14,8 @@ spec:
     temporalSdks: [Python]
     links:
       runbook:
-        label: README (Demo scenarios)
-        url: https://github.com/temporal-sa/temporal-data-pipeline-demo#demo-scenarios
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-data-pipeline-demo/blob/main/RUNBOOK.md
       additional:
         - label: "Slack: is this still the go-to data pipeline demo?"
           url: https://temporal.enterprise.slack.com/archives/C03HNADRLKY/p1770244309402249

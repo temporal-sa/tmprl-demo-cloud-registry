@@ -20,7 +20,8 @@ spec:
       baseTaskQueue: travel-agent
     links:
       runbook:
-        url: https://github.com/temporal-sa/canonical-adk-demo#quick-start
+        label: Runbook
+        url: https://github.com/temporal-sa/canonical-adk-demo/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/canonical-adk-demo

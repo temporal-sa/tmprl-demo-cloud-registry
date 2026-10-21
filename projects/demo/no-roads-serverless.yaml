@@ -30,8 +30,8 @@ spec:
         label: Introduction to Serverless Workers
         url: https://docs.google.com/presentation/d/1f8InHXCgoqxIacuEL4SQcvRhByA9sM7K45S5EZiitVw
       runbook:
-        label: README (Presenter mode)
-        url: https://github.com/temporal-sa/temporal-demo-serverless-no-roads#presenter-mode
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-serverless-no-roads/blob/main/RUNBOOK.md
   source:
     repo: https://github.com/temporal-sa/temporal-demo-serverless-no-roads
   temporal:

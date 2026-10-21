@@ -16,8 +16,8 @@ spec:
       slideDeck:
         url: https://docs.google.com/presentation/d/160Gm9ihtMLM9OmevttsBXLX2iT5SUO-I6giJVukUc4Q
       runbook:
-        label: README (Demo script)
-        url: https://github.com/temporal-sa/temporal-demo-versioning#demo-script
+        label: Runbook
+        url: https://github.com/temporal-sa/temporal-demo-versioning/blob/main/RUNBOOK.md
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-versioning
