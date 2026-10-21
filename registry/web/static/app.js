@@ -573,7 +573,113 @@ function demoMatchesFilters(demo) {
   return matchesTags && matchesSdks && matchesAiSdks && matchesSearch;
 }
 
+// ─── Starred demos ─────────────────────────────────────────────────────────
+// Per-browser quick access: an ordered list of demo ids, newest first. Ids
+// that are no longer in the registry are skipped when rendering, not pruned,
+// so a failed or partial registry load never wipes someone's stars.
+
+const STARRED_KEY = "catalog.starredDemos";
+
+function starredIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(STARRED_KEY) || "[]");
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function isStarred(id) {
+  return starredIds().includes(id);
+}
+
+function toggleStar(id) {
+  const current = starredIds();
+  const ids = current.includes(id) ? current.filter((starred) => starred !== id) : [id, ...current];
+  try {
+    localStorage.setItem(STARRED_KEY, JSON.stringify(ids));
+  } catch {
+    toast("Couldn't save stars in this browser.");
+    return;
+  }
+  renderDemosList();
+}
+
+function starButton(demo, cls = "star-btn") {
+  const starred = isStarred(demo.id);
+  return el(
+    "button",
+    {
+      type: "button",
+      class: starred ? `${cls} is-starred` : cls,
+      "aria-pressed": starred ? "true" : "false",
+      "aria-label": starred ? `Unstar ${demo.name}` : `Star ${demo.name}`,
+      title: starred ? "Remove from Starred" : "Add to Starred",
+      onclick: (event) => {
+        event.stopPropagation();
+        toggleStar(demo.id);
+      },
+    },
+    icon("star")
+  );
+}
+
+// The drawer's labelled toggle; it re-labels itself since the drawer isn't
+// re-rendered when the list behind it is.
+function drawerStarButton(demo) {
+  const button = el("button", { type: "button", class: "btn btn-sm btn-quiet drawer-star" });
+  const paint = () => {
+    const starred = isStarred(demo.id);
+    button.classList.toggle("is-starred", starred);
+    button.setAttribute("aria-pressed", starred ? "true" : "false");
+    button.replaceChildren(icon("star"), starred ? "Starred" : "Star");
+  };
+  button.addEventListener("click", () => {
+    toggleStar(demo.id);
+    paint();
+  });
+  paint();
+  return button;
+}
+
+function chipLink(url, label, title) {
+  if (!url) return null;
+  return externalLink(url, { class: "starred-link", title }, label, icon("external"));
+}
+
+function renderStarredChip(demo) {
+  return el(
+    "div",
+    { class: "starred-chip", style: `--sdk-bar:${sdkBar(demo.sdks)}` },
+    el("button", {
+      type: "button",
+      class: "starred-name",
+      text: demo.name,
+      title: `Open ${demo.name} details`,
+      onclick: () => openDrawer(demo.id),
+    }),
+    chipLink(demo.technicalAssets.appUrl, "App", "Open app"),
+    chipLink(
+      namespaceUrl(demo),
+      "NS",
+      demo.cloud.namespace ? `Open ${demo.cloud.namespace} in Temporal Cloud` : null
+    ),
+    starButton(demo, "star-btn is-inline")
+  );
+}
+
+// Always every starred demo, regardless of search, filters or Ziggy's picks:
+// the point is one click to the demos you already know.
+function renderStarred() {
+  const byId = new Map(state.demos.map((demo) => [demo.id, demo]));
+  const starred = starredIds().map((id) => byId.get(id)).filter(Boolean);
+  const section = document.querySelector("[data-starred]");
+  section.hidden = !starred.length;
+  document.querySelector("[data-starred-list]").replaceChildren(...starred.map(renderStarredChip));
+}
+
 function renderDemosList() {
+  renderStarred();
   const canonical = state.demos.filter((demo) => demo.canonical);
   const others = state.demos.filter((demo) => !demo.canonical);
   // Ziggy lists its picks best first; keep that order within each section.
@@ -832,6 +938,7 @@ function renderFeatureCard(demo) {
       },
     },
     demoArt(demo),
+    starButton(demo),
     el(
       "div",
       { class: "feature-body" },
@@ -876,6 +983,7 @@ function renderDemoCard(demo) {
   return el(
     "article",
     { class: ziggyPickClass("card", demo), id: `demo-${demo.id}`, style: `--sdk-bar:${sdkBar(demo.sdks)}` },
+    starButton(demo),
     el(
       "h3",
       {},
@@ -1023,6 +1131,7 @@ function renderDrawerContent(demo) {
     el(
       "div",
       { class: "drawer-head-actions" },
+      drawerStarButton(demo),
       el(
         "button",
         { type: "button", class: "btn btn-sm btn-quiet", onclick: () => copyLink(demo.id) },
