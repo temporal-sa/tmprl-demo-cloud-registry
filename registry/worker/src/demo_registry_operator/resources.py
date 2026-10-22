@@ -155,6 +155,16 @@ REGISTRY_AUTH_PUBLIC_PATH_PREFIXES = [
     "/_auth",
     "/traefik",
 ]
+# Link-preview crawlers (Slack's unfurler and friends) can't sign in, so they
+# may fetch the catalog's page shells without auth. The shell carries only the
+# page's Open Graph tags (a demo's or workshop's title and summary); the
+# catalog data behind it stays behind auth.
+REGISTRY_LINK_PREVIEW_PATHS = ["/", "/courses"]
+REGISTRY_LINK_PREVIEW_PATH_PREFIXES = ["/demos/", "/courses/"]
+REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN = (
+    "(?i)(Slackbot|Twitterbot|facebookexternalhit|LinkedInBot|Discordbot"
+    "|SkypeUriPreview|MicrosoftPreview|WhatsApp|TelegramBot)"
+)
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -3087,7 +3097,35 @@ def registry_auth_bypass_routes(
                     priority=2000,
                 )
             )
+        preview = ingress_route(
+            demo_project,
+            route_spec,
+            image_overrides=image_overrides,
+            rollout_version=rollout_version,
+            namespace=route_namespace,
+            service_namespace=service_namespace,
+            use_auth=False,
+            priority=2000,
+        )
+        preview["match"] = registry_link_preview_match(demo_project)
+        routes.append(preview)
     return routes
+
+
+def registry_link_preview_match(demo_project: dict[str, Any]) -> str:
+    paths = [f"Path(`{path}`)" for path in REGISTRY_LINK_PREVIEW_PATHS] + [
+        f"PathPrefix(`{prefix}`)" for prefix in REGISTRY_LINK_PREVIEW_PATH_PREFIXES
+    ]
+    # Traefik v3 renamed the v2 HeadersRegexp matcher.
+    header_matcher = (
+        "HeaderRegexp"
+        if traefik_api_version() == TRAEFIK_API_VERSION_V3
+        else "HeadersRegexp"
+    )
+    return (
+        f"Host(`{project_host(demo_project)}`) && ({' || '.join(paths)}) && "
+        f"{header_matcher}(`User-Agent`, `{REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN}`)"
+    )
 
 
 def certificate_resource(
