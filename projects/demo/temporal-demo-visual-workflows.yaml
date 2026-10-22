@@ -61,6 +61,9 @@ spec:
           value: https://cloud.temporal.io
         - name: TRUST_AUTH_HEADERS
           value: 'true'
+        # Rate limits shared by every run; the worker polls one task queue per limit.
+        - name: RATE_LIMITS
+          value: metered=5/s
         - name: SESSION_SECRET
           valueFrom:
             inputRef: secrets.session.SESSION_SECRET
@@ -75,6 +78,12 @@ spec:
       env:
         - name: TASK_QUEUE
           value: visual-workflows
+        - name: RATE_LIMITS
+          value: metered=5/s
+        # The business connectors (Salesforce, Stripe, ServiceNow, Slack,
+        # GitHub) call the sandbox's stand-ins for those services.
+        - name: SANDBOX_URL
+          value: http://sandbox:8090
         - name: ANTHROPIC_API_KEY
           valueFrom:
             inputRef: secrets.anthropic.ANTHROPIC_API_KEY
