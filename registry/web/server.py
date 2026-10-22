@@ -259,6 +259,168 @@ def catalog_payload(registry_path: Path, status_dir: Path) -> dict[str, Any]:
     }
 
 
+SITE_NAME = "Temporal Field Kit"
+SOCIAL_META_MARKER = "<!-- social-meta -->"
+SOCIAL_DESCRIPTION_LIMIT = 300
+DEMO_PATH_PREFIX = "/demos/"
+WORKSHOP_PATH_PREFIX = "/courses/"
+DEFAULT_SOCIAL_IMAGE = "og-image.png"
+VIEW_PAGES = {
+    "/": (
+        "Demos",
+        "Live, presentation-ready Temporal demos you can launch, present, or crash.",
+    ),
+    "/courses": (
+        "Workshops",
+        "Browser-based Instruqt workshops for live sessions, webinars and self-paced learning.",
+    ),
+    "/onboard": (
+        "Add a demo",
+        "Bring a public demo repo into the Temporal Field Kit catalog.",
+    ),
+}
+
+
+def clip(text: str, limit: int = SOCIAL_DESCRIPTION_LIMIT) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def hours_label(duration: Any) -> str | None:
+    if not isinstance(duration, dict):
+        return None
+    low, high = duration.get("minHours"), duration.get("maxHours")
+    if not all(isinstance(v, (int, float)) and v > 0 for v in (low, high)) or high < low:
+        return None
+    unit = "hour" if high == 1 else "hours"
+    return f"{high:g} {unit}" if low == high else f"{low:g}–{high:g} {unit}"
+
+
+def demo_social_meta(project: dict[str, Any]) -> dict[str, Any]:
+    name = str(project["name"])
+    sdks = unique(string_list(project.get("temporalSdks")) + string_list(project.get("aiSdks")))
+    tags = string_list(project.get("tags"))
+    screenshot = f"screenshots/{name}.jpg"
+    return {
+        "title": str(project.get("title") or name),
+        "description": str(project.get("summary") or "A Temporal demo in the Field Kit catalog."),
+        "path": f"{DEMO_PATH_PREFIX}{quote(name)}",
+        "image": screenshot if (STATIC_DIR / screenshot).is_file() else DEFAULT_SOCIAL_IMAGE,
+        "labels": [("SDKs", ", ".join(sdks)), ("Topics", ", ".join(tags[:6]))],
+    }
+
+
+def workshop_social_meta(key: str, members: list[dict[str, Any]]) -> dict[str, Any]:
+    # Mirrors workshopInfo() in app.js: tracks sharing a `parent` are one workshop.
+    representative = next(
+        (course for course in members if course.get("name") == course.get("parent")),
+        min(members, key=lambda course: str(course.get("name", ""))),
+    )
+    sdks = unique(
+        [sdk for course in members for sdk in string_list(course.get("temporalSdks"))]
+        + [sdk for course in members for sdk in string_list(course.get("aiSdks"))]
+    )
+    durations = [hours_label(course.get("duration")) for course in members]
+    return {
+        "title": str(representative.get("title") or representative.get("name") or key),
+        "description": str(representative.get("summary") or "A hands-on Temporal workshop."),
+        "path": f"{WORKSHOP_PATH_PREFIX}{quote(key)}",
+        "image": DEFAULT_SOCIAL_IMAGE,
+        "labels": [
+            ("SDKs", ", ".join(sdks)),
+            ("Length", ", ".join(unique([d for d in durations if d]))),
+        ],
+    }
+
+
+def social_meta_for_path(path: str, registry: dict[str, Any]) -> dict[str, Any]:
+    if path.startswith(DEMO_PATH_PREFIX):
+        name = unquote(path.removeprefix(DEMO_PATH_PREFIX)).strip("/")
+        for project in registry.get("projects", []):
+            if isinstance(project, dict) and project.get("name") == name:
+                return demo_social_meta(project)
+    elif path.startswith(WORKSHOP_PATH_PREFIX):
+        key = unquote(path.removeprefix(WORKSHOP_PATH_PREFIX)).strip("/")
+        courses = registry.get("courses")
+        members = [
+            course
+            for course in (courses if isinstance(courses, list) else [])
+            if isinstance(course, dict) and (course.get("parent") or course.get("name")) == key
+        ]
+        if members:
+            return workshop_social_meta(key, members)
+
+    view = path if path in VIEW_PAGES else (
+        "/courses" if path.startswith(WORKSHOP_PATH_PREFIX) else "/"
+    )
+    heading, description = VIEW_PAGES[view]
+    return {
+        "title": SITE_NAME if view == "/" else f"{heading} · {SITE_NAME}",
+        "description": description,
+        "path": view,
+        "image": DEFAULT_SOCIAL_IMAGE,
+        "labels": [],
+        "site_page": True,
+    }
+
+
+def render_social_meta(meta: dict[str, Any], base_url: str) -> tuple[str, str]:
+    """Return the page <title> and the Open Graph / Twitter tags for a page."""
+    title = meta["title"]
+    page_title = title if meta.get("site_page") else f"{title} · {SITE_NAME}"
+    description = clip(meta["description"])
+    url = f"{base_url}{meta['path']}"
+    image = f"{base_url}/static/{meta['image']}"
+    tags = [
+        ("name", "description", description),
+        ("property", "og:type", "website"),
+        ("property", "og:site_name", SITE_NAME),
+        ("property", "og:title", title),
+        ("property", "og:description", description),
+        ("property", "og:url", url),
+        ("property", "og:image", image),
+        ("name", "twitter:card", "summary_large_image"),
+        ("name", "twitter:title", title),
+        ("name", "twitter:description", description),
+        ("name", "twitter:image", image),
+    ]
+    # Slack renders up to two twitter:label/data pairs under the preview.
+    filled = [(label, data) for label, data in meta["labels"] if data][:2]
+    for index, (label, data) in enumerate(filled, start=1):
+        tags.append(("name", f"twitter:label{index}", label))
+        tags.append(("name", f"twitter:data{index}", clip(data, 120)))
+    lines = [f'<link rel="canonical" href="{escape(url)}" />']
+    lines += [
+        f'<meta {attr}="{escape(key)}" content="{escape(value)}" />'
+        for attr, key, value in tags
+    ]
+    return page_title, "\n    ".join(lines)
+
+
+def render_index_html(template: str, path: str, registry: dict[str, Any], base_url: str) -> str:
+    page_title, tags = render_social_meta(social_meta_for_path(path, registry), base_url)
+    html = re.sub(
+        r"<title>.*?</title>",
+        lambda _: f"<title>{escape(page_title)}</title>",
+        template,
+        count=1,
+        flags=re.DOTALL,
+    )
+    return html.replace(SOCIAL_META_MARKER, tags, 1)
+
+
 def crashable_workflow_id(owner_email: str, demo_name: str) -> str:
     return f"crashable-workspace/{owner_email}/{demo_name}"
 
@@ -980,8 +1142,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_auth_config()
             elif path == "/catalog":
                 self.send_redirect("/")
-            elif path in {"/", "/index.html", "/courses", "/onboard"}:
-                self.send_static("index.html")
+            elif path in {"/", "/index.html", "/courses", "/onboard"} or path.startswith(
+                (DEMO_PATH_PREFIX, WORKSHOP_PATH_PREFIX)
+            ):
+                self.send_index(path)
             elif path.startswith("/static/"):
                 self.send_static(path.removeprefix("/static/"))
             else:
@@ -2076,6 +2240,23 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if secure:
             cookie[name]["secure"] = True
         self.send_header("Set-Cookie", cookie.output(header="").strip())
+
+    def send_index(self, path: str) -> None:
+        # The SPA shell, with per-page Open Graph tags so a pasted link (a demo
+        # at /demos/<name>, a workshop at /courses/<key>) unfurls in Slack. A
+        # bad catalog file only costs the page-specific tags, never the page.
+        template = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        try:
+            registry = load_registry(self.registry_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            registry = {"projects": []}
+        encoded = render_index_html(template, path, registry, auth_base_url()).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Cache-Control", "public, max-age=60")
+        self.end_headers()
+        self.wfile.write(encoded)
 
     def send_static(self, relative_name: str) -> None:
         path = safe_static_path(relative_name)

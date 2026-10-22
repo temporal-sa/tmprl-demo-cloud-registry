@@ -16,7 +16,7 @@ The image serves the catalog from `REGISTRY_DATA_PATH`
 - `/auth/login`
 - `/oauth/google/start`
 - `/oauth/google/callback`
-- `/`
+- `/`, `/courses`, `/onboard`, `/demos/<name>`, `/courses/<key>` (the SPA)
 
 The catalog is published at runtime by the registry operator: it lists every
 `DemoProject` CR and writes a `registry-catalog` ConfigMap, which the operator
@@ -34,6 +34,17 @@ Canonical demos are featured with generated artwork. To show a screenshot of the
 demo instead, add `static/screenshots/<demo name>.jpg` (the `DemoProject` name,
 e.g. `canonical-ai-demo.jpg`; ~1600px wide works well). The UI picks it up on
 the next image build and falls back to the artwork when the file is missing.
+
+Every SPA page carries Open Graph and Twitter tags so a pasted link unfurls in
+Slack. `/demos/<name>` (a demo's drawer) and `/courses/<key>` (a workshop's)
+get that demo's or workshop's title, summary, SDKs and topics or length, and the
+demo's screenshot when it has one; every other page gets the catalog's.
+URLs in the tags are built from `AUTH_BASE_URL`. The default preview image is
+`static/og-image.png` (1200×630). Since the catalog requires sign-in, the
+operator adds an unauthenticated route for these page paths only when the
+`User-Agent` is a known link-preview crawler (`REGISTRY_LINK_PREVIEW_*` in the
+operator's `resources.py`); the shell has no catalog data, which stays behind
+auth on `/api/*`.
 
 `POST /api/namespace-access` backs the header's "Request Namespace Access" button.
 It requires a signed-in session and runs the operator's

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from demo_registry_operator.resources import (
     AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
     AUTH_MIDDLEWARE_NAME,
     HTTPS_REDIRECT_MIDDLEWARE_NAME,
     REGISTRY_AUTH_PUBLIC_PATH_PREFIXES,
     REGISTRY_CATALOG_ANNOTATION,
+    REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN,
     SOURCE_COMMIT_ANNOTATION,
     auth_required,
     auth_header_strip_middleware,
@@ -132,6 +135,41 @@ def test_registry_auth_endpoints_stay_public_when_catalog_is_protected():
             "namespace": "tmprl-dem-cld-registry-operator",
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("cluster", "header_matcher"),
+    [("blue", "HeaderRegexp"), (None, "HeadersRegexp")],
+)
+def test_registry_link_preview_crawlers_reach_page_shells_without_auth(
+    monkeypatch, cluster, header_matcher
+):
+    if cluster:
+        monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", cluster)
+    else:
+        monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    resources = ingress_resources(
+        registry_project(temporal_auth_required=True),
+        image_overrides={"web": "example.com/registry-web:git-abcdef123456"},
+    )
+    https = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == "registry-operator"
+    )
+    preview = [
+        route for route in https["spec"]["routes"] if "User-Agent" in route["match"]
+    ]
+
+    assert len(preview) == 1
+    assert preview[0]["match"] == (
+        "Host(`catalog.tmprl-demo.cloud`) && (Path(`/`) || Path(`/courses`) || "
+        "PathPrefix(`/demos/`) || PathPrefix(`/courses/`)) && "
+        f"{header_matcher}(`User-Agent`, `{REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN}`)"
+    )
+    assert preview[0]["priority"] == 2000
+    assert "middlewares" not in preview[0]
 
 
 def test_registry_web_mounts_catalog_configmaps():

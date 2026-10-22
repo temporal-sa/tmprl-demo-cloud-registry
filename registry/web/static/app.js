@@ -1,8 +1,11 @@
 // Demo Registry — vanilla JS SPA.
 // Two views over the same catalog JSON, plus onboarding:
 //   /         → demos (canonical feature cards + a grid of everything else;
-//               each demo opens in a detail drawer, deep-linked as /#<id>)
-//   /courses  → Instruqt workshops (the server routes this path to the SPA)
+//               each demo opens in a detail drawer, deep-linked as /demos/<id>)
+//   /courses  → Instruqt workshops (each deep-linked as /courses/<key>)
+// The server sends the SPA for all of these, with Open Graph tags for the
+// demo or workshop in the path so links unfurl in Slack. Old /#<id> and
+// /courses#<key> links still open their drawer.
 //   /onboard  → add a demo to the catalog (the user's onboarding workflow)
 
 const LINK_SOURCES = [
@@ -19,6 +22,8 @@ const LINK_SOURCES = [
 
 const WORKSHOPS_ROUTE = "/courses";
 const ONBOARD_ROUTE = "/onboard";
+const DEMO_PATH_PREFIX = "/demos/";
+const WORKSHOP_PATH_PREFIX = "/courses/";
 // Instruqt access is granted through Serval, our internal onboarding tool.
 const INSTRUQT_ACCESS_URL =
   "https://app.serval.com/catalog?request=access-catalog&appId=019f4bef-e156-742c-bbac-f363c6cc2937";
@@ -26,7 +31,7 @@ const INSTRUQT_ACCESS_URL =
 const state = {
   demos: [],
   courses: [],
-  route: window.location.pathname,
+  route: routeFromPath(window.location.pathname),
   demosSearch: "",
   selectedTags: new Set(),
   selectedSdks: new Set(),
@@ -303,6 +308,33 @@ async function loadData() {
 
 // ─── Routing ───────────────────────────────────────────────────────────────
 
+// The view a path belongs to: a drawer path lives on its catalog's route.
+function routeFromPath(pathname) {
+  if (pathname.startsWith(DEMO_PATH_PREFIX)) return "/";
+  if (pathname.startsWith(WORKSHOP_PATH_PREFIX)) return WORKSHOPS_ROUTE;
+  return pathname;
+}
+
+// The drawer a URL asks for: /demos/<id> or /courses/<key>, else a legacy hash.
+function drawerIdFromLocation() {
+  const { pathname, hash } = window.location;
+  for (const prefix of [DEMO_PATH_PREFIX, WORKSHOP_PATH_PREFIX]) {
+    if (pathname.startsWith(prefix)) {
+      try {
+        return decodeURIComponent(pathname.slice(prefix.length).replace(/\/+$/, ""));
+      } catch {
+        return "";
+      }
+    }
+  }
+  return hash.slice(1);
+}
+
+function drawerPath(id) {
+  const prefix = currentView() === "workshops" ? WORKSHOP_PATH_PREFIX : DEMO_PATH_PREFIX;
+  return `${prefix}${encodeURIComponent(id)}`;
+}
+
 function currentView() {
   if (state.route === ONBOARD_ROUTE) return "onboard";
   return state.route === WORKSHOPS_ROUTE ? "workshops" : "demos";
@@ -310,7 +342,7 @@ function currentView() {
 
 function setRoute(target) {
   if (target === state.route) return;
-  closeDrawer({ updateHash: false });
+  closeDrawer({ updateUrl: false });
   state.route = target;
   const search =
     target === WORKSHOPS_ROUTE
@@ -332,12 +364,12 @@ function setupTabs() {
     });
   });
   window.addEventListener("popstate", () => {
-    state.route = window.location.pathname;
+    state.route = routeFromPath(window.location.pathname);
     loadFiltersFromUrl();
     render();
-    syncDrawerToHash();
+    syncDrawerToUrl();
   });
-  window.addEventListener("hashchange", syncDrawerToHash);
+  window.addEventListener("hashchange", syncDrawerToUrl);
 }
 
 function setupKeyboard() {
@@ -1006,8 +1038,8 @@ function cardActions(demo) {
 }
 
 // ─── Detail drawer ─────────────────────────────────────────────────────────
-// Demos and workshops share one drawer, deep-linked by hash on their own page
-// (/#<demo id>, /courses#<workshop key>).
+// Demos and workshops share one drawer, deep-linked by a path under their page
+// (/demos/<demo id>, /courses/<workshop key>).
 
 let drawerReturnFocus = null;
 
@@ -1031,13 +1063,13 @@ function drawerTargetExists(id) {
   return currentView() === "demos" && Boolean(findDemo(id));
 }
 
-function openDrawer(id, { updateHash = true } = {}) {
+function openDrawer(id, { updateUrl = true } = {}) {
   const content = drawerContentFor(id);
   if (!content) return;
   if (!state.openDrawerId) drawerReturnFocus = document.activeElement;
   state.openDrawerId = id;
-  if (updateHash && window.location.hash !== `#${id}`) {
-    window.history.pushState(null, "", `${window.location.pathname}${window.location.search}#${id}`);
+  if (updateUrl && window.location.pathname !== drawerPath(id)) {
+    window.history.pushState(null, "", drawerPath(id) + window.location.search);
   }
   const drawer = document.querySelector("[data-drawer]");
   const panel = document.querySelector("[data-drawer-panel]");
@@ -1049,26 +1081,34 @@ function openDrawer(id, { updateHash = true } = {}) {
   panel.focus();
 }
 
-function closeDrawer({ updateHash = true } = {}) {
+function closeDrawer({ updateUrl = true } = {}) {
   if (!state.openDrawerId) return;
   state.openDrawerId = null;
   clearAllWorkspaceTimers();
   document.querySelector("[data-drawer]").hidden = true;
   document.querySelector("[data-drawer-panel]").replaceChildren();
   document.body.classList.remove("drawer-open");
-  if (updateHash && window.location.hash) {
-    window.history.pushState(null, "", window.location.pathname + window.location.search);
+  if (updateUrl && (window.location.pathname !== state.route || window.location.hash)) {
+    window.history.pushState(null, "", state.route + window.location.search);
   }
   if (drawerReturnFocus && document.contains(drawerReturnFocus)) drawerReturnFocus.focus();
   drawerReturnFocus = null;
 }
 
-function syncDrawerToHash() {
-  const id = window.location.hash.slice(1);
+function syncDrawerToUrl() {
+  const id = drawerIdFromLocation();
   if (id && drawerTargetExists(id)) {
-    if (state.openDrawerId !== id) openDrawer(id, { updateHash: false });
+    // Upgrade a legacy /#<id> link to the drawer's path, which unfurls.
+    if (window.location.hash) {
+      window.history.replaceState(null, "", drawerPath(id) + window.location.search);
+    }
+    if (state.openDrawerId !== id) openDrawer(id, { updateUrl: false });
   } else {
-    closeDrawer({ updateHash: false });
+    closeDrawer({ updateUrl: false });
+    // A link to a demo or workshop that is no longer listed lands on its page.
+    if (window.location.pathname !== state.route) {
+      window.history.replaceState(null, "", state.route + window.location.search);
+    }
   }
 }
 
@@ -1077,8 +1117,7 @@ function setupDrawer() {
 }
 
 function copyLink(id) {
-  const path = currentView() === "workshops" ? WORKSHOPS_ROUTE : "/";
-  const url = `${window.location.origin}${path}#${id}`;
+  const url = `${window.location.origin}${drawerPath(id)}`;
   if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
   toast("Link copied");
 }
@@ -1954,7 +1993,7 @@ function workshopAssets(representative, members) {
 }
 
 // A workshop group's key: the catalog `parent` its tracks share, else the lone
-// track's name. It is also the workshop's deep link (/courses#<key>).
+// track's name. It is also the workshop's deep link (/courses/<key>).
 function workshopKey(members) {
   return members[0].parent || members[0].name;
 }
@@ -4722,7 +4761,7 @@ async function init() {
   setupZiggy();
   await loadData();
   render();
-  syncDrawerToHash();
+  syncDrawerToUrl();
   loadZiggy();
 }
 

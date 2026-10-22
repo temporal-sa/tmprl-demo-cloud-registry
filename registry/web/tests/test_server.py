@@ -1691,3 +1691,141 @@ def test_helper_send_starts_a_chat_when_none_is_open():
     operation = kwargs["start_workflow_operation"]
     assert operation._start_workflow_input.id == "catalog-helper/blue/ada@temporal.io"
     assert operation._start_workflow_input.id_conflict_policy == server.WorkflowIDConflictPolicy.USE_EXISTING
+
+
+def fetch_page(httpd, path):
+    response = urlopen(f"http://127.0.0.1:{httpd.server_port}{path}", timeout=2)
+    assert response.status == 200
+    assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+    return response.read().decode("utf-8")
+
+
+def write_catalog(tmp_path):
+    (tmp_path / "registry.json").write_text(
+        json.dumps(
+            {
+                "baseDomain": "tmprl-demo.cloud",
+                "projects": [
+                    {
+                        "name": "canonical-ai-demo",
+                        "title": "Canonical AI <Demo>",
+                        "summary": "An agent that survives crashes & restarts.",
+                        "temporalSdks": ["Python"],
+                        "aiSdks": ["OpenAI Agents SDK"],
+                        "tags": ["ai", "agents"],
+                    },
+                    {"name": "plain-demo", "summary": "No screenshot here."},
+                ],
+                "courses": [
+                    {
+                        "name": "intro-python",
+                        "parent": "intro",
+                        "title": "Intro (Python)",
+                        "temporalSdks": ["Python"],
+                        "duration": {"minHours": 2, "maxHours": 3},
+                    },
+                    {
+                        "name": "intro",
+                        "parent": "intro",
+                        "title": "Temporal 101",
+                        "summary": "Learn Temporal by building.",
+                        "temporalSdks": ["Go"],
+                        "duration": {"minHours": 2, "maxHours": 2},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_demo_page_has_link_preview_meta(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+    write_catalog(tmp_path)
+    httpd = run_test_server(tmp_path)
+    try:
+        html = fetch_page(httpd, "/demos/canonical-ai-demo")
+    finally:
+        httpd.shutdown()
+
+    assert "<title>Canonical AI &lt;Demo&gt; · Temporal Field Kit</title>" in html
+    assert '<meta property="og:title" content="Canonical AI &lt;Demo&gt;" />' in html
+    assert (
+        '<meta property="og:description" '
+        'content="An agent that survives crashes &amp; restarts." />'
+    ) in html
+    assert (
+        '<meta property="og:url" '
+        'content="https://catalog.example.test/demos/canonical-ai-demo" />'
+    ) in html
+    # Canonical demos with a screenshot preview with it.
+    assert (
+        '<meta property="og:image" content="https://catalog.example.test'
+        '/static/screenshots/canonical-ai-demo.jpg" />'
+    ) in html
+    assert '<meta name="twitter:data1" content="Python, OpenAI Agents SDK" />' in html
+    assert '<meta name="twitter:data2" content="ai, agents" />' in html
+    assert server.SOCIAL_META_MARKER not in html
+
+
+def test_demo_without_screenshot_uses_default_image(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+    write_catalog(tmp_path)
+    httpd = run_test_server(tmp_path)
+    try:
+        html = fetch_page(httpd, "/demos/plain-demo")
+    finally:
+        httpd.shutdown()
+
+    assert '<meta property="og:title" content="plain-demo" />' in html
+    assert "https://catalog.example.test/static/og-image.png" in html
+    assert "twitter:label1" not in html
+
+
+def test_workshop_page_merges_its_tracks(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+    write_catalog(tmp_path)
+    httpd = run_test_server(tmp_path)
+    try:
+        html = fetch_page(httpd, "/courses/intro")
+    finally:
+        httpd.shutdown()
+
+    assert '<meta property="og:title" content="Temporal 101" />' in html
+    assert '<meta property="og:description" content="Learn Temporal by building." />' in html
+    assert '<meta name="twitter:data1" content="Python, Go" />' in html
+    assert '<meta name="twitter:data2" content="2–3 hours, 2 hours" />' in html
+
+
+@pytest.mark.parametrize(
+    ("path", "title", "url"),
+    [
+        ("/", "Temporal Field Kit", "https://catalog.example.test/"),
+        ("/courses", "Workshops · Temporal Field Kit", "https://catalog.example.test/courses"),
+        ("/demos/missing", "Temporal Field Kit", "https://catalog.example.test/"),
+        ("/courses/missing", "Workshops · Temporal Field Kit", "https://catalog.example.test/courses"),
+    ],
+)
+def test_catalog_pages_have_site_preview_meta(tmp_path, monkeypatch, path, title, url):
+    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+    write_catalog(tmp_path)
+    httpd = run_test_server(tmp_path)
+    try:
+        html = fetch_page(httpd, path)
+    finally:
+        httpd.shutdown()
+
+    assert f"<title>{title}</title>" in html
+    assert f'<meta property="og:url" content="{url}" />' in html
+    assert "https://catalog.example.test/static/og-image.png" in html
+
+
+def test_page_still_renders_when_catalog_is_unreadable(tmp_path, monkeypatch):
+    (tmp_path / "registry.json").write_text("not json", encoding="utf-8")
+    httpd = run_test_server(tmp_path)
+    try:
+        html = fetch_page(httpd, "/demos/canonical-ai-demo")
+    finally:
+        httpd.shutdown()
+
+    assert "<title>Temporal Field Kit</title>" in html
