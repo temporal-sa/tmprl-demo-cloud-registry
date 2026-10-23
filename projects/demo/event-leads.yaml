@@ -55,7 +55,7 @@ spec:
         - name: TEMPORAL_TASK_QUEUE
           value: event-leads-unversioned
   ingress:
-    subdomain: event-leads
+    subdomain: events
     temporalAuthRequired: false
     component: web
     port: http
