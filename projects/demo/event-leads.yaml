@@ -38,7 +38,7 @@ spec:
       temporalAccess: true
       env:
         - name: PUBLIC_URL
-          value: https://event-leads.tmprl-demo.cloud
+          value: https://events.tmprl-demo.cloud
         - name: AUTH_VERIFY_URL
           value: http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify
         - name: TEMPORAL_TASK_QUEUE
