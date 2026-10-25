@@ -17,10 +17,19 @@ spec:
     temporalSdks:
       - Python
       - Go
+    # Open demo goes to the control panel, where a presenter drives the catalog's
+    # own workflows: provision a sample demo, then watch it in the Temporal UI.
+    appPath: /control
     links:
       runbook:
-        label: Operations runbook
-        url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/docs/operations.md
+        label: Demo runbook
+        url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/RUNBOOK.md
+      slideDeck:
+        url: https://docs.google.com/presentation/d/1Y7ZK4FFo9z1c4rIM3cRNvlwATOU1AwYYqK2p-TbygIY
+      additional:
+        - label: Operations runbook
+          url: https://github.com/temporal-sa/tmprl-demo-cloud-registry/blob/main/docs/operations.md
+          audience: technical
 
   source:
     repo: https://github.com/temporal-sa/tmprl-demo-cloud-registry

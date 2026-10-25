@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
+import functools
 import hashlib
 import hmac
 import json
@@ -148,6 +150,17 @@ ONBOARDING_AGENT_MODES = frozenset({"draft", "section", "chat"})
 # workflow bounds at two minutes), so allow longer than a plain RPC.
 HELPER_WORKFLOW_TYPE = "CatalogHelperWorkflow"
 HELPER_RPC_TIMEOUT_SECONDS = 150
+# The catalog control panel (/control) deploys one sample demo per presenter as
+# an OnboardingPreviewWorkflow under its own id, so it never collides with the
+# presenter's onboarding test deploy. The preview applies it as pv-<project>.
+PREVIEW_WORKFLOW_TYPE = "OnboardingPreviewWorkflow"
+DEMO_CONTROL_TTL_SECONDS = 2 * 60 * 60
+DEMO_CONTROL_PROJECT_PREFIX = "infra-demo"
+DEMO_CONTROL_SAMPLE_PATH = ROOT / "demo" / "sample-project.json"
+COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+# Must match derive.TEMPORAL_NAMESPACE_PREFIX in the operator.
+TEMPORAL_NAMESPACE_PREFIX = "tmprl-dem-cld-"
+TEMPORAL_UI_NAMESPACES_URL = "https://cloud.temporal.io/namespaces"
 HELPER_MAX_BODY_BYTES = 16 * 1024
 HELPER_UPDATES = {"clear-view": "clear_view", "new": "end"}
 
@@ -277,6 +290,10 @@ VIEW_PAGES = {
     "/onboard": (
         "Add a demo",
         "Bring a public demo repo into the Temporal Field Kit catalog.",
+    ),
+    "/control": (
+        "Control panel",
+        "Drive the catalog's own Temporal workflows: provision a demo live and watch it run.",
     ),
 }
 
@@ -453,6 +470,82 @@ def helper_workflow_id(email: str, cluster: str | None) -> str:
     if cluster:
         return f"catalog-helper/{cluster}/{email}"
     return f"catalog-helper/{email}"
+
+
+def demo_control_workflow_id(email: str, cluster: str | None) -> str:
+    email = email.strip().lower()
+    if cluster:
+        return f"demo-control/{cluster}/{email}"
+    return f"demo-control/{email}"
+
+
+def demo_project_workflow_id(project: str, cluster: str | None) -> str:
+    # Must match derive.demo_project_workflow_id in the operator.
+    if cluster:
+        return f"demo-project/{cluster}/{project}"
+    return f"demo-project/{project}"
+
+
+def demo_control_project(email: str) -> str:
+    """The presenter's sample project name: stable per user, DNS-safe, short."""
+
+    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:6]
+    return f"{DEMO_CONTROL_PROJECT_PREFIX}-{digest}"
+
+
+@functools.lru_cache(maxsize=1)
+def demo_control_sample() -> dict[str, Any]:
+    return json.loads(DEMO_CONTROL_SAMPLE_PATH.read_text())["demoProjectTemplate"]
+
+
+def demo_control_deploy_request(email: str, sample: dict[str, Any]) -> dict[str, Any]:
+    """The preview ``deploy`` update for the presenter's copy of the sample."""
+
+    commit_sha = str(sample.get("spec", {}).get("source", {}).get("branch", ""))
+    if not COMMIT_SHA_PATTERN.match(commit_sha) or not commit_sha.strip("0"):
+        raise OnboardingRejected(
+            "The sample demo isn't configured yet: pin source.branch in "
+            "registry/web/demo/sample-project.json to a commit."
+        )
+    project = demo_control_project(email)
+    document = copy.deepcopy(sample)
+    document["metadata"] = {"name": project}
+    return {
+        "project": project,
+        "document": document,
+        "revision": 1,
+        "commit_sha": commit_sha,
+    }
+
+
+def temporal_ui_workflow_url(namespace: str, workflow_id: str) -> str:
+    query = quote(f'WorkflowId="{workflow_id}"', safe="")
+    return f"{TEMPORAL_UI_NAMESPACES_URL}/{namespace}/workflows?query={query}"
+
+
+def demo_control_links(
+    status: dict[str, Any], *, namespace: str, cluster: str | None
+) -> dict[str, str]:
+    """Where to watch the presenter's sample in the Temporal UI.
+
+    ``namespace`` is the operator's (the web shares its connection), which runs
+    the entity workflow; the sample's own namespace is in the same account.
+    """
+
+    name = status.get("name")
+    if not isinstance(name, str) or not name:
+        return {}
+    _, _, account = namespace.partition(".")
+    links = {
+        "entityWorkflow": temporal_ui_workflow_url(
+            namespace, demo_project_workflow_id(name, cluster)
+        ),
+    }
+    if account:
+        links["sampleNamespace"] = (
+            f"{TEMPORAL_UI_NAMESPACES_URL}/{TEMPORAL_NAMESPACE_PREFIX}{name}.{account}/workflows"
+        )
+    return links
 
 
 class TemporalUnavailable(Exception):
@@ -879,10 +972,13 @@ class TemporalGateway:
         return self._run(self._preview_status(owner_email))
 
     async def _preview_status(self, owner_email: str) -> dict[str, Any]:
-        client = await self._get_client()
-        handle = client.get_workflow_handle(
+        return await self._read_preview(
             onboarding_preview_workflow_id(owner_email, self.cluster)
         )
+
+    async def _read_preview(self, workflow_id: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(workflow_id)
         try:
             description = await handle.describe()
         except RPCError as error:
@@ -904,16 +1000,79 @@ class TemporalGateway:
         )
 
     async def _preview_end(self, owner_email: str) -> dict[str, Any]:
-        client = await self._get_client()
-        handle = client.get_workflow_handle(
-            onboarding_preview_workflow_id(owner_email, self.cluster)
+        return await self._end_preview(
+            onboarding_preview_workflow_id(owner_email, self.cluster),
+            missing="You have no test deploy running.",
         )
+
+    async def _end_preview(self, workflow_id: str, *, missing: str) -> dict[str, Any]:
+        client = await self._get_client()
+        handle = client.get_workflow_handle(workflow_id)
         try:
             return await handle.execute_update("end")
         except RPCError as error:
             if error.status == RPCStatusCode.NOT_FOUND:
-                raise OnboardingRejected("You have no test deploy running.") from error
+                raise OnboardingRejected(missing) from error
             raise
+
+    def demo_control_status(self, owner_email: str) -> dict[str, Any]:
+        return self._run(self._demo_control_status(owner_email))
+
+    async def _demo_control_status(self, owner_email: str) -> dict[str, Any]:
+        status = await self._read_preview(
+            demo_control_workflow_id(owner_email, self.cluster)
+        )
+        links = demo_control_links(
+            status, namespace=self._namespace, cluster=self.cluster
+        )
+        return {**status, "links": links} if links else status
+
+    def demo_control_deploy(
+        self, owner_email: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._run(
+            self._demo_control_deploy(owner_email, request),
+            timeout=ONBOARDING_RPC_TIMEOUT_SECONDS,
+        )
+
+    async def _demo_control_deploy(
+        self, owner_email: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        # USE_EXISTING redeploys to a live sample; after one ends, the same id
+        # starts a fresh one.
+        operation = WithStartWorkflowOperation(
+            PREVIEW_WORKFLOW_TYPE,
+            {"owner_email": owner_email, "ttl_seconds": DEMO_CONTROL_TTL_SECONDS},
+            id=demo_control_workflow_id(owner_email, self.cluster),
+            task_queue=self.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        try:
+            status = await client.execute_update_with_start_workflow(
+                "deploy",
+                request,
+                start_workflow_operation=operation,
+            )
+        except WorkflowUpdateFailedError as error:
+            cause = error.cause
+            raise OnboardingRejected(
+                getattr(cause, "message", None) or str(cause or error)
+            ) from error
+        # The panel renders this directly, so no status read has to follow.
+        links = demo_control_links(
+            status, namespace=self._namespace, cluster=self.cluster
+        )
+        return {**status, "links": links} if links else status
+
+    def demo_control_end(self, owner_email: str) -> dict[str, Any]:
+        return self._run(
+            self._end_preview(
+                demo_control_workflow_id(owner_email, self.cluster),
+                missing="You have no sample demo running.",
+            ),
+            timeout=ONBOARDING_RPC_TIMEOUT_SECONDS,
+        )
 
     def helper_status(self, owner_email: str) -> dict[str, Any]:
         return self._run(self._helper_status(owner_email))
@@ -1124,6 +1283,8 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_secrets_list()
             elif path == "/api/onboarding/preview":
                 self.onboarding_preview_status()
+            elif path == "/api/control/provision":
+                self.control_provision_status()
             elif path == "/api/helper":
                 self.helper_status()
             elif path in {"/_auth/verify", "/traefik/verify"}:
@@ -1142,7 +1303,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_auth_config()
             elif path == "/catalog":
                 self.send_redirect("/")
-            elif path in {"/", "/index.html", "/courses", "/onboard"} or path.startswith(
+            elif path in {"/", "/index.html", "/courses", "/onboard", "/control"} or path.startswith(
                 (DEMO_PATH_PREFIX, WORKSHOP_PATH_PREFIX)
             ):
                 self.send_index(path)
@@ -1187,6 +1348,10 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.onboarding_secret_store()
             elif path == "/api/onboarding/preview/end":
                 self.onboarding_preview_end()
+            elif path == "/api/control/provision":
+                self.control_provision_deploy()
+            elif path == "/api/control/provision/end":
+                self.control_provision_end()
             elif path.startswith("/api/onboarding/"):
                 self.onboarding_update(path.removeprefix("/api/onboarding/"))
             elif path == "/api/helper/message":
@@ -1574,6 +1739,32 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if email is None:
             return
         self.send_onboarding_result(lambda: self.temporal_gateway.preview_end(email))
+
+    def control_provision_status(self) -> None:
+        email = self.onboarding_request(mutating=False)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.demo_control_status(email)
+        )
+
+    def control_provision_deploy(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.demo_control_deploy(
+                email, demo_control_deploy_request(email, demo_control_sample())
+            )
+        )
+
+    def control_provision_end(self) -> None:
+        email = self.onboarding_request(mutating=True)
+        if email is None:
+            return
+        self.send_onboarding_result(
+            lambda: self.temporal_gateway.demo_control_end(email)
+        )
 
     def onboarding_update(self, action: str) -> None:
         update = ONBOARDING_UPDATES.get(action)

@@ -315,6 +315,7 @@ def test_catalog_entry_defaults_title_when_registry_block_absent():
     )
     assert entry["title"] == "Banking Money Transfer"
     assert entry["host"] == "banking-app.tmprl-demo.cloud"
+    assert entry["appUrl"] == "https://banking-app.tmprl-demo.cloud"
     assert entry["temporalNamespace"] == "tmprl-dem-cld-banking-money-transfer"
     assert entry["catalogStatus"]["configMap"]["key"] == "banking-money-transfer.json"
 
@@ -331,6 +332,19 @@ def test_catalog_entry_uses_registry_block_when_present():
     assert entry["summary"] == "Does things"
     assert entry["tags"] == ["Demo"]
     assert entry["aiSdks"] == []
+
+
+def test_catalog_entry_app_url_appends_registry_app_path():
+    entry = catalog_entry(
+        project(
+            "registry-operator",
+            registry={"title": "Registry", "summary": "Catalog", "appPath": "/control"},
+            source={"repo": "https://github.com/temporal-sa/x"},
+            ingress={"subdomain": "catalog"},
+        )
+    )
+    assert entry["host"] == "catalog.tmprl-demo.cloud"
+    assert entry["appUrl"] == "https://catalog.tmprl-demo.cloud/control"
 
 
 def test_catalog_entry_passes_registry_ai_sdks_through():

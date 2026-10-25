@@ -316,6 +316,23 @@
 
   .page-head .toolbar { grid-column: 1 / -1; }
 
+  /* /control: the problems the catalog demo shows, under the use-case line. */
+  .control-problems {
+    flex-basis: 100%;
+    display: grid;
+    gap: .35rem;
+    margin-top: .5rem;
+    padding-left: 1.1rem;
+    list-style: disc;
+    color: var(--gray-300);
+    font-weight: 300;
+  }
+
+  .control-problems strong {
+    color: var(--gray-200);
+    font-weight: 500;
+  }
+
   .stats {
     display: flex;
     flex-wrap: wrap;

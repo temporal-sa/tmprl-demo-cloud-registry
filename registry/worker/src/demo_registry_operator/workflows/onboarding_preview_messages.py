@@ -53,6 +53,9 @@ class StartPreviewRequest:
     owner_email: str
     # Continue-as-new carryover; None on a fresh start.
     carried_status: PreviewStatus | None = None
+    # How long the preview lives from its first deploy; None means PREVIEW_TTL.
+    # The catalog control panel's sample demo uses a shorter one.
+    ttl_seconds: int | None = None
 
 
 @dataclass(frozen=True)

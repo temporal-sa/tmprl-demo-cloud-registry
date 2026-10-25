@@ -59,6 +59,11 @@ class OnboardingPreviewWorkflow:
         self._status = request.carried_status or PreviewStatus(
             phase="Deploying", owner_email=request.owner_email
         )
+        self._ttl = (
+            timedelta(seconds=request.ttl_seconds)
+            if request.ttl_seconds
+            else PREVIEW_TTL
+        )
         self._pending: PreviewDeployRequest | None = None
         self._end_requested = False
         self._continue_as_new_for_worker_version = False
@@ -204,7 +209,7 @@ class OnboardingPreviewWorkflow:
         if self._status.deploys == 0:
             self._status.project = request.project
             self._status.created_at = _iso(now)
-            self._status.expires_at = _iso(now + PREVIEW_TTL)
+            self._status.expires_at = _iso(now + self._ttl)
         self._status.deploys += 1
         self._status.phase = "Deploying"
         self._status.stage = "resources"

@@ -419,6 +419,12 @@
           "type": "integer",
           "minimum": 0
         },
+        "appPath": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~/-]*$",
+          "maxLength": 128,
+          "description": "Path appended to the project's host for the catalog's Open demo link, such as /control. Defaults to the host root."
+        },
         "canonical": {
           "type": "boolean",
           "default": false

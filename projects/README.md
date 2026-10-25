@@ -250,6 +250,8 @@ Rules:
   temporalSdks/aiSdks/links/assets). When omitted, the catalog title falls back
   to a humanized name. Use it for runbooks, decks, recordings, and canonical
   docs.
+  - `appPath` (optional) is appended to the project's host for the catalog's
+    **Open demo** link, such as `/control`. Leave it out to open the host root.
   - `summary` is one to three sentences in this order: **Built with** the
     languages, frameworks, and AI SDKs; **Demonstrates** the Temporal features
     and patterns; **Use case:** the scenario it shows. Keep it under 320

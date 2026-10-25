@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import os
 import shutil
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -322,6 +323,7 @@ def test_preview_deploys_redeploys_and_tears_down_on_end():
                         ),
                     )
                     assert (status.phase, status.deploys) == ("Deploying", 1)
+                    assert lifetime(status) == preview_workflow.PREVIEW_TTL
                     expires_at = status.expires_at
                     handle = env.client.get_workflow_handle(
                         "onboarding-preview/ada@temporal.io"
@@ -369,6 +371,73 @@ def test_preview_deploys_redeploys_and_tears_down_on_end():
     assert seen["applied"] == [SHA, "c" * 40]
     assert seen["deleted"] == ["pv-money-transfer"]
     assert seen["cleaned"] == ["pv-money-transfer"]
+
+
+def lifetime(status) -> timedelta:
+    return datetime.fromisoformat(status.expires_at) - datetime.fromisoformat(
+        status.created_at
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DEMO_REGISTRY_TEST_TEMPORAL_HISTORY"),
+    reason="Requires an explicitly enabled local Temporal server",
+)
+def test_preview_started_with_a_ttl_expires_after_it():
+    @activity.defn(name="apply_onboarding_preview")
+    def apply(request: ApplyPreviewRequest) -> AppliedPreview:
+        return AppliedPreview(name="pv-infra-demo", url="https://pv.example")
+
+    @activity.defn(name="read_onboarding_preview")
+    def read(request: ReadPreviewRequest) -> PreviewHealth:
+        return PreviewHealth(phase="Ready", step="Ready")
+
+    @activity.defn(name="delete_onboarding_preview")
+    def delete(request: PreviewNameRequest) -> str:
+        return "deleting"
+
+    @activity.defn(name="wait_onboarding_preview_cleanup")
+    def cleanup(request: PreviewNameRequest) -> None:
+        return None
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_local(
+            dev_server_existing_path=shutil.which("temporal")
+        ) as env:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                async with Worker(
+                    env.client,
+                    task_queue="onboarding-preview",
+                    workflows=[OnboardingPreviewWorkflow],
+                    activities=[apply, read, delete, cleanup],
+                    activity_executor=executor,
+                    workflow_runner=create_workflow_runner(),
+                ):
+                    status = await env.client.execute_update_with_start_workflow(
+                        OnboardingPreviewWorkflow.deploy,
+                        PreviewDeployRequest(
+                            project="infra-demo",
+                            document=draft(),
+                            revision=1,
+                            commit_sha=SHA,
+                        ),
+                        start_workflow_operation=WithStartWorkflowOperation(
+                            OnboardingPreviewWorkflow.run,
+                            StartPreviewRequest(owner_email=OWNER, ttl_seconds=7200),
+                            id="demo-control/ada@temporal.io",
+                            task_queue="onboarding-preview",
+                            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                        ),
+                    )
+                    assert lifetime(status) == timedelta(hours=2)
+                    handle = env.client.get_workflow_handle(
+                        "demo-control/ada@temporal.io"
+                    )
+                    await handle.execute_update(OnboardingPreviewWorkflow.end)
+                    result = await handle.result()
+                    assert result["phase"] == "Ended"
+
+    asyncio.run(scenario())
 
 
 def test_a_failure_from_an_earlier_deploy_is_not_this_deploys():

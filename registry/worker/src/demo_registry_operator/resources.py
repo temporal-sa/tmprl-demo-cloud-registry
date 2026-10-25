@@ -490,6 +490,13 @@ def project_host(demo_project: dict[str, Any]) -> str:
     )
 
 
+def project_app_url(demo_project: dict[str, Any]) -> str:
+    """The catalog's Open demo link: the host plus optional ``registry.appPath``."""
+    registry = spec_of(demo_project).get("registry")
+    app_path = registry.get("appPath") if isinstance(registry, dict) else None
+    return f"https://{project_host(demo_project)}{app_path if isinstance(app_path, str) else ''}"
+
+
 def project_secret_prefix(demo_project: dict[str, Any]) -> str:
     return derive.secret_prefix(project_name(demo_project))
 
@@ -4097,7 +4104,7 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         },
         "summary": registry.get("summary", ""),
         "host": host,
-        "appUrl": f"https://{host}",
+        "appUrl": project_app_url(demo_project),
         "sourceRepo": source.get("repo", ""),
         "temporalNamespace": project_temporal_namespace(demo_project),
         "authRequired": auth_required(demo_project),
@@ -4218,7 +4225,7 @@ def catalog_status_entry(
         "phase": status.get("phase"),
         "message": status.get("message"),
         "host": project_host(demo_project),
-        "appUrl": f"https://{project_host(demo_project)}",
+        "appUrl": project_app_url(demo_project),
         "kubernetesNamespace": project_namespace(demo_project),
         "kubernetesNamespaceStatus": status.get("kubernetesNamespaceStatus"),
         "runtimeNamespaceStatus": status.get("runtimeNamespaceStatus"),
@@ -4554,7 +4561,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         "title": registry.get("title", project_name(demo_project)),
         "summary": registry.get("summary", ""),
         "host": project_host(demo_project),
-        "appUrl": f"https://{project_host(demo_project)}",
+        "appUrl": project_app_url(demo_project),
         "sourceRepo": spec.get("source", {}).get("repo") if isinstance(spec.get("source"), dict) else None,
         "temporalNamespace": project_name(demo_project),
         "authRequired": auth_required(demo_project),
