@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -99,6 +100,30 @@ def test_canary_demo_project_template_passes_schema_and_semantics(name):
         path=template_path,
         data=wrapper["demoProjectTemplate"],
     )
+
+    assert validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    ) == []
+    assert validate_projects.validate_semantics([document]) == []
+
+
+@pytest.mark.parametrize(
+    ("app_path", "ok"),
+    [("/control", True), ("/", True), ("control", False), ("/a b", False)],
+)
+def test_schema_accepts_only_absolute_registry_app_paths(app_path, ok):
+    spec = base_spec()
+    spec["registry"] = {"title": "App", "summary": "Does things", "appPath": app_path}
+    validator = validate_projects.load_default_validators()["DemoProject"]
+    errors = validate_projects.validate_schema(validator, project_document(spec))
+    assert (errors == []) is ok
+
+
+def test_control_panel_sample_project_passes_schema_and_semantics():
+    sample_path = ROOT / "registry/web/demo/sample-project.json"
+    data = json.loads(sample_path.read_text())["demoProjectTemplate"]
+    document = validate_projects.ProjectDocument(path=sample_path, data=data)
 
     assert validate_projects.validate_document_schema(
         validate_projects.load_default_validators(),

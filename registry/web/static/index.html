@@ -163,6 +163,28 @@
           </div>
         </div>
       </section>
+
+      <section data-view="control" hidden>
+        <div class="page-head">
+          <div class="wrap page-head-inner">
+            <div class="page-title">
+              <h1>Control panel</h1>
+              <p>This catalog is a Temporal application. It turns one reviewed YAML file into a fully provisioned environment, with a Temporal Cloud namespace, scoped keys, images, routes and TLS, and removes it cleanly, with no tickets and no half-built leftovers. Drive it here and watch each step in the Temporal UI.</p>
+              <ul class="control-problems">
+                <li><strong>No half-built environments.</strong> When a step fails, the workflow retries or cleans up, and teardown proves each resource is gone.</li>
+                <li><strong>Long jobs survive restarts.</strong> A 10-minute image build keeps going when the operator restarts, and the workflow picks it back up.</li>
+                <li><strong>Bad rollouts never go live.</strong> A candidate gets the live route only after it's ready and passes its health check.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="catalog">
+          <div class="wrap onboard" data-control>
+            <p class="empty">Loading…</p>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer class="site-footer">

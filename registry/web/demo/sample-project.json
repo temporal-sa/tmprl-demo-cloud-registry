@@ -1,0 +1,65 @@
+{
+  "note": "The DemoProject the catalog control panel (/control) deploys as each presenter's sample. The server replaces metadata.name per presenter. source.branch pins a commit so every deploy builds the same code and the web pod needs no GitHub lookup; bump it when the sample repo changes. All zeros means not configured yet, and the panel refuses to deploy.",
+  "demoProjectTemplate": {
+    "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+    "kind": "DemoProject",
+    "metadata": {
+      "name": "infra-demo"
+    },
+    "spec": {
+      "registry": {
+        "title": "Infra Provisioning Sample",
+        "summary": "A tiny web app and Temporal worker, provisioned live from the catalog control panel."
+      },
+      "source": {
+        "repo": "https://github.com/temporal-sa/tmprl-demo-hello-infra",
+        "branch": "cffbbecacf7c524b247eeb4dc94fa9bf3905952f"
+      },
+      "builds": {
+        "app": {
+          "context": ".",
+          "dockerfile": "Dockerfile"
+        }
+      },
+      "components": {
+        "web": {
+          "build": "app",
+          "temporalAccess": true,
+          "ports": [
+            {
+              "containerPort": 8080,
+              "servicePort": 80
+            }
+          ],
+          "env": [
+            {
+              "name": "TEMPORAL_TASK_QUEUE",
+              "value": "hello-infra"
+            }
+          ]
+        },
+        "worker": {
+          "build": "app",
+          "command": [
+            "python",
+            "worker.py"
+          ],
+          "worker": true,
+          "env": [
+            {
+              "name": "TEMPORAL_TASK_QUEUE",
+              "value": "hello-infra"
+            }
+          ]
+        }
+      },
+      "ingress": {
+        "subdomain": "infra-demo"
+      },
+      "smokeCheck": {
+        "path": "/health",
+        "expectedStatus": 200
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@
 // demo or workshop in the path so links unfurl in Slack. Old /#<id> and
 // /courses#<key> links still open their drawer.
 //   /onboard  → add a demo to the catalog (the user's onboarding workflow)
+//   /control  → drive the catalog's own workflows as a live demo
 
 const LINK_SOURCES = [
   { pattern: "github.com", label: "GitHub" },
@@ -22,6 +23,7 @@ const LINK_SOURCES = [
 
 const WORKSHOPS_ROUTE = "/courses";
 const ONBOARD_ROUTE = "/onboard";
+const CONTROL_ROUTE = "/control";
 const DEMO_PATH_PREFIX = "/demos/";
 const WORKSHOP_PATH_PREFIX = "/courses/";
 // Instruqt access is granted through Serval, our internal onboarding tool.
@@ -337,6 +339,7 @@ function drawerPath(id) {
 
 function currentView() {
   if (state.route === ONBOARD_ROUTE) return "onboard";
+  if (state.route === CONTROL_ROUTE) return "control";
   return state.route === WORKSHOPS_ROUTE ? "workshops" : "demos";
 }
 
@@ -2353,7 +2356,8 @@ function render() {
     section.hidden = section.getAttribute("data-view") !== view;
   });
   document.querySelectorAll(".tabs [data-route]").forEach((link) => {
-    if (link.getAttribute("data-route") === (view === "workshops" ? WORKSHOPS_ROUTE : "/")) {
+    const tabRoute = { demos: "/", workshops: WORKSHOPS_ROUTE }[view];
+    if (link.getAttribute("data-route") === tabRoute) {
       link.setAttribute("aria-current", "page");
     } else {
       link.removeAttribute("aria-current");
@@ -2368,12 +2372,16 @@ function render() {
   document.title = {
     workshops: "Workshops · Temporal Field Kit",
     onboard: "Add a Demo · Temporal Field Kit",
+    control: "Control Panel · Temporal Field Kit",
   }[view] || "Demos · Temporal Field Kit";
   renderCounts();
   renderZiggyLauncher();
   if (view === "onboard") {
     if (!onboard.loaded) loadOnboarding();
     renderOnboarding();
+  } else if (view === "control") {
+    if (!control.loaded) loadControl();
+    renderControl();
   } else if (view === "workshops") {
     renderWorkshopsFilters();
     renderWorkshopsList();
@@ -3745,6 +3753,223 @@ function markErrorFields(root, errors) {
     );
     node.classList.toggle("has-error", hit);
   });
+}
+
+// ─── Control panel ─────────────────────────────────────────────────────────
+// /control drives the catalog's own Temporal workflows for a live demo. The
+// signed-in presenter provisions a copy of a small sample demo through the same
+// path every catalog project takes, watches it in the Temporal UI, then tears
+// it down. Each presenter gets their own copy (the server keys it by session).
+
+const CONTROL_TTL_LABEL = "2 hours";
+// Each status read is a Query (a billable Action), so poll only while a deploy
+// or teardown is moving and the tab is visible, and back off while nothing
+// changes.
+const CONTROL_POLL_MS = 5000;
+const CONTROL_POLL_MAX_MS = 30000;
+const control = {
+  loaded: false,
+  status: null,
+  busy: null,
+  error: null,
+  signInUrl: null,
+  pollMs: CONTROL_POLL_MS,
+};
+let controlPollTimer = null;
+
+async function loadControl() {
+  try {
+    const res = await fetch("/api/control/provision", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      control.signInUrl = `/auth/login?return_to=${encodeURIComponent(window.location.href)}`;
+    } else if (!res.ok) {
+      control.error = data.message || data.error || `HTTP ${res.status}`;
+    } else {
+      acceptControlStatus(data);
+    }
+  } catch (err) {
+    control.error = err.message;
+  }
+  control.loaded = true;
+  renderControl();
+}
+
+function acceptControlStatus(status) {
+  const before = control.status && control.status.updated_at;
+  control.pollMs =
+    before && before === status.updated_at
+      ? Math.min(control.pollMs * 2, CONTROL_POLL_MAX_MS)
+      : CONTROL_POLL_MS;
+  control.status = status;
+}
+
+function scheduleControlPoll() {
+  clearTimeout(controlPollTimer);
+  const preview = control.status;
+  if (
+    preview &&
+    PREVIEW_POLLING.has(preview.phase) &&
+    currentView() === "control" &&
+    document.visibilityState === "visible"
+  ) {
+    controlPollTimer = setTimeout(loadControl, control.pollMs);
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && currentView() === "control" && control.loaded) {
+    loadControl();
+  }
+});
+
+async function controlCall(label, url) {
+  if (control.busy) return;
+  control.busy = label;
+  control.error = null;
+  renderControl();
+  try {
+    acceptControlStatus(await postJSON(url, {}));
+  } catch (err) {
+    control.error = err.message;
+  } finally {
+    control.busy = null;
+    renderControl();
+  }
+}
+
+function controlLinks(preview) {
+  const links = preview.links || {};
+  return el(
+    "div",
+    { class: "onboard-repo" },
+    links.entityWorkflow
+      ? externalLink(links.entityWorkflow, { class: "onboard-repo-name", text: "Watch the provisioning workflow" })
+      : null,
+    links.sampleNamespace
+      ? externalLink(links.sampleNamespace, { text: "The demo's own Temporal namespace" })
+      : null,
+    preview.url && preview.phase === "Ready"
+      ? externalLink(preview.url, { text: `Open ${preview.url.replace("https://", "")}` })
+      : null,
+    el("span", { class: "mono", text: previewEndsAt(preview) })
+  );
+}
+
+function controlProvisionBody(preview) {
+  if (preview.phase === "Ending") {
+    return [el("p", { class: "onboard-busy", role: "status", text: `Tearing down: ${preview.step || "deleting"}…` })];
+  }
+  if (!previewLive(preview)) {
+    const parts = [
+      el("p", {
+        class: "onboard-hint",
+        text: `Provision a small sample demo the way every catalog project is provisioned: a Temporal Cloud namespace and scoped API key, image repositories, a CodeBuild image build, a candidate deployment, a health check, then the live route and TLS. It's yours alone and ends on its own after ${CONTROL_TTL_LABEL}.`,
+      }),
+    ];
+    if (preview.phase === "Ended") {
+      const why = preview.ended_reason === "Expired" ? ` after ${CONTROL_TTL_LABEL}` : "";
+      parts.push(el("p", { class: "onboard-hint", text: `Your last demo environment ended${why}, and everything it created was deleted.` }));
+    }
+    parts.push(
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el("button", {
+          type: "button",
+          class: "btn btn-primary btn-sm",
+          "aria-disabled": String(Boolean(control.busy)),
+          text: "Provision a demo environment",
+          onclick: () => controlCall("Starting the provisioning workflow", "/api/control/provision"),
+        })
+      )
+    );
+    return parts;
+  }
+  const parts = [];
+  if (preview.phase === "Ready") {
+    parts.push(onboardAlert("success", "Provisioned and live.", "The candidate passed its health check, so it got the live route."));
+  } else if (preview.phase === "Failed") {
+    parts.push(onboardAlert("error", "Provisioning failed.", preview.last_error));
+  } else {
+    // The build log link is left out: it opens the AWS console on a shared screen.
+    parts.push(previewProgress({ ...preview, log_url: null }));
+  }
+  parts.push(controlLinks(preview));
+  return parts;
+}
+
+function controlTeardownBody(preview) {
+  if (!previewLive(preview)) {
+    return [el("p", { class: "onboard-hint", text: "Provision a demo environment first." })];
+  }
+  return [
+    el("p", {
+      class: "onboard-hint",
+      text: "Deleting the project starts finalize, which removes the namespace, key, images and Kubernetes resources. The panel waits until it can prove each one is gone.",
+    }),
+    el(
+      "div",
+      { class: "onboard-actions" },
+      el("button", {
+        type: "button",
+        class: "btn btn-secondary btn-sm",
+        "aria-disabled": String(Boolean(control.busy)),
+        text: "Tear it down",
+        onclick: () =>
+          !control.busy &&
+          window.confirm("Tear down your demo environment and delete everything it created?") &&
+          controlCall("Starting the teardown", "/api/control/provision/end"),
+      })
+    ),
+  ];
+}
+
+function renderControl() {
+  const root = document.querySelector("[data-control]");
+  if (!root) return;
+  if (!control.loaded) {
+    root.replaceChildren(el("p", { class: "empty", text: "Loading…" }));
+    return;
+  }
+  if (control.signInUrl) {
+    root.replaceChildren(
+      onboardAlert("warn", "Sign in to use the control panel."),
+      el("a", { class: "btn btn-primary btn-sm", href: control.signInUrl, text: "Sign in" })
+    );
+    return;
+  }
+  const preview = control.status || { phase: "None" };
+  const children = [];
+  if (control.busy) children.push(el("p", { class: "onboard-busy", role: "status", text: `${control.busy}…` }));
+  if (control.error) children.push(onboardAlert("error", "That didn't work.", control.error));
+  children.push(
+    onboardStep(
+      1,
+      "Get Temporal UI access",
+      el("p", {
+        class: "onboard-hint",
+        text: "Adds you to the group that can read every catalog namespace, including the one the catalog's own workflows run in.",
+      }),
+      el(
+        "div",
+        { class: "onboard-actions" },
+        el(
+          "button",
+          {
+            type: "button",
+            class: "btn btn-secondary btn-sm",
+            onclick: (event) => grantNamespaceAccess(event.currentTarget),
+          },
+          el("span", { text: "Request Namespace Access" })
+        )
+      )
+    ),
+    onboardStep(2, "Provision a demo environment", ...controlProvisionBody(preview)),
+    onboardStep(3, "Tear it down", ...controlTeardownBody(preview))
+  );
+  root.replaceChildren(...children);
+  scheduleControlPoll();
 }
 
 // ─── Onboarding: test deploy ───────────────────────────────────────────────

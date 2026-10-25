@@ -941,6 +941,15 @@ class OnboardingGateway:
     def preview_end(self, email):
         return self._record("preview_end", email)
 
+    def demo_control_status(self, email):
+        return self._record("demo_control_status", email)
+
+    def demo_control_deploy(self, email, request):
+        return self._record("demo_control_deploy", email, request)
+
+    def demo_control_end(self, email):
+        return self._record("demo_control_end", email)
+
 
 def onboarding_request(httpd, path, *, body=None, method="POST", headers=None):
     return urlopen(
@@ -1155,7 +1164,9 @@ def test_preview_status_is_none_without_a_preview_and_final_once_ended():
                 return_value=SimpleNamespace(get_workflow_handle=lambda _id: handle)
             ),
         )
-        return await server.TemporalGateway._preview_status(gateway, "ada@temporal.io")
+        return await server.TemporalGateway._read_preview(
+            gateway, "onboarding-preview/blue/ada@temporal.io"
+        )
 
     missing = AsyncMock(
         side_effect=server.RPCError("missing", server.RPCStatusCode.NOT_FOUND, b"")
@@ -1166,6 +1177,133 @@ def test_preview_status_is_none_without_a_preview_and_final_once_ended():
 
     assert asyncio.run(status(missing)) == {"phase": "None"}
     assert asyncio.run(status(ended)) == {"phase": "Ended"}
+
+
+SAMPLE = {
+    "apiVersion": "registry.tmprl-demo.cloud/v1alpha1",
+    "kind": "DemoProject",
+    "metadata": {"name": "infra-demo"},
+    "spec": {"source": {"repo": "https://github.com/temporal-sa/x", "branch": "a" * 40}},
+}
+
+
+def test_control_page_is_served_by_the_spa(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path)
+    try:
+        response = urlopen(f"http://127.0.0.1:{httpd.server_port}/control", timeout=2)
+        assert response.status == 200
+        assert b"data-view=\"control\"" in response.read()
+    finally:
+        httpd.shutdown()
+
+
+def test_control_deploys_the_session_users_copy_of_the_pinned_sample(
+    tmp_path, monkeypatch
+):
+    configure_google_auth(monkeypatch)
+    monkeypatch.setattr(server, "demo_control_sample", lambda: SAMPLE)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        response = onboarding_request(httpd, "/api/control/provision", body={})
+        assert response.status == 200
+        [(call, email, request)] = gateway.calls
+        project = server.demo_control_project("mjones@temporal.io")
+        assert (call, email) == ("demo_control_deploy", "mjones@temporal.io")
+        assert request["project"] == project
+        assert request["document"]["metadata"] == {"name": project}
+        assert request["commit_sha"] == "a" * 40
+        assert SAMPLE["metadata"] == {"name": "infra-demo"}  # not mutated
+    finally:
+        httpd.shutdown()
+
+
+def test_control_refuses_to_deploy_an_unpinned_sample(tmp_path, monkeypatch):
+    configure_google_auth(monkeypatch)
+    unpinned = {**SAMPLE, "spec": {"source": {"branch": "0" * 40}}}
+    monkeypatch.setattr(server, "demo_control_sample", lambda: unpinned)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(httpd, "/api/control/provision", body={})
+        assert raised.value.code == 409
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "call"),
+    [
+        ("/api/control/provision", "GET", "demo_control_status"),
+        ("/api/control/provision/end", "POST", "demo_control_end"),
+    ],
+)
+def test_control_status_and_end_act_on_the_session_user(
+    tmp_path, monkeypatch, path, method, call
+):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        body = {} if method == "POST" else None
+        response = onboarding_request(httpd, path, body=body, method=method)
+        assert response.status == 200
+        assert gateway.calls == [(call, "mjones@temporal.io")]
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize("path", ["/api/control/provision", "/api/control/provision/end"])
+def test_control_writes_refuse_cross_origin_requests(tmp_path, monkeypatch, path):
+    configure_google_auth(monkeypatch)
+    gateway = OnboardingGateway()
+    httpd = run_test_server(tmp_path, gateway)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            onboarding_request(
+                httpd, path, body={}, headers={"Origin": "https://evil.tmprl-demo.cloud"}
+            )
+        assert raised.value.code == 403
+        assert gateway.calls == []
+    finally:
+        httpd.shutdown()
+
+
+def test_control_ids_and_names():
+    assert server.demo_control_workflow_id(" Ada@Temporal.io ", "blue") == (
+        "demo-control/blue/ada@temporal.io"
+    )
+    assert server.demo_control_workflow_id("ada@temporal.io", None) == (
+        "demo-control/ada@temporal.io"
+    )
+    project = server.demo_control_project(" Ada@Temporal.io ")
+    assert project == server.demo_control_project("ada@temporal.io")
+    assert project.startswith("infra-demo-") and len(project) == len("infra-demo-") + 6
+
+
+def test_control_links_point_at_the_entity_workflow_and_sample_namespace():
+    links = server.demo_control_links(
+        {"name": "pv-infra-demo-abc123"},
+        namespace="tmprl-dem-cld-registry-operator.a2dd6",
+        cluster="blue",
+    )
+    assert links["entityWorkflow"] == (
+        "https://cloud.temporal.io/namespaces/tmprl-dem-cld-registry-operator.a2dd6"
+        "/workflows?query=WorkflowId%3D%22demo-project%2Fblue%2Fpv-infra-demo-abc123%22"
+    )
+    assert links["sampleNamespace"] == (
+        "https://cloud.temporal.io/namespaces/tmprl-dem-cld-pv-infra-demo-abc123.a2dd6/workflows"
+    )
+    assert server.demo_control_links({"phase": "None"}, namespace="x.y", cluster=None) == {}
+
+
+def test_control_sample_ships_pinned_to_a_commit_or_not_at_all():
+    sample = server.demo_control_sample()
+    branch = sample["spec"]["source"]["branch"]
+    assert server.COMMIT_SHA_PATTERN.match(branch)
 
 
 def test_onboarding_workflow_id_matches_the_operator():

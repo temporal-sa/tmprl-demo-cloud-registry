@@ -22,6 +22,8 @@ COPY registry/web/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY registry/web/server.py /app/server.py
+# The sample DemoProject the control panel (/control) deploys.
+COPY registry/web/demo /app/demo
 COPY --from=web-build /work/static /app/static
 # The catalog is published at runtime by the registry operator into a ConfigMap
 # mounted at /app/data. Ship an empty fallback so the image builds and serves
