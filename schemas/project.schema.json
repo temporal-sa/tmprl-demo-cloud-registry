@@ -392,6 +392,11 @@
           "type": "boolean",
           "default": true,
           "description": "Whether Traefik should pass the original request Host header to this route's upstream service."
+        },
+        "public": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip the catalog SSO forward-auth for this route; the app must authenticate requests itself. Requires a pathPrefix other than /."
         }
       }
     },

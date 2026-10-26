@@ -108,10 +108,39 @@ def relative_path(path: Path) -> str:
         return str(path)
 
 
+class UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys.
+
+    PyYAML keeps the last value silently, but kustomize rejects the file, so a
+    duplicate key here would break Flux reconciliation of every project.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    duplicate = key in seen
+                except TypeError:
+                    continue
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 def load_yaml_document(path: Path) -> tuple[dict[str, Any] | None, list[ProjectError]]:
     try:
         with path.open("r", encoding="utf-8") as file:
-            documents = list(yaml.safe_load_all(file))
+            documents = list(yaml.load_all(file, Loader=UniqueKeyLoader))
     except yaml.YAMLError as error:
         return None, [ProjectError(path, f"YAML parse error: {error}")]
     except OSError as error:
@@ -740,6 +769,19 @@ def validate_ingress_routes(document: ProjectDocument) -> list[ProjectError]:
             )
         else:
             seen_path_prefixes[path_prefix] = index
+
+    for index, route in enumerate(routes):
+        if route.get("public") is not True:
+            continue
+        # A public catch-all would silently turn off SSO for the whole project.
+        path_prefix = route.get("pathPrefix")
+        if not isinstance(path_prefix, str) or not path_prefix.strip("/"):
+            errors.append(
+                ProjectError(
+                    document.path,
+                    f"ingress.routes[{index}] is public and needs a pathPrefix other than '/'",
+                )
+            )
 
     for index, route in enumerate(routes):
         component_name = route.get("component")
