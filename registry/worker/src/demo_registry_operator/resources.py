@@ -2993,6 +2993,7 @@ def ingress_resources(
             rollout_version=rollout_version,
             namespace=route_namespace,
             service_namespace=service_namespace,
+            priority=project_route_priority(route_spec),
         )
         for route_spec in route_specs
     ]
@@ -3050,6 +3051,14 @@ def ingress_resources(
     }
     http["spec"].pop("tls", None)
     return [base, http]
+
+
+def project_route_priority(route_spec: dict[str, Any]) -> int:
+    # An explicit priority replaces Traefik's rule-length ordering, so add the
+    # prefix length back: /webhooks/github must win over / on the same host.
+    # Registry auth bypass routes sit at 2000, above any project route.
+    path_prefix = route_spec.get("pathPrefix")
+    return 1000 + (len(path_prefix) if isinstance(path_prefix, str) else 0)
 
 
 def http_redirect_routes(
@@ -3216,11 +3225,17 @@ def ingress_route(
                 "name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
                 "namespace": route_namespace,
             },
-            {
-                "name": AUTH_MIDDLEWARE_NAME,
-                "namespace": route_namespace,
-            }
         ]
+        # A public route (e.g. a signed webhook receiver) skips SSO and the app
+        # authenticates requests itself. Still strip the identity headers so a
+        # client can't forge them.
+        if route_spec.get("public") is not True:
+            route["middlewares"].append(
+                {
+                    "name": AUTH_MIDDLEWARE_NAME,
+                    "namespace": route_namespace,
+                }
+            )
     return route
 
 

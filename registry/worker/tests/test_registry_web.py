@@ -259,6 +259,69 @@ def test_protected_routes_strip_identity_headers_before_forward_auth():
     }
 
 
+def webhook_project(*, temporal_auth_required=True):
+    return {
+        "metadata": {"name": "agentic-sdlc"},
+        "spec": {
+            "components": {
+                "web": {
+                    "ports": [{"containerPort": 8080, "servicePort": 80}],
+                },
+            },
+            "ingress": {
+                "subdomain": "agentic-sdlc",
+                "temporalAuthRequired": temporal_auth_required,
+                "routes": [
+                    {
+                        "pathPrefix": "/webhooks/github",
+                        "component": "web",
+                        "port": "http",
+                        "public": True,
+                    },
+                    {"pathPrefix": "/", "component": "web", "port": "http"},
+                ],
+            },
+        },
+    }
+
+
+def https_routes_by_match(demo_project):
+    resources = ingress_resources(demo_project, image_overrides={})
+    https = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == demo_project["metadata"]["name"]
+    )
+    return {route["match"]: route for route in https["spec"]["routes"]}
+
+
+def test_public_route_skips_forward_auth_but_still_strips_identity_headers():
+    routes = https_routes_by_match(webhook_project())
+    namespace = "tmprl-dem-cld-agentic-sdlc"
+
+    webhook = routes[
+        "Host(`agentic-sdlc.tmprl-demo.cloud`) && PathPrefix(`/webhooks/github`)"
+    ]
+    assert webhook["middlewares"] == [
+        {"name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME, "namespace": namespace},
+    ]
+    root = routes["Host(`agentic-sdlc.tmprl-demo.cloud`) && PathPrefix(`/`)"]
+    assert root["middlewares"] == [
+        {"name": AUTH_HEADER_STRIP_MIDDLEWARE_NAME, "namespace": namespace},
+        {"name": AUTH_MIDDLEWARE_NAME, "namespace": namespace},
+    ]
+    # Explicit priorities disable Traefik's rule-length ordering, so the longer
+    # prefix has to outrank the root route itself.
+    assert webhook["priority"] > root["priority"]
+
+
+def test_public_route_has_no_middlewares_when_project_auth_is_off():
+    routes = https_routes_by_match(webhook_project(temporal_auth_required=False))
+
+    assert all("middlewares" not in route for route in routes.values())
+
+
 def test_ingress_route_host_header_passthrough_defaults_and_override():
     resources = ingress_resources(
         {

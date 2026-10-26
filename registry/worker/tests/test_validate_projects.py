@@ -1620,3 +1620,90 @@ def test_ordinary_project_metadata_is_not_reserved():
     }
 
     assert validate_projects.validate_reserved_metadata(document) == []
+
+
+def public_route_spec(*routes: dict) -> dict:
+    spec = base_spec()
+    spec["components"]["app"]["ports"] = [{"containerPort": 8080, "servicePort": 80}]
+    spec["ingress"] = {
+        "subdomain": "env-inputs",
+        "temporalAuthRequired": True,
+        "routes": list(routes),
+    }
+    return spec
+
+
+def test_public_route_with_path_prefix_validates():
+    document = project_document(
+        public_route_spec(
+            {"pathPrefix": "/webhooks/github", "component": "app", "port": "http", "public": True},
+            {"pathPrefix": "/", "component": "app", "port": "http"},
+        )
+    )
+
+    validator = validate_projects.load_default_validators()["DemoProject"]
+    assert validate_projects.validate_schema(validator, document) == []
+    assert validate_projects.validate_ingress_routes(document) == []
+
+
+@pytest.mark.parametrize("route", [{}, {"pathPrefix": "/"}], ids=["catch-all", "root"])
+def test_public_route_must_not_cover_the_whole_host(route):
+    document = project_document(
+        public_route_spec({**route, "component": "app", "port": "http", "public": True})
+    )
+
+    assert messages(validate_projects.validate_ingress_routes(document)) == [
+        "ingress.routes[0] is public and needs a pathPrefix other than '/'"
+    ]
+
+
+def test_public_is_only_allowed_on_listed_routes():
+    spec = base_spec()
+    spec["components"]["app"]["ports"] = [{"containerPort": 8080, "servicePort": 80}]
+    spec["ingress"] = {
+        "subdomain": "env-inputs",
+        "component": "app",
+        "port": "http",
+        "public": True,
+    }
+    validator = validate_projects.load_default_validators()["DemoProject"]
+
+    errors = validate_projects.validate_schema(validator, project_document(spec))
+
+    assert any("public" in error.message for error in errors)
+
+
+def test_duplicate_yaml_keys_are_rejected(tmp_path):
+    path = tmp_path / "duplicate.yaml"
+    path.write_text(
+        "apiVersion: registry.tmprl-demo.cloud/v1alpha1\n"
+        "kind: DemoProject\n"
+        "metadata:\n"
+        "  name: duplicate\n"
+        "spec:\n"
+        "  components:\n"
+        "    app: {build: app}\n"
+        "  components:\n"
+        "    web: {build: app}\n"
+    )
+
+    document, errors = validate_projects.load_yaml_document(path)
+
+    assert document is None
+    assert len(errors) == 1
+    assert "found duplicate key 'components'" in errors[0].message
+
+
+def test_yaml_merge_keys_are_not_duplicates(tmp_path):
+    path = tmp_path / "merge.yaml"
+    path.write_text(
+        "base: &base {a: 1}\n"
+        "merged:\n"
+        "  <<: *base\n"
+        "  b: 2\n"
+    )
+
+    document, errors = validate_projects.load_yaml_document(path)
+
+    assert errors == []
+    assert document == {"base": {"a": 1}, "merged": {"a": 1, "b": 2}}

@@ -282,6 +282,9 @@ Rules:
   host.
 - `ingress.temporalAuthRequired` defaults true. Set false only for reviewed
   public demos.
+- `ingress.routes[].public: true` skips catalog SSO for one route, such as a
+  GitHub webhook receiver that verifies its HMAC signature. Needs a
+  `pathPrefix` other than `/`; the app must authenticate those requests itself.
 - For multi-route apps, include a catch-all `/` route if the frontend should
   own everything not matched earlier.
 

@@ -81,6 +81,43 @@ def test_preview_renders_under_its_own_name_with_rebuilt_metadata():
     assert document["spec"]["ingress"]["subdomain"] == "money-transfer"
 
 
+def test_preview_keeps_public_routes_while_forcing_sso_elsewhere():
+    document = draft(
+        components={"app": {"ports": [{"containerPort": 8080, "servicePort": 80}]}},
+        ingress={
+            "subdomain": "money-transfer",
+            "temporalAuthRequired": False,
+            "routes": [
+                {
+                    "pathPrefix": "/webhooks/github",
+                    "component": "app",
+                    "port": "http",
+                    "public": True,
+                },
+                {"component": "app", "port": "http"},
+            ],
+        },
+    )
+    rendered = activities.render_preview_project(
+        document, owner_email=OWNER, commit_sha=SHA
+    )
+
+    https = resources.ingress_resources(rendered, image_overrides={})[0]
+    middlewares = {
+        route["match"]: [middleware["name"] for middleware in route["middlewares"]]
+        for route in https["spec"]["routes"]
+    }
+    assert middlewares == {
+        "Host(`pv-money-transfer.tmprl-demo.cloud`) && PathPrefix(`/webhooks/github`)": [
+            resources.AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
+        ],
+        "Host(`pv-money-transfer.tmprl-demo.cloud`)": [
+            resources.AUTH_HEADER_STRIP_MIDDLEWARE_NAME,
+            resources.AUTH_MIDDLEWARE_NAME,
+        ],
+    }
+
+
 def test_preview_name_stays_a_dns_label():
     name = activities.preview_name("x" * 63)
     assert len(name) <= 63

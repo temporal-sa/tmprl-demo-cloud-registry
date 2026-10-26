@@ -331,6 +331,21 @@ Rules:
   can safely receive Traefik's upstream host instead.
 - `ingress.temporalAuthRequired` defaults to `true`. Set it `false` only for
   reviewed public demos.
+- `ingress.routes[].public: true` skips catalog SSO for that one route while
+  the rest of the project stays protected, for callers that can't sign in,
+  such as GitHub webhook deliveries. The app must authenticate those requests
+  itself (for example, by verifying GitHub's HMAC signature). Traefik still
+  strips client-supplied `X-Temporal-Auth-*` headers. A public route needs a
+  `pathPrefix` other than `/`, and longer prefixes take priority over shorter
+  ones:
+
+  ```yaml
+  ingress:
+    subdomain: my-demo
+    routes:
+      - {pathPrefix: /webhooks/github, component: web, port: http, public: true}
+      - {pathPrefix: /, component: web, port: http}
+  ```
 - `smokeCheck` is **optional**. When omitted, the candidate is promoted once its
   pods are ready (no HTTP probe). Add it to gate promotion on an owner-approved
   path, e.g. `path: /health`, `expectedStatus: 200`.

@@ -1319,6 +1319,35 @@ def test_workspace_auth_middleware_uses_workspace_verifier():
     )
 
 
+def test_workspace_public_route_skips_forward_auth():
+    demo = _crashable_demo()
+    demo["spec"]["ingress"] = {
+        "subdomain": "canonical-ai-demo",
+        "routes": [
+            {"pathPrefix": "/webhooks/github", "component": "app", "port": "http", "public": True},
+            {"component": "app", "port": "http"},
+        ],
+    }
+    ordered, _, _, _, _ = build_workspace_manifests(
+        demo, {"worker": "i", "app": "i"}, "deadbeef00"
+    )
+
+    https = next(
+        manifest
+        for manifest in ordered
+        if manifest.get("kind") == "IngressRoute"
+        and manifest["spec"]["entryPoints"] == ["websecure"]
+    )
+    middlewares = [
+        [middleware["name"] for middleware in route["middlewares"]]
+        for route in https["spec"]["routes"]
+    ]
+    assert middlewares == [
+        [resources.AUTH_HEADER_STRIP_MIDDLEWARE_NAME],
+        [resources.AUTH_HEADER_STRIP_MIDDLEWARE_NAME, resources.AUTH_MIDDLEWARE_NAME],
+    ]
+
+
 @pytest.mark.parametrize(
     "path",
     sorted((REPO_ROOT / "projects").glob("**/*.yaml")),
