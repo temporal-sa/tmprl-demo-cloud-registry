@@ -8,11 +8,14 @@ metadata:
 spec:
   registry:
     title: Demo Cloud Registry
-    summary: Landing page for Temporal demo projects, reconciled from reviewed project configs and backed by platform workflows for demo environment management.
+    summary: "A demo you can run from /control: one YAML file provisions a full environment end to end, including a Temporal Cloud namespace, API keys, image builds, routes and TLS, then tears it down. Shows saga rollback, builds that survive restarts, API key and mTLS rotation, and canary-gated rollouts."
     tags:
-      - Registry
-      - Platform
-      - Demo Management
+      - Infrastructure Provisioning
+      - Platform Engineering
+      - Saga
+      - Entity Workflows
+      - Worker Versioning
+      - Canary Deployments
       - Temporal Cloud
     temporalSdks:
       - Python
