@@ -434,6 +434,11 @@
           "type": "boolean",
           "default": false
         },
+        "underConstruction": {
+          "type": "boolean",
+          "default": false,
+          "description": "Shows an Under construction banner on the demo's catalog card. Set it while the demo is still being built, and remove it once the demo is ready to present."
+        },
         "readiness": {
           "$ref": "#/$defs/registryReadiness"
         },
