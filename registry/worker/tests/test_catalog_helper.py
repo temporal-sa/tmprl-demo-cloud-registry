@@ -227,6 +227,7 @@ def test_catalog_demos_match_what_the_catalog_lists(monkeypatch):
                 links={"slideDeck": {"url": "https://x"}, "speakerNotes": {"label": "none"}},
                 crashable={"enabled": True, "taskQueueEnv": "TASK_QUEUE"},
             ),
+            project("wip", title="Work In Progress", underConstruction=True),
             project(
                 "canary",
                 labels={catalog_helper.resources.CANARY_LABEL: "true"},
@@ -236,7 +237,7 @@ def test_catalog_demos_match_what_the_catalog_lists(monkeypatch):
 
     demos = catalog_helper.catalog_demos()
 
-    assert [demo["id"] for demo in demos] == ["banking"]
+    assert [demo["id"] for demo in demos] == ["banking", "wip"]
     assert demos[0] == {
         "id": "banking",
         "title": "Money Transfer",
@@ -249,6 +250,8 @@ def test_catalog_demos_match_what_the_catalog_lists(monkeypatch):
         "signInRequired": True,
         "privateCrashableEnvironment": True,
     }
+    assert demos[1]["underConstruction"] is True
+    assert "underConstruction" not in demos[0]
 
 
 @pytest.fixture

@@ -490,6 +490,10 @@ spec:
 
 When omitted, the catalog falls back to a humanized project name.
 
+Set `underConstruction: true` while the demo is still being built. The catalog
+card then shows an Under construction banner. Remove it once the demo is ready
+to present.
+
 ## Rollout Overrides
 
 `spec.rollout` is advanced and usually omitted. It can pin image overrides or a

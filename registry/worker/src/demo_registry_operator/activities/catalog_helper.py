@@ -92,6 +92,9 @@ How to help:
 - When they want to see everything again, call clear_view.
 - Canonical demos are curated, presenter-ready stories with decks and
   recordings; prefer them when two demos fit equally well.
+- A demo marked underConstruction is still being built and not ready to
+  present. Don't highlight one, and when you show one, say it's under
+  construction.
 
 Keep replies short: a few sentences. The chat renders light markdown: bold a
 demo's title, and use a short bullet list when you name several demos; no
@@ -288,6 +291,8 @@ def demo_brief(entry: dict[str, Any]) -> dict[str, Any]:
     }
     if (entry.get("crashable") or {}).get("enabled") or (entry.get("isolatedLambda") or {}).get("enabled"):
         brief["privateCrashableEnvironment"] = True
+    if entry.get("underConstruction"):
+        brief["underConstruction"] = True
     return brief
 
 

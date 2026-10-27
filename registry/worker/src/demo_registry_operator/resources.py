@@ -4137,6 +4137,7 @@ def catalog_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         "temporalSdks": registry.get("temporalSdks", []),
         "aiSdks": registry.get("aiSdks", []),
         "canonical": bool(registry.get("canonical", False)),
+        "underConstruction": bool(registry.get("underConstruction", False)),
         "links": registry.get("links", {}),
         "assets": registry.get("assets", {}),
     }
@@ -4610,6 +4611,7 @@ def registry_entry(demo_project: dict[str, Any]) -> dict[str, Any]:
         "temporalSdks": registry.get("temporalSdks", []),
         "aiSdks": registry.get("aiSdks", []),
         "canonical": bool(registry.get("canonical", False)),
+        "underConstruction": bool(registry.get("underConstruction", False)),
         "links": registry.get("links", {}),
         "assets": registry.get("assets", {}),
     }

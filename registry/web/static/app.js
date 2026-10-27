@@ -58,6 +58,7 @@ const ICONS = {
   link: '<path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L10 5"/><path d="M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1-1"/>',
   close: '<path d="m5 5 10 10M15 5 5 15"/>',
   arrow: '<path d="M4 10h12M11 5l5 5-5 5"/>',
+  cone: '<path d="M8.5 3h3l4 13h-11z"/><path d="M7.2 8h5.6M6 12h8M3 16h14"/>',
   sparkle: '<path d="M10 1c.8 5.2 3.8 8.2 9 9-5.2.8-8.2 3.8-9 9-.8-5.2-3.8-8.2-9-9 5.2-.8 8.2-3.8 9-9Z"/>',
 };
 
@@ -233,6 +234,7 @@ function normalizeDemo(project) {
     name: project.title || project.name,
     summary: project.summary || "",
     canonical: !!project.canonical,
+    underConstruction: !!project.underConstruction,
     tags: Array.isArray(project.tags) ? project.tags : [],
     sdks: Array.isArray(project.temporalSdks) ? project.temporalSdks : [],
     aiSdks: Array.isArray(project.aiSdks) ? project.aiSdks : [],
@@ -972,6 +974,7 @@ function renderFeatureCard(demo) {
         openDrawer(demo.id);
       },
     },
+    constructionBanner(demo),
     demoArt(demo),
     starButton(demo),
     el(
@@ -1018,6 +1021,7 @@ function renderDemoCard(demo) {
   return el(
     "article",
     { class: ziggyPickClass("card", demo), id: `demo-${demo.id}`, style: `--sdk-bar:${sdkBar(demo.sdks)}` },
+    constructionBanner(demo),
     starButton(demo),
     el(
       "h3",
@@ -1032,6 +1036,18 @@ function renderDemoCard(demo) {
     demo.summary ? el("p", { class: "card-summary", text: demo.summary }) : null,
     tagRow([...ziggyTag(demo), ...flagTags(demo), ...topicTags(demo.tags, 3)]),
     el("div", { class: "card-foot" }, cardAssets(presenterAssets(demo)), sdkList(demo.sdks, demo.aiSdks), cardActions(demo))
+  );
+}
+
+// A strip across the top of the card for a demo its owner has marked
+// spec.registry.underConstruction: still being built, not ready to present.
+function constructionBanner(demo) {
+  if (!demo.underConstruction) return null;
+  return el(
+    "p",
+    { class: "construction-banner", title: "Still being built; not ready to present yet" },
+    icon("cone"),
+    "Under construction"
   );
 }
 

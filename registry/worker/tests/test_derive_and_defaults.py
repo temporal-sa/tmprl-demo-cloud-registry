@@ -334,6 +334,28 @@ def test_catalog_entry_uses_registry_block_when_present():
     assert entry["aiSdks"] == []
 
 
+def test_catalog_entry_passes_registry_under_construction_through():
+    entry = catalog_entry(
+        project(
+            "x",
+            registry={"title": "My App", "summary": "Does things", "underConstruction": True},
+            source={"repo": "https://github.com/temporal-sa/x"},
+        )
+    )
+    assert entry["underConstruction"] is True
+
+
+def test_catalog_entry_under_construction_defaults_false():
+    entry = catalog_entry(
+        project(
+            "x",
+            registry={"title": "My App", "summary": "Does things"},
+            source={"repo": "https://github.com/temporal-sa/x"},
+        )
+    )
+    assert entry["underConstruction"] is False
+
+
 def test_catalog_entry_app_url_appends_registry_app_path():
     entry = catalog_entry(
         project(

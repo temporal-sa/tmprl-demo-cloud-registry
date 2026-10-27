@@ -846,6 +846,42 @@ def test_schema_rejects_non_boolean_registry_canonical():
     ), [error.message for error in errors]
 
 
+def test_schema_rejects_non_boolean_registry_under_construction():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "underConstruction": "yes",
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert any(
+        "underConstruction" in error.message for error in errors
+    ), [error.message for error in errors]
+
+
+def test_schema_accepts_registry_under_construction():
+    spec = base_spec()
+    spec["registry"] = {
+        "title": "Demo",
+        "summary": "Summary.",
+        "underConstruction": True,
+    }
+    document = project_document(spec)
+
+    errors = validate_projects.validate_document_schema(
+        validate_projects.load_default_validators(),
+        document,
+    )
+
+    assert errors == [], [error.message for error in errors]
+
+
 def test_schema_accepts_named_registry_link_slots():
     spec = base_spec()
     spec["registry"] = {

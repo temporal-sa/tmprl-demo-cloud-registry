@@ -1046,6 +1046,41 @@
   .feature .star-btn { color: var(--gray-300); background: rgb(0 0 0 / .35); }
   .feature .star-btn.is-starred { color: var(--mint); }
 
+  /* Under construction: a yellow strip across the top of a card (yellow is
+     "in progress" in the buildkit palette), hazard stripes at its end. The
+     star drops below it rather than sitting on it. */
+  .construction-banner {
+    --banner-h: 1.75rem;
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    height: var(--banner-h);
+    padding: 0 .75rem;
+    color: var(--space-black);
+    background: var(--mustard);
+    font-family: var(--mono);
+    font-size: .6875rem;
+    font-weight: 500;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .construction-banner::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 3.5rem;
+    background: repeating-linear-gradient(-45deg, var(--space-black) 0 .4rem, transparent .4rem .8rem);
+    opacity: .85;
+  }
+  .construction-banner svg { width: .875rem; height: .875rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+  .card > .construction-banner { margin: -1.75rem -1.5rem 1.25rem; }
+  .card:has(> .construction-banner) > .star-btn,
+  .feature:has(> .construction-banner) > .star-btn { top: 2.5rem; }
+
   /* Starred: compact launcher chips above the canonical demos */
   .starred { margin-bottom: 3rem; }
   .starred .eyebrow { font-size: .75rem; }

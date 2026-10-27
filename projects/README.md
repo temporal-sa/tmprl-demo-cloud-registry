@@ -252,6 +252,9 @@ Rules:
   docs.
   - `appPath` (optional) is appended to the project's host for the catalog's
     **Open demo** link, such as `/control`. Leave it out to open the host root.
+  - `underConstruction: true` (optional) puts an **Under construction** banner
+    on the demo's catalog card, so presenters know it isn't ready to show yet.
+    Remove it once the demo is ready.
   - `summary` is one to three sentences in this order: **Built with** the
     languages, frameworks, and AI SDKs; **Demonstrates** the Temporal features
     and patterns; **Use case:** the scenario it shows. Keep it under 320
