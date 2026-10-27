@@ -10,9 +10,10 @@ spec:
     title: Agentic SDLC
     summary: >-
       Built with Python, Pydantic AI and Temporal's agent harness over Anthropic,
-      OpenAI and Gemini. Demonstrates parallel coding agents as child Workflows,
-      human approval gates, budget limits, a canary with automatic rollback, and
-      Worker Versioning. Use case: a GitHub issue taken to production by AI agents.
+      OpenAI and Gemini. Demonstrates webhook-driven agents as child Workflows,
+      approval gates in GitHub comments, budgets, canary rollback and Worker
+      Versioning. Use case: AI agents repair a breaking dependency bump, review
+      PRs and ship issues.
     tags: [AI Agents, Multi-Agent, Human-in-the-Loop]
     temporalSdks: [Python]
     aiSdks: [Pydantic AI]
@@ -29,6 +30,12 @@ spec:
         url: https://github.com/temporal-sa/temporal-demo-agentic-sdlc/blob/main/RUNBOOK.md
   source:
     repo: https://github.com/temporal-sa/temporal-demo-agentic-sdlc
+  temporal:
+    # The issue and PR numbers each run works on ("issue:12", "pr:13"); the webhook finds the
+    # runs to Signal with a Visibility query on it.
+    searchAttributes:
+      AgenticSdlcGitHubRefs:
+        type: keywordList
   builds:
     app:
       context: .
@@ -47,11 +54,14 @@ spec:
       shared: gemini
       requiredProperties: [GEMINI_API_KEY]
     # Fine-grained PAT scoped to temporal-sa/agentic-sdlc-storefront (contents, pull requests,
-    # issues: read/write). Expires 2027-10-22; see RUNBOOK "Rotate the GitHub token".
+    # issues, commit statuses, actions: read/write). Expires 2027-10-22; see RUNBOOK "Rotate the
+    # GitHub token".
     github:
       requiredProperties: [GITHUB_TOKEN]
+    # GITHUB_WEBHOOK_SECRET signs the storefront repo's webhook deliveries
+    # (scripts/create-catalog-secrets.sh makes it, scripts/setup-github.sh gives it to GitHub).
     runtime:
-      requiredProperties: [REDIS_PASSWORD, SESSION_SECRET]
+      requiredProperties: [REDIS_PASSWORD, GITHUB_WEBHOOK_SECRET]
   components:
     web:
       build: app
@@ -61,14 +71,15 @@ spec:
       ports: [{name: http, containerPort: 8000, servicePort: 80}]
       env:
         - {name: TEMPORAL_TASK_QUEUE, value: agentic-sdlc}
-        - {name: TRUST_AUTH_HEADERS, value: "true"}
+        # Links from GitHub comments and commit statuses back to the console.
+        - {name: PUBLIC_URL, value: "https://agentic-sdlc.tmprl-demo.cloud"}
         # The web server holds no LLM keys; this is the list its model pickers offer.
         - {name: ENABLED_PROVIDERS, value: "anthropic,openai,google"}
         - name: REDIS_PASSWORD
           valueFrom: {inputRef: secrets.runtime.REDIS_PASSWORD}
         - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"}
-        - name: SESSION_SECRET
-          valueFrom: {inputRef: secrets.runtime.SESSION_SECRET}
+        - name: GITHUB_WEBHOOK_SECRET
+          valueFrom: {inputRef: secrets.runtime.GITHUB_WEBHOOK_SECRET}
         - {name: GITHUB_SANDBOX_REPO, value: temporal-sa/agentic-sdlc-storefront}
     # One worker per pipeline version, both always running, as in the pizza Worker Versioning
     # demo. They are plain workers (crashable, autoscaled) rather than platform-versioned
@@ -117,11 +128,14 @@ spec:
       env:
         - name: REDIS_PASSWORD
           valueFrom: {inputRef: secrets.runtime.REDIS_PASSWORD}
+  # The console is behind catalog SSO. GitHub can't sign in, so its webhook route is public;
+  # the web server rejects any delivery whose X-Hub-Signature-256 doesn't verify.
   ingress:
     subdomain: agentic-sdlc
     temporalAuthRequired: true
-    component: web
-    port: http
+    routes:
+      - {pathPrefix: /webhooks/github, component: web, port: http, public: true}
+      - {pathPrefix: /, component: web, port: http}
   smokeCheck:
     path: /healthz
     expectedStatus: 200
