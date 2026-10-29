@@ -1,0 +1,55 @@
+# Catch-all for *.tmprl-demo.cloud hosts no demo serves (a typo, a deleted demo
+# or workspace). Priority 1 keeps it below every other route: operator-rendered
+# demo routes use 1000+, and unprioritized routes rank by rule length. No auth:
+# visitors on a dead share link may not be able to sign in. The regexp matches a
+# single label because the wildcard cert covers only one.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: not-found
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: not-found
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^[a-z0-9-]+\.tmprl-demo\.cloud$`)
+      priority: 1
+      services:
+        - name: not-found
+          port: 80
+  tls: {}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: not-found-http
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: not-found
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^[a-z0-9-]+\.tmprl-demo\.cloud$`)
+      priority: 1
+      middlewares:
+        - name: not-found-https-redirect
+      services:
+        - name: not-found
+          port: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: not-found-https-redirect
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: not-found
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

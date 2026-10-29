@@ -234,6 +234,26 @@ spec:
   timeout: 10m
   wait: true
 ---
+# Static 404 page for *.tmprl-demo.cloud hosts no demo serves. Needs Traefik's
+# CRDs and the wildcard cert in the default TLSStore.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: traefik-not-found
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: traefik
+    - name: wildcard-cert
+  interval: 5m
+  path: ./clusters/blue/addons/traefik/not-found
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: cluster-gitops-config
+  timeout: 5m
+  wait: true
+---
 # Registry layer. CRDs + the operator itself (P5) + the real catalog (P7). The
 # operator runs as one worker+watch Deployment on task queue
 # registry-management-blue (color set in its configMap).
