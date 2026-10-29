@@ -1,0 +1,3 @@
+# Flux's source-controller drops *.png from the artifact by default; the 404
+# page's ConfigMap needs them.
+!*.png
