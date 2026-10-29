@@ -54,3 +54,10 @@ override.tf.json
 # NB: .terraform.lock.hcl IS committed (pins provider versions) — not ignored.
 # Tofu-emitted per-cluster kubeconfigs (exec-auth, but still machine-local).
 infra/kubeconfig-*.yaml
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

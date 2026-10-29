@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "tmprl_demo_cloud_registry",
+  "project_id": "600175cd-3a9f-4165-baad-a9e65bac6caf"
+}
