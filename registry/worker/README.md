@@ -179,6 +179,11 @@ Environment variables:
 - `DEMO_REGISTRY_CODEBUILD_PROJECT`, required for `aws-codebuild`
 - `DEMO_REGISTRY_CODEBUILD_POLL_SECONDS`, default `30`
 - `DEMO_REGISTRY_CODEBUILD_TIMEOUT_MINUTES`, default `30`
+- `DEMO_REGISTRY_DOCKERHUB_SECRET_PATH`, default `tmprl-dem-cld/platform/dockerhub`;
+  Secrets Manager secret with `username` and `token` keys that CodeBuild uses
+  to log in to Docker Hub before building, so base-image pulls count against
+  that account instead of CodeBuild's shared IP. The secret must exist before
+  the operator uses it, or every build fails. `none`/`off` disables the login.
 - `DEMO_REGISTRY_READINESS_TIMEOUT_SECONDS`, default `300`
 - `DEMO_REGISTRY_READINESS_POLL_SECONDS`, default `5`
 - `DEMO_REGISTRY_AWS_REGION`, default from `AWS_REGION`,
