@@ -274,6 +274,7 @@ def catalog_payload(registry_path: Path, status_dir: Path) -> dict[str, Any]:
 
 SITE_NAME = "Temporal Field Kit"
 SOCIAL_META_MARKER = "<!-- social-meta -->"
+CATALOG_URL_MARKER = "__CATALOG_URL__"
 SOCIAL_DESCRIPTION_LIMIT = 300
 DEMO_PATH_PREFIX = "/demos/"
 WORKSHOP_PATH_PREFIX = "/courses/"
@@ -1309,11 +1310,13 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                 self.send_index(path)
             elif path.startswith("/static/"):
                 self.send_static(path.removeprefix("/static/"))
-            else:
+            elif path.startswith(("/api/", "/_auth/")):
                 self.send_json(
                     {"error": "not_found", "path": path},
                     status=HTTPStatus.NOT_FOUND,
                 )
+            else:
+                self.send_not_found_page()
         except (OSError, ValueError, json.JSONDecodeError) as error:
             self.send_json(
                 {"error": "registry_unavailable", "message": str(error)},
@@ -2018,7 +2021,16 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             try:
                 session_claims = session_from_request(self)
             except AuthError:
-                self.redirect_to_login()
+                if catalog_api_request(self):
+                    self.send_json(
+                        {
+                            "error": "unauthorized",
+                            "message": "Temporal employee auth is required.",
+                        },
+                        status=HTTPStatus.UNAUTHORIZED,
+                    )
+                else:
+                    self.redirect_to_login()
                 return
 
             now = int(time.time())
@@ -2250,7 +2262,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
   <body>
     <section class="login-screen">
       <div class="login-card">
-        <h1 aria-label="Simple Chat Agent"></h1>
+        <h1 aria-label="{SITE_NAME}"></h1>
         <p class="login-subtitle"></p>
         <div class="login-form">
           <a class="login-button login-google" href="{escape(start_url)}"{aria_disabled}>Log In</a>
@@ -2449,6 +2461,13 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def send_not_found_page(self) -> None:
+        # The operator also routes unknown *.tmprl-demo.cloud hosts here, so
+        # the way back has to name the catalog's host.
+        body = (STATIC_DIR / "404.html").read_text(encoding="utf-8")
+        body = body.replace(CATALOG_URL_MARKER, escape(auth_base_url()))
+        self.send_html(body, status=HTTPStatus.NOT_FOUND)
+
     def send_static(self, relative_name: str) -> None:
         path = safe_static_path(relative_name)
         if path is None or not path.is_file():
@@ -2582,6 +2601,19 @@ def original_request_url(handler: BaseHTTPRequestHandler) -> str:
     if host:
         return f"{proto}://{host}{uri}"
     return auth_base_url()
+
+
+def catalog_api_request(handler: BaseHTTPRequestHandler) -> bool:
+    # The catalog SPA calls /api/* with fetch, which would follow a login
+    # redirect to an HTML page; a 401 lets it send the user to sign in instead.
+    # Other hosts' /api/* paths are the demos' own and keep the redirect.
+    uri = handler.headers.get("X-Forwarded-Uri") or handler.headers.get(
+        "X-Forwarded-Path", ""
+    )
+    return (
+        forwarded_host(handler) == urlsplit(auth_base_url()).hostname
+        and urlsplit(uri).path.startswith("/api/")
+    )
 
 
 def forwarded_host(handler: BaseHTTPRequestHandler) -> str:

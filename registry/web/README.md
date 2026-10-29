@@ -18,6 +18,12 @@ The image serves the catalog from `REGISTRY_DATA_PATH`
 - `/oauth/google/callback`
 - `/`, `/courses`, `/onboard`, `/demos/<name>`, `/courses/<key>` (the SPA)
 
+Any other page path returns `404` with `static/404.html`. Unknown `/api/*` and
+`/_auth/*` paths and missing `/static/*` files keep the JSON `404` body. On the
+blue and green clusters the operator also sends every `*.tmprl-demo.cloud` host
+that no demo serves here, without auth, rewriting the path to `/not-found`
+(`REGISTRY_NOT_FOUND_PATH` in `resources.py`), so keep that path unrouted.
+
 The catalog is published at runtime by the registry operator: it lists every
 `DemoProject` CR and writes a `registry-catalog` ConfigMap, which the operator
 mounts into this Deployment at `/app/data`. The image ships an empty fallback so
@@ -68,7 +74,8 @@ its own, and `GET` then returns `{"phase": "None"}`.
 routes. With `AUTH_MODE=google`, missing or invalid sessions redirect to
 `/auth/login`, which starts Google OAuth and sets the shared
 `.tmprl-demo.cloud` session cookie before returning to the original demo URL.
-The verifier injects `X-Temporal-Auth-JWT`, `X-Temporal-Auth-Subject`,
+The catalog's own `/api/*` calls get a JSON `401` instead, since a `fetch` would
+follow the redirect to an HTML page. The verifier injects `X-Temporal-Auth-JWT`, `X-Temporal-Auth-Subject`,
 `X-Temporal-Auth-Email`, and `X-Temporal-Auth-Name` for downstream apps.
 
 `/_auth/verify-workspace` is the forward-auth endpoint for crashable and

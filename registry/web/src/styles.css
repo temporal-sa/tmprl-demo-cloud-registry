@@ -2074,6 +2074,51 @@
   .feature.is-ziggy-pick, .card.is-ziggy-pick { position: relative; animation: ziggy-halo 2.6s ease-in-out infinite; }
   .tag-ziggy { color: var(--space-black); background: var(--mint); border-color: var(--mint); }
   .tag-ziggy svg { fill: currentColor; stroke: none; }
+
+  /* The 404 page (static/404.html): a large Ziggy over the starfield, with
+     the message in a speech bubble whose tail points at Ziggy. */
+  .not-found-stars { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  .not-found {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+
+  .not-found-bubble {
+    position: relative;
+    align-self: center;
+    max-width: 22rem;
+    margin-bottom: 12rem;
+    padding: 1.5rem 1.75rem 1.75rem;
+    color: var(--space-black);
+    background: #fff;
+    box-shadow: 0 10px 30px rgb(0 0 0 / .4);
+    font-family: var(--mono);
+    animation: ziggy-pop .35s cubic-bezier(.2, 1.4, .4, 1);
+  }
+
+  .not-found-bubble::after {
+    content: "";
+    position: absolute;
+    top: 2.5rem;
+    right: -1.4rem;
+    width: 1.6rem;
+    height: 2rem;
+    background: #fff;
+    clip-path: polygon(0 0, 100% 100%, 0 70%);
+  }
+
+  .not-found-bubble h1 { color: var(--ultraviolet); font-size: 1.375rem; font-weight: 500; line-height: 1.3; }
+  .not-found-bubble p { margin: .75rem 0 1.25rem; font-size: .9375rem; line-height: 1.5; }
+  .not-found-bubble .btn { color: var(--off-white); }
+
+  .not-found-ziggy { flex: none; width: min(26rem, 40vw); height: auto; animation: ziggy-float 10s ease-in-out infinite; }
+  .not-found-ziggy img { height: auto; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -2138,6 +2183,11 @@
   .onboard-findings code { grid-column: 1; }
   .ziggy { right: 1rem; bottom: 1rem; }
   .ziggy-panel { height: min(34rem, calc(100vh - 7.5rem)); }
+  /* Stack the bubble over Ziggy and point its tail down. */
+  .not-found { flex-direction: column; gap: 1.5rem; }
+  .not-found-bubble { align-self: auto; margin-bottom: 0; }
+  .not-found-bubble::after { top: auto; right: auto; bottom: -1.4rem; left: 50%; width: 2rem; height: 1.6rem; clip-path: polygon(0 0, 100% 0, 30% 100%); }
+  .not-found-ziggy { width: min(18rem, 70vw); }
 }
 
 @media (max-width: 420px) {

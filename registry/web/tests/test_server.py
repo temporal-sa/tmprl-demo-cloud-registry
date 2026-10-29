@@ -295,6 +295,42 @@ def test_auth_verify_redirects_to_central_login_without_cookie(tmp_path, monkeyp
         httpd.shutdown()
 
 
+@pytest.mark.parametrize(
+    ("host", "uri", "code"),
+    [
+        # The catalog's own API answers fetch() with a 401 it can act on.
+        ("catalog.tmprl-demo.cloud", "/api/catalog", 401),
+        ("catalog.tmprl-demo.cloud", "/api/helper?x=1", 401),
+        # Catalog pages and every demo's paths, /api/* included, still redirect.
+        ("catalog.tmprl-demo.cloud", "/demos/canonical-ai-demo", 302),
+        ("catalog.tmprl-demo.cloud", "/apis", 302),
+        ("banking-app.tmprl-demo.cloud", "/api/transfer", 302),
+    ],
+)
+def test_auth_verify_rejects_catalog_api_without_redirect(
+    tmp_path, monkeypatch, host, uri, code
+):
+    configure_google_auth(monkeypatch)
+    httpd = run_test_server(tmp_path)
+    try:
+        request = Request(
+            f"http://127.0.0.1:{httpd.server_port}/_auth/verify",
+            headers={
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": host,
+                "X-Forwarded-Uri": uri,
+            },
+        )
+        with pytest.raises(HTTPError) as raised:
+            urlopen_no_redirect(request)
+    finally:
+        httpd.shutdown()
+
+    assert raised.value.code == code
+    if code == 401:
+        assert json.loads(raised.value.read().decode("utf-8"))["error"] == "unauthorized"
+
+
 def test_auth_verify_allows_signed_session_cookie(tmp_path, monkeypatch):
     configure_google_auth(monkeypatch)
     token = server.create_session_token(
@@ -1956,6 +1992,55 @@ def test_catalog_pages_have_site_preview_meta(tmp_path, monkeypatch, path, title
     assert f"<title>{title}</title>" in html
     assert f'<meta property="og:url" content="{url}" />' in html
     assert "https://catalog.example.test/static/og-image.png" in html
+
+
+# /not-found is where the operator's unknown-host route rewrites every path
+# (REGISTRY_NOT_FOUND_PATH), so it must stay unrouted.
+@pytest.mark.parametrize("path", ["/no-such-page", "/not-found"])
+def test_unknown_page_serves_not_found_page(tmp_path, monkeypatch, path):
+    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+    httpd = run_test_server(tmp_path)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            urlopen(f"http://127.0.0.1:{httpd.server_port}{path}", timeout=2)
+    finally:
+        httpd.shutdown()
+
+    assert raised.value.code == 404
+    assert raised.value.headers["Content-Type"] == "text/html; charset=utf-8"
+    html = raised.value.read().decode("utf-8")
+    assert "We couldn't find that page." in html
+    # Unknown hosts get this page too, so the link back names the catalog.
+    assert 'href="https://catalog.example.test/"' in html
+    assert server.CATALOG_URL_MARKER not in html
+
+
+@pytest.mark.parametrize("path", ["/api/no-such-endpoint", "/_auth/no-such-check"])
+def test_unknown_api_path_stays_json(tmp_path, path):
+    httpd = run_test_server(tmp_path)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            urlopen(f"http://127.0.0.1:{httpd.server_port}{path}", timeout=2)
+    finally:
+        httpd.shutdown()
+
+    assert raised.value.code == 404
+    assert json.loads(raised.value.read().decode("utf-8")) == {
+        "error": "not_found",
+        "path": path,
+    }
+
+
+def test_missing_static_file_stays_json(tmp_path):
+    httpd = run_test_server(tmp_path)
+    try:
+        with pytest.raises(HTTPError) as raised:
+            urlopen(f"http://127.0.0.1:{httpd.server_port}/static/missing.png", timeout=2)
+    finally:
+        httpd.shutdown()
+
+    assert raised.value.code == 404
+    assert raised.value.headers["Content-Type"] == "application/json; charset=utf-8"
 
 
 def test_page_still_renders_when_catalog_is_unreadable(tmp_path, monkeypatch):

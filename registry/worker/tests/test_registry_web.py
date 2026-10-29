@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from demo_registry_operator.resources import (
@@ -9,12 +11,16 @@ from demo_registry_operator.resources import (
     REGISTRY_AUTH_PUBLIC_PATH_PREFIXES,
     REGISTRY_CATALOG_ANNOTATION,
     REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN,
+    REGISTRY_NOT_FOUND_MIDDLEWARE_NAME,
+    REGISTRY_NOT_FOUND_PATH,
+    REGISTRY_UNKNOWN_HOST_MATCH,
     SOURCE_COMMIT_ANNOTATION,
     auth_required,
     auth_header_strip_middleware,
     auth_middleware,
     deployment_resources,
     ingress_resources,
+    promotion_resources,
     runtime_secret_resources,
 )
 
@@ -170,6 +176,85 @@ def test_registry_link_preview_crawlers_reach_page_shells_without_auth(
     )
     assert preview[0]["priority"] == 2000
     assert "middlewares" not in preview[0]
+
+
+def test_unknown_hosts_get_the_catalog_404_page_on_colored_clusters(monkeypatch):
+    monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+    rendered = promotion_resources(
+        registry_project(temporal_auth_required=True),
+        image_overrides={"web": "example.com/registry-web:git-abcdef123456"},
+    )
+    https = next(
+        resource
+        for resource in rendered
+        if resource["kind"] == "IngressRoute"
+        and resource["metadata"]["name"] == "registry-operator"
+    )
+    route_by_match = {route["match"]: route for route in https["spec"]["routes"]}
+
+    page = route_by_match[REGISTRY_UNKNOWN_HOST_MATCH]
+    static = route_by_match[f"{REGISTRY_UNKNOWN_HOST_MATCH} && PathPrefix(`/static/`)"]
+    # Below every demo route, and public: no sign-in for a page that isn't there.
+    assert page["priority"] < static["priority"] < 1000
+    assert page["middlewares"] == [
+        {
+            "name": REGISTRY_NOT_FOUND_MIDDLEWARE_NAME,
+            "namespace": "tmprl-dem-cld-registry-operator",
+        }
+    ]
+    assert "middlewares" not in static
+    assert page["services"] == static["services"] == (
+        route_by_match["Host(`catalog.tmprl-demo.cloud`)"]["services"]
+    )
+    assert route_by_match["Host(`catalog.tmprl-demo.cloud`)"]["priority"] == 1000
+
+    rewrite = next(
+        resource
+        for resource in rendered
+        if resource["kind"] == "Middleware"
+        and resource["metadata"]["name"] == REGISTRY_NOT_FOUND_MIDDLEWARE_NAME
+    )
+    assert rewrite["spec"] == {"replacePath": {"path": REGISTRY_NOT_FOUND_PATH}}
+
+
+def test_unknown_host_match_covers_one_subdomain_label():
+    pattern = REGISTRY_UNKNOWN_HOST_MATCH.removeprefix("HostRegexp(`").removesuffix("`)")
+
+    assert re.fullmatch(pattern, "no-such-demo.tmprl-demo.cloud")
+    assert not re.fullmatch(pattern, "tmprl-demo.cloud")
+    assert not re.fullmatch(pattern, "a.b.tmprl-demo.cloud")
+    assert not re.fullmatch(pattern, "demo.tmprl-demoxcloud")
+
+
+@pytest.mark.parametrize(
+    "project",
+    [registry_project(temporal_auth_required=True), None],
+    ids=["catalog-on-pet", "other-demo-on-blue"],
+)
+def test_unknown_host_routes_render_only_for_the_catalog_on_colored_clusters(
+    monkeypatch, project
+):
+    if project is None:
+        monkeypatch.setenv("DEMO_REGISTRY_CLUSTER", "blue")
+        project = registry_project(temporal_auth_required=True)
+        project["metadata"] = {"name": "banking-money-transfer"}
+    else:
+        monkeypatch.delenv("DEMO_REGISTRY_CLUSTER", raising=False)
+    rendered = promotion_resources(
+        project,
+        image_overrides={"web": "example.com/registry-web:git-abcdef123456"},
+    )
+
+    assert not any(
+        "HostRegexp" in route["match"]
+        for resource in rendered
+        if resource["kind"] == "IngressRoute"
+        for route in resource["spec"]["routes"]
+    )
+    assert not any(
+        resource["metadata"]["name"] == REGISTRY_NOT_FOUND_MIDDLEWARE_NAME
+        for resource in rendered
+    )
 
 
 def test_registry_web_mounts_catalog_configmaps():
