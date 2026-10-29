@@ -32,6 +32,9 @@ DEFAULT_PUBLIC_ECR_REGION = "us-east-1"
 # operator-managed demo namespace. An account admin creates it once; the operator
 # never creates groups or changes account roles.
 DEFAULT_NAMESPACE_READERS_GROUP = "tmprl-demo-cld-read"
+# Secrets Manager secret with `username` and `token` keys for a Docker Hub
+# account. CodeBuild fails every build if it is configured but missing.
+DEFAULT_DOCKERHUB_SECRET_PATH = "tmprl-dem-cld/platform/dockerhub"
 DISABLED_VALUES = {"none", "off", "disabled", "false"}
 
 
@@ -74,6 +77,8 @@ class WorkerConfig:
     rollout_diagnostics_bucket: str | None = None
     # Empty string disables the readers group (no grants, no self-service joins).
     namespace_readers_group: str = DEFAULT_NAMESPACE_READERS_GROUP
+    # Empty string disables the Docker Hub login; pulls are then anonymous.
+    dockerhub_secret_path: str = DEFAULT_DOCKERHUB_SECRET_PATH
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -205,6 +210,10 @@ class WorkerConfig:
             namespace_readers_group=env_disableable(
                 "DEMO_REGISTRY_NAMESPACE_READERS_GROUP",
                 default=DEFAULT_NAMESPACE_READERS_GROUP,
+            ),
+            dockerhub_secret_path=env_disableable(
+                "DEMO_REGISTRY_DOCKERHUB_SECRET_PATH",
+                default=DEFAULT_DOCKERHUB_SECRET_PATH,
             ),
         )
 

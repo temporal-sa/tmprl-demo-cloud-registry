@@ -65,6 +65,13 @@ resource "aws_iam_role_policy" "codebuild_perms" {
         Action   = "secretsmanager:GetSecretValue"
         Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/*/*"
       },
+      {
+        # Docker Hub login for base-image pulls (DEMO_REGISTRY_DOCKERHUB_SECRET_PATH).
+        Sid      = "DockerHubLogin"
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = "arn:${local.partition}:secretsmanager:${var.region}:${local.account_id}:secret:${var.name_prefix}/platform/dockerhub-*"
+      },
     ]
   })
 }

@@ -325,6 +325,7 @@ def test_codebuild_private_source_uses_no_source_checkout():
             codebuild_project="tmprl-dem-cld-build",
             aws_region="us-west-1",
             codebuild_timeout_minutes=30,
+            dockerhub_secret_path="tmprl-dem-cld/platform/dockerhub",
         ),
         image_templates={
             "frontend": (
@@ -362,8 +363,6 @@ def test_codebuild_private_source_uses_no_source_checkout():
     assert "git clone --no-checkout" in buildspec
     assert "DEMO_SOURCE_REPO" in buildspec
     assert "cd /tmp/source && git checkout" in buildspec
-    assert "cd /tmp/source && python3 -c" in buildspec
-    assert "public.ecr.aws/docker/library" in buildspec
     assert "DEMO_SOURCE_VERSION" in buildspec
     assert "cd /tmp/source && docker build" in buildspec
 
@@ -398,6 +397,7 @@ def test_codebuild_public_source_keeps_github_source_override():
             codebuild_project="tmprl-dem-cld-build",
             aws_region="us-west-1",
             codebuild_timeout_minutes=30,
+            dockerhub_secret_path="tmprl-dem-cld/platform/dockerhub",
         ),
         image_templates={
             "frontend": (
@@ -422,7 +422,66 @@ def test_codebuild_public_source_keeps_github_source_override():
         variable["name"] for variable in args["environmentVariablesOverride"]
     }
     assert "git clone --no-checkout" not in args["buildspecOverride"]
-    assert "public.ecr.aws/docker/library" in args["buildspecOverride"]
+
+
+def test_codebuild_logs_in_to_docker_hub_before_building():
+    args = builds.codebuild_start_build_args(
+        demo_project(),
+        SimpleNamespace(
+            codebuild_project="tmprl-dem-cld-build",
+            aws_region="us-west-1",
+            codebuild_timeout_minutes=30,
+            dockerhub_secret_path="tmprl-dem-cld/platform/dockerhub",
+        ),
+        image_templates={
+            "frontend": "example.com/frontend:git-${SOURCE_SHA}",
+            "backend": "example.com/backend:git-${SOURCE_SHA}",
+        },
+        source_repo="https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        source_version=SOURCE_SHA,
+    )
+
+    env = {
+        variable["name"]: variable
+        for variable in args["environmentVariablesOverride"]
+    }
+    assert env["DOCKERHUB_USERNAME"] == {
+        "name": "DOCKERHUB_USERNAME",
+        "value": "tmprl-dem-cld/platform/dockerhub:username",
+        "type": "SECRETS_MANAGER",
+    }
+    assert env["DOCKERHUB_TOKEN"] == {
+        "name": "DOCKERHUB_TOKEN",
+        "value": "tmprl-dem-cld/platform/dockerhub:token",
+        "type": "SECRETS_MANAGER",
+    }
+    buildspec = args["buildspecOverride"]
+    login = buildspec.index('--username \\"$DOCKERHUB_USERNAME\\" --password-stdin')
+    assert login < buildspec.index("docker build")
+    assert "public.ecr.aws/docker/library" not in buildspec
+
+
+def test_codebuild_skips_docker_hub_login_when_disabled():
+    args = builds.codebuild_start_build_args(
+        demo_project(),
+        SimpleNamespace(
+            codebuild_project="tmprl-dem-cld-build",
+            aws_region="us-west-1",
+            codebuild_timeout_minutes=30,
+            dockerhub_secret_path="",
+        ),
+        image_templates={
+            "frontend": "example.com/frontend:git-${SOURCE_SHA}",
+            "backend": "example.com/backend:git-${SOURCE_SHA}",
+        },
+        source_repo="https://github.com/temporal-sa/demo-banking-app-money-transfer",
+        source_version=SOURCE_SHA,
+    )
+
+    assert not {"DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"} & {
+        variable["name"] for variable in args["environmentVariablesOverride"]
+    }
+    assert "DOCKERHUB" not in args["buildspecOverride"]
 
 
 def test_codebuild_buildspec_defaults_to_dockerfile_strategy():

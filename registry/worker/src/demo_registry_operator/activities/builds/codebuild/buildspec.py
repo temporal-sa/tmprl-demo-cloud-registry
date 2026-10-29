@@ -374,6 +374,21 @@ def codebuild_start_build_args(
             "type": "PLAINTEXT",
         },
     ]
+    if config.dockerhub_secret_path:
+        environment_variables.extend(
+            [
+                {
+                    "name": "DOCKERHUB_USERNAME",
+                    "value": f"{config.dockerhub_secret_path}:username",
+                    "type": "SECRETS_MANAGER",
+                },
+                {
+                    "name": "DOCKERHUB_TOKEN",
+                    "value": f"{config.dockerhub_secret_path}:token",
+                    "type": "SECRETS_MANAGER",
+                },
+            ]
+        )
     start_args: dict[str, Any] = {
         "projectName": config.codebuild_project,
         "buildspecOverride": codebuild_buildspec(
@@ -381,6 +396,7 @@ def codebuild_start_build_args(
             image_templates,
             aws_region=config.aws_region,
             manual_source_checkout=bool(source_auth_secret_path),
+            dockerhub_login=bool(config.dockerhub_secret_path),
         ),
         "environmentVariablesOverride": environment_variables,
         "privilegedModeOverride": True,
@@ -434,6 +450,7 @@ def codebuild_buildspec(
     *,
     aws_region: str,
     manual_source_checkout: bool = False,
+    dockerhub_login: bool = False,
 ) -> str:
     registries = sorted(
         {
@@ -456,12 +473,11 @@ def codebuild_buildspec(
             f'IMAGE_VERSION="git-${{SOURCE_SHA}}{build_definitions.image_version_suffix(demo_project)}"',
         ]
     )
-    prefetch_command = dockerhub_official_base_prefetch_command(
-        demo_project,
-        manual_source_checkout=manual_source_checkout,
-    )
-    if prefetch_command:
-        pre_build_commands.append(prefetch_command)
+    if dockerhub_login:
+        pre_build_commands.append(
+            'printf "%s" "$DOCKERHUB_TOKEN" '
+            '| docker login --username "$DOCKERHUB_USERNAME" --password-stdin'
+        )
     if any(
         build_definitions.build_strategy(build) == build_definitions.BUILDPACK_BUILD_STRATEGY
         for build in resources.builds(demo_project).values()
@@ -746,56 +762,6 @@ def lambda_wrapper_context_dir(build_name: str) -> str:
         for character in build_name
     )
     return f"/tmp/tmprl-lambda-wrapper-images/{safe or 'build'}"
-
-
-def dockerhub_official_base_prefetch_command(
-    demo_project: dict[str, Any],
-    *,
-    manual_source_checkout: bool,
-) -> str | None:
-    dockerfiles = sorted(
-        {
-            str(build.get("dockerfile"))
-            for build in resources.builds(demo_project).values()
-            if isinstance(build, dict)
-            and isinstance(build.get("dockerfile"), str)
-            and build.get("dockerfile")
-        }
-    )
-    if not dockerfiles:
-        return None
-
-    script = (
-        "import pathlib, subprocess, sys; "
-        "seen=set(); "
-        "\nfor dockerfile in sys.argv[1:]:"
-        "\n    for line in pathlib.Path(dockerfile).read_text().splitlines():"
-        "\n        parts=line.strip().split()"
-        "\n        if not parts or parts[0].upper() != 'FROM':"
-        "\n            continue"
-        "\n        index=1"
-        "\n        while index < len(parts) and parts[index].startswith('--'):"
-        "\n            index += 1"
-        "\n        if index >= len(parts):"
-        "\n            continue"
-        "\n        image=parts[index].split('@', 1)[0]"
-        "\n        if '/' in image:"
-        "\n            continue"
-        "\n        if image in seen:"
-        "\n            continue"
-        "\n        seen.add(image)"
-        "\n        mirror='public.ecr.aws/docker/library/' + image"
-        "\n        subprocess.run(['docker', 'pull', mirror], check=True)"
-        "\n        subprocess.run(['docker', 'tag', mirror, image], check=True)"
-    )
-    source_prefix = "cd /tmp/source && " if manual_source_checkout else ""
-    return (
-        source_prefix
-        + "python3 -c "
-        + shlex.quote(script)
-        + " "
-        + " ".join(shlex.quote(dockerfile) for dockerfile in dockerfiles)
-    )
 
 
 def manual_source_checkout_commands() -> list[str]:
