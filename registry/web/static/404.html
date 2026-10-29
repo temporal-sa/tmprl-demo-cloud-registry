@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#141414" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex" />
+    <title>Page not found · Temporal Field Kit</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://temporal.io" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Mono:wght@400;500&display=swap" />
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <canvas class="not-found-stars" aria-hidden="true"></canvas>
+    <main class="not-found">
+      <div class="not-found-bubble">
+        <h1>We couldn't find that page.</h1>
+        <p>The link may be out of date, or the page may have moved.</p>
+        <a class="btn btn-primary btn-sm" href="__CATALOG_URL__/">Back to the demos</a>
+      </div>
+      <div class="not-found-ziggy ziggy-figure" aria-hidden="true">
+        <img class="ziggy-open" src="/static/brand/ziggy-large.png" alt="" width="640" height="640" />
+        <img class="ziggy-blink" src="/static/brand/ziggy-large-blink.png" alt="" width="640" height="640" />
+      </div>
+    </main>
+    <script src="/static/starfield.js"></script>
+    <script>Starfield.start(document.querySelector(".not-found-stars"));</script>
+  </body>
+</html>

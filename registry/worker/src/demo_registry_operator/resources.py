@@ -165,6 +165,19 @@ REGISTRY_LINK_PREVIEW_USER_AGENT_PATTERN = (
     "(?i)(Slackbot|Twitterbot|facebookexternalhit|LinkedInBot|Discordbot"
     "|SkypeUriPreview|MicrosoftPreview|WhatsApp|TelegramBot)"
 )
+# A host under the base domain that no demo serves (a typo, a deleted demo or
+# workspace) gets the catalog's 404 page instead of Traefik's plain-text one.
+# These routes sit below every demo route (1000+). They skip auth: guests on a
+# dead share link or visitors to a public demo can't sign in, and the page holds
+# nothing to protect. The rewrite target must stay a path the web server doesn't
+# route, so it answers with its 404 page.
+REGISTRY_UNKNOWN_HOST_MATCH = (
+    "HostRegexp(`^[a-z0-9-]+\\." + derive.BASE_DOMAIN.replace(".", "\\.") + "$`)"
+)
+REGISTRY_UNKNOWN_HOST_PRIORITY = 1
+REGISTRY_UNKNOWN_HOST_STATIC_PRIORITY = 2
+REGISTRY_NOT_FOUND_MIDDLEWARE_NAME = "registry-not-found"
+REGISTRY_NOT_FOUND_PATH = "/not-found"
 TEMPORAL_BOOTSTRAP_SECRET_PATH = "tmprl-dem-cld/platform/temporal-cloud-bootstrap"
 TEMPORAL_BOOTSTRAP_SECRET_PROPERTIES = [
     "TEMPORAL_CLOUD_API_KEY",
@@ -1564,6 +1577,10 @@ def promotion_resources(
             )
         )
         resources.append(auth_middleware(demo_project, namespace=route_namespace))
+    if ingress_routes(demo_project) and registry_unknown_host_routes_enabled(demo_project):
+        resources.append(
+            registry_not_found_middleware(demo_project, namespace=route_namespace)
+        )
     resources.extend(
         ingress_resources(
             demo_project,
@@ -3009,6 +3026,17 @@ def ingress_resources(
             ),
             *routes,
         ]
+    if registry_unknown_host_routes_enabled(demo_project):
+        routes.extend(
+            registry_unknown_host_routes(
+                demo_project,
+                route_specs,
+                image_overrides=image_overrides or {},
+                rollout_version=rollout_version,
+                namespace=route_namespace,
+                service_namespace=service_namespace,
+            )
+        )
     annotations = {
         "platform.temporal.io/host": project_host(demo_project),
         "platform.temporal.io/temporal-auth-required": str(
@@ -3126,6 +3154,73 @@ def registry_auth_bypass_routes(
         preview["match"] = registry_link_preview_match(demo_project)
         routes.append(preview)
     return routes
+
+
+def registry_unknown_host_routes_enabled(demo_project: dict[str, Any]) -> bool:
+    # Colored clusters only: they serve every host from the wildcard cert. The
+    # pet's per-host cert would fail TLS for an unknown host anyway.
+    return is_registry_catalog_project(demo_project) and operator_cluster() is not None
+
+
+def registry_unknown_host_routes(
+    demo_project: dict[str, Any],
+    route_specs: list[dict[str, Any]],
+    *,
+    image_overrides: dict[str, str],
+    rollout_version: str | None = None,
+    namespace: str | None = None,
+    service_namespace: str | None = None,
+) -> list[dict[str, Any]]:
+    route_namespace = namespace or project_namespace(demo_project)
+    web_spec = next(
+        spec
+        for spec in route_specs
+        if spec["component"] == REGISTRY_WEB_COMPONENT_NAME
+        and not spec.get("pathPrefix")
+    )
+
+    def route(priority: int) -> dict[str, Any]:
+        return ingress_route(
+            demo_project,
+            web_spec,
+            image_overrides=image_overrides,
+            rollout_version=rollout_version,
+            namespace=route_namespace,
+            service_namespace=service_namespace,
+            use_auth=False,
+            priority=priority,
+        )
+
+    # The 404 page's own stylesheet, script and images load from the unknown
+    # host too, so /static/ passes through unrewritten.
+    static = route(REGISTRY_UNKNOWN_HOST_STATIC_PRIORITY)
+    static["match"] = f"{REGISTRY_UNKNOWN_HOST_MATCH} && PathPrefix(`/static/`)"
+    page = route(REGISTRY_UNKNOWN_HOST_PRIORITY)
+    page["match"] = REGISTRY_UNKNOWN_HOST_MATCH
+    page["middlewares"] = [
+        {"name": REGISTRY_NOT_FOUND_MIDDLEWARE_NAME, "namespace": route_namespace}
+    ]
+    return [static, page]
+
+
+def registry_not_found_middleware(
+    demo_project: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "apiVersion": traefik_api_version(),
+        "kind": "Middleware",
+        "metadata": {
+            "name": REGISTRY_NOT_FOUND_MIDDLEWARE_NAME,
+            "namespace": namespace or project_namespace(demo_project),
+            "labels": common_labels(demo_project),
+            "annotations": {
+                "platform.temporal.io/description": "Send every path on an unknown host to the catalog's 404 page.",
+            },
+        },
+        "spec": {"replacePath": {"path": REGISTRY_NOT_FOUND_PATH}},
+    }
 
 
 def registry_link_preview_match(demo_project: dict[str, Any]) -> str:
