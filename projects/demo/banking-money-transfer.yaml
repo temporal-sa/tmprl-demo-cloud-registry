@@ -19,6 +19,10 @@ spec:
       runbook:
         label: Runbook
         url: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer/blob/main/RUNBOOK.md
+    crashable:
+      enabled: true
+      taskQueueEnv: TEMPORAL_TASK_QUEUE
+      baseTaskQueue: MoneyTransfer
 
   source:
     repo: https://github.com/temporal-sa/temporal-demo-banking-app-money-transfer
@@ -52,8 +56,8 @@ spec:
         - containerPort: 8000
           servicePort: 8000
 
-    # Temporal worker; uses the app's default task queue (MoneyTransfer), which
-    # the backend also defaults to, so they match without injecting one.
+    # Temporal worker. The worker and backend both default to the MoneyTransfer
+    # task queue; crashable workspaces inject TEMPORAL_TASK_QUEUE into both.
     worker:
       build: worker
       worker: true
