@@ -274,7 +274,6 @@ def catalog_payload(registry_path: Path, status_dir: Path) -> dict[str, Any]:
 
 SITE_NAME = "Temporal Field Kit"
 SOCIAL_META_MARKER = "<!-- social-meta -->"
-CATALOG_URL_MARKER = "__CATALOG_URL__"
 SOCIAL_DESCRIPTION_LIMIT = 300
 DEMO_PATH_PREFIX = "/demos/"
 WORKSHOP_PATH_PREFIX = "/courses/"
@@ -2462,10 +2461,7 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def send_not_found_page(self) -> None:
-        # The operator also routes unknown *.tmprl-demo.cloud hosts here, so
-        # the way back has to name the catalog's host.
         body = (STATIC_DIR / "404.html").read_text(encoding="utf-8")
-        body = body.replace(CATALOG_URL_MARKER, escape(auth_base_url()))
         self.send_html(body, status=HTTPStatus.NOT_FOUND)
 
     def send_static(self, relative_name: str) -> None:

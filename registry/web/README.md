@@ -19,10 +19,10 @@ The image serves the catalog from `REGISTRY_DATA_PATH`
 - `/`, `/courses`, `/onboard`, `/demos/<name>`, `/courses/<key>` (the SPA)
 
 Any other page path returns `404` with `static/404.html`. Unknown `/api/*` and
-`/_auth/*` paths and missing `/static/*` files keep the JSON `404` body. On the
-blue and green clusters the operator also sends every `*.tmprl-demo.cloud` host
-that no demo serves here, without auth, rewriting the path to `/not-found`
-(`REGISTRY_NOT_FOUND_PATH` in `resources.py`), so keep that path unrouted.
+`/_auth/*` paths and missing `/static/*` files keep the JSON `404` body.
+`*.tmprl-demo.cloud` hosts that no demo serves get a standalone copy of this
+page from Flux (`clusters/<color>/addons/traefik/not-found`); keep the two in
+step when the design changes.
 
 The catalog is published at runtime by the registry operator: it lists every
 `DemoProject` CR and writes a `registry-catalog` ConfigMap, which the operator

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - ingressroute.yaml
+# The name hash rolls the pods when the page or config changes. Keep the site
+# ConfigMap under 1MiB: the PNGs are stored base64-encoded.
+configMapGenerator:
+  - name: not-found-site
+    namespace: traefik
+    files:
+      - site/404.html
+      - site/starfield.js
+      - site/favicon.svg
+      - site/ziggy-large.png
+      - site/ziggy-large-blink.png
+  - name: not-found-nginx
+    namespace: traefik
+    files:
+      - default.conf

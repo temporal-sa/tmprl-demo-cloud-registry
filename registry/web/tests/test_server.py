@@ -1994,25 +1994,17 @@ def test_catalog_pages_have_site_preview_meta(tmp_path, monkeypatch, path, title
     assert "https://catalog.example.test/static/og-image.png" in html
 
 
-# /not-found is where the operator's unknown-host route rewrites every path
-# (REGISTRY_NOT_FOUND_PATH), so it must stay unrouted.
-@pytest.mark.parametrize("path", ["/no-such-page", "/not-found"])
-def test_unknown_page_serves_not_found_page(tmp_path, monkeypatch, path):
-    monkeypatch.setenv("AUTH_BASE_URL", "https://catalog.example.test")
+def test_unknown_page_serves_not_found_page(tmp_path):
     httpd = run_test_server(tmp_path)
     try:
         with pytest.raises(HTTPError) as raised:
-            urlopen(f"http://127.0.0.1:{httpd.server_port}{path}", timeout=2)
+            urlopen(f"http://127.0.0.1:{httpd.server_port}/no-such-page", timeout=2)
     finally:
         httpd.shutdown()
 
     assert raised.value.code == 404
     assert raised.value.headers["Content-Type"] == "text/html; charset=utf-8"
-    html = raised.value.read().decode("utf-8")
-    assert "We couldn't find that page." in html
-    # Unknown hosts get this page too, so the link back names the catalog.
-    assert 'href="https://catalog.example.test/"' in html
-    assert server.CATALOG_URL_MARKER not in html
+    assert "We couldn't find that page." in raised.value.read().decode("utf-8")
 
 
 @pytest.mark.parametrize("path", ["/api/no-such-endpoint", "/_auth/no-such-check"])

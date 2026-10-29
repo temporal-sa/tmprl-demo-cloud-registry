@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: not-found
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: not-found
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: not-found
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: not-found
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: not-found
+          maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+      containers:
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:1.31.7-alpine
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: site
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+            - name: config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+      volumes:
+        - name: site
+          configMap:
+            name: not-found-site
+        - name: config
+          configMap:
+            name: not-found-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: not-found
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: not-found
+spec:
+  selector:
+    app.kubernetes.io/name: not-found
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
