@@ -1,20 +1,22 @@
-"""Boundary payloads for the catalog helper (Ziggy) workflow.
+"""Boundary payloads for the catalog helper (Ziggy) agent.
 
-The catalog web server drives ``CatalogHelperWorkflow`` with plain dicts that
-the SDK decodes into these dataclasses, and reads ``HelperStatus`` back as a
-plain dict.
+Ziggy runs on the Temporal agent harness, whose client and worker use a
+Pydantic data converter, so these are pydantic models. The catalog web server
+sends ``HelperAsk`` through the harness's ``send_agent_message`` front door and
+reads ``HelperStatus`` back as a plain dict from the ``status`` query.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 # The chat takes no more messages in these phases.
 CLOSED_PHASES = frozenset({"Ended", "Expired"})
 
 
-@dataclass
-class HelperView:
+class HelperView(BaseModel):
     """What Ziggy has done to the demos page.
 
     demo_ids is Ziggy's filter: the page shows exactly these demos, or every
@@ -22,11 +24,12 @@ class HelperView:
     """
 
     demo_ids: list[str] | None = None
-    highlights: list[str] = field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class HelperMessage:
+class HelperMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     # "user" | "ziggy"
     role: str
     text: str
@@ -34,16 +37,15 @@ class HelperMessage:
     # Ziggy messages: "Done" | "Failed", and what the turn did to the page,
     # e.g. "Showing 3 demos".
     outcome: str | None = None
-    actions: list[str] = field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class HelperStatus:
+class HelperStatus(BaseModel):
     # "Open" | "Ended" | "Expired"
     phase: str
     owner_email: str
-    messages: list[HelperMessage] = field(default_factory=list)
-    view: HelperView = field(default_factory=HelperView)
+    messages: list[HelperMessage] = Field(default_factory=list)
+    view: HelperView = Field(default_factory=HelperView)
     # A turn is running; the page shows Ziggy typing.
     busy: bool = False
     turns: int = 0
@@ -53,30 +55,51 @@ class HelperStatus:
     expires_at: str | None = None
 
 
-@dataclass(frozen=True)
-class StartHelperRequest:
+class StartHelperRequest(BaseModel):
+    """Who the chat belongs to."""
+
     owner_email: str
 
 
-@dataclass(frozen=True)
-class SendHelperMessage:
+class HelperAsk(BaseModel):
+    """A message from the user to Ziggy."""
+
     text: str
 
 
-@dataclass(frozen=True)
-class HelperTurnRequest:
-    # Unique per turn; the model key is minted for it.
-    turn_id: str
+class HelperReply(BaseModel):
+    """Ziggy's answer to one message."""
+
+    text: str
+    # "Done" | "Failed"
+    outcome: str
+    actions: list[str] = Field(default_factory=list)
+
+
+class HelperRound(BaseModel):
+    """One earlier model call of this turn: what the model said, and the
+    results of the tools it called."""
+
+    content: list[dict[str, Any]]
+    tool_results: list[dict[str, Any]]
+
+
+class HelperModelRequest(BaseModel):
     message: str
     # Earlier messages of this chat, oldest first.
-    history: list[HelperMessage] = field(default_factory=list)
-    view: HelperView = field(default_factory=HelperView)
+    history: list[HelperMessage] = Field(default_factory=list)
+    # The page when the turn started.
+    view: HelperView = Field(default_factory=HelperView)
+    rounds: list[HelperRound] = Field(default_factory=list)
+    # The turn's last model call may not call tools, so it ends with a reply.
+    last_round: bool = False
 
 
-@dataclass(frozen=True)
-class HelperTurnResult:
-    reply: str
-    view: HelperView
-    actions: list[str] = field(default_factory=list)
+class HelperModelResponse(BaseModel):
+    # The model's content blocks as the Messages API returned them.
+    content: list[dict[str, Any]]
+    stop_reason: str | None = None
+    # The catalog the call saw, demo id to title.
+    titles: dict[str, str] = Field(default_factory=dict)
     input_tokens: int = 0
     output_tokens: int = 0

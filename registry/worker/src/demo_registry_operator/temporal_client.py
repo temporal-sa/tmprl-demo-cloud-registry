@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporalio.client import Client
 from temporalio.service import DnsLoadBalancingConfig
 
@@ -20,7 +21,8 @@ TEMPORAL_DNS_RESOLUTION_INTERVAL_MS = 15000
 
 
 async def connect(config: WorkerConfig) -> Client:
-    rpc_metadata: Mapping[str, str] | None = None
+    # Newer temporalio clients reject None here.
+    rpc_metadata: Mapping[str, str] = {}
     if config.temporal_api_key:
         rpc_metadata = {"authorization": f"Bearer {config.temporal_api_key}"}
 
@@ -37,3 +39,20 @@ async def connect(config: WorkerConfig) -> Client:
         # fine. The liveness heartbeat avoids service_client.check_health(), which
         # can't decompress gzip responses; see worker.liveness_heartbeat.
     )
+
+
+def agent_harness_client(client: Client) -> Client:
+    """The same connection, configured for agent-harness workflows (Ziggy).
+
+    AgentHarnessPlugin installs a Pydantic data converter, which the operator's
+    other workflows must not get, hence a separate client. Large-payload
+    offload is off: its default store is the local filesystem, which the catalog
+    web server (another pod) can't read, and Ziggy's payloads are small.
+    """
+
+    config = client.config()
+    config["plugins"] = [
+        *config.get("plugins", []),
+        AgentHarnessPlugin(large_payload_offload=None),
+    ]
+    return Client(**config)

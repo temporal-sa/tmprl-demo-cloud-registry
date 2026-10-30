@@ -617,7 +617,8 @@ async def connect_to_project_namespace(secret: dict[str, Any]) -> Client:
             error_type=errors.CONFIGURATION_ERROR,
         )
 
-    rpc_metadata: Mapping[str, str] | None = None
+    # Newer temporalio clients reject None here.
+    rpc_metadata: Mapping[str, str] = {}
     tls: bool | TLSConfig = secret_bool(secret.get("tls"), default=True)
     if secret.get("apiKey"):
         rpc_metadata = {"authorization": f"Bearer {secret['apiKey']}"}

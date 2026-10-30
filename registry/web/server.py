@@ -13,6 +13,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import timedelta
 from html import escape
@@ -46,6 +47,16 @@ try:
     )
     from temporalio.common import WorkflowIDConflictPolicy
     from temporalio.service import RPCError, RPCStatusCode
+    from temporal_agent_harness.harness.agent_client import (
+        AgentClient,
+        MidTurnRejectedError,
+    )
+    from temporal_agent_harness.harness.agent_protocol import (
+        AgentConfig,
+        AgentEvent,
+        AgentEventType,
+    )
+    from temporal_agent_harness.plugin import AgentHarnessPlugin
 
     TEMPORALIO_AVAILABLE = True
 except Exception:  # noqa: BLE001 - optional dependency
@@ -146,9 +157,11 @@ MAX_SECRET_VALUE_CHARS = 8192
 ONBOARDING_AGENT_MODES = frozenset({"draft", "section", "chat"})
 
 # Ziggy, the demos page's helper: one CatalogHelperWorkflow chat per signed-in
-# user. A message waits for Ziggy's reply (one short model turn, which the
-# workflow bounds at two minutes), so allow longer than a plain RPC.
+# user, an agent on the Temporal agent harness. A message waits for Ziggy's
+# reply (one short model turn, which the workflow bounds at two minutes), so
+# allow longer than a plain RPC.
 HELPER_WORKFLOW_TYPE = "CatalogHelperWorkflow"
+HELPER_MESSAGE_HANDLER = "ask"
 HELPER_RPC_TIMEOUT_SECONDS = 150
 # The catalog control panel (/control) deploys one sample demo per presenter as
 # an OnboardingPreviewWorkflow under its own id, so it never collides with the
@@ -468,8 +481,31 @@ def helper_workflow_id(email: str, cluster: str | None) -> str:
     # Must match derive.catalog_helper_workflow_id in the operator.
     email = email.strip().lower()
     if cluster:
-        return f"catalog-helper/{cluster}/{email}"
-    return f"catalog-helper/{email}"
+        return f"ziggy/{cluster}/{email}"
+    return f"ziggy/{email}"
+
+
+def helper_task_queue(task_queue: str) -> str:
+    # Must match derive.catalog_helper_task_queue in the operator.
+    return f"{task_queue}-ziggy"
+
+
+async def wait_for_helper_reply(agent: Any, reply: Any) -> str | None:
+    """Follows the agent's event stream until the message's handler finishes.
+    Returns the handler's error, or None when Ziggy answered."""
+
+    stream = await agent.attach(
+        on_item=lambda item, _offset: item, from_offset=reply.accepted_offset
+    )
+    async with aclosing(stream):
+        async for item in stream:
+            if not isinstance(item, AgentEvent) or item.message_id != reply.message_id:
+                continue
+            if item.event.type == AgentEventType.MESSAGE_HANDLER_END:
+                return None
+            if item.event.type == AgentEventType.MESSAGE_HANDLER_ERROR:
+                return item.event.message
+    raise RuntimeError("Ziggy's chat went idle without answering the message.")
 
 
 def demo_control_workflow_id(email: str, cluster: str | None) -> str:
@@ -762,6 +798,7 @@ class TemporalGateway:
         self.cluster = cluster
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any | None = None
+        self._helper_client: Any | None = None
         self._connect_lock: asyncio.Lock | None = None
         self._start_lock = threading.Lock()
 
@@ -801,10 +838,11 @@ class TemporalGateway:
             self._connect_lock = asyncio.Lock()
         async with self._connect_lock:
             if self._client is None:
+                # Newer temporalio clients reject None here.
                 rpc_metadata = (
                     {"authorization": f"Bearer {self._api_key}"}
                     if self._api_key
-                    else None
+                    else {}
                 )
                 self._client = await Client.connect(
                     self._address,
@@ -813,6 +851,24 @@ class TemporalGateway:
                     rpc_metadata=rpc_metadata,
                 )
         return self._client
+
+    async def _get_helper_client(self) -> Any:
+        """The same connection, configured for Ziggy's agent-harness workflow.
+
+        Ziggy's worker uses the harness's Pydantic data converter with
+        large-payload offload off (its default store is the worker pod's
+        disk); this client matches it.
+        """
+
+        client = await self._get_client()
+        if self._helper_client is None:
+            config = client.config()
+            config["plugins"] = [
+                *config.get("plugins", []),
+                AgentHarnessPlugin(large_payload_offload=None),
+            ]
+            self._helper_client = Client(**config)
+        return self._helper_client
 
     def ensure_workspace(
         self,
@@ -1078,7 +1134,7 @@ class TemporalGateway:
         return self._run(self._helper_status(owner_email))
 
     async def _helper_status(self, owner_email: str) -> dict[str, Any]:
-        client = await self._get_client()
+        client = await self._get_helper_client()
         handle = client.get_workflow_handle(
             helper_workflow_id(owner_email, self.cluster)
         )
@@ -1100,33 +1156,37 @@ class TemporalGateway:
         )
 
     async def _helper_send(self, owner_email: str, text: str) -> dict[str, Any]:
-        client = await self._get_client()
-        # USE_EXISTING continues the open chat; after one ends or expires, the
-        # same id starts a fresh one.
-        operation = WithStartWorkflowOperation(
-            HELPER_WORKFLOW_TYPE,
-            {"owner_email": owner_email},
-            id=helper_workflow_id(owner_email, self.cluster),
-            task_queue=self.task_queue,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-        )
+        client = await self._get_helper_client()
+        workflow_id = helper_workflow_id(owner_email, self.cluster)
+        agent = AgentClient(client, workflow_id)
         try:
-            return await client.execute_update_with_start_workflow(
-                "send",
+            # Continues the open chat; after one ends or expires, the same id
+            # starts a fresh one.
+            reply = await agent.start_and_submit_message(
+                HELPER_MESSAGE_HANDLER,
                 {"text": text},
-                start_workflow_operation=operation,
+                workflow_name=HELPER_WORKFLOW_TYPE,
+                task_queue=helper_task_queue(self.task_queue),
+                start_config=AgentConfig(),
+                start_data={"owner_email": owner_email},
             )
+        except MidTurnRejectedError as error:
+            raise HelperRejected("Ziggy is still answering your last message.") from error
         except WorkflowUpdateFailedError as error:
             cause = error.cause
             raise HelperRejected(
                 getattr(cause, "message", None) or str(cause or error)
             ) from error
+        problem = await wait_for_helper_reply(agent, reply)
+        if problem:
+            raise HelperRejected(problem)
+        return await client.get_workflow_handle(workflow_id).query("status")
 
     def helper_update(self, owner_email: str, update: str) -> dict[str, Any]:
         return self._run(self._helper_update(owner_email, update))
 
     async def _helper_update(self, owner_email: str, update: str) -> dict[str, Any]:
-        client = await self._get_client()
+        client = await self._get_helper_client()
         handle = client.get_workflow_handle(
             helper_workflow_id(owner_email, self.cluster)
         )
