@@ -1,4 +1,0 @@
-interface:
-  display_name: "Demo Cloud Onboarding"
-  short_description: "Report demo onboarding needs"
-  default_prompt: "Use $tmprl-demo-cloud-onboarding to inspect this demo repo and produce an onboarding report without making code or file changes."
