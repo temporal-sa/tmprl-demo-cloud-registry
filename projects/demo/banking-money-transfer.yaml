@@ -11,7 +11,7 @@ spec:
       compensation and failure scenarios, with optional payload encryption. Use
       case: moving money reliably through failures.
     tags: [Banking, Saga]
-    temporalSdks: [Python]
+    temporalSdks: [Python, Go, TypeScript, Java, .NET, Ruby, Rust]
     links:
       slideDeck:
         label: "Intro to Temporal: Money Transfer"
