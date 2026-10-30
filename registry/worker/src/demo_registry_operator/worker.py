@@ -122,7 +122,7 @@ from demo_registry_operator.activities.catalog_onboarding import (
     verify_onboarding_pull_request,
 )
 from demo_registry_operator.activities.catalog_helper import (
-    run_catalog_helper_turn,
+    run_catalog_helper_model_call,
 )
 from demo_registry_operator.activities.onboarding_agent import (
     delete_onboarding_agent_sessions,
@@ -188,13 +188,14 @@ from demo_registry_operator.activities.rollout_diagnostics import (
 )
 from demo_registry_operator.config import WorkerConfig
 from demo_registry_operator.derive import (
+    catalog_helper_task_queue,
     catalog_onboarding_workflow_id,
     onboarding_preview_workflow_id,
     demo_project_workflow_id,
     instruqt_course_workflow_id,
 )
 from demo_registry_operator.resources import WORKER_LIVENESS_FILE
-from demo_registry_operator.temporal_client import connect
+from demo_registry_operator.temporal_client import agent_harness_client, connect
 from demo_registry_operator.watch import run_demo_project_watch
 from demo_registry_operator.workflows.demo_project import DemoProjectWorkflow
 from demo_registry_operator.workflows.demo_project_artifact_build import (
@@ -267,6 +268,7 @@ WORKFLOW_PASSTHROUGH_MODULES = (
     "demo_registry_operator.errors",
     "demo_registry_operator.resources",
     "demo_registry_operator.workflows.catalog_helper_messages",
+    "demo_registry_operator.workflows.catalog_helper_tools",
     "demo_registry_operator.workflows.catalog_onboarding_messages",
     "demo_registry_operator.workflows.crashable_workspace_messages",
     "demo_registry_operator.workflows.isolated_lambda_workspace_messages",
@@ -286,6 +288,27 @@ def create_workflow_runner() -> SandboxedWorkflowRunner:
         restrictions=SandboxRestrictions.default.with_passthrough_modules(
             *WORKFLOW_PASSTHROUGH_MODULES
         )
+    )
+
+
+def create_catalog_helper_worker(
+    client: Client,
+    *,
+    task_queue: str,
+    activity_executor: concurrent.futures.Executor,
+    deployment_config: WorkerDeploymentConfig | None,
+) -> Worker:
+    """Ziggy's worker: the agent-harness CatalogHelperWorkflow on its own queue,
+    over the operator's connection with the harness's data converter."""
+
+    return Worker(
+        agent_harness_client(client),
+        task_queue=catalog_helper_task_queue(task_queue),
+        workflow_runner=create_workflow_runner(),
+        workflows=[CatalogHelperWorkflow],
+        activities=[run_catalog_helper_model_call],
+        activity_executor=activity_executor,
+        deployment_config=deployment_config,
     )
 
 
@@ -373,7 +396,6 @@ async def main() -> None:
                     SyncNamespaceReadersWorkflow,
                     CatalogOnboardingWorkflow,
                     OnboardingPreviewWorkflow,
-                    CatalogHelperWorkflow,
                 ],
                 activities=[
                     load_canary_templates,
@@ -505,12 +527,21 @@ async def main() -> None:
                     read_onboarding_preview,
                     delete_onboarding_preview,
                     wait_onboarding_preview_cleanup,
-                    run_catalog_helper_turn,
                 ],
                 activity_executor=activity_executor,
                 deployment_config=deployment_config,
             )
             tasks.append(asyncio.create_task(worker.run()))
+            tasks.append(
+                asyncio.create_task(
+                    create_catalog_helper_worker(
+                        client,
+                        task_queue=config.task_queue,
+                        activity_executor=activity_executor,
+                        deployment_config=deployment_config,
+                    ).run()
+                )
+            )
             tasks.append(asyncio.create_task(liveness_heartbeat(client)))
             if deployment_config is not None:
                 tasks.append(

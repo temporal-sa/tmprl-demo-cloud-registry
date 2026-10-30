@@ -61,10 +61,12 @@ can read every demo namespace. It returns the workflow's result, e.g.
 
 The `/api/helper` endpoints back Ziggy, the floating demo picker on the demos
 page. They require a signed-in session and drive that user's
-`CatalogHelperWorkflow` (operator `workflows/catalog_helper.py`). A message
-(`{"text": ...}`) starts the chat if none is open and returns once Ziggy has
-answered: one short turn on Claude Haiku through the LiteLLM broker, with tools
-that only change what the page shows. The status carries the chat and Ziggy's
+`CatalogHelperWorkflow` (operator `workflows/catalog_helper.py`), an agent on
+the [Temporal agent harness](https://pypi.org/project/temporal-agent-harness/)
+that runs on its own `<operator task queue>-ziggy` queue. A message
+(`{"text": ...}`) goes to the agent's `ask` handler, starting the chat if none
+is open, and returns once Ziggy has answered: one short turn on Claude Haiku,
+with tools that only change what the page shows. The status carries the chat and Ziggy's
 `view`: `demo_ids` (the demos to filter to, or `null`) and `highlights` (the
 demos to put a halo on). `clear-view` drops both when the user clears Ziggy's
 filter, and `new` ends the chat. A chat with no messages for 30 minutes ends on

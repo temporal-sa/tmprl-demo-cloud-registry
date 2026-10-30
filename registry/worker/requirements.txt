@@ -1,8 +1,11 @@
-temporalio>=1.29,<2
+temporalio>=1.31,<2
 kubernetes>=30,<34
 boto3>=1.34,<2
 PyYAML>=6.0.1,<7
 cryptography>=42,<46
 jsonschema>=4.22,<5
-# Ziggy, the catalog's demo picker, calls Claude through the LiteLLM gateway.
+# Ziggy, the catalog's demo picker, is an agent on the Temporal agent harness
+# and calls Claude directly. Pre-1.0, so pinned; keep it aligned with
+# registry/web/requirements.txt.
+temporal-agent-harness==0.8.0
 anthropic>=1,<2

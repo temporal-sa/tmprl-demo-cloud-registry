@@ -114,8 +114,15 @@ def catalog_helper_workflow_id(owner_email: str, cluster: str | None = None) -> 
     (registry/web/server.py) builds the same id; keep them identical."""
     email = owner_email.strip().lower()
     if cluster:
-        return f"catalog-helper/{cluster}/{email}"
-    return f"catalog-helper/{email}"
+        return f"ziggy/{cluster}/{email}"
+    return f"ziggy/{email}"
+
+
+def catalog_helper_task_queue(registry_task_queue: str) -> str:
+    """Ziggy's own queue next to the operator's. Its worker and client use the
+    agent harness's Pydantic data converter, so it can't share the operator's
+    queue. The catalog web server derives the same name."""
+    return f"{registry_task_queue}-ziggy"
 
 
 def onboarding_preview_workflow_id(owner_email: str, cluster: str | None = None) -> str:

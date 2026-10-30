@@ -1816,13 +1816,16 @@ def test_helper_rejections_are_conflicts_with_the_workflow_message(tmp_path, mon
         httpd.shutdown()
 
 
-def test_helper_workflow_id_matches_the_operator():
-    # demo_registry_operator.derive.catalog_helper_workflow_id
+def test_helper_workflow_id_and_queue_match_the_operator():
+    # demo_registry_operator.derive.catalog_helper_workflow_id / _task_queue
     assert server.helper_workflow_id(" Ada@Temporal.io ", "blue") == (
-        "catalog-helper/blue/ada@temporal.io"
+        "ziggy/blue/ada@temporal.io"
     )
     assert server.helper_workflow_id("ada@temporal.io", None) == (
-        "catalog-helper/ada@temporal.io"
+        "ziggy/ada@temporal.io"
+    )
+    assert server.helper_task_queue("registry-management-blue") == (
+        "registry-management-blue-ziggy"
     )
 
 
@@ -1838,7 +1841,7 @@ def test_helper_status_forgets_chats_that_ended(status):
     )
     gateway = SimpleNamespace(
         cluster="blue",
-        _get_client=AsyncMock(
+        _get_helper_client=AsyncMock(
             return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)
         ),
     )
@@ -1849,22 +1852,103 @@ def test_helper_status_forgets_chats_that_ended(status):
     handle.query.assert_not_awaited()
 
 
-def test_helper_send_starts_a_chat_when_none_is_open():
-    client = SimpleNamespace(execute_update_with_start_workflow=AsyncMock(return_value={"phase": "Open"}))
+class FakeHelperAgent:
+    """Stands in for the harness AgentClient on Ziggy's chat."""
+
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+
+    def __call__(self, client, workflow_id):
+        self.workflow_id = workflow_id
+        return self
+
+    async def start_and_submit_message(self, handler, payload, **kwargs):
+        self.calls.append((handler, payload, kwargs))
+        if self.error:
+            raise self.error
+        return SimpleNamespace(message_id="m1", accepted_offset=3)
+
+
+def helper_send(monkeypatch, agent, problem=None):
+    monkeypatch.setattr(server, "AgentClient", agent)
+    monkeypatch.setattr(server, "wait_for_helper_reply", AsyncMock(return_value=problem))
+    handle = SimpleNamespace(query=AsyncMock(return_value={"phase": "Open"}))
     gateway = SimpleNamespace(
         cluster="blue",
         task_queue="registry-management-blue",
-        _get_client=AsyncMock(return_value=client),
+        _get_helper_client=AsyncMock(
+            return_value=SimpleNamespace(get_workflow_handle=lambda _: handle)
+        ),
+    )
+    return asyncio.run(server.TemporalGateway._helper_send(gateway, "ada@temporal.io", "hi"))
+
+
+def test_helper_send_asks_the_agent_and_returns_the_chat(monkeypatch):
+    agent = FakeHelperAgent()
+
+    assert helper_send(monkeypatch, agent) == {"phase": "Open"}
+
+    assert agent.workflow_id == "ziggy/blue/ada@temporal.io"
+    [(handler, payload, kwargs)] = agent.calls
+    assert (handler, payload) == ("ask", {"text": "hi"})
+    assert kwargs["workflow_name"] == "CatalogHelperWorkflow"
+    assert kwargs["task_queue"] == "registry-management-blue-ziggy"
+    assert kwargs["start_data"] == {"owner_email": "ada@temporal.io"}
+
+
+def test_helper_send_rejects_a_message_while_ziggy_answers(monkeypatch):
+    agent = FakeHelperAgent(error=server.MidTurnRejectedError("busy"))
+
+    with pytest.raises(server.HelperRejected) as raised:
+        helper_send(monkeypatch, agent)
+
+    assert str(raised.value) == "Ziggy is still answering your last message."
+
+
+def test_helper_send_rejects_what_the_agent_refused(monkeypatch):
+    with pytest.raises(server.HelperRejected) as raised:
+        helper_send(
+            monkeypatch,
+            FakeHelperAgent(),
+            problem="This chat is at its limit. Start a new chat.",
+        )
+
+    assert str(raised.value) == "This chat is at its limit. Start a new chat."
+
+
+def helper_event(message_id, event):
+    return server.AgentEvent(
+        agent_id="a1", turn_id="t1", turn_number=1, message_id=message_id,
+        timestamp=0.0, event=event,
     )
 
-    result = asyncio.run(server.TemporalGateway._helper_send(gateway, "ada@temporal.io", "hi"))
 
-    assert result == {"phase": "Open"}
-    args, kwargs = client.execute_update_with_start_workflow.await_args
-    assert args == ("send", {"text": "hi"})
-    operation = kwargs["start_workflow_operation"]
-    assert operation._start_workflow_input.id == "catalog-helper/blue/ada@temporal.io"
-    assert operation._start_workflow_input.id_conflict_policy == server.WorkflowIDConflictPolicy.USE_EXISTING
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        ({"type": "message_handler_end", "output": {}}, None),
+        ({"type": "message_handler_error", "message": "Write a message for Ziggy."}, "Write a message for Ziggy."),
+    ],
+)
+def test_wait_for_helper_reply_follows_the_messages_own_events(event, expected):
+    seen_offsets = []
+
+    async def stream():
+        yield helper_event("other", {"type": "message_handler_error", "message": "not ours"})
+        yield helper_event("m1", {"type": "tool_start", "tool_id": "c1", "tool_name": "show_demos", "tool_input": {}})
+        yield helper_event("m1", event)
+        yield helper_event("m1", {"type": "turn_end"})
+
+    async def attach(*, on_item, from_offset):
+        seen_offsets.append(from_offset)
+        return stream()
+
+    reply = SimpleNamespace(message_id="m1", accepted_offset=3)
+    result = asyncio.run(server.wait_for_helper_reply(SimpleNamespace(attach=attach), reply))
+
+    assert result == expected
+    assert seen_offsets == [3]
 
 
 def fetch_page(httpd, path):
