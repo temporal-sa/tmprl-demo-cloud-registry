@@ -122,6 +122,7 @@ from demo_registry_operator.activities.catalog_onboarding import (
     verify_onboarding_pull_request,
 )
 from demo_registry_operator.activities.catalog_helper import (
+    check_catalog_helper_worker,
     run_catalog_helper_model_call,
 )
 from demo_registry_operator.activities.onboarding_agent import (
@@ -217,6 +218,9 @@ from demo_registry_operator.workflows.demo_rollout import DemoRolloutWorkflow
 from demo_registry_operator.workflows.catalog_helper import (
     CatalogHelperWorkflow,
 )
+from demo_registry_operator.workflows.catalog_helper_canary import (
+    CatalogHelperCanaryWorkflow,
+)
 from demo_registry_operator.workflows.catalog_onboarding import (
     CatalogOnboardingWorkflow,
 )
@@ -299,14 +303,16 @@ def create_catalog_helper_worker(
     deployment_config: WorkerDeploymentConfig | None,
 ) -> Worker:
     """Ziggy's worker: the agent-harness CatalogHelperWorkflow on its own queue,
-    over the operator's connection with the harness's data converter."""
+    over the operator's connection with the harness's data converter. It shares
+    the operator's Worker Deployment Version, so it also runs the rollout gate's
+    workflow type, as a lightweight check of this worker."""
 
     return Worker(
         agent_harness_client(client),
         task_queue=catalog_helper_task_queue(task_queue),
         workflow_runner=create_workflow_runner(),
-        workflows=[CatalogHelperWorkflow],
-        activities=[run_catalog_helper_model_call],
+        workflows=[CatalogHelperWorkflow, CatalogHelperCanaryWorkflow],
+        activities=[run_catalog_helper_model_call, check_catalog_helper_worker],
         activity_executor=activity_executor,
         deployment_config=deployment_config,
     )

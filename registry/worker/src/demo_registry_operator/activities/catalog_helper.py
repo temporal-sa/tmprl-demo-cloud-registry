@@ -108,6 +108,12 @@ The catalog:
 
 
 @activity.defn
+def check_catalog_helper_worker() -> None:
+    """The rollout gate's check on Ziggy's queue (workflows/catalog_helper_canary.py):
+    it passes once an activity worker of the new version picks it up."""
+
+
+@activity.defn
 def run_catalog_helper_model_call(request: HelperModelRequest) -> HelperModelResponse:
     demos = catalog_demos()
     if not demos:

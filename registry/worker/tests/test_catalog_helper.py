@@ -28,7 +28,10 @@ from temporalio.worker import Replayer, Worker
 from demo_registry_operator import derive
 from demo_registry_operator.activities import catalog_helper
 from demo_registry_operator.temporal_client import agent_harness_client
-from demo_registry_operator.worker import create_workflow_runner
+from demo_registry_operator.worker import (
+    create_catalog_helper_worker,
+    create_workflow_runner,
+)
 from demo_registry_operator.workflows import catalog_helper as helper_workflow
 from demo_registry_operator.workflows.catalog_helper import CatalogHelperWorkflow
 from demo_registry_operator.workflows.catalog_helper_messages import (
@@ -628,5 +631,29 @@ def test_chat_expires_after_thirty_idle_minutes():
                 await handle.result()
                 description = await handle.describe()
                 assert description.status.name == "COMPLETED"
+
+    asyncio.run(scenario())
+
+
+@needs_temporal
+def test_the_rollout_gate_passes_on_ziggys_queue():
+    """The worker controller starts the operator's gate workflow on every queue
+    of the version, Ziggy's included, with the operator canary's input."""
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with create_catalog_helper_worker(
+                env.client,
+                task_queue="registry-management",
+                activity_executor=concurrent.futures.ThreadPoolExecutor(),
+                deployment_config=None,
+            ):
+                result = await agent_harness_client(env.client).execute_workflow(
+                    "RegistryOperatorCanaryWorkflow",
+                    {"projectNamePrefix": "operator-canary", "timeoutSeconds": 900},
+                    id="registry-operator-canary/ziggy",
+                    task_queue=TASK_QUEUE,
+                )
+                assert result == {"phase": "Succeeded"}
 
     asyncio.run(scenario())
