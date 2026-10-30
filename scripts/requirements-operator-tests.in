@@ -1,0 +1,3 @@
+# Acquisition is separate from sandboxed execution. Lock with uv pip compile.
+-r ../registry/worker/requirements.txt
+pytest>=8,<10

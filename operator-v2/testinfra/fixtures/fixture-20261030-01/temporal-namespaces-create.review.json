@@ -1,0 +1,122 @@
+{
+  "accountID": "a2dd6",
+  "budgets": {
+    "actualServiceAccountsOrKeysAuthorized": 0,
+    "actualWorkflowStartsAuthorized": 0,
+    "automaticCleanup": false,
+    "bootstrapKeysMaximum": 4,
+    "bootstrapServiceAccountsMaximum": 4,
+    "controlConcurrentActivitiesMaximum": 1,
+    "controlConcurrentWorkflowsMaximum": 1,
+    "newNamespacesMaximum": 3
+  },
+  "createAuthorized": false,
+  "denySentinel": "rv2-na-ccf373e086e2cccea9d44ed3d4f9996c.a2dd6 receives no control workloads and no namespace grants for target/control principals; separately authorized exact owned denial calls only, never production targets.",
+  "excluded": [
+    "namespace creation by test principals",
+    "global/account/project permissions in test code",
+    "namespace moves/creation without ProjectID",
+    "tag/global authority",
+    "Nexus/users/groups",
+    "API-key generation/output/storage",
+    "mTLS CA material",
+    "production requests",
+    "delete protection disable/delete/automatic cleanup",
+    "search attribute removal"
+  ],
+  "executionBoundary": "Existing projectbootstrap helper is CreateProject-only and MUST NOT execute these requests. A separately reviewed one-shot namespace helper must enforce exact-method/target payload allowlist, fixed per-namespace async ID, durable before-dispatch marker, per-attempt auth budget/deadline and no process replay. This review grants no execution permission.",
+  "namespaceConfig": {
+    "apiKeyAuthEnabled": true,
+    "deleteProtection": true,
+    "mTLS": false,
+    "namespaceTags": 0,
+    "noCredentialMaterial": true,
+    "provisionedCapacity": false,
+    "region": "aws-us-east-2",
+    "replicas": 1,
+    "retentionDays": 1,
+    "searchAttributes": 0
+  },
+  "owner": {
+    "environmentId": "registry-v2-lab",
+    "installationId": "registry-v2-fixtures",
+    "projectUid": "sentinel-20261030-01",
+    "lifetime": "disposable",
+    "runId": "fixture-20261030-01"
+  },
+  "ownership": "Tags are omitted: test principals never require global tag authority. Ownership is independently bound from approved exact create intent/echoed async input, qualified namespace ID, immutable ProjectID and provider CreatedTime; names, owner DTOs and local request hashes alone never prove provider ownership.",
+  "parentPreconditions": "CreateNamespace carries ProjectId but no Project resourceVersion precondition. Pre-read does not atomically fence parent lifecycle changes. Keep bootstrap lifecycle serialized and independently reverify exact project birth/spec/protection; never fallback to Default Project or reuse disappeared bound namespace names.",
+  "principalPlan": [
+    {
+      "namespace": "rv2-na-cdd19e6047a857290950a23c418124fd.a2dd6",
+      "scope": "namespace-only WRITE",
+      "slot": "control-worker"
+    },
+    {
+      "namespace": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "scope": "namespace-only ADMIN for exact namespace observation/update; cross-SA API-key CRUD unestablished, no admin fallback",
+      "slot": "target-manager"
+    },
+    {
+      "namespace": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "scope": "namespace-only WRITE; separate secure bootstrap then SELF-key CredentialManager with PreprovisionedServiceAccounts and CreateScopedServiceAccounts=false",
+      "slot": "target-runtime"
+    },
+    {
+      "namespace": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "scope": "namespace-only WRITE; separate owned SA/key sentinel to prove SELF versus other-owner denial",
+      "slot": "target-other-owner"
+    }
+  ],
+  "projectBinding": {
+    "projectID": "b0de211fec164d81b0bcc7e7752b582f",
+    "createdTime": "2026-10-30T02:35:03.281016994Z",
+    "resourceVersion": "5c1130d8-2094-4328-b550-4082f6a3662a",
+    "asyncOperationID": "f9172794-74b1-5926-a5ab-527954981531",
+    "approvedRequestSHA256": "012f78f8dcbda819d33c09a0860f3739484e023a73db8f147600fbdc48e843db",
+    "state": "RESOURCE_STATE_ACTIVE",
+    "asyncState": "STATE_FULFILLED",
+    "operationInputExactSpecAndAsyncVerified": true,
+    "deleteProtectionEnabled": true
+  },
+  "regionDecision": "Root explicitly selected aws-us-east-2 from the actual account catalog, corroborated by exact GetRegion. Original aws-us-west-2 GetRegion was NotFound; original three names/requests/async IDs are superseded and never executed. AWS fixture region remains us-west-2. Region availability is not namespace quota/headroom proof; owner confirmation remains required.",
+  "requests": [
+    {
+      "asyncOperationID": "ae330063-2e13-5b18-9cab-239730f0df69",
+      "label": "control",
+      "namespaceID": "rv2-na-cdd19e6047a857290950a23c418124fd.a2dd6",
+      "purpose": "Durable test workflow control; no production queues or clients",
+      "requestFile": "temporal-namespace-control-create.request.json",
+      "requestSHA256": "e8945d3ec477fbd503b5f14d03729ea456215d22b5d43cd659c38f3a9bbe2111",
+      "specDeterministicProtobufSHA256": "d20bcf69cae3568a7278d09ba1b9a81ba93976fcd8d3740daf42d6c6ecafc55b"
+    },
+    {
+      "asyncOperationID": "baa9cce2-9b79-529b-978a-19eb0748b0a4",
+      "label": "target",
+      "namespaceID": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "purpose": "Scoped namespace adapter and SELF-key credential staging target",
+      "requestFile": "temporal-namespace-target-create.request.json",
+      "requestSHA256": "baf1b4731b766a67a58178b85c75d6f42f5670c317ceb5ce7cd64d5b5ecb1262",
+      "specDeterministicProtobufSHA256": "b7923ced25f1691e1112d4cb4fbb8919c5b3cd21346ae940de4037a8d64d9391"
+    },
+    {
+      "asyncOperationID": "e24f3960-aeed-5c43-b4f4-63dedd5a063d",
+      "label": "deny",
+      "namespaceID": "rv2-na-ccf373e086e2cccea9d44ed3d4f9996c.a2dd6",
+      "purpose": "Owned negative permission sentinel; no control workflows/workers",
+      "requestFile": "temporal-namespace-deny-create.request.json",
+      "requestSHA256": "88b0937db910139fd2cb4c8de2ec0c63c2178acff6d6ccc6a7c9a3ac8c490aac",
+      "specDeterministicProtobufSHA256": "bcab6cd64d2d61aa39f750d575b267684323cf9990abd72c92595e26e8193e3a"
+    }
+  ],
+  "requiredPreflight": [
+    "fresh exact human OAuth principal/account anchor; OAuth never enters test workers",
+    "independent exact new Project ID/birth/spec/protection observation plus reviewed creation provenance; structural DTO validation alone is not proof",
+    "exact planned Namespace names absent and exact async IDs NotFound before any creation; no account-wide listings/name adoption",
+    "verify entitlement for at most three namespaces and regional capacity; unmeasured shared quota headroom is not a successful proof",
+    "root reviews exact request hashes and one-shot namespace transport/receipt handling before any live CreateNamespace"
+  ],
+  "runID": "fixture-20261030-01",
+  "schemaVersion": "registry-temporal-namespace-create-review-v1",
+  "unknownOutcome": "Any error/late/lost reply retains its original dispatch marker and exact async intent; no new ID/request/process replay/name adoption. Exact async input and namespace CreatedTime must prove creation before binding. A previously bound namespace disappearance requires a new reviewed run/name, never recreation."
+}

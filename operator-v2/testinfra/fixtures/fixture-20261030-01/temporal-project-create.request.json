@@ -1,0 +1,10 @@
+{
+  "asyncOperationId": "f9172794-74b1-5926-a5ab-527954981531",
+  "spec": {
+    "description": "registry-operator-v2 fixture=fixture-20261030-01; owner-sha256=69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c; bootstrap=create-project-v1",
+    "displayName": "rv2-project-sandbox-066c88b708d6b5259dc84d8c2437d651",
+    "lifecycle": {
+      "enableDeleteProtection": true
+    }
+  }
+}

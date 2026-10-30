@@ -1,0 +1,21 @@
+{
+  "account": "a2dd6",
+  "createAuthorized": false,
+  "crossProjectProofClaimed": false,
+  "denyNamespace": "rv2-na-ccf373e086e2cccea9d44ed3d4f9996c.a2dd6",
+  "denyServiceAccountName": "rv2-service-account-deny-self-aa42b2efcc03448ea9aba53d6a12ffdf",
+  "maximumBootstrapKeys": 4,
+  "namespaceScopedSAsTotal": 4,
+  "newProjectNamespacesTotal": 3,
+  "noAdminFallback": true,
+  "principalScopes": "Separate newly owned lab namespace and distinct same-target WRITE SA/key for SELF versus other-owner checks; no production names",
+  "projectScopedPrincipalLane": false,
+  "requestsEmitted": false,
+  "requiredBeforeCreation": [
+    "new dedicated owned ProjectID/create provenance and namespace capacity proof",
+    "root-reviewed exact bootstrap plan and short-lived non-printing key delivery",
+    "deny namespace must have no running control/production workloads",
+    "same-target deny SA/key must have real independent ID/birth/provenance; no guessed owner IDs"
+  ],
+  "schemaVersion": "registry-temporal-deny-review-v1"
+}

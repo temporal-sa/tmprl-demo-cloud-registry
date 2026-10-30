@@ -1,0 +1,269 @@
+{
+  "data": {
+    "aws_caller_identity": {
+      "provisioner": {}
+    }
+  },
+  "output": {
+    "deny_bindings": {
+      "value": {
+        "account": "429214323166",
+        "kms_key_arn": "${aws_kms_key.deny.arn}",
+        "log_group_arn": "${aws_cloudwatch_log_group.deny.arn}",
+        "log_stream_arn": "${aws_cloudwatch_log_stream.deny.arn}",
+        "owner": {
+          "environmentId": "registry-v2-lab",
+          "installationId": "registry-v2-fixtures",
+          "projectUid": "sentinel-20261030-01",
+          "lifetime": "disposable",
+          "runId": "fixture-20261030-01"
+        },
+        "project_arn": "arn:aws:codebuild:us-west-2:429214323166:project/rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd",
+        "region": "us-west-2",
+        "repository_arn": "${aws_ecr_repository.deny.arn}",
+        "role_arn": "${aws_iam_role.deny_build.arn}",
+        "run_id": "fixture-20261030-01",
+        "secret_arn": "${aws_secretsmanager_secret.deny.arn}"
+      }
+    }
+  },
+  "provider": {
+    "aws": {
+      "allowed_account_ids": [
+        "429214323166"
+      ],
+      "max_retries": 0,
+      "profile": "SolutionsArchitecture/AWSAdministratorAccess",
+      "region": "us-west-2"
+    }
+  },
+  "resource": {
+    "aws_cloudwatch_log_group": {
+      "deny": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "name": "/aws/codebuild/rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd",
+        "retention_in_days": 1,
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_cloudwatch_log_stream": {
+      "deny": {
+        "log_group_name": "${aws_cloudwatch_log_group.deny.name}",
+        "name": "deny-sentinel"
+      }
+    },
+    "aws_codebuild_project": {
+      "deny": {
+        "artifacts": [
+          {
+            "type": "NO_ARTIFACTS"
+          }
+        ],
+        "auto_retry_limit": 0,
+        "build_timeout": 5,
+        "concurrent_build_limit": 1,
+        "depends_on": [
+          "aws_iam_role_policy.deny_build"
+        ],
+        "description": "Owned harmless deny target; unexpected StartBuild must be stopped/reported",
+        "environment": [
+          {
+            "compute_type": "BUILD_GENERAL1_SMALL",
+            "image": "aws/codebuild/standard:7.0",
+            "image_pull_credentials_type": "CODEBUILD",
+            "privileged_mode": false,
+            "type": "LINUX_CONTAINER"
+          }
+        ],
+        "logs_config": [
+          {
+            "cloudwatch_logs": [
+              {
+                "status": "DISABLED"
+              }
+            ]
+          }
+        ],
+        "name": "rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd",
+        "project_visibility": "PRIVATE",
+        "queued_timeout": 5,
+        "service_role": "${aws_iam_role.deny_build.arn}",
+        "source": [
+          {
+            "buildspec": "version: 0.2\nphases:\n  build:\n    commands:\n      - printf '%s\\n' deny-sentinel-unexpected-start\n",
+            "type": "NO_SOURCE"
+          }
+        ],
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_ecr_lifecycle_policy": {
+      "deny": {
+        "policy": "{\"rules\":[{\"action\":{\"type\":\"expire\"},\"description\":\"Keep at most one harmless deny-sentinel image\",\"rulePriority\":1,\"selection\":{\"countNumber\":1,\"countType\":\"imageCountMoreThan\",\"tagStatus\":\"any\"}}]}",
+        "repository": "${aws_ecr_repository.deny.name}"
+      }
+    },
+    "aws_ecr_repository": {
+      "deny": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "encryption_configuration": [
+          {
+            "encryption_type": "AES256"
+          }
+        ],
+        "force_delete": false,
+        "image_scanning_configuration": [
+          {
+            "scan_on_push": false
+          }
+        ],
+        "image_tag_mutability": "IMMUTABLE",
+        "name": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-deny-repository-primary-be864620ebc28ae8b78ef444a857381e",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_iam_policy": {
+      "deny_boundary": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "name": "rv2-deny-build-boundary-primar-b3f63acfc2421992cf39852c9f09f23f",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"NoDataOrPrivilegeAuthority\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_iam_role": {
+      "deny_build": {
+        "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"429214323166\",\"aws:SourceArn\":\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"codebuild.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "max_session_duration": 3600,
+        "name": "rv2-deny-build-role-primary-339f7eebc6084f0fccdc7fa2c6ed2ee0",
+        "permissions_boundary": "${aws_iam_policy.deny_boundary.arn}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_iam_role_policy": {
+      "deny_build": {
+        "name": "fixture-deny-all",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"NoDataOrPrivilegeAuthority\"}],\"Version\":\"2012-10-17\"}",
+        "role": "${aws_iam_role.deny_build.id}"
+      }
+    },
+    "aws_kms_alias": {
+      "deny": {
+        "name": "alias/rv2-deny-kms-alias-primary-8bea7cf5ddbc3fa56c8cfbc92af6d32d",
+        "target_key_id": "${aws_kms_key.deny.key_id}"
+      }
+    },
+    "aws_kms_key": {
+      "deny": {
+        "deletion_window_in_days": 7,
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Owned synthetic deny-sentinel encryption only fixture-20261030-01",
+        "enable_key_rotation": true,
+        "policy": "{\"Statement\":[{\"Action\":[\"kms:*\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c\"},\"Resource\":\"*\",\"Sid\":\"ExactHumanProvisioner\"},{\"Action\":[\"kms:DescribeKey\",\"kms:GetKeyPolicy\",\"kms:PutKeyPolicy\",\"kms:CancelKeyDeletion\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:root\"},\"Resource\":\"*\",\"Sid\":\"AccountRecoveryAdministration\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "aws_secretsmanager_secret": {
+      "deny": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Owned synthetic negative-test target; value is NOT seeded by IaC",
+        "kms_key_id": "${aws_kms_key.deny.arn}",
+        "name": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-deny-secret-primary-6d4c3e8f5a00c3cd44a96a46e65087fb",
+        "recovery_window_in_days": 7,
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01",
+          "RegistrySentinel": "deny"
+        }
+      }
+    },
+    "terraform_data": {
+      "scope_guard": {
+        "input": "fixture-20261030-01-deny",
+        "lifecycle": {
+          "precondition": [
+            {
+              "condition": "${startswith(data.aws_caller_identity.provisioner.arn, \"arn:aws:sts::429214323166:assumed-role/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c/\")}",
+              "error_message": "Only the explicitly reviewed human provisioning role may provision this isolated fixture."
+            },
+            {
+              "condition": "${timecmp(timestamp(), var.fixture_expires_at) \u003c 0 \u0026\u0026 timecmp(var.fixture_expires_at, timeadd(timestamp(), \"48h\")) \u003c= 0}",
+              "error_message": "Review a future fixture expiration no more than 48 hours from provisioning."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "terraform": {
+    "backend": {
+      "local": {
+        "path": ".state/fixture-20261030-01-deny.tfstate"
+      }
+    },
+    "required_providers": {
+      "aws": {
+        "source": "hashicorp/aws",
+        "version": "= 6.71.0"
+      }
+    },
+    "required_version": "\u003e= 1.10.0, \u003c 2.0.0"
+  },
+  "variable": {
+    "fixture_expires_at": {
+      "default": "2026-10-31T23:59:59Z",
+      "description": "Human-reviewed expiry, at most48 hours after provisioning; TTL tags are not automatic deletion",
+      "type": "string"
+    }
+  }
+}

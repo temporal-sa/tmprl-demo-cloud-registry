@@ -191,6 +191,7 @@ def test_runtime_namespace_waiting_for_images_defers_runtime_secrets(monkeypatch
 
 def test_runtime_namespace_apply_does_not_render_base_namespace(monkeypatch):
     applied = []
+    autoscaler_queries = []
     demo_project = banking_project()
     images = banking_images()
     version = resources.candidate_version(demo_project, images)
@@ -201,7 +202,12 @@ def test_runtime_namespace_apply_does_not_render_base_namespace(monkeypatch):
         assert dry_run is False
         return applied_summary(rendered)
 
+    def list_autoscalers(namespace, *, label_selector):
+        autoscaler_queries.append((namespace, label_selector))
+        return []
+
     monkeypatch.setattr(reconcile.kube, "apply_resources", capture_apply)
+    monkeypatch.setattr(reconcile.kube, "list_autoscalers", list_autoscalers)
 
     status = reconcile.apply_demo_project_resources(
         reconcile.ApplyDemoProjectResourcesRequest(
@@ -218,6 +224,9 @@ def test_runtime_namespace_apply_does_not_render_base_namespace(monkeypatch):
 
     assert status["phase"] == "SmokeCheckPending"
     assert namespace_names == {runtime_namespace}
+    assert autoscaler_queries == [
+        (runtime_namespace, "platform.temporal.io/project=banking-money-transfer")
+    ]
 
 
 def test_candidate_runtime_apply_does_not_promote_stable_services():

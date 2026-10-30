@@ -1,0 +1,8 @@
+# REVIEW-ONLY: no real state destination or credentials are included.
+# Provision and verify a separate versioned sandbox bucket before binding these
+# placeholders. Never run init from the repository's live infra directory.
+bucket       = "${STATE_BUCKET_NAME}"
+key          = "sandbox/${OWNER_TOKEN}/terraform.tfstate"
+region       = "${AWS_REGION}"
+encrypt      = true
+use_lockfile = true

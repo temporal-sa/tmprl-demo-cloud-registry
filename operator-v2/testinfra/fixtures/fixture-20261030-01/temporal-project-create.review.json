@@ -1,0 +1,108 @@
+{
+  "accountPreflight": {
+    "configFileAndEnvDisabled": true,
+    "existingProjectNeverMutationTarget": true,
+    "knownAccountAnchorNamespace": "tmprl-dem-cld-registry-operator.a2dd6",
+    "knownAccountAnchorProjectID": "eca773c382124db79bbfab0b429faa5a",
+    "noAPIKeyArgument": true,
+    "noAccountWideLists": true,
+    "oauthOnly": true,
+    "readDoesNotProveCustomProjectQuota": true,
+    "requiredImmediatelyBeforeExecution": true,
+    "selectedReadMetadataOnly": true
+  },
+  "apiVersion": "v0.24.0",
+  "asyncOperationID": "f9172794-74b1-5926-a5ab-527954981531",
+  "cleanupGate": "A new project is retained/delete-protected until separately reviewed owned cleanup. Never disable/delete existing account projects; empty owned project requirement and explicit protection disable apply.",
+  "createAuthorized": false,
+  "deleteProtection": true,
+  "descriptionOwnerReceipt": "registry-operator-v2 fixture=fixture-20261030-01; owner-sha256=69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c; bootstrap=create-project-v1",
+  "displayName": "rv2-project-sandbox-066c88b708d6b5259dc84d8c2437d651",
+  "excludedActions": [
+    "Projects enablement",
+    "move existing resources",
+    "existing project update/delete",
+    "Namespace create without new bound ProjectID",
+    "account/global admin API-key generation or reuse in test code",
+    "service-account/API-key creation",
+    "permission probes",
+    "automatic rollback/delete"
+  ],
+  "executionTransport": {
+    "CLIRejectedReason": "Cloud extension v0.2.1 constructs SDK options with default seven-retry policy. CLI is not the reviewed one-shot mutation transport.",
+    "credentialSource": "explicit private OAuth config/profile; unexpired access token only, no API-key fallback or refresh",
+    "guard": "private reviewed approval/request digest, exact OAuth identity/account preflight, fsynced exclusive before-dispatch tombstone, single-use per-transport-attempt authentication budget, no automatic process replay",
+    "outcome": "safe new immutable project ID/async receipt or honest unknown with canonical gRPC code; never provider text or credentials",
+    "requiredHelper": "testinfra/projectbootstrap/cmd/create-project",
+    "reviewAndExecutionAuthorizationStillRequired": true
+  },
+  "expectedAccountID": "a2dd6",
+  "owner": {
+    "environmentId": "registry-v2-lab",
+    "installationId": "registry-v2-fixtures",
+    "projectUid": "sentinel-20261030-01",
+    "lifetime": "disposable",
+    "runId": "fixture-20261030-01"
+  },
+  "primaryReferences": [
+    "https://docs.temporal.io/cloud/projects",
+    "https://docs.temporal.io/cloud/manage-access/permissions-reference",
+    "https://docs.temporal.io/evaluate/cloud/limits",
+    "https://github.com/temporalio/cloud-sdk-go/tree/v0.21.0"
+  ],
+  "quotaGate": "At most one new protected project; custom-project entitlement and available slots are unmeasured. A quota/feature error must stop, without enablement, support-setting changes or Default Project fallback.",
+  "rejectedCLIArgvNotExecuted": [
+    "temporal",
+    "cloud",
+    "project",
+    "create",
+    "--display-name",
+    "rv2-project-sandbox-066c88b708d6b5259dc84d8c2437d651",
+    "--description",
+    "registry-operator-v2 fixture=fixture-20261030-01; owner-sha256=69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c; bootstrap=create-project-v1",
+    "--enable-delete-protection",
+    "--async-operation-id",
+    "f9172794-74b1-5926-a5ab-527954981531",
+    "--async",
+    "--disable-config-file",
+    "--disable-config-env",
+    "--disable-pop-up",
+    "--command-timeout",
+    "20s",
+    "--client-connect-timeout",
+    "5s",
+    "-o",
+    "json"
+  ],
+  "requestFile": "temporal-project-create.request.json",
+  "requestMethod": "CreateProject only; never UpdateProject or enablement",
+  "requestSHA256": "012f78f8dcbda819d33c09a0860f3739484e023a73db8f147600fbdc48e843db",
+  "requestType": "temporal.api.cloud.cloudservice.v1.CreateProjectRequest",
+  "requiredOutcome": [
+    "capture exact CreateProjectResponse.ProjectId and matching asyncOperation.id immediately into safe durable receipt",
+    "new ProjectID must be nonempty and differ from the protected existing project ID",
+    "GetProject by that exact new ID must match specification, delete protection, CreatedTime and creation operation evidence",
+    "pin immutable ID plus birth/resourceVersion/owner bootstrap receipt before constructing any Namespace Create request",
+    "no namespaces, API keys or service accounts are created by this project-only request"
+  ],
+  "runID": "fixture-20261030-01",
+  "schemaVersion": "registry-project-create-review-v1",
+  "sdkVersion": "go.temporal.io/cloud-sdk v0.21.0",
+  "specDeterministicProtobufSHA256": "b7c323684ff1c4c065e3aecebf092e00f7f678b1a8c314c8e532c9ec32683f10",
+  "uniqueness": "Display name includes full disjoint ownership/run digest. No account-wide display-name search is authorized or claimed; display name is mutable and never sufficient for adoption. Only the newly returned immutable ProjectID is a binding.",
+  "unknownOutcome": {
+    "accountWideDiscovery": false,
+    "allowedRead": "GetAsyncOperation only for this exact approved ID, and GetProject only if an independently returned new ID is known",
+    "automaticReplay": false,
+    "fallback": "Stop and retain the exact safe intent/unknown receipt. Exact same-request replay must be independently documented/proven before use; otherwise resolve through a separately approved provider/human evidence path. Never create a different project or use Default Project to hide uncertainty.",
+    "nameBasedIdempotentFlag": false,
+    "providerLimitation": "Pinned AsyncOperation schema has input/state/times but no documented output/resource ID; a lost CreateProject response may leave the generated ProjectID unproven.",
+    "recordedBeforeDispatch": [
+      "exact request digest/body",
+      "fixed async ID",
+      "expected account/owner/run",
+      "fresh OAuth account preflight",
+      "root execution approval"
+    ]
+  }
+}

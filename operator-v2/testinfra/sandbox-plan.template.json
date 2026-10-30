@@ -1,0 +1,148 @@
+{
+  "schemaVersion": "registry-sandbox-review/v1",
+  "applyAuthorized": false,
+  "authorizationProven": false,
+  "purpose": "Inert fixture draft. It is neither an IAM deployment document nor a cloud permission proof. Bind names only from trusted ownership context; never interpolate a project spec.",
+  "requiredBindings": [
+    "SANDBOX_KMS_KEY_ID",
+    "FIXTURE_OPERATOR_PRINCIPAL_ARN",
+    "SANDBOX_OIDC_PROVIDER_ARN",
+    "SANDBOX_OIDC_ISSUER",
+    "TEMPORAL_INVOKER_PRINCIPAL_ARN",
+    "OPERATOR_TEMPORAL_NAMESPACE_ID",
+    "TARGET_TEMPORAL_NAMESPACE_ID"
+  ],
+  "resources": {
+    "repositoryArn": "arn:${AWS_PARTITION}:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${ECR_REPOSITORY_NAME}",
+    "buildProjectArn": "arn:${AWS_PARTITION}:codebuild:${AWS_REGION}:${AWS_ACCOUNT_ID}:project/${BUILD_PROJECT_NAME}",
+    "runtimeSecretArnPattern": "arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????",
+    "candidateSecretArnPattern": "arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${CANDIDATE_SECRET_NAME}-??????",
+    "sourceSecretArnPattern": "arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${SOURCE_SECRET_NAME}-??????",
+    "kmsKeyArn": "arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}",
+    "lambdaArn": "arn:${AWS_PARTITION}:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_FUNCTION_NAME}",
+    "artifactBucket": "${ARTIFACT_BUCKET_NAME}",
+    "stateBucket": "${STATE_BUCKET_NAME}",
+    "stateKey": "sandbox/${OWNER_TOKEN}/terraform.tfstate"
+  },
+  "budgets": {
+    "activeRuns": 1,
+    "targetNamespaces": 1,
+    "concurrentBuilds": 1,
+    "buildTimeoutMinutes": 30,
+    "deadlineMinutes": 30,
+    "repositories": 1,
+    "secrets": 3,
+    "lambdaEnabled": false,
+    "reservedLambdaConcurrencyChangesAllowed": false
+  },
+  "buildProject": {
+    "name": "${BUILD_PROJECT_NAME}",
+    "serviceRoleArn": "arn:${AWS_PARTITION}:iam::${AWS_ACCOUNT_ID}:role/${BUILD_ROLE_NAME}",
+    "sourceType": "NO_SOURCE",
+    "artifactsType": "NO_ARTIFACTS",
+    "concurrentBuildLimit": 1,
+    "timeoutInMinutes": 30,
+    "privilegedModeRequiresSeparateReview": true,
+    "warning": "StartBuild overrides are executable authority. A separate project AND role are required. A request broker must cap timeout/image/source overrides; project defaults alone are not proof of quota enforcement."
+  },
+  "roles": {
+    "operator": {
+      "name": "${OPERATOR_ROLE_NAME}",
+      "enabled": true,
+      "trustReviewRequired": true,
+      "trustPolicy": {
+        "Version": "2012-10-17",
+        "Statement": [{"Effect":"Allow","Principal":{"AWS":"${FIXTURE_OPERATOR_PRINCIPAL_ARN}"},"Action":["sts:AssumeRole"]}]
+      },
+      "permissions": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {"Sid":"RepositoryReadAndCleanup","Effect":"Allow","Action":["ecr:DescribeRepositories","ecr:ListTagsForResource","ecr:DeleteRepository"],"Resource":["arn:${AWS_PARTITION}:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${ECR_REPOSITORY_NAME}"]},
+          {"Sid":"CreateOwnedRepository","Effect":"Allow","Action":["ecr:CreateRepository","ecr:TagResource"],"Resource":["arn:${AWS_PARTITION}:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${ECR_REPOSITORY_NAME}"],"Condition":{"StringEquals":{"aws:RequestTag/RegistryOwner":["${OWNER_TOKEN}"]}}},
+          {"Sid":"OwnRuntimeSecrets","Effect":"Allow","Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret","secretsmanager:PutSecretValue","secretsmanager:DeleteSecret"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????","arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${CANDIDATE_SECRET_NAME}-??????"],"Condition":{"StringEquals":{"secretsmanager:ResourceTag/RegistryOwner":["${OWNER_TOKEN}"]}}},
+          {"Sid":"CreateOwnedSecrets","Effect":"Allow","Action":["secretsmanager:CreateSecret"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????","arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${CANDIDATE_SECRET_NAME}-??????"],"Condition":{"StringEquals":{"aws:RequestTag/RegistryOwner":["${OWNER_TOKEN}"],"secretsmanager:KmsKeyArn":["arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}"]}}},
+          {"Sid":"TagOnlyOwnedSecretIdentity","Effect":"Allow","Action":["secretsmanager:TagResource"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????","arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${CANDIDATE_SECRET_NAME}-??????"],"Condition":{"StringEquals":{"aws:RequestTag/RegistryOwner":["${OWNER_TOKEN}"]}}},
+          {"Sid":"OwnedSecretCrypto","Effect":"Allow","Action":["kms:Decrypt","kms:GenerateDataKey"],"Resource":["arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}"],"Condition":{"StringEquals":{"kms:ViaService":["secretsmanager.${AWS_REGION}.amazonaws.com"]},"StringLike":{"kms:EncryptionContext:SecretARN":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????","arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${CANDIDATE_SECRET_NAME}-??????"]}}},
+          {"Sid":"OnlyOwnBuildProject","Effect":"Allow","Action":["codebuild:StartBuild","codebuild:BatchGetBuilds","codebuild:StopBuild"],"Resource":["arn:${AWS_PARTITION}:codebuild:${AWS_REGION}:${AWS_ACCOUNT_ID}:project/${BUILD_PROJECT_NAME}"],"Condition":{"Null":{"codebuild:serviceRole":["true"]}}},
+          {"Sid":"OwnEncryptedEvidence","Effect":"Allow","Action":["s3:PutObject"],"Resource":["arn:${AWS_PARTITION}:s3:::${ARTIFACT_BUCKET_NAME}/diagnostics/${OWNER_TOKEN}/*"],"Condition":{"StringEquals":{"s3:x-amz-server-side-encryption":["AES256"]}}}
+        ]
+      }
+    },
+    "build": {
+      "name": "${BUILD_ROLE_NAME}",
+      "enabled": true,
+      "trustReviewRequired": true,
+      "trustPolicy": {
+        "Version":"2012-10-17",
+        "Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":["sts:AssumeRole"],"Condition":{"StringEquals":{"aws:SourceAccount":["${AWS_ACCOUNT_ID}"],"aws:SourceArn":["arn:${AWS_PARTITION}:codebuild:${AWS_REGION}:${AWS_ACCOUNT_ID}:project/${BUILD_PROJECT_NAME}"]}}}]
+      },
+      "permissions": {
+        "Version":"2012-10-17",
+        "Statement":[
+          {"Sid":"EcrTokenOnly","Effect":"Allow","Action":["ecr:GetAuthorizationToken"],"Resource":["*"]},
+          {"Sid":"OwnRepositoryPush","Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:UploadLayerPart","ecr:CompleteLayerUpload","ecr:PutImage"],"Resource":["arn:${AWS_PARTITION}:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${ECR_REPOSITORY_NAME}"]},
+          {"Sid":"OnlyTestSourceCredential","Effect":"Allow","Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${SOURCE_SECRET_NAME}-??????"]},
+          {"Sid":"OnlySourceSecretCrypto","Effect":"Allow","Action":["kms:Decrypt"],"Resource":["arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}"],"Condition":{"StringEquals":{"kms:ViaService":["secretsmanager.${AWS_REGION}.amazonaws.com"]},"StringLike":{"kms:EncryptionContext:SecretARN":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${SOURCE_SECRET_NAME}-??????"]}}},
+          {"Sid":"OwnBuildLogStream","Effect":"Allow","Action":["logs:CreateLogStream","logs:PutLogEvents"],"Resource":["arn:${AWS_PARTITION}:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:/aws/codebuild/${BUILD_PROJECT_NAME}:log-stream:*"]}
+        ]
+      }
+    },
+    "externalSecrets": {
+      "name":"${SECRET_READER_ROLE_NAME}",
+      "enabled":false,
+      "trustReviewRequired":true,
+      "trustPolicy":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"${SANDBOX_OIDC_PROVIDER_ARN}"},"Action":["sts:AssumeRoleWithWebIdentity"],"Condition":{"StringEquals":{"${SANDBOX_OIDC_ISSUER}:sub":["system:serviceaccount:lab-secrets:lab-reader"],"${SANDBOX_OIDC_ISSUER}:aud":["sts.amazonaws.com"]}}}]},
+      "permissions":{"Version":"2012-10-17","Statement":[
+        {"Sid":"OwnRuntimeSecretOnly","Effect":"Allow","Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????"]},
+        {"Sid":"OnlyRuntimeSecretCrypto","Effect":"Allow","Action":["kms:Decrypt"],"Resource":["arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}"],"Condition":{"StringEquals":{"kms:ViaService":["secretsmanager.${AWS_REGION}.amazonaws.com"]},"StringLike":{"kms:EncryptionContext:SecretARN":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????"]}}}
+      ]}
+    },
+    "runtime": {
+      "name":"${RUNTIME_ROLE_NAME}",
+      "enabled":false,
+      "trustReviewRequired":true,
+      "trustPolicy":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sts:AssumeRole"]}]},
+      "permissions":{"Version":"2012-10-17","Statement":[
+        {"Sid":"OwnRuntimeLogStream","Effect":"Allow","Action":["logs:CreateLogStream","logs:PutLogEvents"],"Resource":["arn:${AWS_PARTITION}:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:/aws/lambda/${LAMBDA_FUNCTION_NAME}:log-stream:*"]},
+        {"Sid":"OwnRuntimeSecretOnly","Effect":"Allow","Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],"Resource":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????"]},
+        {"Sid":"OnlyRuntimeSecretCrypto","Effect":"Allow","Action":["kms:Decrypt"],"Resource":["arn:${AWS_PARTITION}:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/${SANDBOX_KMS_KEY_ID}"],"Condition":{"StringEquals":{"kms:ViaService":["secretsmanager.${AWS_REGION}.amazonaws.com"]},"StringLike":{"kms:EncryptionContext:SecretARN":["arn:${AWS_PARTITION}:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${RUNTIME_SECRET_NAME}-??????"]}}}
+      ]}
+    },
+    "temporalInvoker": {
+      "name":"${INVOKER_ROLE_NAME}",
+      "enabled":false,
+      "trustReviewRequired":true,
+      "trustPolicy":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"${TEMPORAL_INVOKER_PRINCIPAL_ARN}"},"Action":["sts:AssumeRole"],"Condition":{"StringEquals":{"sts:ExternalId":["${OWNER_TOKEN}"]}}}]},
+      "permissions":{"Version":"2012-10-17","Statement":[{"Sid":"OnlyTestFunction","Effect":"Allow","Action":["lambda:GetFunction","lambda:InvokeFunction"],"Resource":["arn:${AWS_PARTITION}:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_FUNCTION_NAME}","arn:${AWS_PARTITION}:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_FUNCTION_NAME}:*"]}]}
+    }
+  },
+  "inactiveLambdaExtension": {
+    "enabled":false,
+    "reviewRequired":"Not included in the active operator policy or its boundary. Enabling requires a revised combined boundary, spare account quota, approved trust and image repository policy, and controlled sentinel proof.",
+    "permissions":{"Version":"2012-10-17","Statement":[
+      {"Sid":"OnlyTestFunction","Effect":"Allow","Action":["lambda:CreateFunction","lambda:GetFunction","lambda:UpdateFunctionCode","lambda:UpdateFunctionConfiguration","lambda:DeleteFunction"],"Resource":["arn:${AWS_PARTITION}:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_FUNCTION_NAME}"]},
+      {"Sid":"PassOnlyTestRuntimeRole","Effect":"Allow","Action":["iam:PassRole"],"Resource":["arn:${AWS_PARTITION}:iam::${AWS_ACCOUNT_ID}:role/${RUNTIME_ROLE_NAME}"],"Condition":{"StringEquals":{"iam:PassedToService":["lambda.amazonaws.com"]}}}
+    ]}
+  },
+  "temporal": {
+    "authorizationProven":false,
+    "preProvisionedNamespacesRequired":true,
+    "orchestrationPrincipal":{"accountRole":"read-only","namespacePermissions":{"${OPERATOR_TEMPORAL_NAMESPACE_ID}":"write"}},
+    "resourcePrincipal":{"accountRole":"read-only","namespacePermissions":{"${TARGET_TEMPORAL_NAMESPACE_ID}":"admin"}},
+    "namespaceCreationEnabled":false,
+    "unscopedServiceAccountManagementEnabled":false,
+    "globalReadersGroupEnabled":false,
+    "nexusEnabled":false,
+    "customRolesRequired":false,
+    "pendingVerification":"Confirm principal namespace grants, current account features, namespace-scoped service-account/API-key behavior and absence of inherited admin/project grants. No account discovery has been performed."
+  },
+  "disabledCapabilities":["productionCredentials","productionGitOps","accountReaderGroups","publicEcr","dnsWrites","liveSwingRoute","sharedSecretStores","arbitraryAssumeRole","iamRoleMutation","stateAccessFromOperator","lambdaCloudExecution"],
+  "reviewBeforeAnyApply":[
+    "Provision fixture identities and resources through a separate reviewed fixture authority; never grant IAM/KMS provisioning to the operator or build role.",
+    "Attach the generated explicit-deny boundary and narrow permissions to each role. Inspect existing identity/resource policies, session grants, SCPs, trust, key policies and production reciprocal access; local policy tests cannot prove these.",
+    "Resolve KMS key binding only after independent sandbox ownership verification. Review its key policy and Secrets Manager encryption context. Never reuse a production key.",
+    "Pre-create bounded CloudWatch groups, dedicated encrypted artifacts and versioned state buckets with private/public-access-block and TLS-only resource policies. Only the fixture authority can access state.",
+    "A future External Secrets test needs a separate namespaced store and test-only controller identity; do not install the production ClusterSecretStore. OIDC support for the local test cluster is unresolved.",
+    "Do not use this template as a complete Terraform module or cloud authorization proof. No init, plan, apply or API command is included."
+  ]
+}

@@ -1,0 +1,5 @@
+.state/
+.terraform/
+.private-plan/
+*.tfplan
+crash.log

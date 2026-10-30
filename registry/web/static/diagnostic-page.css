@@ -1,0 +1,17 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; line-height: 1.5; color: #172235; background: #f4f6fa; }
+body { margin: 0; }
+main { max-width: 64rem; margin: 3rem auto; padding: 0 1.25rem 3rem; }
+h1 { font-size: 2rem; line-height: 1.2; }
+h3, h4 { margin: 0 0 .75rem; }
+p { max-width: 80ch; overflow-wrap: anywhere; }
+button { border: 1px solid #455b82; border-radius: .35rem; padding: .55rem .85rem; margin: .3rem .6rem .7rem 0; background: white; color: #172235; font: inherit; cursor: pointer; }
+button:hover { background: #eaf0fb; }
+button:disabled { cursor: default; opacity: .55; }
+button:focus-visible { outline: 3px solid #3066d8; outline-offset: 3px; }
+.diagnostic-panel { margin-top: 1rem; background: white; border: 1px solid #d9e1ee; border-radius: .6rem; padding: 1.25rem; }
+.diagnostic-panel section { border-top: 1px solid #d9e1ee; padding-top: 1rem; margin-top: 1.25rem; }
+dl { margin: .75rem 0; }
+dl > div { display: grid; grid-template-columns: minmax(10rem, 1fr) 2fr; gap: .5rem 1rem; padding: .35rem 0; }
+dt { color: #455b72; }
+dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 40rem) { main { margin-top: 1.5rem; } dl > div { display: block; } dd { margin-bottom: .5rem; } }

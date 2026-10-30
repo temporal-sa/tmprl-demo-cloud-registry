@@ -1,0 +1,186 @@
+{
+  "accountID": "a2dd6",
+  "createAuthorized": false,
+  "existingAccountEvidence": {
+    "createdTime": "2025-12-03T20:10:06.648414946Z",
+    "customProjectQuotaOrCreationEntitlementProven": false,
+    "neverUseExistingProjectForTests": true,
+    "observedExistingProjectID": "eca773c382124db79bbfab0b429faa5a",
+    "projectAPI": "Exact GetProject succeeded; no list or mutation",
+    "state": "RESOURCE_STATE_ACTIVE"
+  },
+  "namespaceRequestGate": "New independent project ID/create provenance is required. Never omit projectId and silently fall back to Default Project. Human bootstrap then binds each Namespace.CreatedTime and create operation receipt.",
+  "namespaceRequestsEmitted": false,
+  "namespaces": [
+    {
+      "authMode": "apiKey",
+      "deleteProtected": true,
+      "logicalLabel": "control",
+      "name": "rv2-na-cdd19e6047a857290950a23c418124fd",
+      "namespaceID": "rv2-na-cdd19e6047a857290950a23c418124fd.a2dd6",
+      "purpose": "Durable test workflow control only; no production queues or clients",
+      "regionID": "aws-us-east-2",
+      "retentionDays": 1
+    },
+    {
+      "authMode": "apiKey",
+      "deleteProtected": true,
+      "logicalLabel": "target",
+      "name": "rv2-na-bb21caaaf651f27157f57a039c38c703",
+      "namespaceID": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "purpose": "One scoped disposable provider target; no name re-creation after bound birth disappearance",
+      "regionID": "aws-us-east-2",
+      "retentionDays": 1
+    }
+  ],
+  "owner": {
+    "environmentId": "registry-v2-lab",
+    "installationId": "registry-v2-fixtures",
+    "projectUid": "sentinel-20261030-01",
+    "lifetime": "disposable",
+    "runId": "fixture-20261030-01"
+  },
+  "permissionMatrix": [
+    {
+      "allowedPlan": "Create exact new project/namespaces/principals only after review",
+      "currentExecutionAuthorized": false,
+      "principal": "Human OAuth bootstrap",
+      "scope": "Existing account admin session, outside test process"
+    },
+    {
+      "documented": "Namespace WRITE / own API-key behavior",
+      "operation": "Temporal Workflow/Activity execution and own key lifecycle",
+      "principal": "control-worker",
+      "proof": "Scoped controlled sentinel test pending",
+      "resource": "rv2-na-cdd19e6047a857290950a23c418124fd.a2dd6"
+    },
+    {
+      "documented": "Namespace ADMIN and scoped-SA management exception",
+      "operation": "GetNamespace/UpdateNamespace/SearchAttributes and scoped ServiceAccount create/get/update/delete",
+      "principal": "target-manager",
+      "proof": "Exact target sentinel proof pending; no production probe",
+      "resource": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6"
+    },
+    {
+      "documented": "Own API-key lifecycle allowed; scoped SA own metadata expected",
+      "operation": "GetServiceAccount, CreateApiKey/GetApiKey/GetApiKeys/DeleteApiKey for owner self",
+      "principal": "target-manager",
+      "proof": "Exact owned IDs only; owner-filtered list if needed, no account sweep",
+      "resource": "its own manager identity/key"
+    },
+    {
+      "documented": "Not established: current docs specify own keys for all roles; any-owner keys only GlobalAdmin/AccountOwner",
+      "operation": "Create/Get/List/DeleteApiKey",
+      "principal": "target-manager",
+      "proof": "BLOCKED. Do not grant account admin to pass test.",
+      "resource": "another target-runtime scoped SA's API keys"
+    },
+    {
+      "documented": "Own-key permission",
+      "operation": "Create/Get/List/DeleteApiKey after secure owner-scoped bootstrap",
+      "principal": "target-runtime",
+      "proof": "Alternative split-transport design not implemented; do not claim existing manager works unchanged",
+      "resource": "its own keys"
+    },
+    {
+      "documented": "No assigned namespace/project access; scoped identity contract",
+      "operation": "Runtime/configuration mutation",
+      "principal": "all test identities",
+      "proof": "Use separately owned deny-sentinel namespace/project for effective-boundary proof; never mutate/probe production",
+      "resource": "production namespaces/other projects"
+    }
+  ],
+  "principals": [
+    {
+      "accountAccessField": null,
+      "bootstrap": "Human creates scoped identity/key using secure non-printing sink only; default UI two-year key must not be used",
+      "keyTTLHours": 24,
+      "name": "control-worker",
+      "namespace": "rv2-na-cdd19e6047a857290950a23c418124fd.a2dd6",
+      "namespacePermission": "WRITE",
+      "projectScopedAccessField": null,
+      "scope": "NamespaceScopedAccess only"
+    },
+    {
+      "accountAccessField": null,
+      "bootstrap": "Human creates scoped identity/key with secure non-printing delivery; no account/global roles",
+      "keyTTLHours": 24,
+      "name": "target-manager",
+      "namespace": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "namespacePermission": "ADMIN",
+      "projectScopedAccessField": null,
+      "scope": "NamespaceScopedAccess only"
+    },
+    {
+      "accountAccessField": null,
+      "bootstrap": "Management SA can create scoped SA by docs. Another owner's API-key issue/revoke remains blocked pending provider clarification; alternate self-key transport requires separate secure bootstrap design.",
+      "keyTTLHours": 24,
+      "name": "target-runtime",
+      "namespace": "rv2-na-bb21caaaf651f27157f57a039c38c703.a2dd6",
+      "namespacePermission": "WRITE",
+      "projectScopedAccessField": null,
+      "scope": "NamespaceScopedAccess only"
+    }
+  ],
+  "project": {
+    "deleteProtected": true,
+    "description": "Registry operator v2 isolated fixture fixture-20261030-01 owner=69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+    "displayName": "rv2-project-sandbox-066c88b708d6b5259dc84d8c2437d651",
+    "enableProjects": false,
+    "immutableProjectID": "Provider-generated; bind returned exact ID/create operation/birth before rendering namespace CreateNamespace requests",
+    "moveExistingResources": false,
+    "mustNotEqualExistingProjectID": "eca773c382124db79bbfab0b429faa5a",
+    "requiredCreationPrincipal": "Human OAuth bootstrap only, after exact review; no API-key reuse in test code"
+  },
+  "protectedProduction": {
+    "namespace": "tmprl-dem-cld-registry-operator.a2dd6",
+    "project": "eca773c382124db79bbfab0b429faa5a",
+    "role": "Only offline negative fixtures; no code access granted and no live mutation/denial probe"
+  },
+  "quotaBudget": {
+    "accountWideRateLimits": "Shared; serialize provisioning and back off without production namespace probes",
+    "keyTTLHours": 24,
+    "maximumNewAPIKeys": 3,
+    "newNamespaceScopedServiceAccounts": 3,
+    "newNamespaces": 2,
+    "newProjects": 1,
+    "normalAPS": 5,
+    "projectNamespaceQuotaHeadroom": "Unproven; published defaults are not actual account quota or current usage",
+    "testMaximumConcurrentWorkflows": 2
+  },
+  "schemaVersion": "registry-temporal-fixture-v1",
+  "selfKeyFirstLane": {
+    "blockedUntil": "All listed effective own-key/metadata/async/recovery checks and real durable store/guard/canary are proven on newly owned fixtures",
+    "bootstrap": [
+      "human bootstrap records new target namespace birth/provenance",
+      "derive CredentialIntent.SlotID and deterministic service-account name/marker from that immutable binding",
+      "human creates exactly that NamespaceScopedAccess WRITE runtime SA; observe ID/CreatedTime/provenance",
+      "human creates one short-lived bootstrap key directly into reviewed secure store memory; no CLI stdout/log/history or IaC state",
+      "CredentialManager uses PreprovisionedServiceAccounts with exact runtime SA ref and CreateScopedServiceAccounts=false",
+      "CredentialTransport authenticates as that same runtime SA so create/get/list/revoke operations concern its OWN keys; namespace mutation uses separate ADMIN adapter"
+    ],
+    "principals": "Separate namespace ADMIN management adapter and namespace WRITE runtime SELF-key transport; never account admin in test process",
+    "requiredIndependentProofs": [
+      "runtime self principal can GetServiceAccount for exact own ID and GetNamespace on exact bound target",
+      "runtime self principal can CreateApiKey/GetApiKey/GetApiKeys(owner=self only)/DeleteApiKey for exact owned IDs",
+      "GetAsyncOperation for self-created key operations is visible through the chosen operation observer principal",
+      "lost create request returns exact echoed input and immutable key birth metadata sufficient for conservative ownership recovery",
+      "target-manager cannot manage separately owned deny-sentinel runtime SA keys if provider denies cross-SA key operations; do not probe production",
+      "bootstrap key delivery, expiration, replacement and revocation have a secure, bounded recovery path"
+    ],
+    "state": "CandidateForReview_NotExecuted"
+  },
+  "testCapabilities": {
+    "accountAdministration": false,
+    "disableDeleteProtection": false,
+    "globalTags": false,
+    "groupsOrUsers": false,
+    "managedTargetReadUpdate": "Only verified exact target ADMIN principal plus bound birth/version/external guard; not enabled by this descriptor alone",
+    "namespaceCreation": false,
+    "namespaceDeletion": false,
+    "namespaceMove": false,
+    "nexus": false,
+    "projectMutation": false,
+    "searchAttributeRemoval": false
+  }
+}

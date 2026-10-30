@@ -1,0 +1,127 @@
+{
+  "applyAuthorized": false,
+  "awsAccount": "429214323166",
+  "awsRegion": "us-west-2",
+  "buildLimits": {
+    "IAMUnsupportedOverrideFields": [
+      "timeoutInMinutesOverride",
+      "queuedTimeoutInMinutesOverride",
+      "debugSessionEnabled",
+      "idempotencyToken"
+    ],
+    "appliedLinuxSmallQuota": 300,
+    "appliedQuotaCode": "L-9D07B6EF",
+    "autoRetryLimit": 0,
+    "hardDollarCeiling": false,
+    "maximumBuildStartsPerApprovedRun": 3,
+    "maximumFixtureLifetimeHours": 48,
+    "maximumObservedRunMinutes": 15,
+    "orchestratorConcurrentBuildLimit": 1,
+    "privilegedMode": false,
+    "projectBuildTimeoutMinutes": 5,
+    "projectConcurrentBuildLimit": 1,
+    "projectQueuedTimeoutMinutes": 5,
+    "quotaEvidence": "Exact GetServiceQuota in us-west-2 succeeded; UsageMetric=null. Applied quota is not current headroom.",
+    "sharedRegionalQuotaHeadroom": "Current running/queued use not measured; verify headroom before build approval",
+    "softSpendStopUSD": 5,
+    "unsupportedFieldsPolicy": "Trusted adapter must send only projectName plus persisted idempotencyToken; reject all other fields. IAM documented keys block supported overrides, but IAM cannot express a universal request-field allowlist. Independent watchdog/stop budget and reviewed exact build IDs required; these are operational safeguards, not a hard spend fence."
+  },
+  "candidateStage": {
+    "candidateCreateAuthorized": false,
+    "genericPrefixFallback": false,
+    "reason": "CandidateID depends on the provider-observed namespace incarnation. Base writer/canary policies deny all actions.",
+    "state": "BlockedUntilIndependentTemporalBirth"
+  },
+  "cleanup": {
+    "authority": "Reviewed human bootstrap principal only for base resources; no broad runtime cleanup grant",
+    "candidate": "Store DeleteCandidate remains unsupported. Never delete an unknown, active or unproven candidate, or infer FinalNotCommitted from absence. Revoke/retire only verified owned Temporal keys and preserve failed/unknown outcome evidence first.",
+    "kmsDeletionRecoveryDays": 7,
+    "kmsPendingDeletionCost": "KMS key can remain billable until actual deletion; soft spend threshold is not guaranteed enforcement",
+    "noAutomaticCleanupOnFailedPlan": true,
+    "sequence": [
+      "stop only recorded owned build IDs and drain accepted outcomes",
+      "retain or explicitly resolve every candidate write/key outcome; no name-based deletion",
+      "confirm local control journal evidence safely retained outside ephemeral runtime namespace",
+      "remove owned images and ECR repository only after explicit identity/owner confirmation; force_delete=false prevents blind image purge",
+      "delete only exact owned IAM roles/boundaries and log group",
+      "disable/schedule owned KMS key deletion with seven-day recovery; TTL tags do not perform cleanup",
+      "for Temporal, remove only owned test namespace principals/namespaces and then empty owned project; each delete protection disable is a separate reviewed action"
+    ]
+  },
+  "cloudAuthorizationProven": false,
+  "denialProofsOnOwnedSentinelsOnly": [
+    "test role cannot StartBuild on a separate deny sentinel project; never probe production",
+    "CodeBuild service role cannot read a separately owned deny-sentinel secret or write deny-sentinel ECR",
+    "invoker cannot pass/assume any runtime role, change IAM, update project, or use supported build/source/role/image/environment/artifact/log overrides",
+    "candidate base roles deny all service operations",
+    "stage-two writer can only create/describe exact per-stage name with owned KMS and exact required owner/stage/namespace tags; wrong tag/KMS/name/replication denied",
+    "canary role reads only exact candidate; namespace/secret birth/version/journal checks remain mandatory",
+    "production-root negative cases are offline policy fixtures, not live probes"
+  ],
+  "owner": {
+    "environmentId": "registry-v2-lab",
+    "installationId": "registry-v2-fixtures",
+    "projectUid": "sentinel-20261030-01",
+    "lifetime": "disposable",
+    "runId": "fixture-20261030-01"
+  },
+  "primaryReferences": [
+    "https://docs.aws.amazon.com/service-authorization/latest/reference/list_codebuild.html",
+    "https://docs.aws.amazon.com/codebuild/latest/userguide/action-context-keys.html",
+    "https://docs.aws.amazon.com/codebuild/latest/userguide/cross-service-confused-deputy-prevention.html",
+    "https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html",
+    "https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html",
+    "https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html",
+    "https://registry.terraform.io/providers/hashicorp/aws/6.71.0/docs",
+    "https://docs.temporal.io/cloud/projects",
+    "https://docs.temporal.io/cloud/manage-access/permissions-reference",
+    "https://docs.temporal.io/cloud/manage-access/service-accounts",
+    "https://docs.temporal.io/evaluate/cloud/limits"
+  ],
+  "provisioning": {
+    "accountGuard": "provider allowed_account_ids plus exact SSO-role precondition",
+    "onlyHumanIAMRole": "arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c",
+    "onlyHumanProfile": "SolutionsArchitecture/AWSAdministratorAccess",
+    "passRole": "No test identity receives iam:PassRole. Human provisioning may pass only the derived build execution role to codebuild.amazonaws.com in this reviewed action scope; existing SSO admin policy is not itself narrowed by this plan.",
+    "productionRegion": "us-west-1; fixture us-west-2 reduces regional contention but is not account isolation",
+    "state": "Separate local .state/fixture-20261030-01.tfstate; never infra/ backend; no secret values in state",
+    "validationOnly": "tofu init -backend=false and tofu validate; no plan/apply/import/destroy authorized"
+  },
+  "remainingGates": [
+    "root review of exact rendered base and resource/permission matrix before any creation",
+    "verify regional CodeBuild quota and actual running/headroom before any build",
+    "record new KMS canonical ARN/provider birth and scoped role effective permission observations",
+    "confirm dedicated Temporal project creation entitlement/quota without enabling Projects or moving current resources",
+    "secure non-printing bootstrap delivery of namespace-scoped keys; OAuth/account-admin credentials never enter test workers",
+    "independent control and target Namespace CreatedTime/provenance before stage-two candidate IAM render",
+    "provider clarification/owned-sentinel proof for namespace ADMIN managing another scoped SA API key: docs currently establish only own-key versus global-admin-any-key",
+    "real durable candidate outcome ledger/guard/canary wiring before credential-staging end-to-end proof",
+    "managed runner digest/toolchain pin before general application build parity"
+  ],
+  "resourceRoot": "rv2",
+  "resources": {
+    "buildRole": "rv2-build-role-primary-808fe505266b3d0ac35c97cae4f8a729",
+    "candidateCanaryRole": "rv2-canary-role-primary-c8cb42b1517d556bf7873fcf53f022f0",
+    "candidateWriterRole": "rv2-candidate-writer-role-prim-e55ba9250ccb0ac9a248cc3fdc166a4b",
+    "codebuildProject": "rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec",
+    "ecrRepository": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b",
+    "invokerRole": "rv2-invoker-role-primary-7fa814626ac458ff37636ea893a0a8a7",
+    "kmsAlias": "alias/rv2-kms-alias-primary-1b6abae2a08d68babcd858d4317f43eb",
+    "kmsKeyARN": "Provider output, independently attest after creation; no guessed UUID or alias-as-provenance",
+    "logGroup": "/aws/codebuild/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec"
+  },
+  "runID": "fixture-20261030-01",
+  "schemaVersion": "registry-isolated-fixture-v1",
+  "storageLimits": {
+    "buildArtifactEncryption": "NO_ARTIFACTS sentinel; CodeBuild default artifact-key field is not the candidate CMK, and build role has no KMS permission",
+    "candidateKeyNotGrantedToBuildRole": true,
+    "ecrRetainedImageCount": 3,
+    "hardStorageByteLimit": false,
+    "logsRetentionDays": 1,
+    "managedBuildImage": "aws/codebuild/standard:7.0; no override, but mutable managed tag is not a cryptographic toolchain pin; full application-build lane remains pending",
+    "noS3ArtifactOrSourceBucket": true,
+    "publicECR": false,
+    "sourceSecrets": false
+  },
+  "temporalAccount": "a2dd6"
+}

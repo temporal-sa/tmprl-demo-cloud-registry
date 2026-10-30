@@ -1,0 +1,1281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-sa/tmprl-demo-cloud-demo-registry/schemas/project.schema.json",
+  "title": "DemoProject",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.tmprl-demo.cloud/v1alpha1"
+    },
+    "kind": {
+      "const": "DemoProject"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "builds", "components"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo"],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^https://github\\.com/(temporal-sa|temporalio|temporal-community)/[A-Za-z0-9_.-]+/?$"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "gitRepository": {
+              "$ref": "#/$defs/sourceGitRepository"
+            }
+          }
+        },
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "builds": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/build"
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/userSecret"
+          }
+        },
+        "temporal": {
+          "$ref": "#/$defs/temporal"
+        },
+        "components": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/component"
+          }
+        },
+        "ingress": {
+          "$ref": "#/$defs/ingress"
+        },
+        "rollout": {
+          "$ref": "#/$defs/rollout"
+        },
+        "smokeCheck": {
+          "$ref": "#/$defs/smokeCheck"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context"],
+      "properties": {
+        "context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["dockerfile", "buildpack"],
+          "default": "dockerfile"
+        },
+        "dockerfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "builder": {
+          "type": "string",
+          "minLength": 1
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/envName"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "processes": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "strategy": {
+              "enum": ["dockerfile"]
+            }
+          },
+          "required": ["dockerfile"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["builder"]
+              },
+              {
+                "required": ["processes"]
+              }
+            ]
+          }
+        },
+        {
+          "properties": {
+            "strategy": {
+              "const": "buildpack"
+            }
+          },
+          "required": ["strategy", "builder"],
+          "not": {
+            "required": ["dockerfile"]
+          }
+        }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build"],
+      "properties": {
+        "isolatedExecutor": {"type": "boolean", "default": false, "description": "Credential-free Bubblewrap executor on port 8082; image must contain bash, iptables, bubblewrap, and a healthz endpoint."},
+        "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
+        "build": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "serviceName": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "automountServiceAccountToken": {
+          "type": "boolean",
+          "default": false
+        },
+        "awsIamRoleArn": {
+          "type": "string",
+          "pattern": "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+$"
+        },
+        "command": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "args": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/componentPort"
+          }
+        },
+        "env": {
+          "$ref": "#/$defs/envList"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dnsLabel"
+          }
+        },
+        "temporalAccess": {
+          "type": "boolean",
+          "default": false
+        },
+        "temporalNamespace": {
+          "$ref": "#/$defs/temporalNamespaceLabel",
+          "$comment": "Binds this component to a namespace declared in spec.temporal.namespaces. Absent means the project's original namespace, which is what every component gets today."
+        },
+        "temporalProxy": {
+          "$ref": "#/$defs/temporalProxy"
+        },
+        "temporalMtls": {
+          "$ref": "#/$defs/temporalMtls"
+        },
+        "serverless": {
+          "$ref": "#/$defs/serverless"
+        },
+        "worker": {
+          "$ref": "#/$defs/worker"
+        },
+        "autoscaling": {
+          "$ref": "#/$defs/autoscaling"
+        },
+        "resources": {
+          "$ref": "#/$defs/containerResources"
+        }
+      },
+      "allOf": [{"if": {"properties": {"isolatedExecutor": {"const": true}}, "required": ["isolatedExecutor"]}, "then": {"properties": {"worker": false, "temporalAccess": {"const": false}, "automountServiceAccountToken": {"const": false}, "awsIamRoleArn": false, "temporalProxy": false, "temporalMtls": false, "serverless": false, "secrets": {"maxItems": 0}}}}]
+    },
+    "componentPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["containerPort"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "containerPort": {
+          "$ref": "#/$defs/portNumber"
+        },
+        "servicePort": {
+          "$ref": "#/$defs/portNumber"
+        }
+      }
+    },
+    "dnsLabel": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "minLength": 1,
+      "maxLength": 63
+    },
+    "envList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/envVar"
+      }
+    },
+    "envVar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "oneOf": [
+        {
+          "required": ["value"]
+        },
+        {
+          "required": ["valueFrom"]
+        }
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/envName"
+        },
+        "value": {
+          "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/envValueFrom"
+        }
+      }
+    },
+    "envValueFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputRef"],
+      "properties": {
+        "inputRef": {
+          "type": "string",
+          "pattern": "^(platform\\.rolloutVersion|temporal\\.(address|namespace|apiKey|tls|caCert|clientCert|clientKey)|secrets\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[A-Z_][A-Z0-9_]*)$"
+        }
+      }
+    },
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subdomain"],
+      "properties": {
+        "subdomain": {
+          "$ref": "#/$defs/subdomain"
+        },
+        "temporalAuthRequired": {
+          "type": "boolean",
+          "default": true
+        },
+        "component": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "port": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ingressRoute"
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["component", "port"],
+          "not": {
+            "required": ["routes"]
+          }
+        },
+        {
+          "required": ["routes"],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["component"]
+              },
+              {
+                "required": ["port"]
+              }
+            ]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["component"]
+              },
+              {
+                "required": ["port"]
+              },
+              {
+                "required": ["routes"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ingressRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "port"],
+      "properties": {
+        "pathPrefix": {
+          "type": "string",
+          "pattern": "^/.*$"
+        },
+        "component": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "port": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "passHostHeader": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether Traefik should pass the original request Host header to this route's upstream service."
+        },
+        "public": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip the catalog SSO forward-auth for this route; the app must authenticate requests itself. Requires a pathPrefix other than /."
+        }
+      }
+    },
+    "portNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "displayOrder": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "appPath": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~/-]*$",
+          "maxLength": 128,
+          "description": "Path appended to the project's host for the catalog's Open demo link, such as /control. Defaults to the host root."
+        },
+        "canonical": {
+          "type": "boolean",
+          "default": false
+        },
+        "underConstruction": {
+          "type": "boolean",
+          "default": false,
+          "description": "Shows an Under construction banner on the demo's catalog card. Set it while the demo is still being built, and remove it once the demo is ready to present."
+        },
+        "readiness": {
+          "$ref": "#/$defs/registryReadiness"
+        },
+        "tags": {
+          "$ref": "#/$defs/registryLabels"
+        },
+        "temporalSdks": {
+          "$ref": "#/$defs/registryLabels"
+        },
+        "aiSdks": {
+          "$ref": "#/$defs/registryLabels",
+          "description": "The AI SDKs or agent SDKs the demo's code calls directly, such as Google ADK or the Anthropic SDK. Leave out LiteLLM and other proxies."
+        },
+        "links": {
+          "$ref": "#/$defs/registryLinks"
+        },
+        "assets": {
+          "$ref": "#/$defs/registryAssets"
+        },
+        "crashable": {
+          "$ref": "#/$defs/registryCrashable"
+        },
+        "isolatedLambda": {
+          "$ref": "#/$defs/registryIsolatedLambda",
+          "description": "Opt-in private workspace for a Lambda-backed demo whose application already reads taskQueueEnv, derives any extra queues from that value, and includes the active task queue in workflow IDs. Leave disabled when the demo hardcodes a queue, Worker Deployment name, or workflow ID; those demos need an application change before isolation can pair their clients with the workspace workers."
+        }
+      }
+    },
+    "registryIsolatedLambda": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "taskQueueEnv": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseTaskQueue": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "registryCrashable": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "taskQueueEnv": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseTaskQueue": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "registryAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "kind"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "kind": {
+          "$ref": "#/$defs/registryLabel"
+        }
+      }
+    },
+    "registryAssetList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/registryAsset"
+      }
+    },
+    "registryAssets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "technical": {
+          "$ref": "#/$defs/registryAssetList"
+        },
+        "nonTechnical": {
+          "$ref": "#/$defs/registryAssetList"
+        }
+      }
+    },
+    "registryLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "registryLabels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/registryLabel"
+      }
+    },
+    "registryLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        }
+      }
+    },
+    "registryLinks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "speakerNotes": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "slideDeck": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "runbook": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "goldenPath": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "externalRecording": {
+          "$ref": "#/$defs/registryLink"
+        },
+        "additional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/registryAdditionalLink"
+          }
+        }
+      }
+    },
+    "registryAdditionalLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "audience"],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/registryLabel"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "audience": {
+          "type": "string",
+          "enum": ["technical", "nonTechnical"]
+        }
+      }
+    },
+    "registryReadiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "maxScore"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxScore": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageOverrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/dnsLabel"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sourceCommitSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{7,40}$"
+        }
+      }
+    },
+    "smokeCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "expectedStatus"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/.*$"
+        },
+        "expectedStatus": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 10
+        }
+      }
+    },
+    "serverless": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["aws-lambda"]
+        },
+        "packageType": {
+          "type": "string",
+          "const": "image",
+          "default": "image"
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["x86_64", "arm64"],
+          "default": "x86_64"
+        },
+        "memoryMb": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 10240,
+          "default": 512
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900,
+          "default": 600
+        },
+        "workerDeployment": {
+          "$ref": "#/$defs/serverlessWorkerDeployment"
+        }
+      }
+    },
+    "serverlessWorkerDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deploymentName": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "buildId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "initialCurrent": {
+          "type": "boolean",
+          "description": "When isolated Lambda workspaces register several versions of one Worker Deployment, the component marked initialCurrent is the one SetCurrentVersion call. At most one component per deploymentName may set this."
+        },
+        "env": {
+          "$ref": "#/$defs/serverlessWorkerDeploymentEnv"
+        }
+      }
+    },
+    "serverlessWorkerDeploymentEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deploymentName": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        },
+        "buildId": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://[^\\s]+$"
+    },
+    "temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/temporalRegion"
+        },
+        "auth": {
+          "$ref": "#/$defs/temporalAuth"
+        },
+        "fairness": {
+          "$ref": "#/$defs/temporalFairness",
+          "$comment": "Applies to the project's own namespace. Each spec.temporal.namespaces entry sets its own."
+        },
+        "searchAttributes": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/temporalSearchAttributeName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/temporalSearchAttribute"
+          }
+        },
+        "namespaces": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/temporalNamespaceLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/temporalNamespaceSpec"
+          }
+        },
+        "nexusEndpoints": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/nexusEndpointName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/nexusEndpoint"
+          }
+        }
+      }
+    },
+    "temporalRegion": {
+      "type": "string",
+      "pattern": "^(aws|gcp|azure)-[a-z0-9-]+$",
+      "minLength": 5,
+      "maxLength": 63
+    },
+    "temporalAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["apiKey", "mtls"],
+          "default": "apiKey"
+        }
+      }
+    },
+    "temporalSearchAttribute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["text", "keyword", "int", "double", "bool", "datetime", "keywordList"],
+          "default": "keyword"
+        }
+      }
+    },
+    "temporalSearchAttributeName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "temporalNamespaceLabel": {
+      "$ref": "#/$defs/dnsLabel",
+      "$comment": "candidate and ca-candidate collide with the credential-rotation staging paths tmprl-dem-cld/<project>/temporal-<suffix>, so they are reserved.",
+      "not": {
+        "enum": ["candidate", "ca-candidate"]
+      }
+    },
+    "temporalNamespaceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Additional namespaces inherit the project's spec.temporal.auth.mode; auth is not per-namespace. searchAttributes is deliberately absent: the reconcile step that manages them computes its delete set against a single project-scoped status blob, so it runs for the project's own namespace only. Declaring them here would be silently ignored.",
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/temporalRegion"
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        },
+        "fairness": {
+          "$ref": "#/$defs/temporalFairness"
+        }
+      }
+    },
+    "temporalFairness": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable Temporal Cloud task queue fairness on the namespace. Fairness is a paid Temporal Cloud feature. Absent or false means disabled: the operator turns it off on a namespace where it is on."
+    },
+    "nexusEndpointName": {
+      "type": "string",
+      "$comment": "Temporal Cloud requires ^[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]$ and names are unique account-wide, so this is deliberately not dnsLabel (which permits a leading digit).",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9]$",
+      "minLength": 2,
+      "maxLength": 63
+    },
+    "nexusEndpointNamespaceRef": {
+      "$ref": "#/$defs/dnsLabel",
+      "$comment": "Either the literal \"primary\" (the project's original namespace) or a key declared in spec.temporal.namespaces. Which one it is gets checked semantically, not here."
+    },
+    "nexusEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetTaskQueue"],
+      "properties": {
+        "targetNamespace": {
+          "$ref": "#/$defs/nexusEndpointNamespaceRef",
+          "default": "primary"
+        },
+        "targetTaskQueue": {
+          "type": "string",
+          "$comment": "Deliberately not cross-validated: the platform has never tracked a component's task queue and this feature does not introduce that tracking.",
+          "minLength": 1
+        },
+        "allowedCallerNamespaces": {
+          "type": "array",
+          "$comment": "Callers inside this demo. Temporal allows no callers by default. Omit this when allowedCallerProjects is the only allowlist. An explicit list must be non-empty.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nexusEndpointNamespaceRef"
+          }
+        },
+        "allowedCallerProjects": {
+          "type": "array",
+          "$comment": "Other DemoProject names. The operator derives each project's primary Temporal namespace. Do not write a resolved namespace here.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/dnsLabel"
+          }
+        }
+      }
+    },
+    "temporalProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "addressEnv": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
+    },
+    "temporalMtls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "certFiles": {
+          "$ref": "#/$defs/temporalMtlsCertFiles"
+        }
+      }
+    },
+    "temporalMtlsCertFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "mountPath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "paths": {
+          "$ref": "#/$defs/temporalMtlsCertFilePaths"
+        },
+        "pathEnv": {
+          "$ref": "#/$defs/temporalMtlsCertFilePathEnv"
+        }
+      }
+    },
+    "temporalMtlsCertFilePaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caCert": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "clientCert": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "clientKey": {
+          "type": "string",
+          "pattern": "^/.+$"
+        }
+      }
+    },
+    "temporalMtlsCertFilePathEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "certDir": {
+          "$ref": "#/$defs/envName"
+        },
+        "caCert": {
+          "$ref": "#/$defs/envName"
+        },
+        "clientCert": {
+          "$ref": "#/$defs/envName"
+        },
+        "clientKey": {
+          "$ref": "#/$defs/envName"
+        }
+      }
+    },
+    "userSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shared": {
+          "type": "string",
+          "description": "Secret path relative to tmprl-dem-cld/platform/shared/; omitted uses the project-owned secret path.",
+          "pattern": "^[A-Za-z0-9_+=.@-]+(/[A-Za-z0-9_+=.@-]+)*$",
+          "not": {
+            "pattern": "(^|/)[.]{1,2}(/|$)"
+          }
+        },
+        "requiredProperties": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envName"
+          }
+        }
+      }
+    },
+    "stringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "subdomain": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+      "not": {
+        "pattern": "(^|\\.)tmprl-demo\\.cloud$"
+      }
+    },
+    "sourceGitRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authSecret": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "sparseCheckout": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ignore": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "worker": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["versioning"],
+          "properties": {
+            "versioning": {
+              "$ref": "#/$defs/workerVersioning"
+            },
+            "livenessProbe": {
+              "type": "boolean",
+              "description": "Enable the heartbeat-driven liveness probe. The worker process must refresh the heartbeat file on a successful Temporal round-trip; the rendered probe restarts the container if it goes stale (recovers a Running-but-wedged worker)."
+            }
+          }
+        }
+      ]
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "KEDA temporal-scaler autoscaling for a Kubernetes worker. Workers without this block (and without replicas) default to 1..10 when a task queue resolves from env TEMPORAL_TASK_QUEUE; otherwise they stay at a fixed 1 replica. Mutually exclusive with replicas.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true},
+        "minReplicas": {"type": "integer", "minimum": 0, "default": 1, "description": "0 enables scale-to-zero; the first task after idling waits for a pod to start."},
+        "maxReplicas": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+        "taskQueue": {"type": "string", "minLength": 1, "description": "Task queue whose backlog drives scaling. Defaults to the literal value of env TEMPORAL_TASK_QUEUE."},
+        "queueTypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["workflow", "activity"]},
+          "default": ["workflow", "activity"]
+        },
+        "targetQueueSize": {"type": "integer", "minimum": 1, "default": 5, "description": "Backlog per replica."},
+        "cooldownPeriod": {"type": "integer", "minimum": 30, "default": 300, "description": "Seconds of no backlog before scaling to zero (only used when minReplicas is 0)."}
+      }
+    },
+    "containerResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Main-container requests/limits. Requests default to cpu 100m / memory 256Mi so cluster-autoscaler can see replicas KEDA adds.",
+      "properties": {
+        "requests": {"$ref": "#/$defs/resourceQuantities"},
+        "limits": {"$ref": "#/$defs/resourceQuantities"}
+      }
+    },
+    "resourceQuantities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": "string", "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$"},
+        "memory": {"type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi)?$"}
+      }
+    },
+    "workerVersioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "deploymentName": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "rollout": {
+          "$ref": "#/$defs/workerRollout"
+        },
+        "sunset": {
+          "$ref": "#/$defs/workerSunset"
+        }
+      }
+    },
+    "workerRollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["AllAtOnce", "Manual", "Progressive"],
+          "default": "AllAtOnce"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/workerRolloutStep"
+          }
+        },
+        "gate": {
+          "$ref": "#/$defs/workerRolloutGate"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "Progressive"
+              }
+            },
+            "required": ["strategy"]
+          },
+          "then": {
+            "required": ["steps"]
+          }
+        }
+      ]
+    },
+    "workerRolloutGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowType"],
+      "properties": {
+        "workflowType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input": {
+          "type": "object"
+        },
+        "inputFrom": {
+          "$ref": "#/$defs/workerRolloutGateInputFrom"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["input"],
+          "not": {
+            "required": ["inputFrom"]
+          }
+        },
+        {
+          "required": ["inputFrom"],
+          "not": {
+            "required": ["input"]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": ["input"]
+              },
+              {
+                "required": ["inputFrom"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "workerRolloutGateInputFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["configMapKeyRef"],
+          "not": {
+            "required": ["secretKeyRef"]
+          }
+        },
+        {
+          "required": ["secretKeyRef"],
+          "not": {
+            "required": ["configMapKeyRef"]
+          }
+        }
+      ],
+      "properties": {
+        "configMapKeyRef": {
+          "$ref": "#/$defs/localObjectKeyRef"
+        },
+        "secretKeyRef": {
+          "$ref": "#/$defs/localObjectKeyRef"
+        }
+      }
+    },
+    "workerRolloutStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rampPercentage", "pauseDuration"],
+      "properties": {
+        "rampPercentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99
+        },
+        "pauseDuration": {
+          "$ref": "#/$defs/goDuration"
+        }
+      }
+    },
+    "workerSunset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scaledownDelay": {
+          "$ref": "#/$defs/goDuration"
+        },
+        "deleteDelay": {
+          "$ref": "#/$defs/goDuration"
+        }
+      }
+    },
+    "localObjectKeyRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/dnsLabel"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "goDuration": {
+      "type": "string",
+      "pattern": "^[0-9]+(ns|us|ms|s|m|h)$"
+    }
+  }
+}

@@ -1,0 +1,105 @@
+name: Operator v2 local contracts
+
+on:
+  pull_request:
+    paths:
+      - operator-v2/**
+      - operator-v2/Makefile
+      - scripts/prepare_operator_kube_tests.py
+      - scripts/run_operator_kube_tests.py
+      - scripts/verify_operator_fixture_image.py
+      - scripts/run_operator_go_unit_tests.py
+      - scripts/prepare_operator_go_compiler.py
+      - scripts/operator_go_compiler_inputs.py
+      - scripts/operator_go_linux_compiler.py
+      - scripts/tests/test_go_compiler_contract.py
+      - scripts/tests/test_go_unit_runner_contract.py
+      - scripts/operator_unit_boundary.go
+      - scripts/prepare_operator_python_tests.py
+      - scripts/run_operator_python_tests.py
+      - scripts/operator_python_test_harness.py
+      - scripts/prepare_operator_node_tests.py
+      - scripts/run_operator_node_tests.py
+      - scripts/operator_node_test_contract.py
+      - scripts/operator_node_boundary.mjs
+      - scripts/verify_diagnostic_ui_contract.py
+      - scripts/tests/test_node_runner_contract.py
+      - scripts/prepare_operator_browser_tests.py
+      - scripts/run_operator_browser_boundary.py
+      - scripts/operator_browser_contract.py
+      - scripts/operator_browser_boundary.mjs
+      - scripts/operator_browser_assertions.mjs
+      - scripts/tests/test_browser_boundary_contract.py
+      - scripts/tests/browser_assertions.test.mjs
+      - scripts/operator_browser_kube_fixture.py
+      - scripts/operator_browser_page.mjs
+      - scripts/tests/test_browser_kube_contract.py
+      - scripts/tests/browser_page_protocol.test.mjs
+      - scripts/operator_preparation_test_contract.py
+      - scripts/operator_kube_test_compiler.py
+      - scripts/tests/test_preparation_test_contract.py
+      - scripts/operator_browser_source_unavailable.mjs
+      - scripts/tests/browser_source_unavailable_protocol.test.mjs
+      - registry/web/static/diagnostics.mjs
+      - registry/web/static/diagnostic-page.html
+      - registry/web/static/diagnostic-page.mjs
+      - registry/web/static/diagnostic-page.css
+      - registry/web/tests/diagnostics.test.mjs
+      - registry/web/tests/diagnostic-page.test.mjs
+      - registry/web/tests/fixtures/go-diagnostic-view-v1.json
+      - .github/workflows/operator-v2-local-contracts.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-kubernetes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Acquire pinned public local-test tools
+        run: python3 scripts/prepare_operator_kube_tests.py
+      - name: Acquire pinned official native Go compiler image
+        run: python3 scripts/prepare_operator_go_compiler.py --acquire
+      - name: Acquire pinned public Python test image
+        run: python3 scripts/prepare_operator_python_tests.py
+      - name: Acquire pinned official public Node test image
+        run: python3 scripts/prepare_operator_node_tests.py --acquire
+      - name: Python stdlib helpers without networking or native process execution
+        run: python3 scripts/run_operator_python_tests.py --self-check
+      - name: Unit contracts without external networking or host credentials
+        run: python3 scripts/run_operator_go_unit_tests.py
+      - name: Compiler artifact and public-input negative guards
+        run: python3 -m unittest discover -s scripts/tests -p test_go_compiler_contract.py
+      - name: Finite Go proof selection and transcript negative guards
+        run: python3 -m unittest discover -s scripts/tests -p test_go_unit_runner_contract.py
+      - name: Browser prerequisite and boundary pure negative guards
+        run: python3 -m unittest discover -s scripts/tests -p test_browser_boundary_contract.py
+      - name: Browser page protocol and owned integration pure negative guards
+        run: python3 -m unittest discover -s scripts/tests -p test_browser_kube_contract.py
+      - name: Preparation and shared integration compiler pure negative guards
+        run: python3 -m unittest discover -s scripts/tests -p test_preparation_test_contract.py
+      - name: Local metadata two-process CAS without external networking or host credentials
+        run: python3 scripts/run_operator_go_unit_tests.py --metadata-process
+      - name: Candidate credential observation over owned local TLS without external networking
+        run: python3 scripts/run_operator_go_unit_tests.py --credential-observation-wire
+      - name: Staged actor read guard and TLS lifecycle without external networking
+        run: python3 scripts/run_operator_go_unit_tests.py --credential-staging-observation-wire
+      - name: Real helper CLI credential pipe and journal lifecycle without external networking
+        run: python3 scripts/run_operator_go_unit_tests.py --aws-permission-invocation-process
+      - name: Go diagnostic wire contract in isolated no-network containers
+        run: python3 scripts/verify_diagnostic_ui_contract.py
+      - name: Node runner transcript and configuration negative guards
+        run: python3 scripts/tests/test_node_runner_contract.py
+      - name: Diagnostic frontend contracts with native no-network Node proof
+        run: python3 scripts/run_operator_node_tests.py
+      - name: Real API, controller and network contracts
+        run: python3 scripts/run_operator_kube_tests.py

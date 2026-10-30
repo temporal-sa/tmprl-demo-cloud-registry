@@ -1,0 +1,19 @@
+{
+  "asyncOperationId": "ae330063-2e13-5b18-9cab-239730f0df69",
+  "projectId": "b0de211fec164d81b0bcc7e7752b582f",
+  "spec": {
+    "apiKeyAuth": {
+      "enabled": true
+    },
+    "lifecycle": {
+      "enableDeleteProtection": true
+    },
+    "name": "rv2-na-cdd19e6047a857290950a23c418124fd",
+    "replicas": [
+      {
+        "region": "aws-us-east-2"
+      }
+    ],
+    "retentionDays": 1
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "createHistory": {
+    "groups": [
+      {
+        "count": 1,
+        "kind": "Namespace",
+        "outcome": "CanonicalReceiptRecorded"
+      },
+      {
+        "count": 1,
+        "kind": "ConfigMap",
+        "outcome": "Rejected"
+      },
+      {
+        "count": 1,
+        "kind": "Deployment",
+        "outcome": "OutcomeUnconfirmed"
+      }
+    ],
+    "scope": "HistoricalCreateRecords"
+  },
+  "evidenceResolutionAvailable": false,
+  "explanation": "demo: Failed at smoke.\nCause [SmokeFailed]: Candidate smoke check failed\nAutomatic retries are exhausted after 3 observed attempts.\nPrevious active revision active-one remains routed (confirmed 2026-10-30T11:59:00Z).\nRecovery cleanup: Retained [CleanupFailed]: Candidate was retained after cleanup failed.\nStatus delivery to catalog failed independently of the operation: Status delivery failed.\nStatus delivery to catalog covers older observation 3 (current 4).\nNext: Inspect the candidate configuration.\nEvidence capture-one: Failed.\nThis summary is partial; inspect the operation's authorized evidence for omitted detail.\nOperation operation-two; environment lab; observed generation 2; reconcile revision-two; observation 4.",
+  "freshness": {
+    "desiredGeneration": 2,
+    "desiredReconcileKey": "revision-two",
+    "evaluatedAt": "2026-10-30T12:00:00Z",
+    "lastProgressAt": "2026-10-30T11:59:00Z",
+    "observedGeneration": 2,
+    "observedReconcileKey": "revision-two",
+    "state": "Current"
+  },
+  "operation": {
+    "availability": {
+      "activeRevision": "active-one",
+      "candidateRevision": "candidate-two",
+      "confirmedAt": "2026-10-30T11:59:00Z",
+      "routeState": "ActivePreserved"
+    },
+    "evidence": [
+      {
+        "id": "capture-one",
+        "kind": "PodLogs",
+        "locator": "",
+        "partial": true,
+        "state": "Failed"
+      }
+    ],
+    "failure": {
+      "category": "Smoke",
+      "code": "SmokeFailed",
+      "execution": {},
+      "id": "smoke-one",
+      "message": "Candidate smoke check failed",
+      "nextAction": "Inspect the candidate configuration.",
+      "occurredAt": "2026-10-30T11:59:00Z",
+      "provider": {},
+      "step": "smoke"
+    },
+    "identity": {
+      "environment": "lab",
+      "generation": 2,
+      "installation": "installation-one",
+      "operationID": "operation-two",
+      "projectName": "demo",
+      "projectUID": "canonical-uid-one",
+      "reconcileKey": "revision-two"
+    },
+    "partial": true,
+    "progressedAt": "2026-10-30T11:59:00Z",
+    "publication": [
+      {
+        "failure": {
+          "category": "Publication",
+          "code": "PublishFailed",
+          "execution": {},
+          "id": "publication-one",
+          "message": "Status delivery failed",
+          "occurredAt": "2026-10-30T12:00:00Z",
+          "provider": {}
+        },
+        "observedAt": "2026-10-30T12:00:00Z",
+        "sink": "catalog",
+        "sourceSequence": 3,
+        "state": "Failed"
+      }
+    ],
+    "recovery": [
+      {
+        "failure": {
+          "category": "Cleanup",
+          "code": "CleanupFailed",
+          "execution": {},
+          "id": "cleanup-one",
+          "message": "Candidate was retained after cleanup failed",
+          "occurredAt": "2026-10-30T11:59:00Z",
+          "provider": {},
+          "step": "cleanup"
+        },
+        "id": "cleanup-one",
+        "state": "Retained",
+        "step": "cleanup"
+      }
+    ],
+    "retry": {
+      "attempt": 3,
+      "authoritative": true,
+      "maximumAttempts": 3,
+      "observedAt": "2026-10-30T11:59:00Z",
+      "status": "Exhausted"
+    },
+    "schemaVersion": 1,
+    "sequence": 4,
+    "state": "Failed",
+    "step": "smoke"
+  },
+  "partial": true,
+  "schemaVersion": 1,
+  "source": {
+    "desiredObservedAt": "2026-10-30T11:59:30Z",
+    "origin": "Materialized",
+    "persistenceTimeKnown": true,
+    "readAt": "2026-10-30T12:00:00Z",
+    "recordedAt": "2026-10-30T11:58:00Z"
+  },
+  "status": "Failed",
+  "target": {
+    "environment": "lab",
+    "installation": "installation-one",
+    "projectUID": "canonical-uid-one"
+  }
+}

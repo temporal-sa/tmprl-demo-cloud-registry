@@ -1,0 +1,84 @@
+{
+  "reviewDate": "2026-10-29",
+  "status": "offline primary-document review; not AWS policy validation or account proof",
+  "rows": [
+    {
+      "actions": ["ecr:CreateRepository", "ecr:TagResource", "ecr:DescribeRepositories", "ecr:ListTagsForResource", "ecr:DeleteRepository", "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"],
+      "resourceType": "repository",
+      "arnShape": "arn:${Partition}:ecr:${Region}:${Account}:repository/${RepositoryName}",
+      "conditionsUsed": ["aws:RequestTag/RegistryOwner on create/tag only"],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecr.html",
+      "remainingProof": "Actual create/tag dependent authorization, repository policy and exact fixture resource ownership."
+    },
+    {
+      "actions": ["ecr:GetAuthorizationToken"],
+      "resourceType": "global action requires Resource *",
+      "conditionsUsed": [],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecr.html",
+      "remainingProof": "A registry token does not grant repository operations; every data action remains separately scoped."
+    },
+    {
+      "actions": ["secretsmanager:CreateSecret", "secretsmanager:TagResource", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret"],
+      "resourceType": "Secret",
+      "arnShape": "arn:${Partition}:secretsmanager:${Region}:${Account}:secret:${SecretId}",
+      "conditionsUsed": ["aws:RequestTag/RegistryOwner on create/tag", "secretsmanager:KmsKeyArn on create (separate from dependent TagResource authorization)", "secretsmanager:ResourceTag/RegistryOwner on existing operator-managed secrets"],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html",
+      "remainingProof": "Six-character provider suffix binding, creation tags, key binding, secret resource policies, no owner retagging by other principals, recovery-window cleanup accounting."
+    },
+    {
+      "actions": ["codebuild:StartBuild", "codebuild:BatchGetBuilds", "codebuild:StopBuild"],
+      "resourceType": "project (including BatchGetBuilds/StopBuild; not a fabricated build ARN resource scope)",
+      "arnShape": "arn:${Partition}:codebuild:${Region}:${Account}:project/${ProjectName}",
+      "conditionsUsed": ["Null codebuild:serviceRole blocks service-role overrides"],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_codebuild.html",
+      "additionalReferences": ["https://docs.aws.amazon.com/codebuild/latest/APIReference/API_StartBuild.html", "https://docs.aws.amazon.com/codebuild/latest/userguide/action-context-keys.html", "https://docs.aws.amazon.com/codebuild/latest/userguide/setting-up-service-role.html"],
+      "remainingProof": "Effective project service role, override field authorization, timeout/compute/source/image request broker, spare shared quotas. Source buildspec condition supports presence via Null, not content validation."
+    },
+    {
+      "actions": ["kms:Decrypt", "kms:GenerateDataKey"],
+      "resourceType": "exact independently owned key ARN; placeholder must remain until verified",
+      "conditionsUsed": ["kms:ViaService = secretsmanager.<region>.amazonaws.com", "kms:EncryptionContext:SecretARN = exact allowed secret ARN patterns"],
+      "reference": "https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html",
+      "additionalReferences": ["https://docs.aws.amazon.com/secretsmanager/latest/userguide/security-encryption.html"],
+      "remainingProof": "Key ownership, key policy, grants and service-mediated effective permissions. No generic opaque key-ID adoption is authorized by the ownership library."
+    },
+    {
+      "actions": ["logs:CreateLogStream", "logs:PutLogEvents"],
+      "resourceType": "log-stream",
+      "arnShape": "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}:log-stream:${LogStreamName}",
+      "conditionsUsed": [],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html",
+      "remainingProof": "Fixture authority must pre-create exact bounded log groups. No global CreateLogGroup or shared-group mutation is granted."
+    },
+    {
+      "actions": ["s3:PutObject"],
+      "resourceType": "object in distinct artifact bucket and owner-specific prefix",
+      "conditionsUsed": ["s3:x-amz-server-side-encryption = AES256"],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_s3.html",
+      "remainingProof": "Private TLS-only bucket policy, object ownership, lifecycle and no access to separate fixture state. Multipart operations are intentionally not granted."
+    },
+    {
+      "actions": ["lambda:CreateFunction", "lambda:GetFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:DeleteFunction", "lambda:InvokeFunction", "iam:PassRole"],
+      "resourceType": "exact function/qualified-function ARNs and exact runtime role ARN",
+      "conditionsUsed": ["iam:PassedToService = lambda.amazonaws.com; tags are not a PassRole control"],
+      "reference": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_lambda.html",
+      "additionalReferences": ["https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html"],
+      "remainingProof": "Inactive extension only. Current operator boundary denies IAM. Enabling requires explicit combined policy/boundary review, owned role trust and image policy, approved invoke principal/external ID, capacity and sentinel proof."
+    },
+    {
+      "actions": ["Temporal data-plane write on test orchestration namespace", "Temporal Namespace Admin on pre-provisioned target namespace"],
+      "resourceType": "exact namespace IDs through separate principals",
+      "conditionsUsed": ["no inherited account/project global administration"],
+      "reference": "https://docs.temporal.io/cloud/manage-access/permissions-reference",
+      "remainingProof": "Current account grants and namespace-scoped service-account/API-key behavior. Account-level namespace creation, global reader groups and Nexus are disabled; custom-role availability is not assumed."
+    }
+  ],
+  "transitiveReview": [
+    "operator -> dedicated StartBuild project -> dedicated build service role -> exact test ECR/source-secret/KMS/log scope",
+    "operator -> PassRole is disabled in the active lane; inactive extension names only the exact runtime role",
+    "ExternalSecret -> dedicated store -> dedicated reader role -> runtime secret/key only; disabled until OIDC and controller boundary are proven",
+    "runtime role and Temporal invoke role -> exact owned test resources; inactive until reviewed",
+    "All role boundaries explicitly deny IAM mutation, AssumeRole and resource-policy/key-policy escalation, plus actions outside exact fixture resources",
+    "Reciprocal production access, shared-account quotas, resource policies, session grants and ownership tags need independent account evidence; offline examples do not establish them"
+  ]
+}

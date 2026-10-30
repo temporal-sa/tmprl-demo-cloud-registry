@@ -1,0 +1,344 @@
+{
+  "data": {
+    "aws_caller_identity": {
+      "provisioner": {}
+    }
+  },
+  "output": {
+    "fixture_bindings": {
+      "value": {
+        "account": "429214323166",
+        "build_project_arn": "arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec",
+        "build_role_arn": "arn:aws:iam::429214323166:role/rv2-build-role-primary-808fe505266b3d0ac35c97cae4f8a729",
+        "canary_role_arn": "arn:aws:iam::429214323166:role/rv2-canary-role-primary-c8cb42b1517d556bf7873fcf53f022f0",
+        "candidate_writer_role_arn": "arn:aws:iam::429214323166:role/rv2-candidate-writer-role-prim-e55ba9250ccb0ac9a248cc3fdc166a4b",
+        "invoker_role_arn": "arn:aws:iam::429214323166:role/rv2-invoker-role-primary-7fa814626ac458ff37636ea893a0a8a7",
+        "kms_key_arn": "${aws_kms_key.candidate.arn}",
+        "owner": {
+          "environmentId": "registry-v2-lab",
+          "installationId": "registry-v2-fixtures",
+          "projectUid": "sentinel-20261030-01",
+          "lifetime": "disposable",
+          "runId": "fixture-20261030-01"
+        },
+        "region": "us-west-2",
+        "repository_arn": "arn:aws:ecr:us-west-2:429214323166:repository/rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b",
+        "run_id": "fixture-20261030-01"
+      }
+    }
+  },
+  "provider": {
+    "aws": {
+      "allowed_account_ids": [
+        "429214323166"
+      ],
+      "max_retries": 0,
+      "profile": "SolutionsArchitecture/AWSAdministratorAccess",
+      "region": "us-west-2"
+    }
+  },
+  "resource": {
+    "aws_cloudwatch_log_group": {
+      "build": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "name": "/aws/codebuild/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec",
+        "retention_in_days": 1,
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "aws_codebuild_project": {
+      "sentinel": {
+        "artifacts": [
+          {
+            "type": "NO_ARTIFACTS"
+          }
+        ],
+        "auto_retry_limit": 0,
+        "build_timeout": 5,
+        "concurrent_build_limit": 1,
+        "depends_on": [
+          "aws_iam_role_policy.build"
+        ],
+        "description": "Disposable fixed no-source sentinel; no production roles or credentials",
+        "environment": [
+          {
+            "compute_type": "BUILD_GENERAL1_SMALL",
+            "image": "aws/codebuild/standard:7.0",
+            "image_pull_credentials_type": "CODEBUILD",
+            "privileged_mode": false,
+            "type": "LINUX_CONTAINER"
+          }
+        ],
+        "logs_config": [
+          {
+            "cloudwatch_logs": [
+              {
+                "group_name": "${aws_cloudwatch_log_group.build.name}",
+                "status": "ENABLED",
+                "stream_name": "sentinel"
+              }
+            ]
+          }
+        ],
+        "name": "rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec",
+        "project_visibility": "PRIVATE",
+        "queued_timeout": 5,
+        "service_role": "${aws_iam_role.build.arn}",
+        "source": [
+          {
+            "buildspec": "version: 0.2\nphases:\n  build:\n    commands:\n      - printf '%s\\n' registry-v2-fixture-sentinel\n",
+            "type": "NO_SOURCE"
+          }
+        ],
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "aws_ecr_lifecycle_policy": {
+      "sentinel": {
+        "policy": "{\"rules\":[{\"action\":{\"type\":\"expire\"},\"description\":\"Keep at most three fixture images; this is not a hard byte/cost limit\",\"rulePriority\":1,\"selection\":{\"countNumber\":3,\"countType\":\"imageCountMoreThan\",\"tagStatus\":\"any\"}}]}",
+        "repository": "${aws_ecr_repository.sentinel.name}"
+      }
+    },
+    "aws_ecr_repository": {
+      "sentinel": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "encryption_configuration": [
+          {
+            "encryption_type": "AES256"
+          }
+        ],
+        "force_delete": false,
+        "image_scanning_configuration": [
+          {
+            "scan_on_push": false
+          }
+        ],
+        "image_tag_mutability": "IMMUTABLE",
+        "name": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "aws_iam_policy": {
+      "build_boundary": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Exact disposable registry-v2 fixture boundary; not production policy",
+        "name": "rv2-build-boundary-primary-2de4845c01c1ed131a841d68ab11ec2d",
+        "policy": "{\"Statement\":[{\"Action\":[\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"],\"Sid\":\"RepositoryToken\"},{\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\",\"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\",\"ecr:PutImage\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:ecr:us-west-2:429214323166:repository/rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b\"],\"Sid\":\"ExactFixtureRepository\"},{\"Action\":[\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:logs:us-west-2:429214323166:log-group:/aws/codebuild/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec:log-stream:*\"],\"Sid\":\"ExactFixtureLogStream\"},{\"Effect\":\"Deny\",\"NotAction\":[\"ecr:GetAuthorizationToken\"],\"NotResource\":[\"arn:aws:ecr:us-west-2:429214323166:repository/rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b\",\"arn:aws:logs:us-west-2:429214323166:log-group:/aws/codebuild/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec:log-stream:*\"],\"Sid\":\"DenyOutsideExactFixtureResources\"},{\"Action\":[\"iam:*\",\"sts:AssumeRole*\",\"codebuild:CreateProject\",\"codebuild:UpdateProject\",\"codebuild:DeleteProject\",\"codebuild:StartBuildBatch\",\"ecr:SetRepositoryPolicy\",\"ecr:DeleteRepositoryPolicy\",\"secretsmanager:PutResourcePolicy\",\"secretsmanager:DeleteResourcePolicy\",\"secretsmanager:PutSecretValue\",\"secretsmanager:UpdateSecretVersionStage\",\"secretsmanager:DeleteSecret\",\"secretsmanager:ReplicateSecretToRegions\",\"kms:CreateGrant\",\"kms:PutKeyPolicy\",\"kms:ScheduleKeyDeletion\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"NoPrivilegeOrResourcePolicyChanges\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "canary_boundary": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Exact disposable registry-v2 fixture boundary; not production policy",
+        "name": "rv2-canary-boundary-primary-ac92eb93b49780cbd68bb7b5b5203019",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"DisabledCandidateLane\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "candidate_writer_boundary": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Exact disposable registry-v2 fixture boundary; not production policy",
+        "name": "rv2-candidate-writer-boundary-40faeb3105b39f25e554aeb43c0d3e4d",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"DisabledCandidateLane\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "invoker_boundary": {
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Exact disposable registry-v2 fixture boundary; not production policy",
+        "name": "rv2-invoker-boundary-primary-8819f543a96675c756bb7b4d0ce8a459",
+        "policy": "{\"Statement\":[{\"Action\":[\"codebuild:BatchGetProjects\",\"codebuild:BatchGetBuilds\",\"codebuild:StopBuild\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"],\"Sid\":\"InspectAndStopExactProject\"},{\"Action\":[\"codebuild:StartBuild\"],\"Condition\":{\"Null\":{\"codebuild:artifacts\":\"true\",\"codebuild:autoRetryLimit\":\"true\",\"codebuild:cache\":\"true\",\"codebuild:encryptionKey\":\"true\",\"codebuild:environment\":\"true\",\"codebuild:environment.certificate\":\"true\",\"codebuild:environment.computeType\":\"true\",\"codebuild:environment.environmentVariables\":\"true\",\"codebuild:environment.fleet.fleetArn\":\"true\",\"codebuild:environment.image\":\"true\",\"codebuild:environment.imagePullCredentialsType\":\"true\",\"codebuild:environment.privilegedMode\":\"true\",\"codebuild:environment.registryCredential\":\"true\",\"codebuild:environment.type\":\"true\",\"codebuild:logsConfig\":\"true\",\"codebuild:secondaryArtifacts\":\"true\",\"codebuild:secondarySources\":\"true\",\"codebuild:serviceRole\":\"true\",\"codebuild:source\":\"true\",\"codebuild:source.auth.resource\":\"true\",\"codebuild:source.auth.type\":\"true\",\"codebuild:source.buildStatusConfig.context\":\"true\",\"codebuild:source.buildStatusConfig.targetUrl\":\"true\",\"codebuild:source.buildspec\":\"true\",\"codebuild:source.insecureSsl\":\"true\",\"codebuild:source.location\":\"true\"}},\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"],\"Sid\":\"StartFixedSentinelOnly\"},{\"Action\":\"*\",\"Effect\":\"Deny\",\"NotResource\":[\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\",\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"],\"Sid\":\"DenyOutsideExactFixtureResources\"},{\"Action\":[\"iam:*\",\"sts:AssumeRole*\",\"codebuild:CreateProject\",\"codebuild:UpdateProject\",\"codebuild:DeleteProject\",\"codebuild:StartBuildBatch\",\"ecr:SetRepositoryPolicy\",\"ecr:DeleteRepositoryPolicy\",\"secretsmanager:PutResourcePolicy\",\"secretsmanager:DeleteResourcePolicy\",\"secretsmanager:PutSecretValue\",\"secretsmanager:UpdateSecretVersionStage\",\"secretsmanager:DeleteSecret\",\"secretsmanager:ReplicateSecretToRegions\",\"kms:CreateGrant\",\"kms:PutKeyPolicy\",\"kms:ScheduleKeyDeletion\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"NoPrivilegeOrResourcePolicyChanges\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "aws_iam_role": {
+      "build": {
+        "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"429214323166\",\"aws:SourceArn\":\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"codebuild.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "max_session_duration": 3600,
+        "name": "rv2-build-role-primary-808fe505266b3d0ac35c97cae4f8a729",
+        "permissions_boundary": "${aws_iam_policy.build_boundary.arn}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "canary": {
+        "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"fixture-20261030-01\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c\"}}],\"Version\":\"2012-10-17\"}",
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "max_session_duration": 3600,
+        "name": "rv2-canary-role-primary-c8cb42b1517d556bf7873fcf53f022f0",
+        "permissions_boundary": "${aws_iam_policy.canary_boundary.arn}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "candidate_writer": {
+        "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"fixture-20261030-01\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c\"}}],\"Version\":\"2012-10-17\"}",
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "max_session_duration": 3600,
+        "name": "rv2-candidate-writer-role-prim-e55ba9250ccb0ac9a248cc3fdc166a4b",
+        "permissions_boundary": "${aws_iam_policy.candidate_writer_boundary.arn}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      },
+      "invoker": {
+        "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"fixture-20261030-01\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c\"}}],\"Version\":\"2012-10-17\"}",
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "max_session_duration": 3600,
+        "name": "rv2-invoker-role-primary-7fa814626ac458ff37636ea893a0a8a7",
+        "permissions_boundary": "${aws_iam_policy.invoker_boundary.arn}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "aws_iam_role_policy": {
+      "build": {
+        "name": "fixture-only",
+        "policy": "{\"Statement\":[{\"Action\":[\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"],\"Sid\":\"RepositoryToken\"},{\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\",\"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\",\"ecr:PutImage\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:ecr:us-west-2:429214323166:repository/rv2/9026c9a8c2a2e28594174cd400392f80/rv2-repository-primary-70f0409abf6b3f063a53d4ef3c265a8b\"],\"Sid\":\"ExactFixtureRepository\"},{\"Action\":[\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:logs:us-west-2:429214323166:log-group:/aws/codebuild/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec:log-stream:*\"],\"Sid\":\"ExactFixtureLogStream\"}],\"Version\":\"2012-10-17\"}",
+        "role": "${aws_iam_role.build.id}"
+      },
+      "canary": {
+        "name": "fixture-only",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"CandidateLaneDisabled\"}],\"Version\":\"2012-10-17\"}",
+        "role": "${aws_iam_role.canary.id}"
+      },
+      "candidate_writer": {
+        "name": "fixture-only",
+        "policy": "{\"Statement\":[{\"Action\":[\"*\"],\"Effect\":\"Deny\",\"Resource\":[\"*\"],\"Sid\":\"CandidateLaneDisabled\"}],\"Version\":\"2012-10-17\"}",
+        "role": "${aws_iam_role.candidate_writer.id}"
+      },
+      "invoker": {
+        "name": "fixture-only",
+        "policy": "{\"Statement\":[{\"Action\":[\"codebuild:BatchGetProjects\",\"codebuild:BatchGetBuilds\",\"codebuild:StopBuild\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"],\"Sid\":\"InspectAndStopExactProject\"},{\"Action\":[\"codebuild:StartBuild\"],\"Condition\":{\"Null\":{\"codebuild:artifacts\":\"true\",\"codebuild:autoRetryLimit\":\"true\",\"codebuild:cache\":\"true\",\"codebuild:encryptionKey\":\"true\",\"codebuild:environment\":\"true\",\"codebuild:environment.certificate\":\"true\",\"codebuild:environment.computeType\":\"true\",\"codebuild:environment.environmentVariables\":\"true\",\"codebuild:environment.fleet.fleetArn\":\"true\",\"codebuild:environment.image\":\"true\",\"codebuild:environment.imagePullCredentialsType\":\"true\",\"codebuild:environment.privilegedMode\":\"true\",\"codebuild:environment.registryCredential\":\"true\",\"codebuild:environment.type\":\"true\",\"codebuild:logsConfig\":\"true\",\"codebuild:secondaryArtifacts\":\"true\",\"codebuild:secondarySources\":\"true\",\"codebuild:serviceRole\":\"true\",\"codebuild:source\":\"true\",\"codebuild:source.auth.resource\":\"true\",\"codebuild:source.auth.type\":\"true\",\"codebuild:source.buildStatusConfig.context\":\"true\",\"codebuild:source.buildStatusConfig.targetUrl\":\"true\",\"codebuild:source.buildspec\":\"true\",\"codebuild:source.insecureSsl\":\"true\",\"codebuild:source.location\":\"true\"}},\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:codebuild:us-west-2:429214323166:project/rv2-build-project-primary-bee4d5a637a6f57632fbd4a8ac37d4ec\"],\"Sid\":\"StartFixedSentinelOnly\"}],\"Version\":\"2012-10-17\"}",
+        "role": "${aws_iam_role.invoker.id}"
+      }
+    },
+    "aws_kms_alias": {
+      "candidate": {
+        "name": "alias/rv2-kms-alias-primary-1b6abae2a08d68babcd858d4317f43eb",
+        "target_key_id": "${aws_kms_key.candidate.key_id}"
+      }
+    },
+    "aws_kms_key": {
+      "candidate": {
+        "deletion_window_in_days": 7,
+        "depends_on": [
+          "terraform_data.scope_guard"
+        ],
+        "description": "Disposable registry-v2 candidate encryption key fixture-20261030-01",
+        "enable_key_rotation": true,
+        "policy": "{\"Statement\":[{\"Action\":[\"kms:*\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c\"},\"Resource\":\"*\",\"Sid\":\"ExactHumanProvisioner\"},{\"Action\":[\"kms:DescribeKey\",\"kms:GetKeyPolicy\",\"kms:PutKeyPolicy\",\"kms:CancelKeyDeletion\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::429214323166:root\"},\"Resource\":\"*\",\"Sid\":\"AccountRecoveryAdministration\"}],\"Version\":\"2012-10-17\"}",
+        "tags": {
+          "RegistryExpiresAt": "${var.fixture_expires_at}",
+          "RegistryFixture": "registry-operator-v2",
+          "RegistryOwner": "69f0c938839a2f590f4ee0b7135bc30f2389a784d684e2919d4098d28327b20c",
+          "RegistryRun": "fixture-20261030-01"
+        }
+      }
+    },
+    "terraform_data": {
+      "scope_guard": {
+        "input": "fixture-20261030-01",
+        "lifecycle": {
+          "precondition": [
+            {
+              "condition": "${startswith(data.aws_caller_identity.provisioner.arn, \"arn:aws:sts::429214323166:assumed-role/AWSReservedSSO_AWSAdministratorAccess_ce84ce92ec884c3c/\")}",
+              "error_message": "Only the explicitly reviewed human provisioning role may provision this isolated fixture."
+            },
+            {
+              "condition": "${timecmp(timestamp(), var.fixture_expires_at) \u003c 0 \u0026\u0026 timecmp(var.fixture_expires_at, timeadd(timestamp(), \"48h\")) \u003c= 0}",
+              "error_message": "Review a future fixture expiration no more than 48 hours from provisioning."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "terraform": {
+    "backend": {
+      "local": {
+        "path": ".state/fixture-20261030-01.tfstate"
+      }
+    },
+    "required_providers": {
+      "aws": {
+        "source": "hashicorp/aws",
+        "version": "= 6.71.0"
+      }
+    },
+    "required_version": "\u003e= 1.10.0, \u003c 2.0.0"
+  },
+  "variable": {
+    "fixture_expires_at": {
+      "default": "2026-10-31T23:59:59Z",
+      "description": "Human-reviewed expiry, at most48 hours after provisioning; TTL tags are not automatic deletion",
+      "type": "string"
+    }
+  }
+}

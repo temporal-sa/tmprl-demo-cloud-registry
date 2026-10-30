@@ -1,0 +1,87 @@
+{
+  "account": "429214323166",
+  "applyAuthorized": false,
+  "awsCreates": 11,
+  "baseResourcesModified": false,
+  "budgets": {
+    "actualAdditionalBuildStarts": 0,
+    "additionalBuildProjects": 1,
+    "additionalCMKs": 1,
+    "buildRole": "Explicit deny-all boundary and inline; no data/secret/log privileges",
+    "hardDollarFence": false,
+    "logRetentionDays": 1,
+    "maximumBuildMinutes": 5,
+    "maximumQueuedMinutes": 5,
+    "maximumUnexpectedSuccessBuilds": 1,
+    "softUSDStop": 5,
+    "syntheticImages": 0,
+    "syntheticSecretVersions": 0,
+    "totalCompanionNamespaceTargetCount": 3
+  },
+  "cleanup": "Reviewed exact owned cleanup only; retain unknown outcomes. ECR force_delete=false, secret recovery7d, CMK pending deletion7d. No automatic destroy/retag/recreate/import.",
+  "names": {
+    "boundary": "rv2-deny-build-boundary-primar-b3f63acfc2421992cf39852c9f09f23f",
+    "keyAlias": "rv2-deny-kms-alias-primary-8bea7cf5ddbc3fa56c8cfbc92af6d32d",
+    "logGroup": "/aws/codebuild/rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd",
+    "project": "rv2-deny-build-project-primary-e4370e39f5bcc68b32b911dc971bfccd",
+    "repository": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-deny-repository-primary-be864620ebc28ae8b78ef444a857381e",
+    "role": "rv2-deny-build-role-primary-339f7eebc6084f0fccdc7fa2c6ed2ee0",
+    "secret": "rv2/9026c9a8c2a2e28594174cd400392f80/rv2-deny-secret-primary-6d4c3e8f5a00c3cd44a96a46e65087fb"
+  },
+  "owner": {
+    "environmentId": "registry-v2-lab",
+    "installationId": "registry-v2-fixtures",
+    "projectUid": "sentinel-20261030-01",
+    "lifetime": "disposable",
+    "runId": "fixture-20261030-01"
+  },
+  "probes": [
+    {
+      "expected": "AccessDenied through reviewed invoker boundary; no build should start",
+      "requested": "StartBuild or unapproved service-role override",
+      "target": "deny project/role",
+      "unexpectedSuccess": "Record exact owned BuildID, stop/report under separately authorized procedure; do not continue probe batch"
+    },
+    {
+      "expected": "AccessDenied outside exact base ECR repository",
+      "requested": "BatchGetImage or harmless PutImage valid manifest",
+      "target": "deny repository seeded synthetic image"
+    },
+    {
+      "expected": "AccessDenied, not missing-value error",
+      "requested": "GetSecretValue",
+      "target": "deny secret seeded synthetic version",
+      "unexpectedSuccess": "Never print/serialize returned bytes; fail/report exact safe IDs"
+    },
+    {
+      "expected": "AccessDenied outside exact permitted key",
+      "requested": "GenerateDataKey with harmless reviewed encryption context",
+      "target": "deny CMK",
+      "unexpectedSuccess": "Never print/serialize plaintext key; clear/discard in secure boundary and stop"
+    },
+    {
+      "expected": "AccessDenied outside exact base log stream pattern",
+      "requested": "One current-timestamp harmless PutLogEvents event",
+      "target": "deny log stream"
+    }
+  ],
+  "probesAuthorized": false,
+  "productionResourcesUsed": false,
+  "purpose": "Real controlled resource identities for later effective-permission checks, never missing-name/production stand-ins",
+  "region": "us-west-2",
+  "requiredBeforeProbes": [
+    "root reviews this exact source/saved-plan digest before additional creation",
+    "attest each actual canonical ARN/RoleID/key birth/resource creation time and exact tags after any approved apply",
+    "separately authorize secure synthetic non-production secret value seed outside IaC state; bind exact VersionID",
+    "separately authorize one harmless valid synthetic OCI image seed; bind exact tag/digest/config/layers",
+    "use valid harmless API payloads and owner-bound versions/IDs, never arbitrary or nonexistent references",
+    "review expected AccessDenied and unexpected-success handling for every exact call, with stop IDs/receipt/cleanup",
+    "do not reinterpret a resource-not-found or invalid request as a permission denial",
+    "candidate writer/canary remain disabled until separately reviewed actual stage2 policy; base deny-all is not a positive candidate permission proof",
+    "no account/global credentials enter tests; no builds/assume-role/probes authorized by this render"
+  ],
+  "schemaVersion": "registry-owned-deny-sentinels-v1",
+  "seedingAuthorized": false,
+  "state": "Separate ignored .state/fixture-20261030-01-deny.tfstate; base module/state untouched",
+  "terraformCreates": 12
+}
