@@ -39,7 +39,7 @@ spec:
         - name: AUTH_VERIFY_URL
           value: http://web.tmprl-dem-cld-registry-operator.svc.cluster.local/_auth/verify
         - name: EVENT_LEADS_URL
-          value: https://event-leads.tmprl-demo.cloud
+          value: https://events.tmprl-demo.cloud
         - name: EVENT_LEADS_ENDPOINT
           value: event-leads-participants
         - name: CONTROL_TASK_QUEUE
